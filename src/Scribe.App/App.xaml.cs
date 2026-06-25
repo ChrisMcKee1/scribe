@@ -10,6 +10,7 @@ using Scribe.App.Overlay;
 using Scribe.App.Settings;
 using Scribe.App.Tray;
 using Scribe.Core.Audio;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Persistence;
@@ -86,6 +87,7 @@ public partial class App : Application
             services.GetRequiredService<IVadService>(),
             services.GetRequiredService<ITranscriptionService>(),
             services.GetRequiredService<ITextPostProcessor>(),
+            services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<ITextInjector>(),
             services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<ISettingsRepository>(),
@@ -171,6 +173,8 @@ public partial class App : Application
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<ITextCleanupService>(),
+            services.GetRequiredService<IAzureFoundryDiscovery>(),
             settings => _controller!.ApplySettings(settings));
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();

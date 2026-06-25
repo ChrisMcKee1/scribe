@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -27,6 +28,7 @@ internal sealed class DictationController : IDisposable
     private readonly IVadService _vad;
     private readonly ITranscriptionService _transcription;
     private readonly ITextPostProcessor _postProcessor;
+    private readonly ITextCleanupService _cleanup;
     private readonly ITextInjector _injector;
     private readonly IHistoryRepository _history;
     private readonly ISettingsRepository _settingsRepository;
@@ -45,6 +47,7 @@ internal sealed class DictationController : IDisposable
         IVadService vad,
         ITranscriptionService transcription,
         ITextPostProcessor postProcessor,
+        ITextCleanupService cleanup,
         ITextInjector injector,
         IHistoryRepository history,
         ISettingsRepository settingsRepository,
@@ -55,6 +58,7 @@ internal sealed class DictationController : IDisposable
         _vad = vad;
         _transcription = transcription;
         _postProcessor = postProcessor;
+        _cleanup = cleanup;
         _injector = injector;
         _history = history;
         _settingsRepository = settingsRepository;
@@ -89,6 +93,7 @@ internal sealed class DictationController : IDisposable
 
         _settings = _settingsRepository.Load();
         _postProcessor.Reload();
+        _cleanup.Configure(BuildCleanupOptions(_settings));
 
         _hotkeys.UpdateBinding(_settings.Hotkey);
         _hotkeys.Activated += OnActivated;
@@ -114,8 +119,17 @@ internal sealed class DictationController : IDisposable
 
         _hotkeys.UpdateBinding(settings.Hotkey);
         _postProcessor.Reload();
+        _cleanup.Configure(BuildCleanupOptions(settings));
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
+
+    /// <summary>Maps persisted AppSettings into the cleanup service's provider-agnostic options.</summary>
+    private static CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
+        settings.EnableAiCleanup,
+        settings.AiCleanupProvider,
+        settings.AiCleanupModel,
+        settings.AiCleanupAzureEndpoint,
+        settings.AiCleanupAzureDeployment);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -181,7 +195,7 @@ internal sealed class DictationController : IDisposable
         _ = Task.Run(ProcessAsync);
     }
 
-    private void ProcessAsync()
+    private async Task ProcessAsync()
     {
         var settings = CurrentSettings;
         try
@@ -223,7 +237,22 @@ internal sealed class DictationController : IDisposable
                 return;
             }
 
-            var text = settings.ApplyPostProcessing ? _postProcessor.Process(result.Text) : result.Text;
+            // Optional AI cleanup runs between raw decoding and dictionary canonicalization so the
+            // post-processor always has the final say on casing of terms like ".NET" or "ReBAC".
+            // CleanAsync never throws and returns the input unchanged when cleanup is off or not
+            // ready, so a dictation is never blocked or lost by this stage.
+            var recognized = result.Text;
+            if (settings.EnableAiCleanup)
+            {
+                var cleaned = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
+                if (!string.Equals(cleaned, recognized, StringComparison.Ordinal))
+                {
+                    _log.LogInformation("AI cleanup refined the transcription.");
+                    recognized = cleaned;
+                }
+            }
+
+            var text = settings.ApplyPostProcessing ? _postProcessor.Process(recognized) : recognized;
             if (string.IsNullOrWhiteSpace(text))
             {
                 _log.LogInformation("Post-processing produced empty text; nothing to inject.");

@@ -173,6 +173,83 @@
                                 </StackPanel>
                             </ui:Card>
 
+                            <TextBlock Text="AI cleanup" Style="{StaticResource GroupHeader}"/>
+                            <ui:Card Style="{StaticResource SettingCard}">
+                                <StackPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Polish text with AI" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Fix punctuation, capitalization and grammar with an AI model before text is inserted. If the model isn't ready, dictation continues with the raw text."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="AiCleanupCheck" Grid.Column="1" VerticalAlignment="Center"
+                                                         Checked="AiCleanupCheck_Toggled" Unchecked="AiCleanupCheck_Toggled"/>
+                                    </Grid>
+
+                                    <TextBlock Text="Provider" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                    <TextBlock Style="{StaticResource SettingHint}"
+                                               Text="Run a model on this PC with Foundry Local (fully offline), or use a model you've deployed in Azure AI Foundry via your Azure sign-in."/>
+                                    <ComboBox x:Name="AiProviderCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                              SelectionChanged="AiProviderCombo_SelectionChanged"/>
+
+                                    <!-- Foundry Local (on-device) -->
+                                    <StackPanel x:Name="FoundryPanel">
+                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ComboBox x:Name="AiModelCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                  SelectionChanged="AiModelCombo_SelectionChanged"/>
+                                        <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                        <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <TextBlock Text="Requires Foundry Local" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                               Text="The selected model downloads automatically on first use (about 1–2 GB)."/>
+                                                </StackPanel>
+                                                <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check"
+                                                           MinWidth="76" VerticalAlignment="Center"
+                                                           Click="AiCheckButton_Click"/>
+                                            </Grid>
+                                        </Border>
+                                    </StackPanel>
+
+                                    <!-- Azure AI Foundry (your Azure sign-in) -->
+                                    <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
+                                        <TextBlock Text="Deployment" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                  SelectionChanged="AzureDeploymentCombo_SelectionChanged"/>
+                                        <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                        <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <TextBlock Text="Uses your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                               Text="Sign in with the Azure CLI (az login), then refresh to list the models you've deployed. No keys are stored."/>
+                                                </StackPanel>
+                                                <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; refresh"
+                                                           MinWidth="76" VerticalAlignment="Center"
+                                                           Click="AzureRefreshButton_Click"/>
+                                            </Grid>
+                                        </Border>
+                                    </StackPanel>
+                                </StackPanel>
+                            </ui:Card>
+
                             <TextBlock Text="Advanced" Style="{StaticResource GroupHeader}"/>
                             <ui:Card Style="{StaticResource SettingCard}">
                                 <Grid>

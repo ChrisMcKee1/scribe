@@ -1,4 +1,5 @@
 using Scribe.Core.Audio;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Persistence;
@@ -52,6 +53,12 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IHistoryRepository, HistoryRepository>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
+
+        // Optional AI cleanup (Foundry Local on-device, or an Azure AI Foundry deployment via the
+        // user's Azure sign-in). Registered unconditionally; it stays inert until enabled in
+        // settings, and degrades to raw text whenever it is not ready.
+        services.AddSingleton<ITextCleanupService, TextCleanupService>();
+        services.AddSingleton<IAzureFoundryDiscovery, AzureFoundryDiscovery>();
 
         return services;
     }

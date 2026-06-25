@@ -29,6 +29,32 @@
     <!-- Fluent (Windows 11) design system for WPF: themed controls, FluentWindow, Mica. -->
     <PackageVersion Include="WPF-UI" Version="4.3.0" />
 
+    <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
+         client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
+    <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.3" />
+    <!-- OpenAI is pinned to 2.9.1 to match the exact build Azure.AI.OpenAI 2.9.0-beta.1 ships
+         against (its AzureOpenAIClient subclasses OpenAI SDK internals, so the versions must
+         agree to avoid runtime breaks). Foundry Local does not depend on this package. -->
+    <PackageVersion Include="OpenAI" Version="2.9.1" />
+
+    <!-- Optional cloud AI cleanup via Azure AI Foundry / Azure OpenAI, discovered through the
+         user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored).
+         2.9.0-beta.1 is the only release with a native net10.0 target. -->
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
+    <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.5.2" />
+    <!-- Azure Resource Graph powers a single tenant-wide KQL query to enumerate every chat
+         deployment across all subscriptions at once, instead of an N×M per-subscription crawl
+         (which times out on large corp tenants). CognitiveServices is kept as a fallback. -->
+    <PackageVersion Include="Azure.ResourceManager.ResourceGraph" Version="1.1.0" />
+
+    <!-- Installer + delta auto-update. -->
+    <PackageVersion Include="Velopack" Version="1.2.0" />
+
+    <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
+         settings store in plaintext. -->
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+
     <!-- Test -->
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

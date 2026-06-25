@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 
@@ -21,26 +22,34 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
+    private readonly ITextCleanupService _cleanup;
+    private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly Action<AppSettings> _applySettings;
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private readonly ObservableCollection<AzureFoundryDeployment> _azureDeployments = new();
     private IReadOnlyList<DictionaryEntry> _originalEntries = Array.Empty<DictionaryEntry>();
 
     private HotkeyBinding _pendingBinding;
     private readonly HashSet<Key> _heldModifiers = new();
     private bool _capturing;
     private bool _finalized;
+    private bool _loadingUi;
 
     public SettingsWindow(
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
         IDictionaryRepository dictionary,
+        ITextCleanupService cleanup,
+        IAzureFoundryDiscovery azureDiscovery,
         Action<AppSettings> applySettings)
     {
         _settingsRepository = settingsRepository;
         _audio = audio;
         _dictionary = dictionary;
+        _cleanup = cleanup;
+        _azureDiscovery = azureDiscovery;
         _applySettings = applySettings;
 
         _settings = settingsRepository.Load();
@@ -54,6 +63,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateChoices();
         LoadFromSettings();
         LoadDictionary();
+
+        // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
+        _cleanup.StatusChanged += OnCleanupStatusChanged;
+        Closed += OnClosed;
+        RefreshAiStatus();
     }
 
     private void PopulateDevices()
@@ -91,22 +105,75 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LoadFromSettings()
     {
-        HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
-        ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
+        _loadingUi = true;
+        try
+        {
+            HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
+            ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
 
-        OverlayCheck.IsChecked = _settings.ShowOverlay;
-        VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
-        PostCheck.IsChecked = _settings.ApplyPostProcessing;
-        LaunchCheck.IsChecked = _settings.LaunchOnLogin;
-        StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
-        BeamSearchCheck.IsChecked = _settings.UseHighAccuracyDecoding;
+            OverlayCheck.IsChecked = _settings.ShowOverlay;
+            VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
+            PostCheck.IsChecked = _settings.ApplyPostProcessing;
+            LaunchCheck.IsChecked = _settings.LaunchOnLogin;
+            StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
+            BeamSearchCheck.IsChecked = _settings.UseHighAccuracyDecoding;
 
-        var items = (InjectionChoice[])InjectionCombo.ItemsSource;
-        InjectionCombo.SelectedItem =
-            items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
+            var items = (InjectionChoice[])InjectionCombo.ItemsSource;
+            InjectionCombo.SelectedItem =
+                items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
 
-        ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
-        UpdateThreadsLabel();
+            ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
+            UpdateThreadsLabel();
+
+            LoadAiSettings();
+        }
+        finally
+        {
+            _loadingUi = false;
+        }
+    }
+
+    private void LoadAiSettings()
+    {
+        AiCleanupCheck.IsChecked = _settings.EnableAiCleanup;
+
+        AiProviderCombo.DisplayMemberPath = nameof(ProviderChoice.Label);
+        AiProviderCombo.ItemsSource = new[]
+        {
+            new ProviderChoice(CleanupProvider.FoundryLocal, "On-device — Foundry Local"),
+            new ProviderChoice(CleanupProvider.AzureFoundry, "Azure AI Foundry — your Azure sign-in"),
+        };
+
+        AiModelCombo.DisplayMemberPath = nameof(CleanupModel.DisplayName);
+        AiModelCombo.ItemsSource = CleanupModelCatalog.Curated;
+
+        AzureDeploymentCombo.DisplayMemberPath = nameof(AzureFoundryDeployment.DisplayName);
+        AzureDeploymentCombo.ItemsSource = _azureDeployments;
+
+        var providers = (ProviderChoice[])AiProviderCombo.ItemsSource;
+        AiProviderCombo.SelectedItem =
+            providers.FirstOrDefault(p => p.Provider == _settings.AiCleanupProvider) ?? providers[0];
+
+        var model = CleanupModelCatalog.Curated
+            .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
+        AiModelCombo.SelectedItem = model ?? CleanupModelCatalog.Curated[0];
+
+        // Seed the Azure list with the saved deployment so Save preserves the selection even before
+        // the user runs a discovery refresh. A real refresh replaces this synthetic entry.
+        if (!string.IsNullOrWhiteSpace(_settings.AiCleanupAzureEndpoint) &&
+            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureDeployment))
+        {
+            _azureDeployments.Add(new AzureFoundryDeployment(
+                "Saved selection", string.Empty, string.Empty, string.Empty,
+                _settings.AiCleanupAzureEndpoint!, _settings.AiCleanupAzureDeployment!,
+                _settings.AiCleanupAzureDeployment!, null, string.Empty));
+            AzureDeploymentCombo.SelectedIndex = 0;
+        }
+
+        UpdateAiProviderPanels();
+        UpdateAiEnabledState();
+        UpdateAiModelHint();
+        UpdateAzureDeploymentHint();
     }
 
     private void LoadDictionary()
@@ -236,6 +303,205 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ThreadsLabel.Text = value == 0 ? "Auto" : value.ToString();
     }
 
+    // --- AI cleanup ----------------------------------------------------------------------
+
+    private CleanupProvider SelectedProvider =>
+        (AiProviderCombo.SelectedItem as ProviderChoice)?.Provider ?? CleanupProvider.FoundryLocal;
+
+    private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        UpdateAiEnabledState();
+    }
+
+    private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        UpdateAiProviderPanels();
+        RefreshAiStatus();
+    }
+
+    private void AiModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        UpdateAiModelHint();
+    }
+
+    private void AzureDeploymentCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        UpdateAzureDeploymentHint();
+    }
+
+    private async void AiCheckButton_Click(object sender, RoutedEventArgs e)
+    {
+        AiCheckButton.IsEnabled = false;
+        AiStatusText.Text = "Checking Foundry Local…";
+        try
+        {
+            var available = await Task.Run(() => _cleanup.ProbeAsync());
+            AiStatusText.Text = available
+                ? "Foundry Local is available. The selected model downloads on first use (about 1–2 GB)."
+                : "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
+        }
+        catch
+        {
+            AiStatusText.Text = "Couldn't verify Foundry Local. Make sure it's installed and try again.";
+        }
+        finally
+        {
+            AiCheckButton.IsEnabled = true;
+        }
+    }
+
+    private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
+    {
+        AzureRefreshButton.IsEnabled = false;
+        AzureStatusText.Text = "Signing in and listing your Azure deployments…";
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(cts.Token), cts.Token);
+
+            var previous = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
+            SetAzureDeployments(
+                deployments,
+                preferEndpoint: previous?.Endpoint ?? _settings.AiCleanupAzureEndpoint,
+                preferDeployment: previous?.DeploymentName ?? _settings.AiCleanupAzureDeployment);
+
+            AzureStatusText.Text = deployments.Count == 0
+                ? "No chat-model deployments were found in your Azure subscriptions."
+                : $"Found {deployments.Count} deployment(s). Choose one to use for cleanup.";
+        }
+        catch (OperationCanceledException)
+        {
+            AzureStatusText.Text = "Listing Azure deployments timed out. Please try again.";
+        }
+        catch
+        {
+            AzureStatusText.Text = "Couldn't list deployments. Run 'az login' and make sure you have access to a deployment.";
+        }
+        finally
+        {
+            AzureRefreshButton.IsEnabled = true;
+        }
+    }
+
+    private void SetAzureDeployments(
+        IReadOnlyList<AzureFoundryDeployment> deployments, string? preferEndpoint, string? preferDeployment)
+    {
+        _azureDeployments.Clear();
+        foreach (var deployment in deployments)
+        {
+            _azureDeployments.Add(deployment);
+        }
+
+        AzureFoundryDeployment? match = null;
+        if (!string.IsNullOrWhiteSpace(preferDeployment))
+        {
+            match = _azureDeployments.FirstOrDefault(d =>
+                string.Equals(d.DeploymentName, preferDeployment, StringComparison.OrdinalIgnoreCase) &&
+                (string.IsNullOrWhiteSpace(preferEndpoint) ||
+                 string.Equals(d.Endpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (match is not null)
+        {
+            AzureDeploymentCombo.SelectedItem = match;
+        }
+        else if (_azureDeployments.Count > 0)
+        {
+            AzureDeploymentCombo.SelectedIndex = 0;
+        }
+
+        UpdateAzureDeploymentHint();
+    }
+
+    private void UpdateAiProviderPanels()
+    {
+        if (FoundryPanel is null || AzurePanel is null)
+        {
+            return;
+        }
+
+        var azure = SelectedProvider == CleanupProvider.AzureFoundry;
+        FoundryPanel.Visibility = azure ? Visibility.Collapsed : Visibility.Visible;
+        AzurePanel.Visibility = azure ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateAiEnabledState()
+    {
+        var on = AiCleanupCheck.IsChecked == true;
+        AiProviderCombo.IsEnabled = on;
+        FoundryPanel.IsEnabled = on;
+        AzurePanel.IsEnabled = on;
+    }
+
+    private void UpdateAiModelHint()
+    {
+        if (AiModelHint is null)
+        {
+            return;
+        }
+
+        AiModelHint.Text = (AiModelCombo.SelectedItem as CleanupModel)?.Hint ?? string.Empty;
+    }
+
+    private void UpdateAzureDeploymentHint()
+    {
+        if (AzureDeploymentHint is null)
+        {
+            return;
+        }
+
+        AzureDeploymentHint.Text = AzureDeploymentCombo.SelectedItem is AzureFoundryDeployment deployment
+            ? deployment.Detail
+            : "Sign in and refresh to choose a deployment.";
+    }
+
+    private void OnCleanupStatusChanged() => Dispatcher.BeginInvoke(new Action(RefreshAiStatus));
+
+    private void RefreshAiStatus()
+    {
+        var detail = _cleanup.StatusDetail;
+        if (_cleanup.Status == CleanupStatus.Disabled || string.IsNullOrWhiteSpace(detail))
+        {
+            return;
+        }
+
+        // Surface the live engine status on whichever provider is actually running.
+        if (_settings.AiCleanupProvider == CleanupProvider.AzureFoundry)
+        {
+            AzureStatusText.Text = detail;
+        }
+        else
+        {
+            AiStatusText.Text = detail;
+        }
+    }
+
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        Closed -= OnClosed;
+    }
+
     // --- Save / cancel -------------------------------------------------------------------
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -256,6 +522,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
+
+            _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
+            _settings.AiCleanupProvider = SelectedProvider;
+            _settings.AiCleanupModel =
+                (AiModelCombo.SelectedItem as CleanupModel)?.Alias ?? CleanupModelCatalog.DefaultAlias;
+            var azureDeployment = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
+            _settings.AiCleanupAzureEndpoint = azureDeployment?.Endpoint;
+            _settings.AiCleanupAzureDeployment = azureDeployment?.DeploymentName;
 
             PersistDictionary();
             _settingsRepository.Save(_settings);
@@ -320,6 +594,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private sealed record DeviceChoice(string? Id, string Name);
 
     private sealed record InjectionChoice(InjectionMethod Method, string Label);
+
+    private sealed record ProviderChoice(CleanupProvider Provider, string Label);
 
     /// <summary>Editable dictionary row backing the grid. Parameterless ctor enables grid add-row.</summary>
     public sealed class DictionaryRow
