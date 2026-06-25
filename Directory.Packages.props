@@ -41,6 +41,17 @@
          .AsIChatClient() lets both Foundry Local and Azure OpenAI present the same IChatClient, so the
          cleanup call site is provider-agnostic and clients swap with no logic change. GA (no preview). -->
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.7.0" />
+
+    <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive:
+         Foundry Local / classic Azure OpenAI wrap their IChatClient in a ChatClientAgent, while an
+         Azure AI Foundry *project* endpoint (…/api/projects/…) is turned into an AIAgent directly via
+         AIProjectClient.AsAIAgent — the framework's native Foundry path, no server-side agent created.
+         Microsoft.Agents.AI.Foundry supplies the AIProjectClient.AsAIAgent extension; Azure.AI.Projects
+         supplies AIProjectClient. -->
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.11.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
+    <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Azure AI Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored).

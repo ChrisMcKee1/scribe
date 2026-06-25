@@ -47,9 +47,11 @@ public interface IAzureFoundryDiscovery
     /// <summary>
     /// Enumerates deployments. Throws on auth failure (e.g. not signed in) so the UI can prompt the
     /// user to run <c>az login</c>; per-account errors are swallowed so one bad resource never hides
-    /// the rest.
+    /// the rest. <paramref name="tenantId"/> optionally pins discovery to a specific Entra tenant
+    /// instead of the Azure CLI's active tenant (useful when the user juggles corp and demo tenants).
     /// </summary>
-    Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
+        string? tenantId = null, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -91,14 +93,23 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
     public AzureFoundryDiscovery(ILogger<AzureFoundryDiscovery> log) => _log = log;
 
-    public async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
+        string? tenantId = null, CancellationToken cancellationToken = default)
     {
         // Exclude the interactive browser flow: this is a headless background call and must fail
-        // fast to a clear "run az login" message rather than popping a browser.
-        var credential = new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        // fast to a clear "run az login" message rather than popping a browser. An explicit tenant
+        // overrides the Azure CLI's active tenant so the right subscriptions are enumerated.
+        var credentialOptions = new DefaultAzureCredentialOptions
         {
             ExcludeInteractiveBrowserCredential = true,
-        });
+        };
+
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            credentialOptions.TenantId = tenantId.Trim();
+        }
+
+        var credential = new DefaultAzureCredential(credentialOptions);
 
         var arm = new ArmClient(credential);
 

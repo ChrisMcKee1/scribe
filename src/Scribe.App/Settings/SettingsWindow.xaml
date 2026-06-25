@@ -241,6 +241,13 @@
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                    Text="Stored encrypted on this PC (Windows DPAPI). When set, the key is used instead of your Azure sign-in."/>
 
+                                        <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    VerticalContentAlignment="Center"
+                                                    PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Set this if you sign in to more than one tenant (e.g. work and a demo tenant). Used both for sign-in discovery and for cleanup. Ignored when an API key is set."/>
+
                                         <!-- Discovery helper: list deployments from the user's az login and autofill the fields above. -->
                                         <TextBlock Text="Discover from your Azure sign-in" Style="{StaticResource SettingTitle}" Margin="0,18,0,0"/>
                                         <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"

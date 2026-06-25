@@ -63,6 +63,15 @@ public sealed class AppSettings
     public string? AiCleanupAzureDeployment { get; set; }
 
     /// <summary>
+    /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Azure AI Foundry and
+    /// authentication falls back to the user's sign-in. <see cref="DefaultAzureCredential"/> otherwise
+    /// uses whichever tenant the Azure CLI is currently set to, which is wrong for users who juggle a
+    /// corporate and a demo tenant. Leave blank to use the active <c>az login</c> tenant. Ignored when
+    /// an API key is supplied.
+    /// </summary>
+    public string? AiCleanupAzureTenantId { get; set; }
+
+    /// <summary>
     /// Optional Azure OpenAI API key. When set, the Azure provider authenticates with this key instead
     /// of the user's <c>az login</c> (DefaultAzureCredential). Encrypted at rest with Windows DPAPI via
     /// <see cref="DpapiProtectedStringConverter"/>; this property exposes the plaintext in memory.

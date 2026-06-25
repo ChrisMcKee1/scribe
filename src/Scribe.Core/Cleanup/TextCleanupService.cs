@@ -1,8 +1,10 @@
 using System.ClientModel;
 using System.Text.RegularExpressions;
 using Azure.AI.OpenAI;
+using Azure.AI.Projects;
 using Azure.Identity;
 using Microsoft.AI.Foundry.Local;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenAI;
@@ -13,15 +15,20 @@ namespace Scribe.Core.Cleanup;
 
 /// <summary>
 /// AI text cleanup that fixes punctuation, capitalization and grammar in transcribed text by
-/// sending it to a chat model. Two providers are supported behind one provider-neutral
-/// <see cref="IChatClient"/> (Microsoft.Extensions.AI), so the call site is identical regardless of
-/// where the model runs and a different client can be swapped in with no change to cleanup logic:
+/// sending it to a chat model. Both providers are unified on the Microsoft Agent Framework
+/// <see cref="AIAgent"/> primitive, so the call site (<see cref="CleanAsync"/>) is identical
+/// regardless of where the model runs and a different backend swaps in with no change to cleanup
+/// logic:
 /// <list type="bullet">
 /// <item><b>Foundry Local</b> — a small instruct model running on this PC via Foundry's local
-/// OpenAI-compatible web service. Everything stays offline; the ~1–2 GB model downloads on first
-/// use.</item>
-/// <item><b>Azure AI Foundry</b> — a model the user has already deployed in Azure, reached with
-/// their Azure CLI sign-in (AAD token, no key stored). No download.</item>
+/// OpenAI-compatible web service, wrapped as an agent with <see cref="ChatClientAgent"/>. Everything
+/// stays offline; the ~1–2 GB model downloads on first use.</item>
+/// <item><b>Azure AI Foundry</b> — a model the user has already deployed in Azure. An Azure AI
+/// Foundry <i>project</i> endpoint (<c>…/api/projects/…</c>) is turned into an agent directly with
+/// the framework's native <c>AIProjectClient.AsAIAgent</c>; a classic Azure OpenAI account endpoint
+/// is reached through <see cref="AzureOpenAIClient"/> and wrapped with <see cref="ChatClientAgent"/>.
+/// Authentication reuses the user's Azure CLI sign-in (AAD token, optional tenant override) or an
+/// optional API key.</item>
 /// </list>
 /// <para>
 /// Design guarantees that keep dictation robust: initialization happens entirely in the background
@@ -33,10 +40,14 @@ namespace Scribe.Core.Cleanup;
 internal sealed class TextCleanupService : ITextCleanupService
 {
     // Cleanup is a quick rewrite of short text; cap latency and input size so a long paragraph or a
-    // slow model can never stall the inject path. On any timeout we return the raw text.
+    // slow model can never stall the inject path. On any timeout we return the raw text. Azure gets a
+    // longer budget than Foundry Local: a cloud round-trip plus a reasoning model's hidden thinking
+    // step is slower than a warm on-device model.
     private const int CleanupTimeoutSeconds = 12;
+    private const int AzureCleanupTimeoutSeconds = 20;
     private const int MaxInputChars = 4000;
     private const float CleanupTemperature = 0.1f;
+    private const string AgentName = "ScribeCleanup";
 
     private static readonly Regex ThinkBlock =
         new("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -56,10 +67,9 @@ internal sealed class TextCleanupService : ITextCleanupService
     private OpenAIClient? _openAiClient;
     private bool _managerReady;
 
-    // Azure credential, created lazily and reused.
-    private DefaultAzureCredential? _azureCredential;
-
-    private IChatClient? _chatClient;
+    // The active cleanup agent (Agent Framework). Rebuilt whenever the provider/model/endpoint
+    // changes; null until initialization completes or after the feature is disabled.
+    private AIAgent? _agent;
 
     private CancellationTokenSource? _configureCts;
     private int _lastReportedPct = -1;
@@ -101,13 +111,13 @@ internal sealed class TextCleanupService : ITextCleanupService
             if (!effective.Enabled)
             {
                 _configureCts?.Cancel();
-                _chatClient = null;
+                _agent = null;
                 nowDisabled = true;
             }
             else if (!effective.IsActionable)
             {
                 _configureCts?.Cancel();
-                _chatClient = null;
+                _agent = null;
                 notActionable = true;
             }
             else if (!(sameConfig && _status == CleanupStatus.Ready))
@@ -149,16 +159,16 @@ internal sealed class TextCleanupService : ITextCleanupService
             return text;
         }
 
-        IChatClient? chat;
+        AIAgent? agent;
         CleanupOptions options;
         lock (_gate)
         {
-            if (!_options.Enabled || _status != CleanupStatus.Ready || _chatClient is null)
+            if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null)
             {
                 return text;
             }
 
-            chat = _chatClient;
+            agent = _agent;
             options = _options;
         }
 
@@ -170,21 +180,17 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try
         {
+            var timeoutSeconds = options.Provider == CleanupProvider.AzureFoundry
+                ? AzureCleanupTimeoutSeconds
+                : CleanupTimeoutSeconds;
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(CleanupTimeoutSeconds));
+            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
-            var messages = new List<ChatMessage>
-            {
-                new(ChatRole.System, BuildSystemPrompt(options)),
-                new(ChatRole.User, text),
-            };
-            var chatOptions = new ChatOptions
-            {
-                Temperature = CleanupTemperature,
-                MaxOutputTokens = EstimateMaxTokens(text),
-            };
-
-            ChatResponse result = await chat.GetResponseAsync(messages, chatOptions, cts.Token)
+            // The system prompt is baked into the agent at creation, so we only send the raw text and
+            // run statelessly (no thread) — each dictation is independent, with no history to grow.
+            var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, text));
+            var result = await agent.RunAsync(text, options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
 
             return Sanitize(result.Text, text);
@@ -232,13 +238,13 @@ internal sealed class TextCleanupService : ITextCleanupService
             acquired = true;
             ct.ThrowIfCancellationRequested();
 
-            var chat = options.Provider switch
+            var agent = options.Provider switch
             {
                 CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
-                _ => await InitFoundryAsync(options.FoundryModelAlias, ct).ConfigureAwait(false),
+                _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
             };
 
-            if (chat is null)
+            if (agent is null)
             {
                 // A sub-initializer already published an Unavailable status with a useful reason.
                 return;
@@ -252,7 +258,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     return;
                 }
 
-                _chatClient = chat;
+                _agent = agent;
             }
 
             SetStatus(CleanupStatus.Ready, ReadyDetail(options));
@@ -276,8 +282,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    private async Task<IChatClient?> InitFoundryAsync(string alias, CancellationToken ct)
+    private async Task<AIAgent?> InitFoundryAsync(CleanupOptions options, CancellationToken ct)
     {
+        var alias = options.FoundryModelAlias;
         SetStatus(CleanupStatus.Initializing, "Starting Foundry Local…");
         await EnsureManagerAsync(ct).ConfigureAwait(false);
 
@@ -307,10 +314,13 @@ internal sealed class TextCleanupService : ITextCleanupService
         SetStatus(CleanupStatus.Downloading, $"Loading {alias}…");
         await model.LoadAsync(ct).ConfigureAwait(false);
 
-        return _openAiClient.GetChatClient(model.Id).AsIChatClient();
+        // Present the on-device OpenAI-compatible chat client as an Agent Framework agent so the
+        // cleanup call site is identical to the Azure path.
+        var chatClient = _openAiClient.GetChatClient(model.Id).AsIChatClient();
+        return new ChatClientAgent(chatClient, instructions: BuildSystemPrompt(options), name: AgentName);
     }
 
-    private async Task<IChatClient?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
+    private async Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
         {
@@ -326,37 +336,52 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         SetStatus(CleanupStatus.Initializing, $"Connecting to Azure deployment '{options.AzureDeployment}'…");
 
-        // When the user supplies an API key, authenticate with it directly; otherwise reuse their
-        // existing az / Visual Studio / environment / managed-identity sign-in. Interactive browser is
-        // excluded so credential resolution never blocks on a popup in the background.
+        var instructions = BuildSystemPrompt(options);
         var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
-        AzureOpenAIClient azureClient;
-        if (useKey)
+
+        // An Azure AI Foundry *project* endpoint (…/api/projects/…) has a different shape from a
+        // classic Azure OpenAI account endpoint and is handled natively by the Agent Framework.
+        var isProject = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase);
+
+        AIAgent agent;
+        if (isProject && !useKey)
         {
-            azureClient = new AzureOpenAIClient(endpointUri, new ApiKeyCredential(options.AzureApiKey!));
+            // Native Foundry path: the project client turns the endpoint + deployment into an agent
+            // directly (a code-first "responses" agent — no server-side agent resource is created).
+            // The project data-plane requires an AAD token, so this path is AAD-only.
+            var credential = CreateAzureCredential(options.AzureTenantId);
+            var project = new AIProjectClient(endpointUri, credential);
+            agent = project.AsAIAgent(model: options.AzureDeployment!, instructions: instructions, name: AgentName);
         }
         else
         {
-            _azureCredential ??= new DefaultAzureCredential(new DefaultAzureCredentialOptions
-            {
-                ExcludeInteractiveBrowserCredential = true,
-            });
-            azureClient = new AzureOpenAIClient(endpointUri, _azureCredential);
+            // Classic Azure OpenAI account endpoint, or a project endpoint paired with an API key
+            // (the project data-plane can't use keys, so fall back to the account host for key auth).
+            var accountHost = isProject
+                ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
+                : endpointUri;
+
+            // When the user supplies an API key, authenticate with it directly; otherwise reuse their
+            // existing az / Visual Studio / environment / managed-identity sign-in (optionally pinned
+            // to a specific tenant). Interactive browser is excluded so credential resolution never
+            // blocks on a popup in the background.
+            var azureClient = useKey
+                ? new AzureOpenAIClient(accountHost, new ApiKeyCredential(options.AzureApiKey!))
+                : new AzureOpenAIClient(accountHost, CreateAzureCredential(options.AzureTenantId));
+
+            var chatClient = azureClient.GetChatClient(options.AzureDeployment!).AsIChatClient();
+            agent = new ChatClientAgent(chatClient, instructions: instructions, name: AgentName);
         }
 
-        var chat = azureClient.GetChatClient(options.AzureDeployment).AsIChatClient();
-
         // Validate auth + deployment with a tiny request so the status reflects reality rather than
-        // silently no-op'ing on every dictation. No temperature: some models only allow the default.
+        // silently no-op'ing on every dictation. We only care that the call doesn't fault; no token
+        // cap, because a clamped budget could be consumed entirely by a reasoning model's thinking.
         ct.ThrowIfCancellationRequested();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(20));
+        cts.CancelAfter(TimeSpan.FromSeconds(AzureCleanupTimeoutSeconds));
         try
         {
-            _ = await chat.GetResponseAsync(
-                new List<ChatMessage> { new(ChatRole.User, "Reply with: ok") },
-                new ChatOptions { MaxOutputTokens = 16 },
-                cts.Token).ConfigureAwait(false);
+            _ = await agent.RunAsync("Reply with: ok", cancellationToken: cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -367,11 +392,29 @@ internal sealed class TextCleanupService : ITextCleanupService
             _log.LogWarning(ex, "Azure deployment validation failed for {Deployment}.", options.AzureDeployment);
             SetStatus(CleanupStatus.Unavailable, useKey
                 ? "Couldn't reach the Azure deployment. Check the endpoint, deployment name, and API key."
-                : "Couldn't reach the Azure deployment. Check that you're signed in (az login) and have access.");
+                : "Couldn't reach the Azure deployment. Check that you're signed in (az login), the tenant is correct, and you have access.");
             return null;
         }
 
-        return chat;
+        return agent;
+    }
+
+    // Builds a credential for Azure auth, optionally pinned to a specific tenant. Interactive browser
+    // is excluded so a background init can never block on a popup; an explicit tenant overrides the
+    // Azure CLI's active tenant, which matters for users who switch between corp and demo tenants.
+    private static DefaultAzureCredential CreateAzureCredential(string? tenantId)
+    {
+        var credentialOptions = new DefaultAzureCredentialOptions
+        {
+            ExcludeInteractiveBrowserCredential = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            credentialOptions.TenantId = tenantId.Trim();
+        }
+
+        return new DefaultAzureCredential(credentialOptions);
     }
 
     private async Task EnsureManagerAsync(CancellationToken ct)
@@ -487,11 +530,40 @@ internal sealed class TextCleanupService : ITextCleanupService
         _ => $"{CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName} ready.",
     };
 
-    private static int EstimateMaxTokens(string text)
+    // Per-call generation options. The system prompt lives on the agent, so this only carries the
+    // sampling/limit knobs that vary by provider.
+    private static ChatOptions BuildChatOptions(CleanupOptions options, string text)
+    {
+        var chatOptions = new ChatOptions
+        {
+            MaxOutputTokens = EstimateMaxTokens(text, options.Provider),
+        };
+
+        // A low temperature keeps Foundry Local instruct models deterministic for a faithful edit.
+        // Azure cleanup commonly targets gpt-5-class reasoning models, which run at a fixed internal
+        // temperature and can reject or ignore an override — so we leave it unset and trust the model.
+        if (options.Provider == CleanupProvider.FoundryLocal)
+        {
+            chatOptions.Temperature = CleanupTemperature;
+        }
+
+        return chatOptions;
+    }
+
+    private static int EstimateMaxTokens(string text, CleanupProvider provider)
     {
         // English averages a little over one token per word; cleanup output tracks input length.
-        // Give headroom and clamp so a runaway response is still bounded.
         var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+        // Azure cleanup often runs on reasoning models whose hidden thinking tokens count against this
+        // same budget, so a tight cap would truncate the visible answer. Give a generous ceiling.
+        if (provider == CleanupProvider.AzureFoundry)
+        {
+            var azureEstimate = (words * 4) + 512;
+            return Math.Clamp(azureEstimate, 512, 4096);
+        }
+
+        // Foundry Local models don't reason, so keep a tight bound for latency and runaway-output safety.
         var estimate = (int)(words * 2.0) + 48;
         return Math.Clamp(estimate, 64, 768);
     }
@@ -593,7 +665,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             cts = _configureCts;
             _configureCts = null;
-            _chatClient = null;
+            _agent = null;
         }
 
         try { cts?.Cancel(); } catch { /* best effort */ }

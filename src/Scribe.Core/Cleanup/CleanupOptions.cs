@@ -22,7 +22,8 @@ public sealed record CleanupOptions(
     string FoundryModelAlias,
     string? AzureEndpoint,
     string? AzureDeployment,
-    string? AzureApiKey = null)
+    string? AzureApiKey = null,
+    string? AzureTenantId = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

@@ -163,6 +163,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureEndpointBox.Text = _settings.AiCleanupAzureEndpoint ?? string.Empty;
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
+        AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
 
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
@@ -378,7 +379,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(cts.Token), cts.Token);
+            var tenantId = NullIfBlank(AzureTenantBox.Text);
+            var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(tenantId, cts.Token), cts.Token);
 
             var previous = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
             SetAzureDeployments(
@@ -538,6 +540,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
+            _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
 
             PersistDictionary();
             _settingsRepository.Save(_settings);
