@@ -1,4 +1,5 @@
 using Scribe.Core.Audio;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Transcription;
 
@@ -27,6 +28,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ITranscriptionService, TranscriptionService>();
 
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
+        services.AddSingleton<IHotkeyService, HotkeyService>();
 
         return services;
     }
