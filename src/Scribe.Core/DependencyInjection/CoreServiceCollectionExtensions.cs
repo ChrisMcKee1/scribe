@@ -1,6 +1,7 @@
 using Scribe.Core.Audio;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -29,6 +30,7 @@ public static class CoreServiceCollectionExtensions
 
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
         services.AddSingleton<IHotkeyService, HotkeyService>();
+        services.AddSingleton<ITextInjector, TextInjector>();
 
         return services;
     }
