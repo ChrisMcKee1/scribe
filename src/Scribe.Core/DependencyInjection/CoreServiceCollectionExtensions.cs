@@ -1,6 +1,7 @@
 using Scribe.Core.Audio;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Persistence;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 
@@ -31,6 +32,11 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
         services.AddSingleton<IHotkeyService, HotkeyService>();
         services.AddSingleton<ITextInjector, TextInjector>();
+
+        services.AddSingleton<ScribeDatabase>();
+        services.AddSingleton<ISettingsRepository, SettingsRepository>();
+        services.AddSingleton<IDictionaryRepository, DictionaryRepository>();
+        services.AddSingleton<IHistoryRepository, HistoryRepository>();
 
         return services;
     }
