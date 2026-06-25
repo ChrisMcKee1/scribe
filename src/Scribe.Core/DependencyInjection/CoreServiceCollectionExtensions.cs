@@ -1,3 +1,4 @@
+using Scribe.Core.Audio;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Transcription;
 
@@ -24,6 +25,8 @@ public static class CoreServiceCollectionExtensions
 
         services.AddOptions<TranscriptionOptions>();
         services.AddSingleton<ITranscriptionService, TranscriptionService>();
+
+        services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
 
         return services;
     }
