@@ -1,4 +1,5 @@
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Transcription;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -6,9 +7,9 @@ namespace Microsoft.Extensions.DependencyInjection;
 public static class CoreServiceCollectionExtensions
 {
     /// <summary>
-    /// Adds the core foundation services (paths + model resolution). Audio, transcription,
-    /// VAD, hotkey, injection, persistence and post-processing services are layered on by
-    /// their respective registration helpers as they are introduced.
+    /// Adds the core foundation services (paths + model resolution) and the offline
+    /// transcription engine. Audio, VAD, hotkey, injection, persistence and post-processing
+    /// services are layered on as they are introduced.
     /// </summary>
     public static IServiceCollection AddScribeCore(this IServiceCollection services)
     {
@@ -20,6 +21,9 @@ public static class CoreServiceCollectionExtensions
         });
 
         services.AddSingleton<ModelLocator>();
+
+        services.AddOptions<TranscriptionOptions>();
+        services.AddSingleton<ITranscriptionService, TranscriptionService>();
 
         return services;
     }
