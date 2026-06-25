@@ -222,38 +222,16 @@
                                         </Border>
                                     </StackPanel>
 
-                                    <!-- Azure AI Foundry (your Azure sign-in, or an endpoint + optional key) -->
+                                    <!-- Azure AI Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
                                     <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
                                         <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
                                         <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                     VerticalContentAlignment="Center"
-                                                    PlaceholderText="https://my-resource.openai.azure.com/"/>
-
-                                        <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="e.g. gpt-4o"/>
-
-                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                        VerticalContentAlignment="Center"
-                                                        PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
+                                                    PlaceholderText="https://my-resource.services.ai.azure.com/"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Stored encrypted on this PC (Windows DPAPI). When set, the key is used instead of your Azure sign-in."/>
+                                                   Text="Your Azure AI Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
 
-                                        <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Set this if you sign in to more than one tenant (e.g. work and a demo tenant). Used both for sign-in discovery and for cleanup. Ignored when an API key is set."/>
-
-                                        <!-- Discovery helper: list deployments from the user's az login and autofill the fields above. -->
-                                        <TextBlock Text="Discover from your Azure sign-in" Style="{StaticResource SettingTitle}" Margin="0,18,0,0"/>
-                                        <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                  SelectionChanged="AzureDeploymentCombo_SelectionChanged"/>
-                                        <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
-
+                                        <!-- Primary path: reuse the user's az login and list their deployments -->
                                         <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}">
                                             <Grid>
@@ -262,37 +240,92 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                    <TextBlock Text="Sign in with the Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                     <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="Run 'az login', then refresh to list your deployments and fill in the fields above. A selection autofills the endpoint and deployment."/>
+                                                               Text="Reuses your 'az login' session — no key needed. Sign in to list the models you've deployed."/>
                                                 </StackPanel>
-                                                <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; refresh"
+                                                <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; find models"
                                                            MinWidth="76" VerticalAlignment="Center"
                                                            Click="AzureRefreshButton_Click"/>
                                             </Grid>
                                         </Border>
+
+                                        <!-- Model picker: the deployments discovered from your sign-in -->
+                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                  SelectionChanged="AzureDeploymentCombo_SelectionChanged"/>
+                                        <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                        <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->
+                                        <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
+                                            <ui:CardExpander.Header>
+                                                <StackPanel>
+                                                    <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                               Text="Everything here is optional and overrides the choices above when set. Leave these empty to keep using your Azure sign-in."/>
+                                                </StackPanel>
+                                            </ui:CardExpander.Header>
+                                            <StackPanel Margin="0,4,0,0">
+                                                <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
+                                                <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="e.g. gpt-4o"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="The model picker above fills this in for you. Editing it overrides the picked model — leave it as-is unless you're naming a deployment by hand."/>
+
+                                                <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                VerticalContentAlignment="Center"
+                                                                PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="When provided, Scribe authenticates with this key and overrides your Azure sign-in. Leave empty to use az login. Stored encrypted on this PC (Windows DPAPI)."/>
+
+                                                <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="When provided, discovery and cleanup use this tenant and override your default az login tenant. Leave empty to use the default. Ignored when an API key is set."/>
+                                            </StackPanel>
+                                        </ui:CardExpander>
                                     </StackPanel>
+
+                                    <!-- Writing style: shared across providers; sent to the model on every cleanup -->
+                                    <TextBlock Text="Writing style" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                               Text="This guidance is sent to the AI model every time it polishes your dictation. Describe the tone, punctuation and structure you want — or leave the default."/>
+                                    <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                SpellCheck.IsEnabled="True"/>
+                                    <ui:Button x:Name="ResetWritingStyleButton" Content="Restore default" Margin="0,8,0,0"
+                                               HorizontalAlignment="Left" Appearance="Secondary"
+                                               Click="ResetWritingStyleButton_Click"/>
                                 </StackPanel>
                             </ui:Card>
 
-                            <TextBlock Text="Advanced" Style="{StaticResource GroupHeader}"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Higher-accuracy decoding" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Use beam-search decoding for slightly better accuracy on difficult audio, at a small speed cost. Takes effect after restarting Scribe."/>
+                            <ui:CardExpander x:Name="AdvancedDecodingExpander" Margin="0,18,0,8" IsExpanded="False">
+                                <ui:CardExpander.Header>
+                                    <StackPanel>
+                                        <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                   Text="Power-user decoding options. The defaults are right for most people — changes here take effect after restarting Scribe."/>
                                     </StackPanel>
-                                    <ui:ToggleSwitch x:Name="BeamSearchCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
+                                </ui:CardExpander.Header>
+                                <StackPanel Margin="0,4,0,0">
                                     <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Higher-accuracy decoding" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Use beam-search decoding for slightly better accuracy on difficult audio, at a small speed cost."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="BeamSearchCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <Grid Margin="0,16,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -307,9 +340,9 @@
                                             Margin="0,8,0,0"
                                             ValueChanged="ThreadsSlider_ValueChanged"/>
                                     <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="CPU threads for transcription (0 = automatic). Changing this takes effect after restarting Scribe."/>
+                                               Text="CPU threads for transcription (0 = automatic)."/>
                                 </StackPanel>
-                            </ui:Card>
+                            </ui:CardExpander>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

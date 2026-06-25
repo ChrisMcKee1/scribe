@@ -23,7 +23,8 @@ public sealed record CleanupOptions(
     string? AzureEndpoint,
     string? AzureDeployment,
     string? AzureApiKey = null,
-    string? AzureTenantId = null)
+    string? AzureTenantId = null,
+    string? WritingStyle = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

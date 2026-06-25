@@ -63,6 +63,14 @@ public sealed class AppSettings
     public string? AiCleanupAzureDeployment { get; set; }
 
     /// <summary>
+    /// User-editable writing-style guidance appended to the AI cleanup prompt. Describes the tone,
+    /// punctuation and structure the model should apply when polishing a transcript. Blank means use
+    /// <see cref="Cleanup.CleanupPrompt.DefaultWritingStyle"/>, so improvements to the default flow
+    /// through to users who never customized it.
+    /// </summary>
+    public string AiCleanupWritingStyle { get; set; } = string.Empty;
+
+    /// <summary>
     /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Azure AI Foundry and
     /// authentication falls back to the user's sign-in. <see cref="DefaultAzureCredential"/> otherwise
     /// uses whichever tenant the Azure CLI is currently set to, which is wrong for users who juggle a

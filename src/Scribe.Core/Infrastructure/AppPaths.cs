@@ -10,9 +10,16 @@ public sealed class AppPaths
 
     public AppPaths(string? rootOverride = null)
     {
-        RootDir = rootOverride ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            AppFolderName);
+        // Resolution order: explicit override (tests) > SCRIBE_DATA_DIR env (isolated/portable
+        // profiles, e.g. screenshot capture) > the per-user %LOCALAPPDATA%\Scribe known folder.
+        // Mirrors the SCRIBE_MODELS_DIR override honoured by ModelLocator.
+        var envOverride = Environment.GetEnvironmentVariable("SCRIBE_DATA_DIR");
+        RootDir = rootOverride
+            ?? (string.IsNullOrWhiteSpace(envOverride)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    AppFolderName)
+                : envOverride);
 
         LogsDir = Path.Combine(RootDir, "logs");
         ModelsDir = Path.Combine(RootDir, "models");

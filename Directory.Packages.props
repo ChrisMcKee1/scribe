@@ -67,6 +67,13 @@
     <!-- Installer + delta auto-update. -->
     <PackageVersion Include="Velopack" Version="1.2.0" />
 
+    <!-- Observability: OpenTelemetry tracing of the dictation lifecycle (capture → VAD → decode →
+         AI cleanup → inject). Always-on locally via a log-bridge processor; OTLP export is opt-in
+         when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire dashboard / Jaeger / any collector). -->
+    <PackageVersion Include="OpenTelemetry" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
+
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />

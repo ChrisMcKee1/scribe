@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/icon.png" alt="Scribe" width="128" height="128" />
+
 # 🎙️ Scribe
 
 **Private, offline voice dictation for Windows 11.**

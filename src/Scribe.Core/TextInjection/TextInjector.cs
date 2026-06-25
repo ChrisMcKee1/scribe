@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
@@ -29,24 +31,61 @@ public sealed class TextInjector : ITextInjector
             return;
         }
 
+        // Capture the ambient dictation span on the calling thread; the STA worker is a fresh
+        // Thread, so Activity.Current would not flow to it. We re-parent the child span explicitly.
+        var parent = Activity.Current;
+
         RunOnStaThread(() =>
         {
+            using var activity = ScribeTelemetry.Source.StartActivity(
+                ScribeTelemetry.InjectActivity, ActivityKind.Internal, parent?.Context ?? default);
+            activity?.SetTag(ScribeTelemetry.TagInjectChars, text.Length);
+
             if (method == InjectionMethod.UnicodeType)
             {
-                TypeUnicode(text);
+                var typed = TypeUnicode(text);
+                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: false);
                 return;
             }
 
-            if (!PasteViaClipboard(text))
+            if (PasteViaClipboard(text, out var ctrl))
+            {
+                ReportInjection(activity, "clipboard", ctrl.Sent, ctrl.Total, fallback: false);
+            }
+            else
             {
                 _logger.LogWarning("Clipboard paste failed; falling back to Unicode typing.");
-                TypeUnicode(text);
+                var typed = TypeUnicode(text);
+                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: true);
             }
         });
     }
 
-    private bool PasteViaClipboard(string text)
+    private static void ReportInjection(Activity? activity, string method, int sent, int total, bool fallback)
     {
+        if (activity is null)
+        {
+            return;
+        }
+
+        var complete = sent == total;
+        activity.SetTag(ScribeTelemetry.TagInjectMethod, method);
+        activity.SetTag(ScribeTelemetry.TagInjectSent, sent);
+        activity.SetTag(ScribeTelemetry.TagInjectTotal, total);
+        activity.SetTag(ScribeTelemetry.TagInjectComplete, complete);
+        activity.SetTag(ScribeTelemetry.TagInjectFallback, fallback);
+
+        // A partial SendInput is the smoking gun for "I spoke but nothing (or only part) appeared" —
+        // mark the span as an error so it stands out in the log and any OTLP backend.
+        if (!complete)
+        {
+            activity.SetStatus(ActivityStatusCode.Error, $"SendInput delivered {sent}/{total} events.");
+        }
+    }
+
+    private bool PasteViaClipboard(string text, out (int Sent, int Total) ctrlV)
+    {
+        ctrlV = (0, 0);
         string? previous = Win32Clipboard.TryGetText();
 
         if (!Win32Clipboard.SetText(text))
@@ -55,7 +94,7 @@ public sealed class TextInjector : ITextInjector
         }
 
         Thread.Sleep(ClipboardSettleDelayMs);
-        SendCtrlV();
+        ctrlV = SendCtrlV();
         Thread.Sleep(PasteSettleDelayMs);
 
         if (previous is not null)
@@ -66,7 +105,7 @@ public sealed class TextInjector : ITextInjector
         return true;
     }
 
-    private void SendCtrlV()
+    private (int Sent, int Total) SendCtrlV()
     {
         INPUT[] inputs =
         [
@@ -81,9 +120,11 @@ public sealed class TextInjector : ITextInjector
         {
             _logger.LogWarning("SendInput delivered {Sent}/{Total} Ctrl+V events.", sent, inputs.Length);
         }
+
+        return ((int)sent, inputs.Length);
     }
 
-    private void TypeUnicode(string text)
+    private (int Sent, int Total) TypeUnicode(string text)
     {
         // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally
         // because each surrogate half is sent as its own KEYEVENTF_UNICODE event.
@@ -97,7 +138,7 @@ public sealed class TextInjector : ITextInjector
 
         if (inputs.Length == 0)
         {
-            return;
+            return (0, 0);
         }
 
         uint sent = SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
@@ -105,6 +146,8 @@ public sealed class TextInjector : ITextInjector
         {
             _logger.LogWarning("SendInput delivered {Sent}/{Total} Unicode events.", sent, inputs.Length);
         }
+
+        return ((int)sent, inputs.Length);
     }
 
     private static INPUT KeyDown(ushort virtualKey) => KeyboardInput(virtualKey, 0, 0);

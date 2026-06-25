@@ -7,6 +7,9 @@
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="WPF-UI" />
   </ItemGroup>
 
@@ -22,6 +25,7 @@
     <AssemblyName>Scribe</AssemblyName>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\scribe.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>

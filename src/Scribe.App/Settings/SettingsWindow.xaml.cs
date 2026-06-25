@@ -165,6 +165,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
 
+        // Open Advanced automatically when manual auth is configured, so an override isn't hidden away.
+        AzureAdvancedExpander.IsExpanded =
+            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey) ||
+            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureTenantId);
+
+        // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
+        SeedAzureModelFromSettings();
+
+        // Show the effective writing style: the user's saved guidance, or the default when blank so
+        // they can see and edit exactly what gets sent to the model.
+        AiWritingStyleBox.Text = CleanupPrompt.ResolveWritingStyle(_settings.AiCleanupWritingStyle);
+
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
         UpdateAiModelHint();
@@ -443,6 +455,34 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAzureDeploymentHint();
     }
 
+    private void SeedAzureModelFromSettings()
+    {
+        var endpoint = _settings.AiCleanupAzureEndpoint?.Trim();
+        var deployment = _settings.AiCleanupAzureDeployment?.Trim();
+        if (string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(deployment))
+        {
+            return;
+        }
+
+        // A lightweight stand-in so the Model picker shows the saved choice until sign-in discovery
+        // replaces it. Empty AccountName makes Detail render the endpoint; ModelName == DeploymentName
+        // makes DisplayName render just the deployment.
+        var current = new AzureFoundryDeployment(
+            SubscriptionName: string.Empty,
+            ResourceGroup: string.Empty,
+            AccountName: string.Empty,
+            Kind: string.Empty,
+            Endpoint: endpoint,
+            DeploymentName: deployment,
+            ModelName: deployment,
+            ModelVersion: null,
+            Location: string.Empty);
+
+        _azureDeployments.Clear();
+        _azureDeployments.Add(current);
+        AzureDeploymentCombo.SelectedItem = current;
+    }
+
     private void UpdateAiProviderPanels()
     {
         if (FoundryPanel is null || AzurePanel is null)
@@ -461,7 +501,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCombo.IsEnabled = on;
         FoundryPanel.IsEnabled = on;
         AzurePanel.IsEnabled = on;
+        AiWritingStyleBox.IsEnabled = on;
+        ResetWritingStyleButton.IsEnabled = on;
     }
+
+    private void ResetWritingStyleButton_Click(object sender, RoutedEventArgs e) =>
+        AiWritingStyleBox.Text = CleanupPrompt.DefaultWritingStyle;
 
     private void UpdateAiModelHint()
     {
@@ -482,7 +527,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         AzureDeploymentHint.Text = AzureDeploymentCombo.SelectedItem is AzureFoundryDeployment deployment
             ? deployment.Detail
-            : "Sign in and refresh to choose a deployment.";
+            : "Sign in to list your models, or enter one under Advanced.";
     }
 
     private void OnCleanupStatusChanged() => Dispatcher.BeginInvoke(new Action(RefreshAiStatus));
@@ -541,6 +586,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
             _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
+
+            // Persist the writing style only when it differs from the default; storing blank for the
+            // default keeps users tracking future improvements to the built-in guidance.
+            var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
+            _settings.AiCleanupWritingStyle =
+                writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
+                    ? string.Empty
+                    : writingStyle;
 
             PersistDictionary();
             _settingsRepository.Save(_settings);

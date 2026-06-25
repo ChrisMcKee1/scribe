@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -131,7 +132,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureEndpoint,
         settings.AiCleanupAzureDeployment,
         settings.AiCleanupAzureApiKey,
-        settings.AiCleanupAzureTenantId);
+        settings.AiCleanupAzureTenantId,
+        settings.AiCleanupWritingStyle);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -199,34 +201,42 @@ internal sealed class DictationController : IDisposable
 
     private async Task ProcessAsync()
     {
+        using var activity = ScribeTelemetry.Source.StartActivity(ScribeTelemetry.DictationActivity);
         var settings = CurrentSettings;
         try
         {
             var captured = _audio.Stop();
+            activity?.SetTag(ScribeTelemetry.TagCaptureSeconds, Math.Round(captured.Duration.TotalSeconds, 2));
             _log.LogInformation("Captured {Seconds:F2}s of audio.", captured.Duration.TotalSeconds);
 
             if (captured.IsEmpty)
             {
+                activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyCapture);
                 _log.LogInformation("Capture was empty; nothing to transcribe.");
                 return;
             }
 
             var audio = captured;
+            activity?.SetTag(ScribeTelemetry.TagVadEnabled, settings.UseVoiceActivityDetection);
             if (settings.UseVoiceActivityDetection)
             {
                 var trimmed = _vad.Trim(captured);
                 if (trimmed.IsEmpty)
                 {
+                    activity?.SetTag(ScribeTelemetry.TagVadKept, false);
+                    activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.VadNoSpeech);
                     _log.LogInformation("VAD detected no speech; discarding capture.");
                     return;
                 }
 
+                activity?.SetTag(ScribeTelemetry.TagVadKept, true);
                 audio = trimmed;
             }
 
             // The recognizer warm-loads at startup, but a very fast first dictation can arrive
             // before that finishes. Rather than throwing the capture away, let Transcribe load the
             // model on demand (it is idempotent) so the user's first utterance is never lost.
+            activity?.SetTag(ScribeTelemetry.TagRecognizerReady, _transcription.IsReady);
             if (!_transcription.IsReady)
             {
                 _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
@@ -235,19 +245,26 @@ internal sealed class DictationController : IDisposable
             var result = _transcription.Transcribe(audio);
             if (result.IsEmpty)
             {
+                activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.NoSpeech);
                 _log.LogInformation("No speech recognized.");
                 return;
             }
+
+            activity?.SetTag(ScribeTelemetry.TagDecodeChars, result.Text.Length);
+            activity?.SetTag(ScribeTelemetry.TagRealTimeFactor, Math.Round(result.RealTimeFactor, 2));
 
             // Optional AI cleanup runs between raw decoding and dictionary canonicalization so the
             // post-processor always has the final say on casing of terms like ".NET" or "ReBAC".
             // CleanAsync never throws and returns the input unchanged when cleanup is off or not
             // ready, so a dictation is never blocked or lost by this stage.
             var recognized = result.Text;
+            activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
                 var cleaned = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
-                if (!string.Equals(cleaned, recognized, StringComparison.Ordinal))
+                var changed = !string.Equals(cleaned, recognized, StringComparison.Ordinal);
+                activity?.SetTag(ScribeTelemetry.TagAiChanged, changed);
+                if (changed)
                 {
                     _log.LogInformation("AI cleanup refined the transcription.");
                     recognized = cleaned;
@@ -257,23 +274,29 @@ internal sealed class DictationController : IDisposable
             var text = settings.ApplyPostProcessing ? _postProcessor.Process(recognized) : recognized;
             if (string.IsNullOrWhiteSpace(text))
             {
+                activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyAfterPostProcess);
                 _log.LogInformation("Post-processing produced empty text; nothing to inject.");
                 return;
             }
 
+            activity?.SetTag(ScribeTelemetry.TagFinalChars, text.Length);
             _log.LogInformation(
                 "Transcribed {Chars} chars in {Decode:F2}s (RTF {Rtf:F2}).",
                 text.Length, result.DecodeDuration.TotalSeconds, result.RealTimeFactor);
 
             var targetApp = ForegroundProcessName();
+            activity?.SetTag(ScribeTelemetry.TagTargetApp, targetApp);
             _injector.Inject(text, settings.InjectionMethod);
             _log.LogInformation("Text injected into {App}.", targetApp ?? "the focused app");
 
+            activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
             RecordHistory(settings, audio, result, text, targetApp);
             Dictated?.Invoke(text);
         }
         catch (Exception ex)
         {
+            activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             _log.LogError(ex, "Dictation processing failed.");
             Error?.Invoke("transcription failed");
         }

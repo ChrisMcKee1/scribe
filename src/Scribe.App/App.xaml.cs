@@ -60,6 +60,7 @@ public partial class App : Application
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddScribeCore();
+        builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new FileLoggerProvider(paths.LogsDir));
         builder.Logging.AddDebug();
@@ -141,16 +142,27 @@ public partial class App : Application
     {
         _tray?.SetState(state);
 
-        var show = state == DictationState.Recording && (_controller?.CurrentSettings.ShowOverlay ?? false);
+        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
+        var polishing = _controller?.CurrentSettings.EnableAiCleanup ?? false;
         Dispatcher.BeginInvoke(() =>
         {
-            if (show)
-            {
-                _overlay?.ShowRecording();
-            }
-            else
+            if (!overlayEnabled)
             {
                 _overlay?.HideOverlay();
+                return;
+            }
+
+            switch (state)
+            {
+                case DictationState.Recording:
+                    _overlay?.ShowRecording();
+                    break;
+                case DictationState.Processing:
+                    _overlay?.ShowProcessing(polishing);
+                    break;
+                default:
+                    _overlay?.HideOverlay();
+                    break;
             }
         });
     }

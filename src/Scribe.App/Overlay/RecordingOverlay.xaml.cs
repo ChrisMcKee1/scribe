@@ -16,7 +16,7 @@ namespace Scribe.App.Overlay;
 public partial class RecordingOverlay : Window
 {
     private const double TrackWidth = 168;
-    private const double BottomMargin = 48;
+    private const double BottomMargin = 12;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
@@ -26,6 +26,7 @@ public partial class RecordingOverlay : Window
 
     private readonly IAudioCaptureService _audio;
     private readonly Storyboard _pulse;
+    private readonly Storyboard _processing;
 
     private bool _subscribed;
     private bool _closing;
@@ -36,6 +37,7 @@ public partial class RecordingOverlay : Window
         _audio = audio ?? throw new ArgumentNullException(nameof(audio));
         InitializeComponent();
         _pulse = (Storyboard)Resources["PulseStoryboard"];
+        _processing = (Storyboard)Resources["ProcessingStoryboard"];
     }
 
     /// <summary>Positions and shows the overlay, starts the pulse and begins metering input.</summary>
@@ -46,6 +48,9 @@ public partial class RecordingOverlay : Window
             return;
         }
 
+        _processing.Stop(this);
+        ProcessingContent.Visibility = Visibility.Collapsed;
+        ListeningContent.Visibility = Visibility.Visible;
         StatusText.Text = "Listening…";
         ResetMeter();
         PositionToWorkArea();
@@ -60,6 +65,41 @@ public partial class RecordingOverlay : Window
         _pulse.Begin(this, isControllable: true);
     }
 
+    /// <summary>
+    /// Switches the overlay to its processing state — a row of bouncing dots — shown after the key
+    /// is released while the capture is transcribed and (optionally) polished by the AI model so the
+    /// user can see that work is happening.
+    /// </summary>
+    public void ShowProcessing(bool polishing)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        // Capture has stopped, so drop the live level meter and the record-dot pulse.
+        if (_subscribed)
+        {
+            _audio.LevelChanged -= OnLevelChanged;
+            _subscribed = false;
+        }
+
+        _pulse.Stop(this);
+        ResetMeter();
+
+        ListeningContent.Visibility = Visibility.Collapsed;
+        ProcessingContent.Visibility = Visibility.Visible;
+        ProcessingText.Text = polishing ? "Polishing…" : "Transcribing…";
+
+        PositionToWorkArea();
+        if (!IsVisible)
+        {
+            Show();
+        }
+
+        _processing.Begin(this, isControllable: true);
+    }
+
     /// <summary>Hides the overlay and stops metering; safe to call when already hidden.</summary>
     public void HideOverlay()
     {
@@ -70,6 +110,7 @@ public partial class RecordingOverlay : Window
         }
 
         _pulse.Stop(this);
+        _processing.Stop(this);
         ResetMeter();
         Hide();
     }

@@ -9,45 +9,129 @@
         Topmost="True"
         ResizeMode="NoResize"
         Focusable="False"
-        Width="248" Height="68">
+        Width="364" Height="180">
     <Window.Resources>
         <Storyboard x:Key="PulseStoryboard" RepeatBehavior="Forever" AutoReverse="True">
             <DoubleAnimation Storyboard.TargetName="RecDot"
                              Storyboard.TargetProperty="Opacity"
                              From="1.0" To="0.25" Duration="0:0:0.7"/>
         </Storyboard>
+        <Storyboard x:Key="ProcessingStoryboard">
+            <DoubleAnimation Storyboard.TargetName="Dot1"
+                             Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                             From="0" To="-5" Duration="0:0:0.45" AutoReverse="True"
+                             RepeatBehavior="Forever" BeginTime="0:0:0">
+                <DoubleAnimation.EasingFunction><QuadraticEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="Dot2"
+                             Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                             From="0" To="-5" Duration="0:0:0.45" AutoReverse="True"
+                             RepeatBehavior="Forever" BeginTime="0:0:0.12">
+                <DoubleAnimation.EasingFunction><QuadraticEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+            <DoubleAnimation Storyboard.TargetName="Dot3"
+                             Storyboard.TargetProperty="(UIElement.RenderTransform).(TranslateTransform.Y)"
+                             From="0" To="-5" Duration="0:0:0.45" AutoReverse="True"
+                             RepeatBehavior="Forever" BeginTime="0:0:0.24">
+                <DoubleAnimation.EasingFunction><QuadraticEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
     </Window.Resources>
 
-    <Border CornerRadius="16" Padding="14,10"
-            Background="#E6202124" BorderBrush="#26FFFFFF" BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="20" ShadowDepth="0" Opacity="0.55" Color="#FF000000"/>
-        </Border.Effect>
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <Ellipse x:Name="RecDot" Grid.Column="0" Width="12" Height="12"
-                     Margin="2,0,12,0" Fill="#E5484D" VerticalAlignment="Center"/>
-
-            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock x:Name="StatusText" Text="Listening…"
-                           Foreground="#FFFFFFFF" FontSize="13" FontWeight="SemiBold"/>
-                <Border Margin="0,8,0,0" Width="168" Height="6" CornerRadius="3"
-                        Background="#33FFFFFF" HorizontalAlignment="Left">
-                    <Border x:Name="MeterFill" HorizontalAlignment="Left" Width="0" CornerRadius="3">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                <GradientStop Color="#34D399" Offset="0.0"/>
-                                <GradientStop Color="#FBBF24" Offset="0.7"/>
-                                <GradientStop Color="#E5484D" Offset="1.0"/>
-                            </LinearGradientBrush>
-                        </Border.Background>
-                    </Border>
+    <Grid>
+        <!-- Strong outer glow: a bright rounded stroke whose bloom radiates around the pill at full
+             intensity. A null fill keeps the glass card above it see-through (no opaque backing). -->
+        <Border Margin="60" CornerRadius="23" BorderThickness="2"
+                Background="{x:Null}" BorderBrush="#FF8FB2FF" IsHitTestVisible="False">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="44" ShadowDepth="0" Opacity="1" Color="#7FA6FF"/>
+            </Border.Effect>
+        </Border>
+        <Border x:Name="Card" Margin="60" CornerRadius="22" BorderThickness="1">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#C22B2F38" Offset="0.0"/>
+                    <GradientStop Color="#B81E2128" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.BorderBrush>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#33FFFFFF" Offset="0.0"/>
+                    <GradientStop Color="#0DFFFFFF" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Border.BorderBrush>
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="48" ShadowDepth="0" Opacity="0.95" Color="#7FA6FF"/>
+            </Border.Effect>
+            <Grid>
+                <!-- Specular sheen across the top so the panel reads like glass -->
+                <Border CornerRadius="22,22,0,0" VerticalAlignment="Top" Height="32" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#1AFFFFFF" Offset="0.0"/>
+                            <GradientStop Color="#00FFFFFF" Offset="1.0"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
                 </Border>
-            </StackPanel>
-        </Grid>
-    </Border>
+
+                <Grid Margin="16,11">
+                    <!-- Listening: pulsing record dot + live input-level meter -->
+                    <Grid x:Name="ListeningContent">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Ellipse x:Name="RecDot" Grid.Column="0" Width="12" Height="12"
+                                 Margin="2,0,12,0" Fill="#E5484D" VerticalAlignment="Center"/>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="StatusText" Text="Listening…"
+                                       Foreground="#FFFFFFFF" FontSize="13" FontWeight="SemiBold"/>
+                            <Border Margin="0,8,0,0" Width="168" Height="6" CornerRadius="3"
+                                    Background="#26FFFFFF" HorizontalAlignment="Left">
+                                <Border x:Name="MeterFill" HorizontalAlignment="Left" Width="0" CornerRadius="3">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#34D399" Offset="0.0"/>
+                                            <GradientStop Color="#FBBF24" Offset="0.7"/>
+                                            <GradientStop Color="#E5484D" Offset="1.0"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Processing: bouncing dots while transcribing / AI polishing -->
+                    <Grid x:Name="ProcessingContent" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                    VerticalAlignment="Center" Margin="2,0,12,0">
+                            <Ellipse x:Name="Dot1" Width="8" Height="8" Margin="0,0,5,0" Fill="#8AB4F8"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform><TranslateTransform/></Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Ellipse x:Name="Dot2" Width="8" Height="8" Margin="0,0,5,0" Fill="#8AB4F8"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform><TranslateTransform/></Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Ellipse x:Name="Dot3" Width="8" Height="8" Fill="#8AB4F8"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform><TranslateTransform/></Ellipse.RenderTransform>
+                            </Ellipse>
+                        </StackPanel>
+
+                        <TextBlock x:Name="ProcessingText" Grid.Column="1" Text="Polishing…"
+                                   VerticalAlignment="Center" Foreground="#FFFFFFFF"
+                                   FontSize="13" FontWeight="SemiBold"/>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>
