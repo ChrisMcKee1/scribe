@@ -2,6 +2,7 @@ using Scribe.Core.Audio;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
@@ -39,6 +40,8 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<IDictionaryRepository, DictionaryRepository>();
         services.AddSingleton<IHistoryRepository, HistoryRepository>();
+
+        services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 
         return services;
     }
