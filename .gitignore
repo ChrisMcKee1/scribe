@@ -1,0 +1,42 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+
+# Models (large ONNX files — fetched via scripts/Download-Models.ps1, never committed)
+models/
+*.onnx
+
+# Audio scratch / captures
+*.wav
+!**/test_wavs/*.wav
+
+# Rider / VS / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+.vscode/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Test / coverage
+[Tt]est[Rr]esults/
+coverage*.json
+coverage*.xml
+*.coverage
+*.trx
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Logs / local app data
+*.log

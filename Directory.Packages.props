@@ -1,0 +1,35 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime, win-x64 native -->
+    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.3" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.3" />
+
+    <!-- Audio capture -->
+    <PackageVersion Include="NAudio" Version="2.3.0" />
+
+    <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 3.0.3 is pinned directly to pull the
+         patched native e_sqlite3 3.50.3 and override Microsoft.Data.Sqlite's transitive
+         2.1.11 bundle, which is flagged by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+
+    <!-- Hosting / DI / logging / options -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.9" />
+
+    <!-- Tray UI -->
+    <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
+
+    <!-- Test -->
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+</Project>

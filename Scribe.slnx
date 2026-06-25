@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Scribe.App/Scribe.App.csproj" />
+    <Project Path="src/Scribe.Core/Scribe.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj" />
+  </Folder>
+</Solution>
