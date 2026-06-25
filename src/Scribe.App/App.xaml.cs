@@ -9,9 +9,11 @@ using Scribe.App.Tray;
 using Scribe.Core.Audio;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
-using Scribe.Core.Models;
+using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
+using Scribe.Core.Vad;
 
 namespace Scribe.App;
 
@@ -63,25 +65,35 @@ public partial class App : Application
         var log = services.GetRequiredService<ILogger<App>>();
         WireGlobalExceptionLogging(log);
 
+        // Install the seed dictionary on first run so post-processing is useful out of the box.
+        services.GetRequiredService<IDictionaryRepository>().SeedIfEmpty(DefaultVocabulary.Entries);
+
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
             services.GetRequiredService<IAudioCaptureService>(),
+            services.GetRequiredService<IVadService>(),
             services.GetRequiredService<ITranscriptionService>(),
+            services.GetRequiredService<ITextPostProcessor>(),
             services.GetRequiredService<ITextInjector>(),
+            services.GetRequiredService<IHistoryRepository>(),
+            services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
 
         _controller.StateChanged += state => _tray!.SetState(state);
         _controller.Error += message => _tray!.ShowError(message);
 
-        // Warm-load the ~600 MB recognizer off the UI thread so the first dictation is fast.
+        // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
+        // dictation is fast and does not stall on model initialization.
         var transcription = services.GetRequiredService<ITranscriptionService>();
+        var vad = services.GetRequiredService<IVadService>();
         _ = Task.Run(() =>
         {
             try
             {
+                vad.Initialize();
                 transcription.Initialize();
                 log.LogInformation("Transcription engine warm-loaded.");
             }
@@ -93,7 +105,7 @@ public partial class App : Application
         });
 
         _controller.Start();
-        log.LogInformation("Scribe started. Hold {Key} to dictate.", HotkeyBinding.Default.DisplayName);
+        log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
     }
 
     protected override void OnExit(ExitEventArgs e)

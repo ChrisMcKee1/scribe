@@ -11,4 +11,7 @@ internal enum DictationState
 
     /// <summary>Capture has stopped and the audio is being transcribed and injected.</summary>
     Processing,
+
+    /// <summary>Dictation is suspended; the hotkey is ignored until resumed.</summary>
+    Paused,
 }

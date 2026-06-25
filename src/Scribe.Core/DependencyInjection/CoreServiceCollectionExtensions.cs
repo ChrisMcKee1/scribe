@@ -28,7 +28,11 @@ public static class CoreServiceCollectionExtensions
 
         services.AddSingleton<ModelLocator>();
 
-        services.AddOptions<TranscriptionOptions>();
+        // Decode thread count is user-configurable; pull it from persisted settings when the
+        // recognizer first resolves its options (0 keeps the service's auto heuristic).
+        services.AddOptions<TranscriptionOptions>()
+            .Configure<ISettingsRepository>((options, settings) =>
+                options.NumThreads = settings.Load().DecodeThreads);
         services.AddSingleton<ITranscriptionService, TranscriptionService>();
 
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
