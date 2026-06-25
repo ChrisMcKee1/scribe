@@ -4,8 +4,10 @@
 [Oo]ut/
 artifacts/
 
-# Models (large ONNX files — fetched via scripts/Download-Models.ps1, never committed)
-models/
+# Models (large ONNX files — fetched via scripts/Download-Models.ps1, never committed).
+# Anchored to the repo root so it only excludes the downloaded model payload and NOT
+# source folders that happen to be named "Models" (e.g. src/Scribe.Core/Models/).
+/models/
 *.onnx
 
 # Audio scratch / captures
