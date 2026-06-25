@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
+using Scribe.App.Settings;
 using Scribe.App.Tray;
 using Scribe.Core.Audio;
 using Scribe.Core.Hotkeys;
@@ -31,6 +32,7 @@ public partial class App : Application
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
+    private SettingsWindow? _settingsWindow;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -70,6 +72,7 @@ public partial class App : Application
 
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
+        _tray.SettingsRequested += OpenSettings;
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -105,8 +108,43 @@ public partial class App : Application
         });
 
         _controller.Start();
+
+        // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
+        // if the app was moved, and clears if the user disabled it elsewhere.
+        StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
+
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
+
+        // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
+        if (e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase)))
+        {
+            OpenSettings();
+        }
     }
+
+    /// <summary>
+    /// Opens the settings window (or focuses it if already open). Built per-open from the host so
+    /// it always reflects the latest persisted state; on save it calls back into the controller to
+    /// apply the new binding and dictionary live.
+    /// </summary>
+    private void OpenSettings() => Dispatcher.Invoke(() =>
+    {
+        if (_settingsWindow is not null)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        var services = _host!.Services;
+        _settingsWindow = new SettingsWindow(
+            services.GetRequiredService<ISettingsRepository>(),
+            services.GetRequiredService<IAudioCaptureService>(),
+            services.GetRequiredService<IDictionaryRepository>(),
+            settings => _controller!.ApplySettings(settings));
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    });
 
     protected override void OnExit(ExitEventArgs e)
     {

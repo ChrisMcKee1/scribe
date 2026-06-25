@@ -18,10 +18,18 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
 
+    /// <summary>Raised when the user picks "Settings…" from the tray menu.</summary>
+    public event Action? SettingsRequested;
+
     public TrayIconHost()
     {
         var menu = new ContextMenu();
         menu.Items.Add(new MenuItem { Header = "Scribe", IsEnabled = false });
+        menu.Items.Add(new Separator());
+
+        var settings = new MenuItem { Header = "Settings…" };
+        settings.Click += (_, _) => SettingsRequested?.Invoke();
+        menu.Items.Add(settings);
         menu.Items.Add(new Separator());
 
         var quit = new MenuItem { Header = "Quit Scribe" };

@@ -7,6 +7,7 @@
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon.Wpf" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="WPF-UI" />
   </ItemGroup>
 
   <PropertyGroup>

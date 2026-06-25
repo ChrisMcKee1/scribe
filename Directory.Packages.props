@@ -26,6 +26,9 @@
     <!-- Tray UI -->
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
 
+    <!-- Fluent (Windows 11) design system for WPF: themed controls, FluentWindow, Mica. -->
+    <PackageVersion Include="WPF-UI" Version="4.3.0" />
+
     <!-- Test -->
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
