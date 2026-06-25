@@ -158,17 +158,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
         AiModelCombo.SelectedItem = model ?? CleanupModelCatalog.Curated[0];
 
-        // Seed the Azure list with the saved deployment so Save preserves the selection even before
-        // the user runs a discovery refresh. A real refresh replaces this synthetic entry.
-        if (!string.IsNullOrWhiteSpace(_settings.AiCleanupAzureEndpoint) &&
-            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureDeployment))
-        {
-            _azureDeployments.Add(new AzureFoundryDeployment(
-                "Saved selection", string.Empty, string.Empty, string.Empty,
-                _settings.AiCleanupAzureEndpoint!, _settings.AiCleanupAzureDeployment!,
-                _settings.AiCleanupAzureDeployment!, null, string.Empty));
-            AzureDeploymentCombo.SelectedIndex = 0;
-        }
+        // Manual endpoint/deployment/key are the source of truth Save reads; discovery just autofills
+        // them. Populate from saved settings (key is decrypted in memory by AppSettings).
+        AzureEndpointBox.Text = _settings.AiCleanupAzureEndpoint ?? string.Empty;
+        AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
+        AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
 
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
@@ -346,6 +340,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        // A discovered deployment autofills the manual fields, which are what Save persists.
+        if (AzureDeploymentCombo.SelectedItem is AzureFoundryDeployment deployment)
+        {
+            AzureEndpointBox.Text = deployment.Endpoint;
+            AzureDeploymentBox.Text = deployment.DeploymentName;
+        }
+
         UpdateAzureDeploymentHint();
     }
 
@@ -382,8 +383,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var previous = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
             SetAzureDeployments(
                 deployments,
-                preferEndpoint: previous?.Endpoint ?? _settings.AiCleanupAzureEndpoint,
-                preferDeployment: previous?.DeploymentName ?? _settings.AiCleanupAzureDeployment);
+                preferEndpoint: NullIfBlank(AzureEndpointBox.Text) ?? previous?.Endpoint,
+                preferDeployment: NullIfBlank(AzureDeploymentBox.Text) ?? previous?.DeploymentName);
 
             AzureStatusText.Text = deployments.Count == 0
                 ? "No chat-model deployments were found in your Azure subscriptions."
@@ -425,9 +426,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             AzureDeploymentCombo.SelectedItem = match;
         }
-        else if (_azureDeployments.Count > 0)
+        else if (string.IsNullOrWhiteSpace(preferEndpoint) && string.IsNullOrWhiteSpace(preferDeployment)
+                 && _azureDeployments.Count > 0)
         {
+            // Nothing entered yet — pick the first discovered deployment and let it autofill the fields.
             AzureDeploymentCombo.SelectedIndex = 0;
+        }
+        else
+        {
+            // Keep the user's manually entered endpoint/deployment; don't overwrite with an unrelated match.
+            AzureDeploymentCombo.SelectedItem = null;
         }
 
         UpdateAzureDeploymentHint();
@@ -527,9 +535,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupProvider = SelectedProvider;
             _settings.AiCleanupModel =
                 (AiModelCombo.SelectedItem as CleanupModel)?.Alias ?? CleanupModelCatalog.DefaultAlias;
-            var azureDeployment = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
-            _settings.AiCleanupAzureEndpoint = azureDeployment?.Endpoint;
-            _settings.AiCleanupAzureDeployment = azureDeployment?.DeploymentName;
+            _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
+            _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
+            _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
 
             PersistDictionary();
             _settingsRepository.Save(_settings);
@@ -588,6 +596,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ? name[..^suffix.Length]
             : name;
     }
+
+    private static string? NullIfBlank(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
 

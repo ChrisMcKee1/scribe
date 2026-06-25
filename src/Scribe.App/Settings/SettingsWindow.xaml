@@ -222,9 +222,27 @@
                                         </Border>
                                     </StackPanel>
 
-                                    <!-- Azure AI Foundry (your Azure sign-in) -->
+                                    <!-- Azure AI Foundry (your Azure sign-in, or an endpoint + optional key) -->
                                     <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
-                                        <TextBlock Text="Deployment" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    VerticalContentAlignment="Center"
+                                                    PlaceholderText="https://my-resource.openai.azure.com/"/>
+
+                                        <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    VerticalContentAlignment="Center"
+                                                    PlaceholderText="e.g. gpt-4o"/>
+
+                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Stored encrypted on this PC (Windows DPAPI). When set, the key is used instead of your Azure sign-in."/>
+
+                                        <!-- Discovery helper: list deployments from the user's az login and autofill the fields above. -->
+                                        <TextBlock Text="Discover from your Azure sign-in" Style="{StaticResource SettingTitle}" Margin="0,18,0,0"/>
                                         <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                   SelectionChanged="AzureDeploymentCombo_SelectionChanged"/>
                                         <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
@@ -237,9 +255,9 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                    <TextBlock Text="Uses your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock Text="Sign in with the Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                     <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="Sign in with the Azure CLI (az login), then refresh to list the models you've deployed. No keys are stored."/>
+                                                               Text="Run 'az login', then refresh to list your deployments and fill in the fields above. A selection autofills the endpoint and deployment."/>
                                                 </StackPanel>
                                                 <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; refresh"
                                                            MinWidth="76" VerticalAlignment="Center"

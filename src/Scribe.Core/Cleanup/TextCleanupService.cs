@@ -3,9 +3,9 @@ using System.Text.RegularExpressions;
 using Azure.AI.OpenAI;
 using Azure.Identity;
 using Microsoft.AI.Foundry.Local;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenAI;
-using OpenAI.Chat;
 using FoundryConfiguration = Microsoft.AI.Foundry.Local.Configuration;
 using FoundryLogLevel = Microsoft.AI.Foundry.Local.LogLevel;
 
@@ -13,8 +13,9 @@ namespace Scribe.Core.Cleanup;
 
 /// <summary>
 /// AI text cleanup that fixes punctuation, capitalization and grammar in transcribed text by
-/// sending it to a chat model. Two providers are supported behind one OpenAI-compatible
-/// <see cref="ChatClient"/>:
+/// sending it to a chat model. Two providers are supported behind one provider-neutral
+/// <see cref="IChatClient"/> (Microsoft.Extensions.AI), so the call site is identical regardless of
+/// where the model runs and a different client can be swapped in with no change to cleanup logic:
 /// <list type="bullet">
 /// <item><b>Foundry Local</b> — a small instruct model running on this PC via Foundry's local
 /// OpenAI-compatible web service. Everything stays offline; the ~1–2 GB model downloads on first
@@ -58,7 +59,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Azure credential, created lazily and reused.
     private DefaultAzureCredential? _azureCredential;
 
-    private ChatClient? _chatClient;
+    private IChatClient? _chatClient;
 
     private CancellationTokenSource? _configureCts;
     private int _lastReportedPct = -1;
@@ -148,7 +149,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             return text;
         }
 
-        ChatClient? chat;
+        IChatClient? chat;
         CleanupOptions options;
         lock (_gate)
         {
@@ -172,23 +173,21 @@ internal sealed class TextCleanupService : ITextCleanupService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(CleanupTimeoutSeconds));
 
-            var messages = new ChatMessage[]
+            var messages = new List<ChatMessage>
             {
-                new SystemChatMessage(BuildSystemPrompt(options)),
-                new UserChatMessage(text),
+                new(ChatRole.System, BuildSystemPrompt(options)),
+                new(ChatRole.User, text),
             };
-            var completionOptions = new ChatCompletionOptions
+            var chatOptions = new ChatOptions
             {
                 Temperature = CleanupTemperature,
-                MaxOutputTokenCount = EstimateMaxTokens(text),
+                MaxOutputTokens = EstimateMaxTokens(text),
             };
 
-            ClientResult<ChatCompletion> result = await chat.CompleteChatAsync(messages, completionOptions, cts.Token)
+            ChatResponse result = await chat.GetResponseAsync(messages, chatOptions, cts.Token)
                 .ConfigureAwait(false);
 
-            var completion = result.Value;
-            var candidate = completion.Content.Count > 0 ? completion.Content[0].Text : null;
-            return Sanitize(candidate, text);
+            return Sanitize(result.Text, text);
         }
         catch (Exception ex)
         {
@@ -277,7 +276,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    private async Task<ChatClient?> InitFoundryAsync(string alias, CancellationToken ct)
+    private async Task<IChatClient?> InitFoundryAsync(string alias, CancellationToken ct)
     {
         SetStatus(CleanupStatus.Initializing, "Starting Foundry Local…");
         await EnsureManagerAsync(ct).ConfigureAwait(false);
@@ -308,10 +307,10 @@ internal sealed class TextCleanupService : ITextCleanupService
         SetStatus(CleanupStatus.Downloading, $"Loading {alias}…");
         await model.LoadAsync(ct).ConfigureAwait(false);
 
-        return _openAiClient.GetChatClient(model.Id);
+        return _openAiClient.GetChatClient(model.Id).AsIChatClient();
     }
 
-    private async Task<ChatClient?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
+    private async Task<IChatClient?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
         {
@@ -327,15 +326,25 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         SetStatus(CleanupStatus.Initializing, $"Connecting to Azure deployment '{options.AzureDeployment}'…");
 
-        // DefaultAzureCredential reuses an existing az / Visual Studio / environment / managed-identity
-        // sign-in. Interactive browser is excluded so this never blocks on a popup in the background.
-        _azureCredential ??= new DefaultAzureCredential(new DefaultAzureCredentialOptions
+        // When the user supplies an API key, authenticate with it directly; otherwise reuse their
+        // existing az / Visual Studio / environment / managed-identity sign-in. Interactive browser is
+        // excluded so credential resolution never blocks on a popup in the background.
+        var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
+        AzureOpenAIClient azureClient;
+        if (useKey)
         {
-            ExcludeInteractiveBrowserCredential = true,
-        });
+            azureClient = new AzureOpenAIClient(endpointUri, new ApiKeyCredential(options.AzureApiKey!));
+        }
+        else
+        {
+            _azureCredential ??= new DefaultAzureCredential(new DefaultAzureCredentialOptions
+            {
+                ExcludeInteractiveBrowserCredential = true,
+            });
+            azureClient = new AzureOpenAIClient(endpointUri, _azureCredential);
+        }
 
-        var azureClient = new AzureOpenAIClient(endpointUri, _azureCredential);
-        var chat = azureClient.GetChatClient(options.AzureDeployment);
+        var chat = azureClient.GetChatClient(options.AzureDeployment).AsIChatClient();
 
         // Validate auth + deployment with a tiny request so the status reflects reality rather than
         // silently no-op'ing on every dictation. No temperature: some models only allow the default.
@@ -344,9 +353,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         cts.CancelAfter(TimeSpan.FromSeconds(20));
         try
         {
-            _ = await chat.CompleteChatAsync(
-                new ChatMessage[] { new UserChatMessage("Reply with: ok") },
-                new ChatCompletionOptions { MaxOutputTokenCount = 16 },
+            _ = await chat.GetResponseAsync(
+                new List<ChatMessage> { new(ChatRole.User, "Reply with: ok") },
+                new ChatOptions { MaxOutputTokens = 16 },
                 cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -356,8 +365,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Azure deployment validation failed for {Deployment}.", options.AzureDeployment);
-            SetStatus(CleanupStatus.Unavailable,
-                "Couldn't reach the Azure deployment. Check that you're signed in (az login) and have access.");
+            SetStatus(CleanupStatus.Unavailable, useKey
+                ? "Couldn't reach the Azure deployment. Check the endpoint, deployment name, and API key."
+                : "Couldn't reach the Azure deployment. Check that you're signed in (az login) and have access.");
             return null;
         }
 

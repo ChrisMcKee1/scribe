@@ -26,6 +26,7 @@
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" />
     <PackageReference Include="Microsoft.AI.Foundry.Local" />
     <PackageReference Include="OpenAI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Azure.AI.OpenAI" />
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Azure.ResourceManager.CognitiveServices" />

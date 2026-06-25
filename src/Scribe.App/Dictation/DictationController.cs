@@ -129,7 +129,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupProvider,
         settings.AiCleanupModel,
         settings.AiCleanupAzureEndpoint,
-        settings.AiCleanupAzureDeployment);
+        settings.AiCleanupAzureDeployment,
+        settings.AiCleanupAzureApiKey);
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)

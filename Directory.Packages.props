@@ -32,10 +32,15 @@
     <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
          client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
     <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.3" />
-    <!-- OpenAI is pinned to 2.9.1 to match the exact build Azure.AI.OpenAI 2.9.0-beta.1 ships
-         against (its AzureOpenAIClient subclasses OpenAI SDK internals, so the versions must
-         agree to avoid runtime breaks). Foundry Local does not depend on this package. -->
-    <PackageVersion Include="OpenAI" Version="2.9.1" />
+    <!-- OpenAI 2.11.0 satisfies both Azure.AI.OpenAI 2.9.0-beta.1 (floor >= 2.9.1) and the
+         Microsoft.Extensions.AI.OpenAI bridge (floor >= 2.11.0). All three reference the same OpenAI
+         SDK build, so AzureOpenAIClient's subclassing and the IChatClient bridge stay in sync.
+         Foundry Local does not depend on this package. -->
+    <PackageVersion Include="OpenAI" Version="2.11.0" />
+    <!-- Provider-neutral chat abstraction (Microsoft.Extensions.AI IChatClient). The OpenAI bridge's
+         .AsIChatClient() lets both Foundry Local and Azure OpenAI present the same IChatClient, so the
+         cleanup call site is provider-agnostic and clients swap with no logic change. GA (no preview). -->
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
 
     <!-- Optional cloud AI cleanup via Azure AI Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored).
