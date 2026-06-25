@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Scribe.App.Dictation;
 using Scribe.App.History;
 using Scribe.App.Infrastructure;
+using Scribe.App.Overlay;
 using Scribe.App.Settings;
 using Scribe.App.Tray;
 using Scribe.Core.Audio;
@@ -33,6 +34,7 @@ public partial class App : Application
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
+    private RecordingOverlay? _overlay;
     private SettingsWindow? _settingsWindow;
     private HistoryWindow? _historyWindow;
 
@@ -89,7 +91,9 @@ public partial class App : Application
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
 
-        _controller.StateChanged += state => _tray!.SetState(state);
+        _overlay = new RecordingOverlay(services.GetRequiredService<IAudioCaptureService>());
+
+        _controller.StateChanged += OnStateChanged;
         _controller.Error += message => _tray!.ShowError(message);
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
@@ -124,6 +128,29 @@ public partial class App : Application
         {
             OpenSettings();
         }
+    }
+
+    /// <summary>
+    /// Reflects a dictation state change in the tray icon and the recording overlay. Runs on a
+    /// background thread, so overlay mutations are marshalled to the UI thread. The overlay only
+    /// shows while recording and only when the user has it enabled.
+    /// </summary>
+    private void OnStateChanged(DictationState state)
+    {
+        _tray?.SetState(state);
+
+        var show = state == DictationState.Recording && (_controller?.CurrentSettings.ShowOverlay ?? false);
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (show)
+            {
+                _overlay?.ShowRecording();
+            }
+            else
+            {
+                _overlay?.HideOverlay();
+            }
+        });
     }
 
     /// <summary>
@@ -173,6 +200,7 @@ public partial class App : Application
     {
         try
         {
+            _overlay?.CloseOverlay();
             _controller?.Dispose();
             _tray?.Dispose();
 
