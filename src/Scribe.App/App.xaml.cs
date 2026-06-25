@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Scribe.App.Dictation;
+using Scribe.App.History;
 using Scribe.App.Infrastructure;
 using Scribe.App.Settings;
 using Scribe.App.Tray;
@@ -33,6 +34,7 @@ public partial class App : Application
     private TrayIconHost? _tray;
     private DictationController? _controller;
     private SettingsWindow? _settingsWindow;
+    private HistoryWindow? _historyWindow;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -73,6 +75,8 @@ public partial class App : Application
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
         _tray.SettingsRequested += OpenSettings;
+        _tray.HistoryRequested += OpenHistory;
+        _tray.PauseToggled += paused => _controller?.SetPaused(paused);
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -144,6 +148,25 @@ public partial class App : Application
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
+    });
+
+    /// <summary>
+    /// Opens the history viewer (or focuses it if already open). Reads the most recent dictations
+    /// from the local SQLite history; nothing leaves the machine.
+    /// </summary>
+    private void OpenHistory() => Dispatcher.Invoke(() =>
+    {
+        if (_historyWindow is not null)
+        {
+            _historyWindow.Activate();
+            return;
+        }
+
+        var services = _host!.Services;
+        _historyWindow = new HistoryWindow(services.GetRequiredService<IHistoryRepository>());
+        _historyWindow.Closed += (_, _) => _historyWindow = null;
+        _historyWindow.Show();
+        _historyWindow.Activate();
     });
 
     protected override void OnExit(ExitEventArgs e)

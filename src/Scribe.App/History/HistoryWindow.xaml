@@ -1,0 +1,81 @@
+<ui:FluentWindow x:Class="Scribe.App.History.HistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Scribe History"
+        Width="760" Height="560" MinWidth="560" MinHeight="380"
+        WindowStartupLocation="CenterScreen"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        WindowCornerPreference="Round">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Scribe History">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="History24"/>
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <Grid Grid.Row="1" Margin="16,4,16,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ui:Card Grid.Row="0" Padding="0">
+                <Grid>
+                    <DataGrid x:Name="HistoryGrid"
+                              AutoGenerateColumns="False"
+                              CanUserAddRows="False" CanUserDeleteRows="False"
+                              IsReadOnly="True"
+                              HeadersVisibility="Column"
+                              SelectionMode="Single"
+                              GridLinesVisibility="Horizontal"
+                              Background="Transparent" BorderThickness="0"
+                              MouseDoubleClick="HistoryGrid_MouseDoubleClick">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="When" Binding="{Binding When}" Width="Auto"/>
+                            <DataGridTextColumn Header="Text" Binding="{Binding Text}" Width="*">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                        <Setter Property="ToolTip" Value="{Binding Text}"/>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="App" Binding="{Binding App}" Width="Auto"/>
+                            <DataGridTextColumn Header="Audio" Binding="{Binding Audio}" Width="Auto"/>
+                            <DataGridTextColumn Header="Decode" Binding="{Binding Decode}" Width="Auto"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock x:Name="EmptyHint"
+                               Text="No dictations yet. Hold your hotkey and speak — your dictations will show up here."
+                               Visibility="Collapsed"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Margin="32" TextAlignment="Center" TextWrapping="Wrap"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </Grid>
+            </ui:Card>
+
+            <Grid Grid.Row="1" Margin="0,16,0,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                    <ui:Button x:Name="ClearButton" Content="Clear all…" Click="ClearButton_Click"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <ui:Button x:Name="CopyButton" Content="Copy text" MinWidth="96"
+                               Margin="0,0,8,0" Click="CopyButton_Click"/>
+                    <ui:Button x:Name="DeleteButton" Content="Delete" MinWidth="96"
+                               Margin="0,0,8,0" Click="DeleteButton_Click"/>
+                    <ui:Button x:Name="CloseButton" Content="Close" Appearance="Primary"
+                               MinWidth="96" Click="CloseButton_Click" IsCancel="True"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

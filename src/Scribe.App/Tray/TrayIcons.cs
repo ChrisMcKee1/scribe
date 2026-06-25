@@ -25,6 +25,28 @@ internal static class TrayIcons
     /// <summary>Processing icon (transcribing / injecting).</summary>
     public static Icon Processing { get; } = Build(Color.FromArgb(0xF2, 0xA6, 0x0C));
 
+    /// <summary>Paused icon — universal pause bars in muted slate, distinct from the idle mic.</summary>
+    public static Icon Paused { get; } = BuildPause(Color.FromArgb(0x60, 0x7D, 0x8B));
+
+    private static Icon BuildPause(Color color)
+    {
+        using var bitmap = new Bitmap(PixelSize, PixelSize, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Color.Transparent);
+            g.ScaleTransform((float)PixelSize / LogicalSize, (float)PixelSize / LogicalSize);
+
+            using var brush = new SolidBrush(color);
+            using var left = RoundedRect(new RectangleF(10, 8, 4, 16), 2);
+            using var right = RoundedRect(new RectangleF(18, 8, 4, 16), 2);
+            g.FillPath(brush, left);
+            g.FillPath(brush, right);
+        }
+
+        return FromBitmap(bitmap);
+    }
+
     private static Icon Build(Color color)
     {
         using var bitmap = new Bitmap(PixelSize, PixelSize, PixelFormat.Format32bppArgb);
@@ -48,6 +70,11 @@ internal static class TrayIcons
             g.DrawLine(pen, 11, 27, 21, 27);    // base
         }
 
+        return FromBitmap(bitmap);
+    }
+
+    private static Icon FromBitmap(Bitmap bitmap)
+    {
         var handle = bitmap.GetHicon();
         // Wrap the HICON in a long-lived Icon kept alive for the process lifetime. We must not
         // dispose it or DestroyIcon the handle: H.NotifyIcon reads Icon.Handle every time the

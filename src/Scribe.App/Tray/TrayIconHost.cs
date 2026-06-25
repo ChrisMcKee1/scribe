@@ -14,12 +14,19 @@ namespace Scribe.App.Tray;
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly TaskbarIcon _icon;
+    private readonly MenuItem _pauseItem;
 
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
 
     /// <summary>Raised when the user picks "Settings…" from the tray menu.</summary>
     public event Action? SettingsRequested;
+
+    /// <summary>Raised when the user picks "History…" from the tray menu.</summary>
+    public event Action? HistoryRequested;
+
+    /// <summary>Raised when the user toggles pause; the argument is the requested paused state.</summary>
+    public event Action<bool>? PauseToggled;
 
     public TrayIconHost()
     {
@@ -30,6 +37,18 @@ internal sealed class TrayIconHost : IDisposable
         var settings = new MenuItem { Header = "Settings…" };
         settings.Click += (_, _) => SettingsRequested?.Invoke();
         menu.Items.Add(settings);
+
+        var history = new MenuItem { Header = "History…" };
+        history.Click += (_, _) => HistoryRequested?.Invoke();
+        menu.Items.Add(history);
+        menu.Items.Add(new Separator());
+
+        // Checkable item: WPF flips IsChecked before Click fires, so it already reflects the
+        // requested state by the time the handler runs. Programmatic IsChecked updates from
+        // SetState do not raise Click, so there is no feedback loop.
+        _pauseItem = new MenuItem { Header = "Pause dictation", IsCheckable = true };
+        _pauseItem.Click += (_, _) => PauseToggled?.Invoke(_pauseItem.IsChecked);
+        menu.Items.Add(_pauseItem);
         menu.Items.Add(new Separator());
 
         var quit = new MenuItem { Header = "Quit Scribe" };
@@ -53,8 +72,11 @@ internal sealed class TrayIconHost : IDisposable
         {
             DictationState.Recording => (TrayIcons.Recording, "Scribe — recording…"),
             DictationState.Processing => (TrayIcons.Processing, "Scribe — transcribing…"),
+            DictationState.Paused => (TrayIcons.Paused, "Scribe — paused"),
             _ => (TrayIcons.Idle, "Scribe — ready"),
         };
+
+        _pauseItem.IsChecked = state == DictationState.Paused;
     });
 
     /// <summary>Surfaces a transient error to the user via the tray tooltip.</summary>
