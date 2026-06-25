@@ -12,6 +12,7 @@ public sealed class TranscriptionService : ITranscriptionService
 {
     private const string ModelType = "nemo_transducer";
     private const int MaxAutoThreads = 8;
+    private const int WarmUpSampleCount = 8_000; // 0.5 s at 16 kHz
 
     private readonly ModelLocator _locator;
     private readonly TranscriptionOptions _options;
@@ -63,6 +64,37 @@ public sealed class TranscriptionService : ITranscriptionService
             _logger.LogInformation(
                 "Loaded Parakeet recognizer ({Threads} threads) from {Directory} in {ElapsedMs} ms",
                 threads, models.Directory, sw.ElapsedMilliseconds);
+
+            WarmUp(_recognizer);
+        }
+    }
+
+    /// <summary>
+    /// Runs one throwaway decode on a short buffer of near-silence so ONNX Runtime allocates its
+    /// arenas and JITs the graph up front. Without this the very first real utterance pays that
+    /// one-off cost and reports a misleadingly high latency / RTF. Best-effort: a warm-up failure
+    /// must never prevent the recognizer from being used.
+    /// </summary>
+    private void WarmUp(OfflineRecognizer recognizer)
+    {
+        try
+        {
+            // 0.5 s of very quiet dither at 16 kHz exercises the full encoder→decoder→joiner path.
+            var samples = new float[WarmUpSampleCount];
+            for (var i = 0; i < samples.Length; i++)
+                samples[i] = ((i & 1) == 0 ? 1 : -1) * 1e-4f;
+
+            var sw = Stopwatch.StartNew();
+            using var stream = recognizer.CreateStream();
+            stream.AcceptWaveform(16_000, samples);
+            recognizer.Decode(stream);
+            sw.Stop();
+
+            _logger.LogInformation("Recognizer warm-up decode completed in {ElapsedMs} ms.", sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Recognizer warm-up decode failed; first real decode may be slower.");
         }
     }
 

@@ -208,11 +208,12 @@ internal sealed class DictationController : IDisposable
                 audio = trimmed;
             }
 
+            // The recognizer warm-loads at startup, but a very fast first dictation can arrive
+            // before that finishes. Rather than throwing the capture away, let Transcribe load the
+            // model on demand (it is idempotent) so the user's first utterance is never lost.
             if (!_transcription.IsReady)
             {
-                _log.LogWarning("Transcription engine not ready yet; discarding capture.");
-                Error?.Invoke("model still loading");
-                return;
+                _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
             }
 
             var result = _transcription.Transcribe(audio);
