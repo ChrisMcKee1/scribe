@@ -99,6 +99,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PostCheck.IsChecked = _settings.ApplyPostProcessing;
         LaunchCheck.IsChecked = _settings.LaunchOnLogin;
         StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
+        BeamSearchCheck.IsChecked = _settings.UseHighAccuracyDecoding;
 
         var items = (InjectionChoice[])InjectionCombo.ItemsSource;
         InjectionCombo.SelectedItem =
@@ -251,6 +252,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
+            _settings.UseHighAccuracyDecoding = BeamSearchCheck.IsChecked == true;
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.DecodeThreads = (int)ThreadsSlider.Value;

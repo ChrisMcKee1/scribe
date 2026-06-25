@@ -32,7 +32,13 @@ public static class CoreServiceCollectionExtensions
         // recognizer first resolves its options (0 keeps the service's auto heuristic).
         services.AddOptions<TranscriptionOptions>()
             .Configure<ISettingsRepository>((options, settings) =>
-                options.NumThreads = settings.Load().DecodeThreads);
+            {
+                var loaded = settings.Load();
+                options.NumThreads = loaded.DecodeThreads;
+                options.DecodingMethod = loaded.UseHighAccuracyDecoding
+                    ? "modified_beam_search"
+                    : "greedy_search";
+            });
         services.AddSingleton<ITranscriptionService, TranscriptionService>();
 
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();

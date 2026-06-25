@@ -54,16 +54,18 @@ public sealed class TranscriptionService : ITranscriptionService
             config.ModelConfig.ModelType = ModelType;
             config.ModelConfig.NumThreads = threads;
             config.ModelConfig.Provider = "cpu";
-            // Defaults from the ctor are already correct: DecodingMethod = "greedy_search",
-            // FeatConfig.SampleRate = 16000, FeatConfig.FeatureDim = 80.
+            config.DecodingMethod = ResolveDecodingMethod(_options.DecodingMethod);
+            config.MaxActivePaths = Math.Max(1, _options.MaxActivePaths);
+            // Other defaults from the ctor are already correct: FeatConfig.SampleRate = 16000,
+            // FeatConfig.FeatureDim = 80.
 
             var sw = Stopwatch.StartNew();
             _recognizer = new OfflineRecognizer(config);
             sw.Stop();
 
             _logger.LogInformation(
-                "Loaded Parakeet recognizer ({Threads} threads) from {Directory} in {ElapsedMs} ms",
-                threads, models.Directory, sw.ElapsedMilliseconds);
+                "Loaded Parakeet recognizer ({Threads} threads, {Method}) from {Directory} in {ElapsedMs} ms",
+                threads, config.DecodingMethod, models.Directory, sw.ElapsedMilliseconds);
 
             WarmUp(_recognizer);
         }
@@ -134,6 +136,13 @@ public sealed class TranscriptionService : ITranscriptionService
         if (configured > 0) return configured;
         return Math.Clamp(Environment.ProcessorCount / 2, 1, MaxAutoThreads);
     }
+
+    // Only the two methods sherpa-onnx supports for an offline transducer are accepted; anything
+    // else (including null/empty) decodes greedily so a bad setting can never wedge the engine.
+    private static string ResolveDecodingMethod(string? configured) =>
+        string.Equals(configured, "modified_beam_search", StringComparison.OrdinalIgnoreCase)
+            ? "modified_beam_search"
+            : "greedy_search";
 
     public void Dispose()
     {

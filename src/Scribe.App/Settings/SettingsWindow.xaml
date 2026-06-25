@@ -175,6 +175,20 @@
 
                             <TextBlock Text="Advanced" Style="{StaticResource GroupHeader}"/>
                             <ui:Card Style="{StaticResource SettingCard}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                        <TextBlock Text="Higher-accuracy decoding" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Use beam-search decoding for slightly better accuracy on difficult audio, at a small speed cost. Takes effect after restarting Scribe."/>
+                                    </StackPanel>
+                                    <ui:ToggleSwitch x:Name="BeamSearchCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                            <ui:Card Style="{StaticResource SettingCard}">
                                 <StackPanel>
                                     <Grid>
                                         <Grid.ColumnDefinitions>

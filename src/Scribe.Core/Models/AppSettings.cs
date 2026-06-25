@@ -23,6 +23,13 @@ public sealed class AppSettings
     /// <summary>Decode thread count for sherpa-onnx; 0 lets the app pick a sensible default.</summary>
     public int DecodeThreads { get; set; }
 
+    /// <summary>
+    /// Use beam-search decoding (<c>modified_beam_search</c>) instead of greedy. Slightly more
+    /// accurate on hard audio at a latency cost. Takes effect after restarting Scribe because the
+    /// recognizer is warm-loaded once.
+    /// </summary>
+    public bool UseHighAccuracyDecoding { get; set; }
+
     /// <summary>Trim leading/trailing silence and reject no-speech captures using VAD.</summary>
     public bool UseVoiceActivityDetection { get; set; } = true;
 
