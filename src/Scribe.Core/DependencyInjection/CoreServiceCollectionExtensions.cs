@@ -4,6 +4,7 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Persistence;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
+using Scribe.Core.Vad;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -32,6 +33,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
         services.AddSingleton<IHotkeyService, HotkeyService>();
         services.AddSingleton<ITextInjector, TextInjector>();
+        services.AddSingleton<IVadService, VadService>();
 
         services.AddSingleton<ScribeDatabase>();
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
