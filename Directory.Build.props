@@ -1,0 +1,22 @@
+<Project>
+  <!-- Shared assembly + package metadata for every project in the solution. The semantic version
+       lives here so a single edit (or a CI override of VersionPrefix/VersionSuffix) stamps the app,
+       the Velopack release, and the assembly/file/informational versions consistently. -->
+  <PropertyGroup>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <!-- CI can pass -p:VersionSuffix=rc.1 to produce 0.1.0-rc.1 without touching this file. -->
+    <Version>$(VersionPrefix)</Version>
+    <Version Condition="'$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</Version>
+
+    <Authors>Chris McKee</Authors>
+    <Company>Chris McKee</Company>
+    <Product>Scribe</Product>
+    <Copyright>Copyright © Chris McKee</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/ChrisMcKee1/scribe</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- .NET 8+ appends the commit hash to InformationalVersion; keep it for support diagnostics. -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

@@ -4,9 +4,10 @@ namespace Scribe.Core.Infrastructure;
 /// Locates the model directory across the layouts Scribe supports, in priority order:
 /// <list type="number">
 ///   <item>the <c>SCRIBE_MODELS_DIR</c> environment variable, if set;</item>
-///   <item>a <c>models</c> folder next to the executable (installed / published layout);</item>
-///   <item>a <c>models</c> folder in an ancestor of the executable (developer layout, where
-///         the repo-root <c>models</c> sits above <c>bin\…\net10.0-windows</c>);</item>
+///   <item>a <c>models</c> folder next to the executable — the app project copies its bundled
+///         models here at build time, and this is also the installed / published layout;</item>
+///   <item>a <c>models</c> folder in an ancestor of the executable (covers running straight from
+///         the source tree, e.g. <c>src/Scribe.App/models</c> above <c>bin\…\net10.0-windows</c>);</item>
 ///   <item>the per-user fallback <c>%LOCALAPPDATA%\Scribe\models</c>.</item>
 /// </list>
 /// The first candidate whose ASR files are all present wins. When none is complete, the

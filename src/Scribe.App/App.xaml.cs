@@ -38,6 +38,7 @@ public partial class App : Application
     private RecordingOverlay? _overlay;
     private SettingsWindow? _settingsWindow;
     private HistoryWindow? _historyWindow;
+    private UpdateService? _updates;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -131,6 +132,12 @@ public partial class App : Application
         {
             OpenSettings();
         }
+
+        // Best-effort background update check. No-ops for non-packaged dev builds; for installed
+        // builds it downloads any newer GitHub release and stages it to apply when the user quits.
+        _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
+        _updates.UpdateReady += message => _tray?.ShowInfo(message);
+        _ = _updates.CheckAsync();
     }
 
     /// <summary>
@@ -216,6 +223,9 @@ public partial class App : Application
     {
         try
         {
+            // Stage any downloaded update first so the updater is waiting as the process exits.
+            _updates?.ApplyPendingOnExit();
+
             _overlay?.CloseOverlay();
             _controller?.Dispose();
             _tray?.Dispose();

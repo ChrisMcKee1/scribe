@@ -32,28 +32,37 @@
     <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
          client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
     <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.3" />
-    <!-- OpenAI 2.11.0 satisfies both Azure.AI.OpenAI 2.9.0-beta.1 (floor >= 2.9.1) and the
-         Microsoft.Extensions.AI.OpenAI bridge (floor >= 2.11.0). All three reference the same OpenAI
-         SDK build, so AzureOpenAIClient's subclassing and the IChatClient bridge stay in sync.
-         Foundry Local does not depend on this package. -->
-    <PackageVersion Include="OpenAI" Version="2.11.0" />
-    <!-- Provider-neutral chat abstraction (Microsoft.Extensions.AI IChatClient). The OpenAI bridge's
-         .AsIChatClient() lets both Foundry Local and Azure OpenAI present the same IChatClient, so the
-         cleanup call site is provider-agnostic and clients swap with no logic change. GA (no preview). -->
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.7.0" />
+    <!-- OpenAI 2.10.0 is the Agent-Framework-validated build (see agent-framework's own
+         Directory.Packages.props). It keeps AzureOpenAIClient.GetResponsesClient() binary-compatible
+         with Azure.AI.OpenAI 2.9.0-beta.1, which calls the ResponsesClient(ClientPipeline,
+         OpenAIClientOptions) constructor that OpenAI 2.11.0 changed — pinning 2.11.0 throws
+         MissingMethodException on the Responses path. Microsoft.Agents.AI.OpenAI 1.11.0,
+         Microsoft.Extensions.AI(.OpenAI) 10.6.0 and Azure.AI.OpenAI 2.9.0-beta.1 all reference this
+         same OpenAI build, so GetResponsesClient().AsAIAgent stays in sync. Foundry Local does not
+         depend on this package. -->
+    <PackageVersion Include="OpenAI" Version="2.10.0" />
+    <!-- Provider-neutral chat abstraction (Microsoft.Extensions.AI IChatClient). Pinned to 10.6.0 to
+         match the Agent Framework's validated set; 10.7.0 floors OpenAI to 2.11.0, which breaks
+         GetResponsesClient() (see the OpenAI note above). -->
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <!-- Microsoft.Extensions.AI.Evaluation powers the offline evals harness (tools/Scribe.Evals)
+         only; referenced with PrivateAssets=all so it never ships with the WPF app. -->
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.6.0" />
 
-    <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive:
-         Foundry Local / classic Azure OpenAI wrap their IChatClient in a ChatClientAgent, while an
-         Azure AI Foundry *project* endpoint (…/api/projects/…) is turned into an AIAgent directly via
-         AIProjectClient.AsAIAgent — the framework's native Foundry path, no server-side agent created.
-         Microsoft.Agents.AI.Foundry supplies the AIProjectClient.AsAIAgent extension; Azure.AI.Projects
-         supplies AIProjectClient. -->
+    <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive.
+         Microsoft.Agents.AI.OpenAI supplies the .AsAIAgent(model, instructions, name) extension on the
+         OpenAI chat/Responses clients: the classic Azure OpenAI account path uses
+         GetResponsesClient().AsAIAgent (the Responses API), and Foundry Local uses
+         GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
+         into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
+         Azure.AI.Projects' AIProjectClient — the framework's native Foundry path, no server-side agent. -->
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.11.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.11.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
-    <!-- Optional cloud AI cleanup via Azure AI Foundry / Azure OpenAI, discovered through the
+    <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored).
          2.9.0-beta.1 is the only release with a native net10.0 target. -->
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />

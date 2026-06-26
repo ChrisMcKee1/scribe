@@ -50,13 +50,13 @@
         <Border x:Name="Card" Margin="60" CornerRadius="22" BorderThickness="1">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#C22B2F38" Offset="0.0"/>
-                    <GradientStop Color="#B81E2128" Offset="1.0"/>
+                    <GradientStop Color="#802B2F38" Offset="0.0"/>
+                    <GradientStop Color="#73191C22" Offset="1.0"/>
                 </LinearGradientBrush>
             </Border.Background>
             <Border.BorderBrush>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#33FFFFFF" Offset="0.0"/>
+                    <GradientStop Color="#4DFFFFFF" Offset="0.0"/>
                     <GradientStop Color="#0DFFFFFF" Offset="1.0"/>
                 </LinearGradientBrush>
             </Border.BorderBrush>

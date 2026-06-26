@@ -83,6 +83,10 @@ internal sealed class TrayIconHost : IDisposable
     public void ShowError(string message) => Dispatch(() =>
         _icon.ToolTipText = $"Scribe — {message}");
 
+    /// <summary>Surfaces a transient, non-error status (e.g. an update is ready) via the tooltip.</summary>
+    public void ShowInfo(string message) => Dispatch(() =>
+        _icon.ToolTipText = $"Scribe — {message}");
+
     private static void Dispatch(Action action)
     {
         var app = Application.Current;

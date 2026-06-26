@@ -54,7 +54,7 @@ public static class CoreServiceCollectionExtensions
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 
-        // Optional AI cleanup (Foundry Local on-device, or an Azure AI Foundry deployment via the
+        // Optional AI cleanup (Foundry Local on-device, or a Microsoft Foundry deployment via the
         // user's Azure sign-in). Registered unconditionally; it stays inert until enabled in
         // settings, and degrades to raw text whenever it is not ready.
         services.AddSingleton<ITextCleanupService, TextCleanupService>();

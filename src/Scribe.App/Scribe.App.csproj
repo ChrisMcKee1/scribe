@@ -10,7 +10,25 @@
     <PackageReference Include="OpenTelemetry" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="Velopack" />
     <PackageReference Include="WPF-UI" />
+  </ItemGroup>
+
+  <!-- Velopack's install/update hooks must run before WPF starts, so we use an explicit Program.Main
+       (StartupObject) instead of the auto-generated App entry point. That requires App.xaml to be a
+       Page rather than the ApplicationDefinition (which would emit a second Main). -->
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" SubType="Designer" Generator="MSBuild:Compile" />
+  </ItemGroup>
+
+  <!-- The offline speech models are a hard runtime dependency. They live in source under .\models
+       (fetched by scripts/Download-Models.ps1, gitignored) and are copied next to the executable so
+       ModelLocator finds them exe-local during development AND they ship inside the published /
+       Velopack installer — giving a fully-offline first run with no parent-directory probing. -->
+  <ItemGroup>
+    <None Remove="models\**" />
+    <None Include="models\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -23,6 +41,7 @@
     <PlatformTarget>x64</PlatformTarget>
     <RootNamespace>Scribe.App</RootNamespace>
     <AssemblyName>Scribe</AssemblyName>
+    <StartupObject>Scribe.App.Program</StartupObject>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\scribe.ico</ApplicationIcon>

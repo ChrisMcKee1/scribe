@@ -20,6 +20,14 @@ public sealed class TextInjector : ITextInjector
     // Brief pause so the clipboard is committed before Ctrl+V is delivered.
     private const int ClipboardSettleDelayMs = 30;
 
+    // Unicode typing is sent in small batches so a long dictation can't overrun the target's input
+    // queue (which silently drops keystrokes). Each batch is UnicodeChunkChars code units; we pause
+    // InterChunkSettleMs between batches and resend a short SendInput remainder up to MaxChunkRetries.
+    private const int UnicodeChunkChars = 50;
+    private const int InterChunkSettleMs = 5;
+    private const int ChunkRetryDelayMs = 12;
+    private const int MaxChunkRetries = 5;
+
     private readonly ILogger<TextInjector> _logger;
 
     public TextInjector(ILogger<TextInjector> logger) => _logger = logger;
@@ -126,28 +134,93 @@ public sealed class TextInjector : ITextInjector
 
     private (int Sent, int Total) TypeUnicode(string text)
     {
-        // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally
-        // because each surrogate half is sent as its own KEYEVENTF_UNICODE event.
-        var inputs = new INPUT[text.Length * 2];
-        int index = 0;
-        foreach (char ch in text)
-        {
-            inputs[index++] = UnicodeKey(ch, keyUp: false);
-            inputs[index++] = UnicodeKey(ch, keyUp: true);
-        }
-
-        if (inputs.Length == 0)
+        int total = text.Length * 2;
+        if (total == 0)
         {
             return (0, 0);
         }
 
-        uint sent = SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
-        if (sent != inputs.Length)
+        // Windows silently drops synthetic keystrokes when a single SendInput batch is larger than the
+        // focused app's input queue can drain — which is why a short dictation types fine but a long
+        // one appears partially or not at all. Type in small chunks with a brief settle between them,
+        // and resend the unsent remainder of a chunk before giving up. The values favour reliability
+        // over raw speed: a few hundred milliseconds on a rare long paragraph is imperceptible next to
+        // dropped text.
+        int sent = 0;
+        for (int start = 0; start < text.Length; start += UnicodeChunkChars)
         {
-            _logger.LogWarning("SendInput delivered {Sent}/{Total} Unicode events.", sent, inputs.Length);
+            int count = Math.Min(UnicodeChunkChars, text.Length - start);
+            var inputs = BuildUnicodeChunk(text, start, count);
+
+            int delivered = SendWithRetry(inputs);
+            sent += delivered;
+
+            // The target stopped accepting input mid-stream even after retries; stop and let the caller
+            // report the partial send (the text.inject span is marked errored when sent != total).
+            if (delivered < inputs.Length)
+            {
+                break;
+            }
+
+            // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
+            if (start + count < text.Length)
+            {
+                Thread.Sleep(InterChunkSettleMs);
+            }
         }
 
-        return ((int)sent, inputs.Length);
+        if (sent != total)
+        {
+            _logger.LogWarning("Unicode typing delivered {Sent}/{Total} events; text may be truncated.", sent, total);
+        }
+
+        return (sent, total);
+    }
+
+    // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because
+    // each surrogate half is sent as its own KEYEVENTF_UNICODE event.
+    private static INPUT[] BuildUnicodeChunk(string text, int start, int count)
+    {
+        var inputs = new INPUT[count * 2];
+        int index = 0;
+        for (int i = start; i < start + count; i++)
+        {
+            inputs[index++] = UnicodeKey(text[i], keyUp: false);
+            inputs[index++] = UnicodeKey(text[i], keyUp: true);
+        }
+
+        return inputs;
+    }
+
+    // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the
+    // input stream was momentarily blocked by other input). Returns how many events were delivered.
+    private int SendWithRetry(INPUT[] inputs)
+    {
+        int size = System.Runtime.InteropServices.Marshal.SizeOf<INPUT>();
+        int offset = 0;
+        int attempts = 0;
+        while (offset < inputs.Length)
+        {
+            var slice = offset == 0 ? inputs : inputs[offset..];
+            uint sent = SendInput((uint)slice.Length, slice, size);
+            offset += (int)sent;
+
+            if (sent == (uint)slice.Length)
+            {
+                break;
+            }
+
+            if (++attempts > MaxChunkRetries)
+            {
+                _logger.LogWarning("SendInput stalled at {Offset}/{Total} events after {Attempts} retries.",
+                    offset, inputs.Length, attempts);
+                break;
+            }
+
+            Thread.Sleep(ChunkRetryDelayMs);
+        }
+
+        return offset;
     }
 
     private static INPUT KeyDown(ushort virtualKey) => KeyboardInput(virtualKey, 0, 0);

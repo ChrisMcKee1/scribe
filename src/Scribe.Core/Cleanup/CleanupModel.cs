@@ -50,3 +50,11 @@ public static class CleanupModelCatalog
         return Curated[0];
     }
 }
+
+/// <summary>
+/// A live entry from the Foundry Local catalog, surfaced in the searchable model picker.
+/// <see cref="Alias"/> is the catalog alias used to load the model; <see cref="Cached"/> means it is
+/// already downloaded on this PC, and <see cref="Loaded"/> means it is currently resident in the
+/// runtime (only one model is kept loaded at a time).
+/// </summary>
+public sealed record FoundryModelOption(string Alias, bool Cached, bool Loaded);

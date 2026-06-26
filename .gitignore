@@ -4,10 +4,16 @@
 [Oo]ut/
 artifacts/
 
+# Publish + installer artifacts (produced by build/pack.ps1 — never committed; they are
+# attached to the GitHub Release instead, where the Velopack updater fetches them).
+publish/
+releases/
+
 # Models (large ONNX files — fetched via scripts/Download-Models.ps1, never committed).
-# Anchored to the repo root so it only excludes the downloaded model payload and NOT
-# source folders that happen to be named "Models" (e.g. src/Scribe.Core/Models/).
-/models/
+# They live next to the app that depends on them (src/Scribe.App/models) and the build copies
+# them into the output. The *.onnx catch-all is a backstop; the C# Models/ source folders
+# (e.g. src/Scribe.Core/Models/) contain no .onnx and are unaffected.
+/src/Scribe.App/models/
 *.onnx
 
 # Audio scratch / captures

@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Downloads the Scribe speech models into ./models (gitignored).
+    Downloads the Scribe speech models into src/Scribe.App/models (gitignored).
 
 .DESCRIPTION
     Fetches the offline ASR model (NVIDIA Parakeet TDT 0.6b v3, int8) from HuggingFace
@@ -12,10 +12,12 @@
       * Partial downloads are resumed via curl's -C - flag.
       * SHA-256 is verified for the large ONNX files; mismatches abort with guidance.
 
-    Total download is ~640 MB. Models are written under -ModelsDir (default: ../models).
+    Total download is ~640 MB. Models are written under -ModelsDir
+    (default: ../src/Scribe.App/models — copied to the app's output at build time).
 
 .PARAMETER ModelsDir
-    Destination directory. Defaults to the repo-root 'models' folder.
+    Destination directory. Defaults to the app's 'src/Scribe.App/models' folder, where the build
+    copies them next to the executable (and into the published installer).
 
 .PARAMETER Force
     Re-download every file even if a valid copy already exists.
@@ -25,7 +27,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ModelsDir = (Join-Path $PSScriptRoot '..\models'),
+    [string]$ModelsDir = (Join-Path $PSScriptRoot '..\src\Scribe.App\models'),
     [switch]$Force
 )
 

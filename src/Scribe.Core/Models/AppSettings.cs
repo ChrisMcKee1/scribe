@@ -43,23 +43,23 @@ public sealed class AppSettings
     /// Run transcribed text through an AI model to fix punctuation, capitalization and grammar
     /// before injection. Off by default. Depending on <see cref="AiCleanupProvider"/> this uses an
     /// on-device Foundry Local model (downloaded on first use) or a model deployed in the user's
-    /// Azure AI Foundry account. Always degrades to raw text when unavailable.
+    /// Microsoft Foundry account. Always degrades to raw text when unavailable.
     /// </summary>
     public bool EnableAiCleanup { get; set; }
 
-    /// <summary>Which engine performs AI cleanup (on-device Foundry Local or Azure AI Foundry).</summary>
+    /// <summary>Which engine performs AI cleanup (on-device Foundry Local or Microsoft Foundry).</summary>
     public Cleanup.CleanupProvider AiCleanupProvider { get; set; } = Cleanup.CleanupProvider.FoundryLocal;
 
     /// <summary>Foundry Local model alias used for AI cleanup when the provider is Foundry Local.</summary>
     public string AiCleanupModel { get; set; } = Cleanup.CleanupModelCatalog.DefaultAlias;
 
     /// <summary>
-    /// Azure OpenAI / AI Foundry resource endpoint used when the provider is Azure AI Foundry,
+    /// Azure OpenAI / Microsoft Foundry resource endpoint used when the provider is Microsoft Foundry,
     /// e.g. <c>https://my-resource.openai.azure.com/</c>. Discovered from the user's Azure sign-in.
     /// </summary>
     public string? AiCleanupAzureEndpoint { get; set; }
 
-    /// <summary>Name of the Azure model deployment to call when the provider is Azure AI Foundry.</summary>
+    /// <summary>Name of the Azure model deployment to call when the provider is Microsoft Foundry.</summary>
     public string? AiCleanupAzureDeployment { get; set; }
 
     /// <summary>
@@ -71,7 +71,7 @@ public sealed class AppSettings
     public string AiCleanupWritingStyle { get; set; } = string.Empty;
 
     /// <summary>
-    /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Azure AI Foundry and
+    /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Microsoft Foundry and
     /// authentication falls back to the user's sign-in. <see cref="DefaultAzureCredential"/> otherwise
     /// uses whichever tenant the Azure CLI is currently set to, which is wrong for users who juggle a
     /// corporate and a demo tenant. Leave blank to use the active <c>az login</c> tenant. Ignored when

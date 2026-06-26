@@ -47,13 +47,13 @@ isn't ready, dictation just continues with the raw transcript.
 
 ![Scribe AI cleanup with Foundry Local — on-device model](docs/screenshots/ai-foundry-local.png)
 
-### …or bring your own Azure model
-Prefer a model you've already deployed in **Azure AI Foundry**? Point Scribe at your endpoint and
+### …or bring your own cloud model
+Prefer a model you've already deployed in **Microsoft Foundry**? Point Scribe at your endpoint and
 deployment. It signs in with your existing `az login` (no key stored), or you can paste an API key.
 Both classic Azure OpenAI resources and Foundry **project** endpoints are supported, with an optional
 Tenant ID for multi-tenant accounts.
 
-![Scribe AI cleanup with Azure AI Foundry — your own deployment](docs/screenshots/ai-azure.png)
+![Scribe AI cleanup with Microsoft Foundry — your own deployment](docs/screenshots/ai-azure.png)
 
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want. It ships with
@@ -63,14 +63,15 @@ sensible defaults for tech terms — add your own in seconds.
 
 ## 🚀 Getting started
 
-> **Installers are on the way.** Prebuilt downloads with automatic updates will be published on the
-> [Releases](../../releases) page. Until then, you can build and run Scribe from source — it takes a
-> couple of minutes.
+> **Installers are on the way.** Scribe now builds a [Velopack](https://velopack.io/) installer with
+> built-in automatic updates (current version **0.1.0**); the first signed downloads will be published
+> on the [Releases](../../releases) page. Until then, you can build and run Scribe from source — it
+> takes a couple of minutes.
 
 **You'll need:** Windows 11 (x64) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
 
 ```powershell
-# 1. Download the speech model (~670 MB) into ./models
+# 1. Download the speech model (~670 MB) into src/Scribe.App/models
 pwsh ./scripts/Download-Models.ps1
 
 # 2. Build
@@ -110,13 +111,42 @@ Scribe.slnx
   src/Scribe.Core            services + domain: audio capture, transcription, VAD, post-processing,
                              text injection, hotkeys, persistence, settings, AI cleanup
   src/Scribe.App             WPF tray app: bootstrap + DI, settings window, recording overlay
-  tests/Scribe.Core.Tests    unit tests (post-processor, dictionary, settings, engine smoke test)
-  scripts/Download-Models.ps1  fetches the ASR + VAD models into ./models (gitignored)
+  tests/Scribe.Core.Tests    unit tests (post-processor, dictionary, settings, cleanup prompt, engine)
+  tools/Scribe.Evals         offline style/format eval harness for AI cleanup (model comparison)
+  scripts/Download-Models.ps1  fetches the ASR + VAD models into src/Scribe.App/models (gitignored)
+  build/pack.ps1             builds the signed Velopack installer + GitHub-release updates
+  Directory.Build.props        shared versioning + package metadata (semver lives here)
   Directory.Packages.props     central NuGet version management
 ```
 
 The optional AI cleanup is built on the **Microsoft Agent Framework** (`AIAgent`), so the on-device
-(Foundry Local) and cloud (Azure AI Foundry) providers share one code path and are easy to extend.
+(Foundry Local) and cloud (Microsoft Foundry) providers share one code path and are easy to extend.
+
+### Evaluating cleanup quality
+
+`tools/Scribe.Evals` is an offline harness that drives the real cleanup service across a suite of
+writing-style prompts (pirate, Old English, French translation, bulleted to-do) applied to one shared
+transcript, then scores each output with a deterministic
+[`Microsoft.Extensions.AI.Evaluation`](https://learn.microsoft.com/dotnet/ai/evaluation/) `IEvaluator`.
+It proves a prompt change actually changes the output and lets you compare models head-to-head — with
+no judge model and no network. The eval packages are referenced `PrivateAssets="all"`, so they never
+ship with the app.
+
+```powershell
+# Score the default on-device model
+dotnet run --project tools/Scribe.Evals
+
+# Compare two Foundry Local models
+dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
+```
+
+### Releases & updates
+
+`build/pack.ps1` publishes a self-contained `win-x64` build, packs it with Velopack (installer + delta
+updates), and can upload the result to GitHub Releases. Code signing is opt-in via **Azure Trusted
+Signing** (`-AzureTrustedSignFile`) or a local certificate (`-SignToolParams`); the app then
+auto-updates from the matching release channel. Versioning is semantic and lives in
+`Directory.Build.props`.
 
 ### Security note
 

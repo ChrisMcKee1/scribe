@@ -34,7 +34,7 @@ good intent, and help newcomers.
 git clone https://github.com/ChrisMcKee1/scribe.git
 cd scribe
 
-# 2. Download the speech models (~670 MB) into ./models (gitignored)
+# 2. Download the speech models (~670 MB) into src/Scribe.App/models (gitignored)
 pwsh ./scripts/Download-Models.ps1
 
 # 3. Restore + build

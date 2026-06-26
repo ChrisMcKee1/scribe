@@ -28,7 +28,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
-    private readonly ObservableCollection<AzureFoundryDeployment> _azureDeployments = new();
+    private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
+    private bool _foundryModelOp;
     private IReadOnlyList<DictionaryEntry> _originalEntries = Array.Empty<DictionaryEntry>();
 
     private HotkeyBinding _pendingBinding;
@@ -141,22 +143,28 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCombo.ItemsSource = new[]
         {
             new ProviderChoice(CleanupProvider.FoundryLocal, "On-device — Foundry Local"),
-            new ProviderChoice(CleanupProvider.AzureFoundry, "Azure AI Foundry — your Azure sign-in"),
+            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry — your Azure sign-in"),
         };
 
-        AiModelCombo.DisplayMemberPath = nameof(CleanupModel.DisplayName);
-        AiModelCombo.ItemsSource = CleanupModelCatalog.Curated;
-
-        AzureDeploymentCombo.DisplayMemberPath = nameof(AzureFoundryDeployment.DisplayName);
-        AzureDeploymentCombo.ItemsSource = _azureDeployments;
+        // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
+        // merges in on demand (panel show / "Check & list models") without blocking the window open.
+        _foundryCuratedByAlias.Clear();
+        foreach (var curated in CleanupModelCatalog.Curated)
+        {
+            _foundryCuratedByAlias[curated.Alias] = curated;
+        }
+        AiModelBox.OriginalItemsSource = CleanupModelCatalog.Curated.Select(m => m.Alias).ToList();
 
         var providers = (ProviderChoice[])AiProviderCombo.ItemsSource;
         AiProviderCombo.SelectedItem =
             providers.FirstOrDefault(p => p.Provider == _settings.AiCleanupProvider) ?? providers[0];
 
-        var model = CleanupModelCatalog.Curated
+        var savedModel = CleanupModelCatalog.Curated
             .FirstOrDefault(m => string.Equals(m.Alias, _settings.AiCleanupModel, StringComparison.OrdinalIgnoreCase));
-        AiModelCombo.SelectedItem = model ?? CleanupModelCatalog.Curated[0];
+        AiModelBox.Text = savedModel?.Alias
+            ?? (string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
+                ? CleanupModelCatalog.Curated[0].Alias
+                : _settings.AiCleanupModel.Trim());
 
         // Manual endpoint/deployment/key are the source of truth Save reads; discovery just autofills
         // them. Populate from saved settings (key is decrypted in memory by AppSettings).
@@ -181,6 +189,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiEnabledState();
         UpdateAiModelHint();
         UpdateAzureDeploymentHint();
+
+        // Best-effort: merge the live on-device catalog + loaded status in without blocking window open.
+        if (SelectedProvider == CleanupProvider.FoundryLocal)
+        {
+            _ = RefreshFoundryModelsAsync();
+        }
     }
 
     private void LoadDictionary()
@@ -334,9 +348,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         UpdateAiProviderPanels();
         RefreshAiStatus();
+
+        if (SelectedProvider == CleanupProvider.FoundryLocal)
+        {
+            _ = RefreshFoundryModelsAsync();
+        }
     }
 
-    private void AiModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void AiModelBox_SuggestionChosen(
+        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxSuggestionChosenEventArgs args)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        if (args.SelectedItem is string alias)
+        {
+            sender.Text = alias;
+        }
+
+        UpdateAiModelHint();
+    }
+
+    private void AiModelBox_QuerySubmitted(
+        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxQuerySubmittedEventArgs args)
     {
         if (_loadingUi)
         {
@@ -346,15 +382,37 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiModelHint();
     }
 
-    private void AzureDeploymentCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void AzureModelBox_SuggestionChosen(
+        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxSuggestionChosenEventArgs args)
     {
         if (_loadingUi)
         {
             return;
         }
 
-        // A discovered deployment autofills the manual fields, which are what Save persists.
-        if (AzureDeploymentCombo.SelectedItem is AzureFoundryDeployment deployment)
+        if (args.SelectedItem is string display)
+        {
+            sender.Text = display;
+            ApplyAzureSelection(display);
+        }
+    }
+
+    private void AzureModelBox_QuerySubmitted(
+        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        ApplyAzureSelection(sender.Text);
+    }
+
+    // A discovered deployment autofills the manual endpoint/deployment fields, which are what Save reads.
+    private void ApplyAzureSelection(string? display)
+    {
+        if (!string.IsNullOrWhiteSpace(display) &&
+            _azureModelMap.TryGetValue(display.Trim(), out var deployment))
         {
             AzureEndpointBox.Text = deployment.Endpoint;
             AzureDeploymentBox.Text = deployment.DeploymentName;
@@ -373,6 +431,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AiStatusText.Text = available
                 ? "Foundry Local is available. The selected model downloads on first use (about 1–2 GB)."
                 : "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
+
+            if (available)
+            {
+                await RefreshFoundryModelsAsync();
+            }
         }
         catch
         {
@@ -381,6 +444,117 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             AiCheckButton.IsEnabled = true;
+        }
+    }
+
+    // Merges the live Foundry Local catalog into the searchable picker and refreshes the loaded-model
+    // status. Best-effort: if Foundry Local isn't installed the curated alias list stays in place.
+    private async Task RefreshFoundryModelsAsync()
+    {
+        try
+        {
+            var models = await _cleanup.ListFoundryModelsAsync();
+            if (models.Count > 0)
+            {
+                // Keep the currently typed alias selectable even if it isn't in the live catalog.
+                var current = AiModelBox.Text?.Trim();
+                var aliases = models.Select(m => m.Alias).ToList();
+                if (!string.IsNullOrWhiteSpace(current) &&
+                    !aliases.Contains(current, StringComparer.OrdinalIgnoreCase))
+                {
+                    aliases.Add(current);
+                }
+
+                AiModelBox.OriginalItemsSource = aliases;
+            }
+
+            UpdateFoundryLoadedText(models.FirstOrDefault(m => m.Loaded)?.Alias);
+        }
+        catch
+        {
+            // Leave the curated list and existing status untouched on any failure.
+        }
+    }
+
+    private void UpdateFoundryLoadedText(string? loadedAlias)
+    {
+        if (AiLoadedModelText is null)
+        {
+            return;
+        }
+
+        AiLoadedModelText.Text = string.IsNullOrWhiteSpace(loadedAlias)
+            ? "No on-device model is loaded yet."
+            : $"Loaded: {loadedAlias}";
+
+        if (AiUnloadButton is not null)
+        {
+            AiUnloadButton.IsEnabled = !_foundryModelOp && !string.IsNullOrWhiteSpace(loadedAlias);
+        }
+    }
+
+    private async void AiLoadButton_Click(object sender, RoutedEventArgs e)
+    {
+        var alias = AiModelBox.Text?.Trim();
+        if (_foundryModelOp || string.IsNullOrWhiteSpace(alias))
+        {
+            return;
+        }
+
+        _foundryModelOp = true;
+        AiLoadButton.IsEnabled = false;
+        AiUnloadButton.IsEnabled = false;
+        try
+        {
+            var progress = new Progress<string>(message => AiStatusText.Text = message);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            var ok = await _cleanup.LoadFoundryModelAsync(alias, progress, cts.Token);
+            if (!ok)
+            {
+                AiStatusText.Text = $"Couldn't load {alias}. Make sure Foundry Local is installed.";
+            }
+        }
+        catch
+        {
+            AiStatusText.Text = $"Couldn't load {alias}.";
+        }
+        finally
+        {
+            _foundryModelOp = false;
+            AiLoadButton.IsEnabled = true;
+            await RefreshFoundryModelsAsync();
+        }
+    }
+
+    private async void AiUnloadButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_foundryModelOp)
+        {
+            return;
+        }
+
+        _foundryModelOp = true;
+        AiLoadButton.IsEnabled = false;
+        AiUnloadButton.IsEnabled = false;
+        AiStatusText.Text = "Unloading the on-device model…";
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            var loaded = await _cleanup.GetLoadedFoundryModelAsync(cts.Token);
+            var ok = await _cleanup.UnloadFoundryModelAsync(loaded, cts.Token);
+            AiStatusText.Text = ok
+                ? "Unloaded. No on-device model is resident."
+                : "Nothing was loaded to unload.";
+        }
+        catch
+        {
+            AiStatusText.Text = "Couldn't unload the on-device model.";
+        }
+        finally
+        {
+            _foundryModelOp = false;
+            AiLoadButton.IsEnabled = true;
+            await RefreshFoundryModelsAsync();
         }
     }
 
@@ -394,7 +568,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var tenantId = NullIfBlank(AzureTenantBox.Text);
             var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(tenantId, cts.Token), cts.Token);
 
-            var previous = AzureDeploymentCombo.SelectedItem as AzureFoundryDeployment;
+            _azureModelMap.TryGetValue(AzureModelBox.Text?.Trim() ?? string.Empty, out var previous);
             SetAzureDeployments(
                 deployments,
                 preferEndpoint: NullIfBlank(AzureEndpointBox.Text) ?? previous?.Endpoint,
@@ -418,41 +592,98 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private async void AzureCliButton_Click(object sender, RoutedEventArgs e)
+    {
+        AzureCliButton.IsEnabled = false;
+        AzureCliStatusText.Text = "Installing or updating the Azure CLI via winget… this can take a minute.";
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var installer = new AzureCliInstaller();
+            var (_, message) = await installer.InstallOrUpdateAsync(cts.Token);
+            AzureCliStatusText.Text = message;
+        }
+        catch (OperationCanceledException)
+        {
+            AzureCliStatusText.Text =
+                "Azure CLI install timed out. Try again, or install it from https://aka.ms/installazurecliwindows.";
+        }
+        catch
+        {
+            AzureCliStatusText.Text =
+                "Couldn't run the installer. Install the Azure CLI from https://aka.ms/installazurecliwindows.";
+        }
+        finally
+        {
+            AzureCliButton.IsEnabled = true;
+        }
+    }
+
     private void SetAzureDeployments(
         IReadOnlyList<AzureFoundryDeployment> deployments, string? preferEndpoint, string? preferDeployment)
     {
-        _azureDeployments.Clear();
-        foreach (var deployment in deployments)
-        {
-            _azureDeployments.Add(deployment);
-        }
+        var items = BuildAzureModelItems(deployments);
+        AzureModelBox.OriginalItemsSource = items;
 
-        AzureFoundryDeployment? match = null;
+        string? selected = null;
         if (!string.IsNullOrWhiteSpace(preferDeployment))
         {
-            match = _azureDeployments.FirstOrDefault(d =>
-                string.Equals(d.DeploymentName, preferDeployment, StringComparison.OrdinalIgnoreCase) &&
-                (string.IsNullOrWhiteSpace(preferEndpoint) ||
-                 string.Equals(d.Endpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase)));
+            foreach (var item in items)
+            {
+                var d = _azureModelMap[item];
+                if (string.Equals(d.DeploymentName, preferDeployment, StringComparison.OrdinalIgnoreCase) &&
+                    (string.IsNullOrWhiteSpace(preferEndpoint) ||
+                     string.Equals(d.Endpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase)))
+                {
+                    selected = item;
+                    break;
+                }
+            }
         }
 
-        if (match is not null)
+        if (selected is not null)
         {
-            AzureDeploymentCombo.SelectedItem = match;
+            AzureModelBox.Text = selected;
+            ApplyAzureSelection(selected);
         }
         else if (string.IsNullOrWhiteSpace(preferEndpoint) && string.IsNullOrWhiteSpace(preferDeployment)
-                 && _azureDeployments.Count > 0)
+                 && items.Count > 0)
         {
             // Nothing entered yet — pick the first discovered deployment and let it autofill the fields.
-            AzureDeploymentCombo.SelectedIndex = 0;
+            AzureModelBox.Text = items[0];
+            ApplyAzureSelection(items[0]);
         }
         else
         {
             // Keep the user's manually entered endpoint/deployment; don't overwrite with an unrelated match.
-            AzureDeploymentCombo.SelectedItem = null;
+            UpdateAzureDeploymentHint();
+        }
+    }
+
+    // Rebuilds the display→deployment map and returns the deduped searchable display strings.
+    private List<string> BuildAzureModelItems(IReadOnlyList<AzureFoundryDeployment> deployments)
+    {
+        _azureModelMap.Clear();
+        var items = new List<string>(deployments.Count);
+        foreach (var deployment in deployments)
+        {
+            var label = deployment.DisplayName;
+            if (_azureModelMap.ContainsKey(label))
+            {
+                // Disambiguate same-named deployments that live in different accounts.
+                label = $"{deployment.DisplayName}  —  {deployment.AccountName}";
+                var i = 2;
+                while (_azureModelMap.ContainsKey(label))
+                {
+                    label = $"{deployment.DisplayName}  —  {deployment.AccountName} ({i++})";
+                }
+            }
+
+            _azureModelMap[label] = deployment;
+            items.Add(label);
         }
 
-        UpdateAzureDeploymentHint();
+        return items;
     }
 
     private void SeedAzureModelFromSettings()
@@ -478,9 +709,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ModelVersion: null,
             Location: string.Empty);
 
-        _azureDeployments.Clear();
-        _azureDeployments.Add(current);
-        AzureDeploymentCombo.SelectedItem = current;
+        var items = BuildAzureModelItems(new[] { current });
+        AzureModelBox.OriginalItemsSource = items;
+        AzureModelBox.Text = items[0];
     }
 
     private void UpdateAiProviderPanels()
@@ -515,7 +746,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        AiModelHint.Text = (AiModelCombo.SelectedItem as CleanupModel)?.Hint ?? string.Empty;
+        var alias = AiModelBox.Text?.Trim() ?? string.Empty;
+        AiModelHint.Text = _foundryCuratedByAlias.TryGetValue(alias, out var model)
+            ? model.Hint
+            : string.Empty;
     }
 
     private void UpdateAzureDeploymentHint()
@@ -525,7 +759,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        AzureDeploymentHint.Text = AzureDeploymentCombo.SelectedItem is AzureFoundryDeployment deployment
+        var key = AzureModelBox.Text?.Trim() ?? string.Empty;
+        AzureDeploymentHint.Text = _azureModelMap.TryGetValue(key, out var deployment)
             ? deployment.Detail
             : "Sign in to list your models, or enter one under Advanced.";
     }
@@ -581,7 +816,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
             _settings.AiCleanupProvider = SelectedProvider;
             _settings.AiCleanupModel =
-                (AiModelCombo.SelectedItem as CleanupModel)?.Alias ?? CleanupModelCatalog.DefaultAlias;
+                NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);

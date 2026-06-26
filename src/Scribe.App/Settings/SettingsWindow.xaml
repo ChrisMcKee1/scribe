@@ -192,16 +192,34 @@
 
                                     <TextBlock Text="Provider" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
                                     <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Run a model on this PC with Foundry Local (fully offline), or use a model you've deployed in Azure AI Foundry via your Azure sign-in."/>
+                                               Text="Run a model on this PC with Foundry Local (fully offline), or use a model you've deployed in Microsoft Foundry via your Azure sign-in."/>
                                     <ComboBox x:Name="AiProviderCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                               SelectionChanged="AiProviderCombo_SelectionChanged"/>
 
                                     <!-- Foundry Local (on-device) -->
                                     <StackPanel x:Name="FoundryPanel">
                                         <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ComboBox x:Name="AiModelCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                  SelectionChanged="AiModelCombo_SelectionChanged"/>
+                                        <ui:AutoSuggestBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                           PlaceholderText="Search models — type to filter"
+                                                           QuerySubmitted="AiModelBox_QuerySubmitted"
+                                                           SuggestionChosen="AiModelBox_SuggestionChosen"/>
                                         <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                        <!-- Load / unload — only one on-device model stays resident at a time -->
+                                        <Grid Margin="0,12,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="AiLoadedModelText" Grid.Column="0" VerticalAlignment="Center"
+                                                       Style="{StaticResource SettingHint}" Margin="0,0,12,0"
+                                                       Text="No on-device model is loaded yet."/>
+                                            <ui:Button x:Name="AiLoadButton" Grid.Column="1" Content="Load" MinWidth="80"
+                                                       Margin="0,0,8,0" Appearance="Primary" Click="AiLoadButton_Click"/>
+                                            <ui:Button x:Name="AiUnloadButton" Grid.Column="2" Content="Unload" MinWidth="80"
+                                                       Appearance="Secondary" Click="AiUnloadButton_Click"/>
+                                        </Grid>
 
                                         <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
                                                 Background="{DynamicResource ControlFillColorSecondaryBrush}">
@@ -215,21 +233,21 @@
                                                     <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                                                Text="The selected model downloads automatically on first use (about 1–2 GB)."/>
                                                 </StackPanel>
-                                                <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check"
+                                                <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check &amp; list models"
                                                            MinWidth="76" VerticalAlignment="Center"
                                                            Click="AiCheckButton_Click"/>
                                             </Grid>
                                         </Border>
                                     </StackPanel>
 
-                                    <!-- Azure AI Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
+                                    <!-- Microsoft Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
                                     <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
                                         <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
                                         <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                     VerticalContentAlignment="Center"
                                                     PlaceholderText="https://my-resource.services.ai.azure.com/"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Your Azure AI Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
+                                                   Text="Your Microsoft Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
 
                                         <!-- Primary path: reuse the user's az login and list their deployments -->
                                         <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
@@ -250,10 +268,31 @@
                                             </Grid>
                                         </Border>
 
+                                        <!-- Azure CLI: the 'az login' path needs the Azure CLI present. One-click install/update. -->
+                                        <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="6"
+                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                    <TextBlock Text="Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                               Text="The 'az login' path needs the Azure CLI. Install or update it here (uses winget)."/>
+                                                </StackPanel>
+                                                <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install / update"
+                                                           MinWidth="76" VerticalAlignment="Center"
+                                                           Click="AzureCliButton_Click"/>
+                                            </Grid>
+                                        </Border>
+
                                         <!-- Model picker: the deployments discovered from your sign-in -->
                                         <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ComboBox x:Name="AzureDeploymentCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                  SelectionChanged="AzureDeploymentCombo_SelectionChanged"/>
+                                        <ui:AutoSuggestBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                           PlaceholderText="Search your deployments — type to filter"
+                                                           QuerySubmitted="AzureModelBox_QuerySubmitted"
+                                                           SuggestionChosen="AzureModelBox_SuggestionChosen"/>
                                         <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
 
                                         <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->

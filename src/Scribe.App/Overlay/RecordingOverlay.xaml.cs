@@ -128,7 +128,8 @@ public partial class RecordingOverlay : Window
         base.OnSourceInitialized(e);
 
         // Click-through (TRANSPARENT) + never-activate (NOACTIVATE) + hidden from Alt+Tab
-        // (TOOLWINDOW). LAYERED is required alongside TRANSPARENT for hit-test pass-through.
+        // (TOOLWINDOW). WPF already sets LAYERED for AllowsTransparency; we re-assert it so the
+        // TRANSPARENT hit-test pass-through is reliable regardless of init order.
         var hwnd = new WindowInteropHelper(this).Handle;
         var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
         exStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
