@@ -96,6 +96,10 @@ public partial class App : Application
             services.GetRequiredService<ILogger<DictationController>>());
 
         _overlay = new RecordingOverlay(services.GetRequiredService<IAudioCaptureService>());
+        // Present the layered overlay once, off-screen and transparent, so its composition surface is
+        // warm before first use. This prevents the transient opaque-frame flash that WPF
+        // AllowsTransparency windows emit when first presented from a hidden state.
+        _overlay.Warmup();
 
         _controller.StateChanged += OnStateChanged;
         _controller.Error += message => _tray!.ShowError(message);

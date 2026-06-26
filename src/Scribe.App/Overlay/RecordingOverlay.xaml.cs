@@ -30,6 +30,7 @@ public partial class RecordingOverlay : Window
 
     private bool _subscribed;
     private bool _closing;
+    private bool _shown;
     private float _meterLevel;
 
     public RecordingOverlay(IAudioCaptureService audio)
@@ -53,7 +54,6 @@ public partial class RecordingOverlay : Window
         ListeningContent.Visibility = Visibility.Visible;
         StatusText.Text = "Listening…";
         ResetMeter();
-        PositionToWorkArea();
 
         if (!_subscribed)
         {
@@ -61,7 +61,7 @@ public partial class RecordingOverlay : Window
             _subscribed = true;
         }
 
-        Show();
+        Reveal();
         _pulse.Begin(this, isControllable: true);
     }
 
@@ -91,12 +91,7 @@ public partial class RecordingOverlay : Window
         ProcessingContent.Visibility = Visibility.Visible;
         ProcessingText.Text = polishing ? "Polishing…" : "Transcribing…";
 
-        PositionToWorkArea();
-        if (!IsVisible)
-        {
-            Show();
-        }
-
+        Reveal();
         _processing.Begin(this, isControllable: true);
     }
 
@@ -112,8 +107,22 @@ public partial class RecordingOverlay : Window
         _pulse.Stop(this);
         _processing.Stop(this);
         ResetMeter();
-        Hide();
+
+        // Keep the layered window shown and only drop its opacity to hide. Calling Hide()/Show()
+        // each cycle re-presents the AllowsTransparency surface, which intermittently leaks one
+        // opaque (black) frame before per-pixel alpha is composited — the transient dark box the
+        // user sees. Toggling Opacity on the already-shown window animates the existing composition
+        // and never re-presents, so the artifact cannot occur.
+        Opacity = 0;
     }
+
+    /// <summary>
+    /// Presents the layered window once, off-screen and fully transparent, so its composition
+    /// surface is established before the user ever sees it. Call once after construction. Subsequent
+    /// shows merely reposition and fade in, avoiding the transient black frame WPF emits when an
+    /// <c>AllowsTransparency</c> window is presented from a hidden state.
+    /// </summary>
+    public void Warmup() => EnsureShown();
 
     /// <summary>Permanently tears down the overlay during application shutdown.</summary>
     public void CloseOverlay()
@@ -141,7 +150,7 @@ public partial class RecordingOverlay : Window
         // LevelChanged arrives on the capture thread; marshal to the UI thread without blocking it.
         Dispatcher.BeginInvoke(() =>
         {
-            if (!IsVisible)
+            if (_closing || Opacity <= 0)
             {
                 return;
             }
@@ -158,6 +167,34 @@ public partial class RecordingOverlay : Window
     {
         _meterLevel = 0f;
         MeterFill.Width = 0;
+    }
+
+    // Brings the (already-shown) overlay on-screen and fades it in. The window stays presented for
+    // its lifetime; only its position and opacity change, so the layered surface is never re-created.
+    private void Reveal()
+    {
+        EnsureShown();
+        PositionToWorkArea();
+        Opacity = 1;
+    }
+
+    private void EnsureShown()
+    {
+        if (_shown || _closing)
+        {
+            return;
+        }
+
+        Opacity = 0;
+        PositionOffScreen();
+        Show();
+        _shown = true;
+    }
+
+    private void PositionOffScreen()
+    {
+        Left = -10000;
+        Top = -10000;
     }
 
     private void PositionToWorkArea()
