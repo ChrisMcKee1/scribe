@@ -12,7 +12,7 @@ good intent, and help newcomers.
 ## Ways to contribute
 
 - **Report a bug** — open an issue with steps to reproduce, what you expected, and
-  what happened. Logs live in `%LOCALAPPDATA%\Scribe\logs` and are very helpful.
+  what happened. Logs live in `%LOCALAPPDATA%\ScribeData\logs` and are very helpful.
 - **Suggest a feature** — open an issue describing the problem you're trying to solve
   (not just the solution). Real-world dictation pain points are gold.
 - **Improve the docs** — README clarity, typos, and screenshots are always welcome.

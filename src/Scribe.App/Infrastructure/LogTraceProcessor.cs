@@ -9,7 +9,7 @@ namespace Scribe.App.Infrastructure;
 /// An OpenTelemetry span processor that writes each finished <see cref="Activity"/> from Scribe's
 /// dictation source to the app's normal file log. A tray app has no console and most users will
 /// never run an OTLP collector, so this guarantees the lifecycle trace is visible in
-/// <c>%LOCALAPPDATA%\Scribe\logs</c> with zero setup — turning an intermittent "the text didn't
+/// <c>%LOCALAPPDATA%\ScribeData\logs</c> with zero setup — turning an intermittent "the text didn't
 /// appear" into a single readable line that names the exact stage and its tags.
 /// </summary>
 internal sealed class LogTraceProcessor : BaseProcessor<Activity>

@@ -2,32 +2,58 @@ namespace Scribe.Core.Infrastructure;
 
 /// <summary>
 /// Resolves and owns the per-user application directories. Everything writable lives under
-/// <c>%LOCALAPPDATA%\Scribe</c>: the SQLite database, logs, and the installed model fallback.
+/// <c>%LOCALAPPDATA%\ScribeData</c>: the SQLite database, logs, and the installed model fallback.
+/// <para>
+/// This folder is deliberately <b>separate</b> from the Velopack install root
+/// (<c>%LOCALAPPDATA%\Scribe</c>). Re-running the installer over an existing install renames the
+/// whole install root aside and deletes it once the new version is in place, so storing the
+/// database there would wipe the user's settings, dictionary, and history on every reinstall.
+/// Keeping data in a sibling folder Velopack never touches lets installs/updates preserve it.
+/// A one-time migration (<see cref="EnsureCreated"/>) carries data forward from the legacy root.
+/// </para>
 /// </summary>
 public sealed class AppPaths
 {
-    public const string AppFolderName = "Scribe";
+    /// <summary>Writable data folder name (sibling of the Velopack install root).</summary>
+    public const string AppFolderName = "ScribeData";
+
+    /// <summary>Legacy data folder name — the Velopack install root that data used to share.</summary>
+    public const string LegacyAppFolderName = "Scribe";
 
     public AppPaths(string? rootOverride = null)
     {
         // Resolution order: explicit override (tests) > SCRIBE_DATA_DIR env (isolated/portable
-        // profiles, e.g. screenshot capture) > the per-user %LOCALAPPDATA%\Scribe known folder.
+        // profiles, e.g. screenshot capture) > the per-user %LOCALAPPDATA%\ScribeData known folder.
         // Mirrors the SCRIBE_MODELS_DIR override honoured by ModelLocator.
         var envOverride = Environment.GetEnvironmentVariable("SCRIBE_DATA_DIR");
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var usingDefaultRoot = rootOverride is null && string.IsNullOrWhiteSpace(envOverride);
+
         RootDir = rootOverride
             ?? (string.IsNullOrWhiteSpace(envOverride)
-                ? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    AppFolderName)
+                ? Path.Combine(localAppData, AppFolderName)
                 : envOverride);
+
+        // Only consider the legacy Velopack-install-root location when running with the real default
+        // root. Explicit overrides are self-contained and must never pull in unrelated legacy data.
+        LegacyRootDir = usingDefaultRoot
+            ? Path.Combine(localAppData, LegacyAppFolderName)
+            : null;
 
         LogsDir = Path.Combine(RootDir, "logs");
         ModelsDir = Path.Combine(RootDir, "models");
         DatabasePath = Path.Combine(RootDir, "scribe.db");
     }
 
-    /// <summary>Root writable directory (<c>%LOCALAPPDATA%\Scribe</c>).</summary>
+    /// <summary>Root writable directory (<c>%LOCALAPPDATA%\ScribeData</c>).</summary>
     public string RootDir { get; }
+
+    /// <summary>
+    /// Legacy writable directory (<c>%LOCALAPPDATA%\Scribe</c>) used by builds that stored data in
+    /// the Velopack install root. <c>null</c> when an explicit root or <c>SCRIBE_DATA_DIR</c> is in
+    /// effect. Only used to migrate the database forward once.
+    /// </summary>
+    public string? LegacyRootDir { get; }
 
     /// <summary>Log output directory.</summary>
     public string LogsDir { get; }
@@ -43,5 +69,54 @@ public sealed class AppPaths
     {
         Directory.CreateDirectory(RootDir);
         Directory.CreateDirectory(LogsDir);
+        if (LegacyRootDir is not null)
+        {
+            TryMigrateDatabase(LegacyRootDir, RootDir);
+        }
+    }
+
+    /// <summary>
+    /// One-time, best-effort migration of the SQLite database from the legacy data root (the
+    /// Velopack install directory) to the dedicated data folder. Copies only when the destination
+    /// database does not yet exist but a legacy one does, so it never overwrites current data and is
+    /// a no-op on every subsequent launch.
+    /// </summary>
+    internal static void TryMigrateDatabase(string legacyRoot, string newRoot)
+    {
+        if (string.Equals(legacyRoot, newRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var newDb = Path.Combine(newRoot, "scribe.db");
+        if (File.Exists(newDb))
+        {
+            return;
+        }
+
+        var legacyDb = Path.Combine(legacyRoot, "scribe.db");
+        if (!File.Exists(legacyDb))
+        {
+            return;
+        }
+
+        try
+        {
+            // Copy (not move) so the legacy copy survives as a fallback until Velopack reclaims it.
+            // SQLite recovers cleanly from the -wal/-shm sidecars copied alongside the main file.
+            Directory.CreateDirectory(newRoot);
+            foreach (var name in new[] { "scribe.db", "scribe.db-wal", "scribe.db-shm" })
+            {
+                var src = Path.Combine(legacyRoot, name);
+                if (File.Exists(src))
+                {
+                    File.Copy(src, Path.Combine(newRoot, name), overwrite: false);
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort: a fresh database is created from defaults if migration fails.
+        }
     }
 }

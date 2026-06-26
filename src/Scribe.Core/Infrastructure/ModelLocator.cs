@@ -8,7 +8,7 @@ namespace Scribe.Core.Infrastructure;
 ///         models here at build time, and this is also the installed / published layout;</item>
 ///   <item>a <c>models</c> folder in an ancestor of the executable (covers running straight from
 ///         the source tree, e.g. <c>src/Scribe.App/models</c> above <c>bin\…\net10.0-windows</c>);</item>
-///   <item>the per-user fallback <c>%LOCALAPPDATA%\Scribe\models</c>.</item>
+///   <item>the per-user fallback <c>%LOCALAPPDATA%\ScribeData\models</c>.</item>
 /// </list>
 /// The first candidate whose ASR files are all present wins. When none is complete, the
 /// per-user fallback is returned so callers can surface a clear "models missing" message

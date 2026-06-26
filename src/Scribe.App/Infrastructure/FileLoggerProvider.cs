@@ -5,7 +5,7 @@ namespace Scribe.App.Infrastructure;
 
 /// <summary>
 /// A minimal, dependency-free file logger that appends one line per entry to a daily log file
-/// under <c>%LOCALAPPDATA%\Scribe\logs</c>. A tray app has no console, so a file sink is the
+/// under <c>%LOCALAPPDATA%\ScribeData\logs</c>. A tray app has no console, so a file sink is the
 /// primary way to diagnose the end-to-end dictation loop.
 /// </summary>
 internal sealed class FileLoggerProvider : ILoggerProvider
