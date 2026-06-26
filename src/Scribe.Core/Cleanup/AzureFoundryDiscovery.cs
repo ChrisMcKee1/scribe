@@ -38,6 +38,14 @@ public sealed record AzureFoundryDeployment(
 }
 
 /// <summary>
+/// Result of a cheap "is the user already signed in?" probe. <see cref="IsSignedIn"/> is true when
+/// <see cref="DefaultAzureCredential"/> can mint an ARM token without an interactive prompt (i.e. a
+/// valid <c>az login</c> / VS / environment / managed-identity session exists). <see cref="Account"/>
+/// is the signed-in identity (UPN/email or app id) when it can be read from the token, else null.
+/// </summary>
+public sealed record AzureSignInStatus(bool IsSignedIn, string? Account);
+
+/// <summary>
 /// Discovers chat-capable model deployments across the Azure subscriptions the signed-in user can
 /// see. Authentication uses <see cref="DefaultAzureCredential"/>, so an existing <c>az login</c>
 /// (or Visual Studio / VS Code / environment / managed-identity) session is reused with no key.
@@ -52,6 +60,16 @@ public interface IAzureFoundryDiscovery
     /// </summary>
     Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
         string? tenantId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cheaply checks whether the user is already signed in to Azure (an existing <c>az login</c> or
+    /// other <see cref="DefaultAzureCredential"/> source) by requesting an ARM token without any
+    /// interactive prompt. Lets the UI show "already signed in" and list deployments automatically
+    /// instead of forcing a sign-in click. Never throws — a failed/absent credential returns
+    /// <see cref="AzureSignInStatus.IsSignedIn"/> = false.
+    /// </summary>
+    Task<AzureSignInStatus> GetSignInStatusAsync(
+        string? tenantId = null, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -65,6 +83,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     private static readonly string[] NonChatMarkers =
     {
         "embedding", "whisper", "tts", "dall-e", "dalle", "sora", "image", "moderation", "transcribe",
+        "realtime", "audio",
     };
 
     // Max accounts whose deployments we fetch concurrently. Deployments aren't indexed by Resource
@@ -96,20 +115,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     public async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
         string? tenantId = null, CancellationToken cancellationToken = default)
     {
-        // Exclude the interactive browser flow: this is a headless background call and must fail
-        // fast to a clear "run az login" message rather than popping a browser. An explicit tenant
-        // overrides the Azure CLI's active tenant so the right subscriptions are enumerated.
-        var credentialOptions = new DefaultAzureCredentialOptions
-        {
-            ExcludeInteractiveBrowserCredential = true,
-        };
-
-        if (!string.IsNullOrWhiteSpace(tenantId))
-        {
-            credentialOptions.TenantId = tenantId.Trim();
-        }
-
-        var credential = new DefaultAzureCredential(credentialOptions);
+        var credential = CreateCredential(tenantId);
 
         var arm = new ArmClient(credential);
 
@@ -126,6 +132,93 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             _log.LogWarning(ex, "Resource Graph account discovery failed; falling back to per-subscription enumeration.");
             return await DiscoverViaEnumerationAsync(arm, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    public async Task<AzureSignInStatus> GetSignInStatusAsync(
+        string? tenantId = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var credential = CreateCredential(tenantId);
+            var token = await credential.GetTokenAsync(
+                new TokenRequestContext(ArmScopes), cancellationToken).ConfigureAwait(false);
+            return new AzureSignInStatus(true, ReadAccountFromToken(token.Token));
+        }
+        catch (Exception ex) when (ex is AuthenticationFailedException or CredentialUnavailableException)
+        {
+            // Expected when the user simply isn't signed in — not an error worth surfacing as a stack.
+            _log.LogDebug(ex, "Azure sign-in probe: no non-interactive credential available.");
+            return new AzureSignInStatus(false, null);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogDebug(ex, "Azure sign-in probe failed.");
+            return new AzureSignInStatus(false, null);
+        }
+    }
+
+    // One credential configuration shared by the listing call and the sign-in probe, so "are we
+    // signed in?" is answered with the exact same credential chain that discovery will use.
+    private static DefaultAzureCredential CreateCredential(string? tenantId)
+    {
+        // Exclude the interactive browser flow: this is a headless background call and must fail
+        // fast to a clear "run az login" message rather than popping a browser. An explicit tenant
+        // overrides the Azure CLI's active tenant so the right subscriptions are enumerated.
+        var credentialOptions = new DefaultAzureCredentialOptions
+        {
+            ExcludeInteractiveBrowserCredential = true,
+        };
+
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            credentialOptions.TenantId = tenantId.Trim();
+        }
+
+        return new DefaultAzureCredential(credentialOptions);
+    }
+
+    // ARM scope used for both discovery and the sign-in probe.
+    private static readonly string[] ArmScopes = { "https://management.azure.com/.default" };
+
+    // Best-effort identity for the "signed in as …" hint: pull a human-readable claim from the ARM
+    // access token (a JWT). Falls back to null for non-user identities (managed identity / SP) or any
+    // decode failure — the caller still shows a generic "signed in" state.
+    private static string? ReadAccountFromToken(string jwt)
+    {
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length < 2)
+            {
+                return null;
+            }
+
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = (payload.Length % 4) switch
+            {
+                2 => payload + "==",
+                3 => payload + "=",
+                _ => payload,
+            };
+
+            using var doc = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var root = doc.RootElement;
+            foreach (var claim in new[] { "upn", "preferred_username", "unique_name", "email", "appid" })
+            {
+                if (root.TryGetProperty(claim, out var value) &&
+                    value.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(value.GetString()))
+                {
+                    return value.GetString();
+                }
+            }
+        }
+        catch
+        {
+            // Token shape varies; the account label is cosmetic, so never fail the probe over it.
+        }
+
+        return null;
     }
 
     private static bool IsAuthFailure(Exception ex) =>
@@ -210,7 +303,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                 var modelName = model?.Name ?? string.Empty;
                 var deploymentName = deployment.Data?.Name ?? deployment.Id.Name;
 
-                if (!IsChatModel(modelName, deploymentName))
+                if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                 {
                     continue;
                 }
@@ -339,7 +432,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                             var modelName = model?.Name ?? string.Empty;
                             var deploymentName = deployment.Data?.Name ?? deployment.Id.Name;
 
-                            if (!IsChatModel(modelName, deploymentName))
+                            if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                             {
                                 continue;
                             }
@@ -377,7 +470,59 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             .ThenBy(d => d.DeploymentName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    private static bool IsChatModel(string modelName, string deploymentName)
+    // True when a deployment can serve the Responses-API text-cleanup path. Azure reports a per-
+    // deployment capability map we treat as authoritative when present:
+    //   * realtime==true  -> EXCLUDE. Realtime/audio streaming models (gpt-realtime, gpt-realtime-1.5)
+    //     reject the Responses text call with HTTP 400 even though they may advertise other flags.
+    //   * responses==true -> INCLUDE. The decisive flag for our path. Newer reasoning/agent models
+    //     (gpt-5.4-pro, gpt-5.3-codex) report chatCompletion==false but responses==true and DO work.
+    //   * chatCompletion  -> use its value. Older chat models (gpt-4o/4.1, gpt-5.x, model-router)
+    //     report chatCompletion==true without a responses key; embedding/image/document models report
+    //     false. ("chatCompletion" alone is NOT sufficient — it misses the responses-only models above,
+    //     which is why we check "responses" first.)
+    // Only when the map surfaces NONE of these decisive keys do we fall back to the model-name
+    // heuristic (older API versions / some non-OpenAI AIServices deployments).
+    internal static bool SupportsTextCleanup(
+        IReadOnlyDictionary<string, string>? capabilities, string modelName, string deploymentName)
+    {
+        if (capabilities is { Count: > 0 })
+        {
+            if (TryGetCapabilityFlag(capabilities, "realtime", out var realtime) && realtime)
+            {
+                return false;
+            }
+
+            if (TryGetCapabilityFlag(capabilities, "responses", out var supportsResponses) && supportsResponses)
+            {
+                return true;
+            }
+
+            if (TryGetCapabilityFlag(capabilities, "chatCompletion", out var supportsChat))
+            {
+                return supportsChat;
+            }
+        }
+
+        return IsChatModelByName(modelName, deploymentName);
+    }
+
+    private static bool TryGetCapabilityFlag(
+        IReadOnlyDictionary<string, string> capabilities, string key, out bool value)
+    {
+        foreach (var pair in capabilities)
+        {
+            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
+            {
+                value = string.Equals(pair.Value, "true", StringComparison.OrdinalIgnoreCase);
+                return true;
+            }
+        }
+
+        value = false;
+        return false;
+    }
+
+    private static bool IsChatModelByName(string modelName, string deploymentName)
     {
         var haystack = $"{modelName} {deploymentName}".ToLowerInvariant();
         foreach (var marker in NonChatMarkers)

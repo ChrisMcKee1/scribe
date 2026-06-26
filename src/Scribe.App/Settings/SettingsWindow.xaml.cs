@@ -31,6 +31,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
+    private bool _azureAutoListed;
     private IReadOnlyList<DictionaryEntry> _originalEntries = Array.Empty<DictionaryEntry>();
 
     private HotkeyBinding _pendingBinding;
@@ -195,6 +196,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _ = RefreshFoundryModelsAsync();
         }
+        else if (SelectedProvider == CleanupProvider.AzureFoundry)
+        {
+            // Detect an existing Azure sign-in and auto-list deployments so search works immediately.
+            _ = ProbeAzureSignInAsync();
+        }
     }
 
     private void LoadDictionary()
@@ -352,6 +358,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (SelectedProvider == CleanupProvider.FoundryLocal)
         {
             _ = RefreshFoundryModelsAsync();
+        }
+        else if (SelectedProvider == CleanupProvider.AzureFoundry)
+        {
+            _ = ProbeAzureSignInAsync();
         }
     }
 
@@ -560,13 +570,62 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        AzureRefreshButton.IsEnabled = false;
         AzureStatusText.Text = "Signing in and listing your Azure deployments…";
+        await ListAzureDeploymentsAsync();
+    }
+
+    // Probes whether the user is already signed in to Azure (reusing az login / DefaultAzureCredential)
+    // and reflects it in the UI: if signed in we show the identity, relabel the button to "Refresh
+    // models", and list deployments automatically so the search box just works — no forced sign-in click.
+    // Best-effort and non-blocking; runs when the Azure panel is shown.
+    private async Task ProbeAzureSignInAsync()
+    {
+        AzureStatusText.Text = "Checking your Azure sign-in…";
+        AzureSignInStatus status;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var tenantId = NullIfBlank(AzureTenantBox.Text);
+            status = await Task.Run(() => _azureDiscovery.GetSignInStatusAsync(tenantId, cts.Token), cts.Token);
+        }
+        catch
+        {
+            status = new AzureSignInStatus(false, null);
+        }
+
+        if (status.IsSignedIn)
+        {
+            AzureRefreshButton.Content = "Refresh models";
+            AzureStatusText.Text = string.IsNullOrWhiteSpace(status.Account)
+                ? "Signed in to Azure. Listing your deployments…"
+                : $"Signed in as {status.Account}. Listing your deployments…";
+
+            // Auto-list once per window so the picker is populated without a manual click; the manual
+            // "Refresh models" button re-lists on demand afterwards.
+            if (!_azureAutoListed)
+            {
+                _azureAutoListed = true;
+                await ListAzureDeploymentsAsync();
+            }
+        }
+        else
+        {
+            AzureRefreshButton.Content = "Sign in & find models";
+            AzureStatusText.Text =
+                "Not signed in to Azure. Run 'az login' (or install the Azure CLI below), then choose Find models.";
+        }
+    }
+
+    // Shared by the manual Refresh button and the auto-list-on-sign-in path.
+    private async Task ListAzureDeploymentsAsync()
+    {
+        AzureRefreshButton.IsEnabled = false;
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var tenantId = NullIfBlank(AzureTenantBox.Text);
             var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(tenantId, cts.Token), cts.Token);
+            _azureAutoListed = true;
 
             _azureModelMap.TryGetValue(AzureModelBox.Text?.Trim() ?? string.Empty, out var previous);
             SetAzureDeployments(
@@ -575,8 +634,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 preferDeployment: NullIfBlank(AzureDeploymentBox.Text) ?? previous?.DeploymentName);
 
             AzureStatusText.Text = deployments.Count == 0
-                ? "No chat-model deployments were found in your Azure subscriptions."
-                : $"Found {deployments.Count} deployment(s). Choose one to use for cleanup.";
+                ? "No text-capable deployments found. Realtime/audio/embedding models can't do cleanup — deploy a chat model (e.g. gpt-4.1-mini) on your Azure resource."
+                : $"Found {deployments.Count} compatible deployment(s). Choose one to use for cleanup.";
         }
         catch (OperationCanceledException)
         {
