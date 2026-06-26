@@ -18,7 +18,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.50.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private static int s_providerInitialized;
 
@@ -136,6 +136,11 @@ public sealed class ScribeDatabase : IDisposable
             Execute(connection, SchemaV1, transaction);
         }
 
+        if (current < 2)
+        {
+            Execute(connection, SchemaV2, transaction);
+        }
+
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
         Execute(connection, $"PRAGMA user_version={SchemaVersion};", transaction);
         transaction.Commit();
@@ -204,5 +209,19 @@ public sealed class ScribeDatabase : IDisposable
             audio_blob_id INTEGER NULL REFERENCES audio_blobs (id) ON DELETE SET NULL
         );
         CREATE INDEX ix_history_timestamp ON history (timestamp_utc DESC);
+        """;
+
+    // v2: records when AI cleanup failed at runtime so the user can see it in Settings. Rows are
+    // pruned to a rolling one-week window on each success and at startup, so the log stays small.
+    private const string SchemaV2 = """
+        CREATE TABLE cleanup_failures (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc TEXT NOT NULL,
+            provider      TEXT NULL,
+            model         TEXT NULL,
+            reason        TEXT NOT NULL,
+            sample        TEXT NULL
+        );
+        CREATE INDEX ix_cleanup_failures_timestamp ON cleanup_failures (timestamp_utc DESC);
         """;
 }

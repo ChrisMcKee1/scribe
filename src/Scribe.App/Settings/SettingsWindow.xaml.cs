@@ -24,10 +24,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly IDictionaryRepository _dictionary;
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
+    private readonly ICleanupFailureLog _failureLog;
     private readonly Action<AppSettings> _applySettings;
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private readonly ObservableCollection<FailureRow> _failures = new();
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
@@ -46,6 +48,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IDictionaryRepository dictionary,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
+        ICleanupFailureLog failureLog,
         Action<AppSettings> applySettings)
     {
         _settingsRepository = settingsRepository;
@@ -53,6 +56,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _dictionary = dictionary;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
+        _failureLog = failureLog;
         _applySettings = applySettings;
 
         _settings = settingsRepository.Load();
@@ -66,6 +70,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateChoices();
         LoadFromSettings();
         LoadDictionary();
+        LoadFailures();
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
@@ -219,6 +224,39 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
+    }
+
+    private void LoadFailures()
+    {
+        _failures.Clear();
+        foreach (var failure in _failureLog.GetRecent(50))
+        {
+            _failures.Add(new FailureRow
+            {
+                When = failure.TimestampUtc.ToLocalTime().ToString("g"),
+                Model = (string.IsNullOrWhiteSpace(failure.Model) ? failure.Provider : failure.Model)
+                        ?? string.Empty,
+                Reason = failure.Reason,
+            });
+        }
+
+        FailuresGrid.ItemsSource = _failures;
+        NoFailuresText.Visibility = _failures.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ClearFailuresButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _failureLog.Clear();
+            _failures.Clear();
+            NoFailuresText.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not clear the failure log:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     // --- Hotkey capture ------------------------------------------------------------------
@@ -966,5 +1004,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Replacement { get; set; } = string.Empty;
         public bool WholeWord { get; set; } = true;
         public bool Enabled { get; set; } = true;
+    }
+
+    public sealed class FailureRow
+    {
+        public string When { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
     }
 }

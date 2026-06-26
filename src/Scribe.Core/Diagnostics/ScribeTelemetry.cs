@@ -33,6 +33,7 @@ public static class ScribeTelemetry
     public const string TagRealTimeFactor = "scribe.rtf";
     public const string TagAiCleanup = "scribe.ai_cleanup";
     public const string TagAiChanged = "scribe.ai_changed";
+    public const string TagAiOutcome = "scribe.ai_outcome";
     public const string TagFinalChars = "scribe.final_chars";
     public const string TagTargetApp = "scribe.target_app";
     public const string TagInjectMethod = "scribe.inject.method";

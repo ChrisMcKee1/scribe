@@ -51,6 +51,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<IDictionaryRepository, DictionaryRepository>();
         services.AddSingleton<IHistoryRepository, HistoryRepository>();
+        services.AddSingleton<ICleanupFailureLog, CleanupFailureLog>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 

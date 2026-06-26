@@ -136,4 +136,74 @@ public class PersistenceTests
         Assert.Empty(repo.GetRecent());
         Assert.Null(repo.GetAudio(blobId));
     }
+
+    // --- Cleanup failure log (Feature A) -------------------------------------------------
+
+    [Fact]
+    public void Failure_log_add_assigns_id_and_truncates_a_long_sample()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var log = new CleanupFailureLog(db);
+
+        var longSample = new string('a', 500);
+        var saved = log.Add(CleanupFailure.New("AI cleanup timed out.", "FoundryLocal", "qwen2.5-1.5b", longSample));
+
+        Assert.True(saved.Id > 0);
+        Assert.Equal(1, log.Count());
+
+        var recent = log.GetRecent();
+        Assert.Single(recent);
+        Assert.Equal("AI cleanup timed out.", recent[0].Reason);
+        Assert.Equal("qwen2.5-1.5b", recent[0].Model);
+        Assert.Equal(200, recent[0].Sample!.Length); // capped at SampleMaxChars
+    }
+
+    [Fact]
+    public void Failure_log_returns_newest_first()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var log = new CleanupFailureLog(db);
+
+        log.Add(CleanupFailure.New("first") with { TimestampUtc = DateTimeOffset.UtcNow.AddMinutes(-5) });
+        log.Add(CleanupFailure.New("second") with { TimestampUtc = DateTimeOffset.UtcNow });
+
+        var recent = log.GetRecent();
+        Assert.Equal(2, recent.Count);
+        Assert.Equal("second", recent[0].Reason);
+        Assert.Equal("first", recent[1].Reason);
+    }
+
+    [Fact]
+    public void Failure_log_clear_empties_the_table()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var log = new CleanupFailureLog(db);
+
+        log.Add(CleanupFailure.New("boom"));
+        log.Add(CleanupFailure.New("bang"));
+        Assert.Equal(2, log.Count());
+
+        log.Clear();
+
+        Assert.Equal(0, log.Count());
+        Assert.Empty(log.GetRecent());
+    }
+
+    [Fact]
+    public void Failure_log_prune_removes_only_entries_older_than_the_cutoff()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var log = new CleanupFailureLog(db);
+
+        log.Add(CleanupFailure.New("stale") with { TimestampUtc = DateTimeOffset.UtcNow.AddDays(-8) });
+        log.Add(CleanupFailure.New("fresh") with { TimestampUtc = DateTimeOffset.UtcNow.AddHours(-1) });
+
+        var removed = log.PruneOlderThan(DateTimeOffset.UtcNow.AddDays(-7));
+
+        Assert.Equal(1, removed);
+        var recent = log.GetRecent();
+        Assert.Single(recent);
+        Assert.Equal("fresh", recent[0].Reason);
+    }
 }
+

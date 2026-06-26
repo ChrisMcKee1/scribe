@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.Text;
 using System.Text.RegularExpressions;
 using Azure.AI.OpenAI;
 using Azure.AI.Projects;
@@ -53,7 +54,12 @@ internal sealed class TextCleanupService : ITextCleanupService
     // request can take far longer than its warm steady-state latency, and a spurious timeout here
     // would wrongly report an otherwise-working deployment as Unavailable.
     private const int AzureValidationTimeoutSeconds = 60;
-    private const int MaxInputChars = 4000;
+    // Long dictation is split into bounded chunks cleaned sequentially, so a multi-minute capture is
+    // still polished instead of skipped or truncated. Each chunk is small enough that the per-chunk
+    // token budget never truncates and the per-chunk timeout bounds latency. The chunk ceiling caps
+    // worst-case work for a pathologically long hold (20 * 2400 ≈ 48k chars ≈ ~1h of speech).
+    private const int ChunkTargetChars = 2400;
+    private const int MaxCleanupChunks = 20;
     private const float CleanupTemperature = 0.1f;
     private const string AgentName = "ScribeCleanup";
 
@@ -174,11 +180,11 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    public async Task<string> CleanAsync(string text, CancellationToken cancellationToken = default)
+    public async Task<CleanupResult> CleanAsync(string text, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
-            return text;
+            return CleanupResult.Skip(text);
         }
 
         AIAgent? agent;
@@ -187,19 +193,100 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null)
             {
-                return text;
+                return CleanupResult.Skip(text);
             }
 
             agent = _agent;
             options = _options;
         }
 
-        // Very long inputs are rare for dictation and would blow the latency budget; pass through.
-        if (text.Length > MaxInputChars)
+        // Split long dictation into bounded chunks on sentence/word boundaries and clean each in turn,
+        // so an arbitrarily long capture is polished rather than skipped or truncated. Short input is a
+        // single chunk (the common case). A pathologically long hold is capped: anything past the chunk
+        // ceiling is left raw and flagged as a partial failure.
+        var chunks = ChunkForCleanup(text, ChunkTargetChars);
+        string? overflowTail = null;
+        if (chunks.Count > MaxCleanupChunks)
         {
-            return text;
+            overflowTail = string.Join(' ', chunks.Skip(MaxCleanupChunks));
+            chunks = chunks.Take(MaxCleanupChunks).ToList();
         }
 
+        var builder = new StringBuilder(text.Length + 16);
+        var failures = 0;
+        string? firstFailure = null;
+
+        for (var i = 0; i < chunks.Count; i++)
+        {
+            var (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], cancellationToken)
+                .ConfigureAwait(false);
+            if (error is not null)
+            {
+                failures++;
+                firstFailure ??= error;
+            }
+
+            builder.Append(cleanedChunk);
+            if (i < chunks.Count - 1)
+            {
+                builder.Append(' ');
+            }
+        }
+
+        // Every cleaned segment failed — the user effectively got raw text back (any overflow tail is
+        // raw too), so this is a hard failure that drives the visible "intelligence failed" feedback
+        // and is recorded to the failure log. This must take precedence over the partial/overflow
+        // classification below; otherwise a total failure on an over-length capture would be silently
+        // reported as a successful partial clean (no red flash, and a log entry claiming success).
+        if (failures == chunks.Count)
+        {
+            return new CleanupResult(text, CleanupOutcome.Failed, firstFailure ?? "AI cleanup failed.");
+        }
+
+        if (overflowTail is not null)
+        {
+            builder.Append(' ').Append(overflowTail);
+        }
+
+        // Each chunk was already sanitized individually in CleanChunkAsync (think-block/fence/quote
+        // stripping plus the per-chunk ramble guard, which turns an unusable answer into a counted
+        // failure). Re-running the full sanitizer over the rejoin would re-apply the ramble guard
+        // against the whole input and could silently discard a legitimate multi-chunk clean as
+        // "Unchanged"; a trim is all the combined text needs.
+        var combined = builder.ToString().Trim();
+        var changed = !string.Equals(combined, text, StringComparison.Ordinal);
+        var outcome = changed ? CleanupOutcome.Cleaned : CleanupOutcome.Unchanged;
+
+        // Some-but-not-all segments failed, and/or a long tail was left raw: the result is still
+        // usable, so record the partial degradation for the Settings log without flashing the hard-
+        // failure overlay. Report every condition that applies so the log never implies the retained
+        // segments all cleaned successfully when some of them actually failed.
+        string? partial = null;
+        if (failures > 0 || overflowTail is not null)
+        {
+            var parts = new List<string>(2);
+            if (failures > 0)
+            {
+                parts.Add($"{failures} of {chunks.Count} segments failed ({firstFailure})");
+            }
+
+            if (overflowTail is not null)
+            {
+                parts.Add($"the remainder beyond the first {chunks.Count} segments was left raw");
+            }
+
+            partial = "Partial cleanup: " + string.Join("; ", parts) + ".";
+        }
+
+        return new CleanupResult(combined, outcome, partial);
+    }
+
+    // Cleans a single chunk. Returns the cleaned text and a null error on success, or the raw chunk and
+    // a human-readable error when the model call throws, times out, or returns nothing usable. Never
+    // throws — a failed segment falls back to its raw text so dictation is never lost.
+    private async Task<(string Text, string? Error)> CleanChunkAsync(
+        AIAgent agent, CleanupOptions options, string chunk, CancellationToken cancellationToken)
+    {
         try
         {
             var timeout = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
@@ -212,18 +299,112 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             // The system prompt is baked into the agent at creation, so we only send the raw text and
             // run statelessly (no thread) — each dictation is independent, with no history to grow.
-            var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, text));
-            var result = await agent.RunAsync(text, options: runOptions, cancellationToken: cts.Token)
+            var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, chunk));
+            var result = await agent.RunAsync(chunk, options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
 
-            return Sanitize(result.Text, text);
+            if (string.IsNullOrWhiteSpace(result.Text))
+            {
+                return (chunk, "AI cleanup returned no text.");
+            }
+
+            // A non-empty answer can still be unusable (only a think-block, an empty fence, or an
+            // over-long ramble). TrySanitize rejects those; treat a rejection as a per-chunk failure
+            // so an all-rejected dictation falls back to raw AND surfaces the red "intelligence
+            // failed" overlay instead of being logged as a silent unchanged success.
+            if (!TrySanitize(result.Text, chunk, out var cleaned))
+            {
+                return (chunk, "AI cleanup returned unusable output.");
+            }
+
+            return (cleaned, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // A real caller cancellation (e.g. app shutdown) must propagate, not be treated as a
+            // per-segment timeout — otherwise we'd keep calling the model after the user gave up.
+            throw;
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "AI cleanup failed or timed out; using raw transcription.");
-            return text;
+            _log.LogDebug(ex, "AI cleanup failed or timed out for a segment; using raw text.");
+            return (chunk, DescribeFailure(ex));
         }
     }
+
+    // Splits text into chunks no longer than <paramref name="targetChars"/>, breaking on the last
+    // sentence-ending punctuation in the back of each window when possible, else the last whitespace,
+    // and never mid-word unless a single run has no break at all. Raw ASR output is often lightly
+    // punctuated, so the whitespace fallback guarantees bounded chunks for unpunctuated speech.
+    internal static List<string> ChunkForCleanup(string text, int targetChars)
+    {
+        text = text.Trim();
+        if (text.Length <= targetChars)
+        {
+            return [text];
+        }
+
+        var chunks = new List<string>();
+        var start = 0;
+        while (start < text.Length)
+        {
+            var remaining = text.Length - start;
+            if (remaining <= targetChars)
+            {
+                var tail = text[start..].Trim();
+                if (tail.Length > 0)
+                {
+                    chunks.Add(tail);
+                }
+
+                break;
+            }
+
+            var window = text.Substring(start, targetChars);
+            var minBreak = (int)(targetChars * 0.6);
+
+            var breakAt = LastSentenceBreak(window, minBreak);
+            if (breakAt < 0)
+            {
+                breakAt = window.LastIndexOf(' ');
+            }
+
+            if (breakAt < minBreak)
+            {
+                // No sentence or word boundary in range (e.g. one very long run) — hard split.
+                breakAt = targetChars - 1;
+            }
+
+            var piece = text.Substring(start, breakAt + 1).Trim();
+            if (piece.Length > 0)
+            {
+                chunks.Add(piece);
+            }
+
+            start += breakAt + 1;
+        }
+
+        return chunks;
+    }
+
+    private static int LastSentenceBreak(string window, int minIndex)
+    {
+        for (var i = window.Length - 1; i >= minIndex; i--)
+        {
+            if (window[i] is '.' or '!' or '?' or '\n')
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string DescribeFailure(Exception ex) => ex switch
+    {
+        OperationCanceledException or TimeoutException => "AI cleanup timed out.",
+        _ => $"AI cleanup error: {ex.GetType().Name}.",
+    };
 
     public async Task<bool> ProbeAsync(CancellationToken cancellationToken = default)
     {
@@ -924,6 +1105,13 @@ internal sealed class TextCleanupService : ITextCleanupService
             "Return only the corrected text. If it already matches the writing style, return it unchanged.\n\n" +
             "Writing style:\n" + style;
 
+        // The user dictionary is folded in as its own block after the writing style, so the vocabulary
+        // feature is preserved independently of whatever tone the user asked for.
+        if (!string.IsNullOrWhiteSpace(options.Glossary))
+        {
+            prompt += "\n\n" + options.Glossary.Trim();
+        }
+
         // Qwen3-family models (Foundry Local) support a "/no_think" directive that suppresses
         // chain-of-thought, so they return the corrected text directly with no reasoning preamble.
         if (options.Provider == CleanupProvider.FoundryLocal &&
@@ -975,57 +1163,68 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         // Foundry Local output also has to cover translation/format expansion and any hidden reasoning
-        // tokens (e.g. qwen3), and a long dictation can legitimately be 1k+ words — so the ceiling has
-        // to be roomy enough not to truncate. The per-call timeout still bounds runaway generation.
+        // tokens (e.g. qwen3). Long dictation is chunked before it reaches here, so each call is bounded
+        // and this ceiling is only a safety net — keep it roomy so a chunk is never truncated. The
+        // per-call timeout still bounds runaway generation.
         var estimate = (int)(words * 2.5) + 128;
-        return Math.Clamp(estimate, 64, 2048);
+        return Math.Clamp(estimate, 64, 4096);
     }
 
-    private static string Sanitize(string? candidate, string original)
+    private static string Sanitize(string? candidate, string original) =>
+        TrySanitize(candidate, original, out var text) ? text : original;
+
+    // Cleans up a model's raw answer and reports whether it is usable. Returns false (and yields the
+    // original text) when the output is empty after stripping think-blocks/fences/quotes, or is an
+    // over-long ramble — so a caller cleaning a single chunk can treat a rejected answer as a failure
+    // and surface it, rather than silently logging it as an unchanged success.
+    internal static bool TrySanitize(string? candidate, string original, out string text)
     {
+        text = original;
+
         if (string.IsNullOrWhiteSpace(candidate))
         {
-            return original;
+            return false;
         }
 
-        var text = ThinkBlock.Replace(candidate, string.Empty).Trim();
+        var cleaned = ThinkBlock.Replace(candidate, string.Empty).Trim();
 
         // Strip an enclosing markdown code fence the model may have added.
-        if (text.StartsWith("```", StringComparison.Ordinal))
+        if (cleaned.StartsWith("```", StringComparison.Ordinal))
         {
-            var firstNewline = text.IndexOf('\n');
+            var firstNewline = cleaned.IndexOf('\n');
             if (firstNewline >= 0)
             {
-                text = text[(firstNewline + 1)..];
+                cleaned = cleaned[(firstNewline + 1)..];
             }
 
-            if (text.EndsWith("```", StringComparison.Ordinal))
+            if (cleaned.EndsWith("```", StringComparison.Ordinal))
             {
-                text = text[..^3];
+                cleaned = cleaned[..^3];
             }
 
-            text = text.Trim();
+            cleaned = cleaned.Trim();
         }
 
         // Strip a single pair of enclosing quotes if the model wrapped the whole answer in them.
-        if (text.Length >= 2 &&
-            ((text[0] == '"' && text[^1] == '"') || (text[0] == '\'' && text[^1] == '\'')))
+        if (cleaned.Length >= 2 &&
+            ((cleaned[0] == '"' && cleaned[^1] == '"') || (cleaned[0] == '\'' && cleaned[^1] == '\'')))
         {
-            text = text[1..^1].Trim();
+            cleaned = cleaned[1..^1].Trim();
         }
 
-        if (string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(cleaned))
         {
-            return original;
+            return false;
         }
 
         // If the model ignored the instruction and rambled (e.g. answered the text), reject it.
-        if (text.Length > (original.Length * 2.5) + 80)
+        if (cleaned.Length > (original.Length * 2.5) + 80)
         {
-            return original;
+            return false;
         }
 
-        return text;
+        text = cleaned;
+        return true;
     }
 
     private static CleanupOptions Normalize(CleanupOptions options)

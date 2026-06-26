@@ -92,6 +92,8 @@ public partial class App : Application
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<ITextInjector>(),
             services.GetRequiredService<IHistoryRepository>(),
+            services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
 
@@ -103,6 +105,7 @@ public partial class App : Application
 
         _controller.StateChanged += OnStateChanged;
         _controller.Error += message => _tray!.ShowError(message);
+        _controller.CleanupFailed += OnCleanupFailed;
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
         // dictation is fast and does not stall on model initialization.
@@ -124,6 +127,10 @@ public partial class App : Application
         });
 
         _controller.Start();
+
+        // Trim any stale AI-failure log entries (older than the rolling one-week window) on startup,
+        // off the UI thread, so the Settings failure list never accumulates indefinitely.
+        _ = Task.Run(() => _controller!.PruneFailureLog());
 
         // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
         // if the app was moved, and clears if the user disabled it elsewhere.
@@ -179,6 +186,22 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// Shows the brief red "intelligence failed" overlay when AI cleanup fell back to raw text.
+    /// Raised on a background thread, so the overlay mutation is marshalled to the UI thread and
+    /// only shown when the user has the overlay enabled.
+    /// </summary>
+    private void OnCleanupFailed(string reason)
+    {
+        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
+        if (!overlayEnabled)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => _overlay?.ShowFailed(reason));
+    }
+
+    /// <summary>
     /// Opens the settings window (or focuses it if already open). Built per-open from the host so
     /// it always reflects the latest persisted state; on save it calls back into the controller to
     /// apply the new binding and dictionary live.
@@ -198,6 +221,7 @@ public partial class App : Application
             services.GetRequiredService<IDictionaryRepository>(),
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
+            services.GetRequiredService<ICleanupFailureLog>(),
             settings => _controller!.ApplySettings(settings));
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();

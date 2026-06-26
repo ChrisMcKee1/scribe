@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using Scribe.Core.Audio;
 
 namespace Scribe.App.Overlay;
@@ -27,6 +28,13 @@ public partial class RecordingOverlay : Window
     private readonly IAudioCaptureService _audio;
     private readonly Storyboard _pulse;
     private readonly Storyboard _processing;
+
+    // The red "intelligence failed" flash holds the overlay on screen briefly so the user can read
+    // it, then hides itself. The Idle-state hide that arrives right after processing is suppressed
+    // until the hold elapses (see HideOverlay).
+    private static readonly TimeSpan FailedHold = TimeSpan.FromMilliseconds(1300);
+    private DispatcherTimer? _failedTimer;
+    private DateTime _failedHoldUntil = DateTime.MinValue;
 
     private bool _subscribed;
     private bool _closing;
@@ -54,6 +62,7 @@ public partial class RecordingOverlay : Window
         ListeningContent.Visibility = Visibility.Visible;
         StatusText.Text = "Listening…";
         ResetMeter();
+        ClearFailed();
 
         if (!_subscribed)
         {
@@ -86,6 +95,7 @@ public partial class RecordingOverlay : Window
 
         _pulse.Stop(this);
         ResetMeter();
+        ClearFailed();
 
         ListeningContent.Visibility = Visibility.Collapsed;
         ProcessingContent.Visibility = Visibility.Visible;
@@ -95,9 +105,19 @@ public partial class RecordingOverlay : Window
         _processing.Begin(this, isControllable: true);
     }
 
-    /// <summary>Hides the overlay and stops metering; safe to call when already hidden.</summary>
-    public void HideOverlay()
+    /// <summary>
+    /// Flashes the overlay red with an "Intelligence failed" notice when AI cleanup failed at runtime
+    /// and the dictation fell back to raw transcription. Holds briefly so the user can read it, then
+    /// hides itself; a new dictation arriving during the hold takes over immediately.
+    /// </summary>
+    public void ShowFailed(string? reason)
     {
+        if (_closing)
+        {
+            return;
+        }
+
+        // Capture has long since stopped; ensure no metering or animations remain active.
         if (_subscribed)
         {
             _audio.LevelChanged -= OnLevelChanged;
@@ -108,12 +128,59 @@ public partial class RecordingOverlay : Window
         _processing.Stop(this);
         ResetMeter();
 
+        ListeningContent.Visibility = Visibility.Collapsed;
+        ProcessingContent.Visibility = Visibility.Collapsed;
+        FailedContent.Visibility = Visibility.Visible;
+        if (!string.IsNullOrWhiteSpace(reason))
+        {
+            FailedReasonText.Text = reason!.Trim();
+        }
+
+        SetFailedVisual(true);
+        Reveal();
+
+        _failedHoldUntil = DateTime.UtcNow + FailedHold;
+        _failedTimer ??= CreateFailedTimer();
+        _failedTimer.Stop();
+        _failedTimer.Start();
+    }
+
+    /// <summary>Hides the overlay and stops metering; safe to call when already hidden.</summary>
+    public void HideOverlay()
+    {
+        // While the red failure flash is holding, ignore the Idle-state hide that arrives immediately
+        // after processing — the failure timer hides the overlay once the hold elapses. Shutdown
+        // (_closing) bypasses this so teardown always hides.
+        if (!_closing && DateTime.UtcNow < _failedHoldUntil)
+        {
+            return;
+        }
+
+        if (_subscribed)
+        {
+            _audio.LevelChanged -= OnLevelChanged;
+            _subscribed = false;
+        }
+
+        _pulse.Stop(this);
+        _processing.Stop(this);
+        ResetMeter();
+        ClearFailed();
+
         // Keep the layered window shown and only drop its opacity to hide. Calling Hide()/Show()
         // each cycle re-presents the AllowsTransparency surface, which intermittently leaks one
         // opaque (black) frame before per-pixel alpha is composited — the transient dark box the
         // user sees. Toggling Opacity on the already-shown window animates the existing composition
         // and never re-presents, so the artifact cannot occur.
         Opacity = 0;
+
+        // Park the now-transparent window off-screen. On some GPU/DWM configurations a layered
+        // window that drops to Opacity 0 keeps its last-presented (opaque) frame composited at its
+        // on-screen position until that screen region is invalidated — leaving a dark rounded box
+        // lingering where the pill was. Moving the window forces DWM to recomposite the vacated
+        // region (clearing the stale frame) without re-creating the surface, so hide is reliable.
+        // Reveal() repositions to the work area before raising opacity again, so there is no flash.
+        PositionOffScreen();
     }
 
     /// <summary>
@@ -177,6 +244,43 @@ public partial class RecordingOverlay : Window
         MeterFill.Width = 0;
     }
 
+    // Swaps the card's glow/wash between the normal (blue) and failed (red) look.
+    private void SetFailedVisual(bool failed)
+    {
+        FailedTint.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+        OuterGlowFailed.Visibility = failed ? Visibility.Visible : Visibility.Collapsed;
+        OuterGlow.Visibility = failed ? Visibility.Collapsed : Visibility.Visible;
+        if (!failed)
+        {
+            FailedContent.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    // Cancels any in-flight failure flash and restores the normal visual, so a fresh dictation (or a
+    // shutdown) never inherits the red state.
+    private void ClearFailed()
+    {
+        _failedHoldUntil = DateTime.MinValue;
+        _failedTimer?.Stop();
+        SetFailedVisual(false);
+    }
+
+    private DispatcherTimer CreateFailedTimer()
+    {
+        var timer = new DispatcherTimer { Interval = FailedHold };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _failedHoldUntil = DateTime.MinValue;
+            // Only hide if a new dictation hasn't already taken over the overlay.
+            if (FailedContent.Visibility == Visibility.Visible)
+            {
+                HideOverlay();
+            }
+        };
+        return timer;
+    }
+
     // Brings the (already-shown) overlay on-screen and fades it in. The window stays presented for
     // its lifetime; only its position and opacity change, so the layered surface is never re-created.
     private void Reveal()
@@ -201,8 +305,12 @@ public partial class RecordingOverlay : Window
 
     private void PositionOffScreen()
     {
-        Left = -10000;
-        Top = -10000;
+        // Park fully below the entire virtual desktop (all monitors) rather than at a magic negative
+        // constant, so the transparent layered surface is guaranteed off every monitor regardless of
+        // multi-monitor layout or negative-coordinate arrangements. Coordinates are in device-
+        // independent units, matching PositionToWorkArea.
+        Left = SystemParameters.VirtualScreenLeft;
+        Top = SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight + Height;
     }
 
     private void PositionToWorkArea()

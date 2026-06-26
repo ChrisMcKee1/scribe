@@ -413,6 +413,41 @@
                                    Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
                     </Grid>
                 </TabItem>
+
+                <TabItem Header="Diagnostics">
+                    <Grid Margin="2,12,2,2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
+                                   Text="When AI cleanup fails at runtime, Scribe falls back to the raw transcription and records why here. Entries older than a week are removed automatically."/>
+                        <ui:Card Grid.Row="1" Padding="0">
+                            <Grid>
+                                <DataGrid x:Name="FailuresGrid"
+                                          AutoGenerateColumns="False" IsReadOnly="True"
+                                          CanUserAddRows="False" CanUserDeleteRows="False"
+                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                          Background="Transparent" BorderThickness="0">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="When" Binding="{Binding When}" Width="Auto"/>
+                                        <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="Auto"/>
+                                        <DataGridTextColumn Header="Reason" Binding="{Binding Reason}" Width="*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock x:Name="NoFailuresText" Text="No failures recorded."
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Style="{StaticResource SettingHint}" Margin="0"
+                                           Visibility="Collapsed"/>
+                            </Grid>
+                        </ui:Card>
+                        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
+                                       MinWidth="120" Click="ClearFailuresButton_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </TabItem>
             </TabControl>
 
             <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">

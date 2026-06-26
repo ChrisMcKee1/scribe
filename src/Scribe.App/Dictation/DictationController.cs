@@ -32,8 +32,14 @@ internal sealed class DictationController : IDisposable
     private readonly ITextCleanupService _cleanup;
     private readonly ITextInjector _injector;
     private readonly IHistoryRepository _history;
+    private readonly IDictionaryRepository _dictionary;
+    private readonly ICleanupFailureLog _failureLog;
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<DictationController> _log;
+
+    // Failures shown in Settings are kept to a rolling one-week window; older rows are pruned on each
+    // successful cleanup (and at startup by the host) so the diagnostic log never grows unbounded.
+    private static readonly TimeSpan FailureRetention = TimeSpan.FromDays(7);
 
     private readonly object _gate = new();
     private DictationState _state = DictationState.Idle;
@@ -51,6 +57,8 @@ internal sealed class DictationController : IDisposable
         ITextCleanupService cleanup,
         ITextInjector injector,
         IHistoryRepository history,
+        IDictionaryRepository dictionary,
+        ICleanupFailureLog failureLog,
         ISettingsRepository settingsRepository,
         ILogger<DictationController> log)
     {
@@ -62,6 +70,8 @@ internal sealed class DictationController : IDisposable
         _cleanup = cleanup;
         _injector = injector;
         _history = history;
+        _dictionary = dictionary;
+        _failureLog = failureLog;
         _settingsRepository = settingsRepository;
         _log = log;
     }
@@ -74,6 +84,12 @@ internal sealed class DictationController : IDisposable
 
     /// <summary>Raised after a capture is dictated, with the final injected text.</summary>
     public event Action<string>? Dictated;
+
+    /// <summary>
+    /// Raised (on a background thread) when AI cleanup was enabled but failed at runtime, so the
+    /// dictation fell back to raw transcription. Carries a short reason for the failure overlay.
+    /// </summary>
+    public event Action<string>? CleanupFailed;
 
     /// <summary>True while dictation is suspended (the hotkey is ignored).</summary>
     public bool IsPaused
@@ -125,7 +141,7 @@ internal sealed class DictationController : IDisposable
     }
 
     /// <summary>Maps persisted AppSettings into the cleanup service's provider-agnostic options.</summary>
-    private static CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
+    private CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
         settings.EnableAiCleanup,
         settings.AiCleanupProvider,
         settings.AiCleanupModel,
@@ -133,7 +149,26 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureDeployment,
         settings.AiCleanupAzureApiKey,
         settings.AiCleanupAzureTenantId,
-        settings.AiCleanupWritingStyle);
+        settings.AiCleanupWritingStyle,
+        BuildGlossary());
+
+    // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
+    // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —
+    // i.e. right after the dictionary editor saves — and so the value lives on the value-equality
+    // CleanupOptions record, which lets the service detect the change and rebuild its agent.
+    private string? BuildGlossary()
+    {
+        try
+        {
+            var glossary = CleanupPrompt.BuildGlossary(_dictionary.GetEnabled());
+            return string.IsNullOrEmpty(glossary) ? null : glossary;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to build the AI glossary from the dictionary; continuing without it.");
+            return null;
+        }
+    }
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -255,19 +290,54 @@ internal sealed class DictationController : IDisposable
 
             // Optional AI cleanup runs between raw decoding and dictionary canonicalization so the
             // post-processor always has the final say on casing of terms like ".NET" or "ReBAC".
-            // CleanAsync never throws and returns the input unchanged when cleanup is off or not
-            // ready, so a dictation is never blocked or lost by this stage.
+            // CleanAsync never throws for a content failure: it classifies the outcome so we can fall
+            // back to raw text and visibly flag a runtime failure without ever disabling cleanup.
             var recognized = result.Text;
             activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
-                var cleaned = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
-                var changed = !string.Equals(cleaned, recognized, StringComparison.Ordinal);
-                activity?.SetTag(ScribeTelemetry.TagAiChanged, changed);
-                if (changed)
+                var cleanup = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
+                activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
+                activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
+
+                if (cleanup.Outcome == CleanupOutcome.Failed)
                 {
-                    _log.LogInformation("AI cleanup refined the transcription.");
-                    recognized = cleaned;
+                    // Intelligence failed at runtime: keep the raw transcription, signal the UI FIRST
+                    // so the overlay flashes red immediately, then persist the failure on a background
+                    // thread. The failure log opens its own SQLite connection per call, so a busy
+                    // timeout there must never sit in front of raising the flash or injecting the raw
+                    // text. Cleanup stays enabled — the very next dictation tries again.
+                    var reason = cleanup.FailureReason ?? "Intelligence failed.";
+                    _log.LogWarning("AI cleanup failed ({Reason}); using raw transcription.", reason);
+                    RaiseCleanupFailed(reason);
+                    var rawForLog = result.Text;
+                    _ = Task.Run(() => RecordCleanupFailure(settings, reason, rawForLog));
+                }
+                else
+                {
+                    if (cleanup.Changed)
+                    {
+                        _log.LogInformation("AI cleanup refined the transcription.");
+                    }
+
+                    recognized = cleanup.Text;
+
+                    // A partial degradation (some segments failed, or a very long tail was left raw)
+                    // is recorded for the Settings log but does not flash red — the user still got
+                    // usable cleaned text back. Persist off the dictation path so the DB write never
+                    // sits in front of text injection.
+                    if (cleanup.FailureReason is not null)
+                    {
+                        var partialReason = cleanup.FailureReason;
+                        var rawForLog = result.Text;
+                        _ = Task.Run(() => RecordCleanupFailure(settings, partialReason, rawForLog));
+                    }
+
+                    // A genuine cleanup run is a good moment to prune the one-week failure window.
+                    if (cleanup.Outcome is CleanupOutcome.Cleaned or CleanupOutcome.Unchanged)
+                    {
+                        _ = Task.Run(PruneOldFailures);
+                    }
                 }
             }
 
@@ -338,6 +408,54 @@ internal sealed class DictationController : IDisposable
         }
 
         Raise(paused ? DictationState.Paused : DictationState.Idle);
+    }
+
+    // Persists a cleanup failure (hard or partial) for the Settings log. Best-effort: a logging
+    // hiccup must never break the dictation that is already falling back to raw text.
+    private void RecordCleanupFailure(AppSettings settings, string reason, string rawText)
+    {
+        try
+        {
+            var model = settings.AiCleanupProvider == CleanupProvider.AzureFoundry
+                ? settings.AiCleanupAzureDeployment
+                : settings.AiCleanupModel;
+            _failureLog.Add(CleanupFailure.New(reason, settings.AiCleanupProvider.ToString(), model, rawText));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to record an AI cleanup failure.");
+        }
+    }
+
+    /// <summary>Prunes cleanup failures older than the rolling retention window. Safe to call anytime.</summary>
+    public void PruneFailureLog()
+    {
+        try
+        {
+            var removed = _failureLog.PruneOlderThan(DateTimeOffset.UtcNow - FailureRetention);
+            if (removed > 0)
+            {
+                _log.LogDebug("Pruned {Count} AI cleanup failures older than a week.", removed);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to prune AI cleanup failures.");
+        }
+    }
+
+    private void PruneOldFailures() => PruneFailureLog();
+
+    private void RaiseCleanupFailed(string reason)
+    {
+        try
+        {
+            CleanupFailed?.Invoke(reason);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "A CleanupFailed handler threw.");
+        }
     }
 
     private void Raise(DictationState state)

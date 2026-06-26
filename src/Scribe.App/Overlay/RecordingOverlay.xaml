@@ -41,10 +41,18 @@
     <Grid>
         <!-- Strong outer glow: a bright rounded stroke whose bloom radiates around the pill at full
              intensity. A null fill keeps the glass card above it see-through (no opaque backing). -->
-        <Border Margin="60" CornerRadius="23" BorderThickness="2"
+        <Border x:Name="OuterGlow" Margin="60" CornerRadius="23" BorderThickness="2"
                 Background="{x:Null}" BorderBrush="#FF8FB2FF" IsHitTestVisible="False">
             <Border.Effect>
                 <DropShadowEffect BlurRadius="44" ShadowDepth="0" Opacity="1" Color="#7FA6FF"/>
+            </Border.Effect>
+        </Border>
+        <!-- Red outer glow, shown only during the brief "intelligence failed" flash. -->
+        <Border x:Name="OuterGlowFailed" Margin="60" CornerRadius="23" BorderThickness="2"
+                Background="{x:Null}" BorderBrush="#FFE5484D" IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="44" ShadowDepth="0" Opacity="1" Color="#E5484D"/>
             </Border.Effect>
         </Border>
         <Border x:Name="Card" Margin="60" CornerRadius="22" BorderThickness="1">
@@ -72,6 +80,20 @@
                             <GradientStop Color="#00FFFFFF" Offset="1.0"/>
                         </LinearGradientBrush>
                     </Border.Background>
+                </Border>
+
+                <!-- Red wash over the card face during the brief AI-failure flash. Rendered before the
+                     content grid so the failure text stays on top of it. -->
+                <Border x:Name="FailedTint" CornerRadius="22" Visibility="Collapsed" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#E6B3261A" Offset="0.0"/>
+                            <GradientStop Color="#D98C1410" Offset="1.0"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="48" ShadowDepth="0" Opacity="0.95" Color="#E5484D"/>
+                    </Border.Effect>
                 </Border>
 
                 <Grid Margin="16,11">
@@ -129,6 +151,25 @@
                         <TextBlock x:Name="ProcessingText" Grid.Column="1" Text="Polishing…"
                                    VerticalAlignment="Center" Foreground="#FFFFFFFF"
                                    FontSize="13" FontWeight="SemiBold"/>
+                    </Grid>
+
+                    <!-- AI cleanup failed: a brief red notice shown while falling back to raw text -->
+                    <Grid x:Name="FailedContent" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="&#x26A0;" VerticalAlignment="Center"
+                                   Margin="2,0,12,0" FontSize="18" Foreground="#FFFFFFFF"/>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="Intelligence failed" Foreground="#FFFFFFFF"
+                                       FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="FailedReasonText" Text="Used raw transcription"
+                                       Foreground="#D6FFFFFF" FontSize="11" Margin="0,2,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
                     </Grid>
                 </Grid>
             </Grid>

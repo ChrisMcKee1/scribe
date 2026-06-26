@@ -125,17 +125,47 @@ public sealed class PostProcessorTests
     }
 
     [Fact]
-    public void DefaultVocabulary_is_valid_and_canonicalizes_terms()
+    public void Process_does_not_double_expand_already_canonical_text()
     {
-        var (processor, repo, db) = Create();
+        // Regression: when AI cleanup is enabled the glossary biases the model to emit "New York",
+        // then this deterministic stage runs last. An expansion whose replacement embeds its own
+        // pattern ("york" -> "New York") must not fire again and produce "New New York".
+        var (processor, _, db) = Create(DictionaryEntry.New("york", "New York"));
         using (db)
         {
-            var added = repo.SeedIfEmpty(DefaultVocabulary.Entries);
-            Assert.Equal(DefaultVocabulary.Entries.Count, added);
-            processor.Reload();
+            Assert.Equal("I love New York", processor.Process("I love New York"));
+        }
+    }
 
-            Assert.Equal("Azure Foundry uses ONNX and sherpa-onnx",
-                processor.Process("azure foundry uses onnx and sherpa onnx"));
+    [Fact]
+    public void Process_still_expands_raw_pattern_when_replacement_embeds_pattern()
+    {
+        var (processor, _, db) = Create(DictionaryEntry.New("york", "New York"));
+        using (db)
+        {
+            Assert.Equal("I love New York", processor.Process("I love york"));
+        }
+    }
+
+    [Fact]
+    public void Process_expands_only_the_raw_occurrence_in_mixed_text()
+    {
+        // A canonical occurrence and a raw one in the same input: leave the canonical alone, expand
+        // the raw one — never compounding to "New New York".
+        var (processor, _, db) = Create(DictionaryEntry.New("york", "New York"));
+        using (db)
+        {
+            Assert.Equal("New York and New York", processor.Process("New York and york"));
+        }
+    }
+
+    [Fact]
+    public void Process_expands_each_independent_raw_occurrence()
+    {
+        var (processor, _, db) = Create(DictionaryEntry.New("york", "New York"));
+        using (db)
+        {
+            Assert.Equal("New York and New York", processor.Process("york and york"));
         }
     }
 }

@@ -241,7 +241,7 @@ internal sealed class BenchmarkRunner
             {
                 ct.ThrowIfCancellationRequested();
                 var sw = Stopwatch.StartNew();
-                output = await svc.CleanAsync(transcript, ct).ConfigureAwait(false);
+                output = (await svc.CleanAsync(transcript, ct).ConfigureAwait(false)).Text;
                 sw.Stop();
                 times.Add(sw.Elapsed.TotalMilliseconds);
             }

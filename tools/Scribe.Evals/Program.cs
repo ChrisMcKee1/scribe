@@ -89,7 +89,7 @@ internal static class Program
                 continue;
             }
 
-            var cleaned = await svc.CleanAsync(EvalScenarios.RawTranscript, ct);
+            var cleaned = (await svc.CleanAsync(EvalScenarios.RawTranscript, ct)).Text;
 
             var evaluator = new StyleAdherenceEvaluator(
                 scenario.MarkerPatterns, scenario.MinMarkersToPass, scenario.RequireChanged,

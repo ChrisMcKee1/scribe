@@ -27,11 +27,12 @@ public interface ITextCleanupService : IAsyncDisposable
     void Configure(CleanupOptions options);
 
     /// <summary>
-    /// Cleans a single transcription. Returns the input unchanged when cleanup is disabled, the
-    /// engine is not yet ready, the input is empty/too long, or anything fails or times out.
-    /// Never throws.
+    /// Cleans a single transcription. The returned <see cref="CleanupResult.Text"/> is always safe to
+    /// inject — on a skip or a runtime failure it is the original input — and the
+    /// <see cref="CleanupResult.Outcome"/> tells the caller whether the model ran, was skipped (disabled,
+    /// not ready, or empty input), or failed at runtime. Never throws.
     /// </summary>
-    Task<string> CleanAsync(string text, CancellationToken cancellationToken = default);
+    Task<CleanupResult> CleanAsync(string text, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime
