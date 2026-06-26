@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace Scribe.App.Infrastructure;
@@ -23,9 +24,35 @@ internal sealed class FileLoggerProvider : ILoggerProvider
 
     private void Append(string line)
     {
-        lock (_gate)
+        var payload = line + Environment.NewLine;
+
+        // The out-of-process overlay (OverlayLog) appends to this SAME daily file with
+        // FileShare.ReadWrite, so this writer must share-and-retry to match it. Critically, logging
+        // must NEVER throw back into the caller: a transient sharing collision here once propagated
+        // through Microsoft.Extensions.Logging and tore down the recording overlay. Collisions are
+        // retried briefly and then swallowed.
+        for (var attempt = 0; attempt < 12; attempt++)
         {
-            File.AppendAllText(_filePath, line + Environment.NewLine);
+            try
+            {
+                lock (_gate)
+                {
+                    using var stream = new FileStream(
+                        _filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                    using var writer = new StreamWriter(stream);
+                    writer.Write(payload);
+                }
+
+                return;
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(15);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                Thread.Sleep(15);
+            }
         }
     }
 
@@ -51,14 +78,25 @@ internal sealed class FileLoggerProvider : ILoggerProvider
                 return;
             }
 
-            var shortCategory = category.Contains('.') ? category[(category.LastIndexOf('.') + 1)..] : category;
-            var line = $"{DateTime.Now:HH:mm:ss.fff} [{logLevel}] {shortCategory}: {formatter(state, exception)}";
-            if (exception is not null)
+            // Logging must NEVER throw into the caller. Formatting, file I/O, or even a thread
+            // interrupt here once propagated through Microsoft.Extensions.Logging and tore down the
+            // recording overlay (a transient log-file lock was misread as an overlay launch failure).
+            // Any failure to record a line is swallowed — diagnostics are strictly best-effort.
+            try
             {
-                line += Environment.NewLine + exception;
-            }
+                var shortCategory = category.Contains('.') ? category[(category.LastIndexOf('.') + 1)..] : category;
+                var line = $"{DateTime.Now:HH:mm:ss.fff} [{logLevel}] {shortCategory}: {formatter(state, exception)}";
+                if (exception is not null)
+                {
+                    line += Environment.NewLine + exception;
+                }
 
-            provider.Append(line);
+                provider.Append(line);
+            }
+            catch
+            {
+                // Never let diagnostics disrupt the application.
+            }
         }
     }
 

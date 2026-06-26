@@ -83,6 +83,26 @@ dotnet publish $appProj `
     -o $publishDir
 if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed.' }
 
+# --- 1b. Publish the WinUI 3 overlay into the app payload under Overlay\ ----------------------------
+# The installed app resolves the recording pill at <BaseDirectory>\Overlay\Scribe.Overlay.exe
+# (OverlayProcessClient.ResolveOverlayExe, strategy 2). It must be self-contained + unpackaged so it
+# starts with no machine-wide Windows App SDK runtime. Published AFTER the app publish above because
+# that step wipes and recreates $publishDir.
+Write-Host '==> dotnet publish overlay (self-contained WinUI 3)...' -ForegroundColor Cyan
+$overlayProj = Join-Path $repoRoot 'src/Scribe.Overlay/Scribe.Overlay.csproj'
+$overlayDir  = Join-Path $publishDir 'Overlay'
+dotnet publish $overlayProj `
+    -c $Configuration `
+    -r $runtime `
+    --self-contained true `
+    -p:Platform=x64 `
+    -p:Version=$Version `
+    -o $overlayDir
+if ($LASTEXITCODE -ne 0) { throw 'dotnet publish (overlay) failed.' }
+$overlayExe = Join-Path $overlayDir 'Scribe.Overlay.exe'
+if (-not (Test-Path $overlayExe)) { throw "Overlay exe missing after publish: $overlayExe" }
+Write-Host "==> Overlay bundled at: $overlayExe" -ForegroundColor Green
+
 # --- 2. Pack with Velopack -------------------------------------------------------------------------
 # Build the vpk argument list, layering signing on only when requested.
 $packArgs = @(

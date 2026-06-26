@@ -35,7 +35,7 @@ public partial class App : Application
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
-    private RecordingOverlay? _overlay;
+    private IOverlayController? _overlay;
     private SettingsWindow? _settingsWindow;
     private HistoryWindow? _historyWindow;
     private UpdateService? _updates;
@@ -97,11 +97,17 @@ public partial class App : Application
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
 
-        _overlay = new RecordingOverlay(services.GetRequiredService<IAudioCaptureService>());
-        // Present the layered overlay once, off-screen and transparent, so its composition surface is
-        // warm before first use. This prevents the transient opaque-frame flash that WPF
-        // AllowsTransparency windows emit when first presented from a hidden state.
-        _overlay.Warmup();
+        _overlay = new OverlayProcessClient(
+            services.GetRequiredService<IAudioCaptureService>(),
+            services.GetRequiredService<ILogger<OverlayProcessClient>>());
+        // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first use.
+        // The pill renders via DWM composition in a separate kept-warm process, sidestepping the WPF
+        // layered-window path that produced the recurring black box. Only spawn the helper when the
+        // overlay is actually enabled; if the user turns it on later, ShowRecording launches it lazily.
+        if (_controller.CurrentSettings.ShowOverlay)
+        {
+            _overlay.Warmup();
+        }
 
         _controller.StateChanged += OnStateChanged;
         _controller.Error += message => _tray!.ShowError(message);

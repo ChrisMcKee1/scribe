@@ -1,8 +1,10 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
 
 namespace Scribe.App.Overlay;
@@ -26,6 +28,7 @@ public partial class RecordingOverlay : Window
     private const int WS_EX_LAYERED = 0x00080000;
 
     private readonly IAudioCaptureService _audio;
+    private readonly ILogger? _log;
     private readonly Storyboard _pulse;
     private readonly Storyboard _processing;
 
@@ -41,9 +44,10 @@ public partial class RecordingOverlay : Window
     private bool _shown;
     private float _meterLevel;
 
-    public RecordingOverlay(IAudioCaptureService audio)
+    public RecordingOverlay(IAudioCaptureService audio, ILogger<RecordingOverlay>? log = null)
     {
         _audio = audio ?? throw new ArgumentNullException(nameof(audio));
+        _log = log;
         InitializeComponent();
         _pulse = (Storyboard)Resources["PulseStoryboard"];
         _processing = (Storyboard)Resources["ProcessingStoryboard"];
@@ -72,6 +76,7 @@ public partial class RecordingOverlay : Window
 
         Reveal();
         _pulse.Begin(this, isControllable: true);
+        LogState("ShowRecording.done");
     }
 
     /// <summary>
@@ -103,6 +108,7 @@ public partial class RecordingOverlay : Window
 
         Reveal();
         _processing.Begin(this, isControllable: true);
+        LogState("ShowProcessing.done");
     }
 
     /// <summary>
@@ -143,6 +149,7 @@ public partial class RecordingOverlay : Window
         _failedTimer ??= CreateFailedTimer();
         _failedTimer.Stop();
         _failedTimer.Start();
+        LogState("ShowFailed.done");
     }
 
     /// <summary>Hides the overlay and stops metering; safe to call when already hidden.</summary>
@@ -155,6 +162,8 @@ public partial class RecordingOverlay : Window
         {
             return;
         }
+
+        LogState("HideOverlay.enter");
 
         if (_subscribed)
         {
@@ -181,6 +190,7 @@ public partial class RecordingOverlay : Window
         // region (clearing the stale frame) without re-creating the surface, so hide is reliable.
         // Reveal() repositions to the work area before raising opacity again, so there is no flash.
         PositionOffScreen();
+        LogState("HideOverlay.exit");
     }
 
     /// <summary>
@@ -218,6 +228,108 @@ public partial class RecordingOverlay : Window
         // DONOTROUND removes that failure mode entirely (no-op on Win10, which ignores the attribute).
         var pref = (int)DwmWindowCornerPreference.DoNotRound;
         _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
+
+        EnsureSoftwareRendering("OnSourceInitialized");
+        LogState("OnSourceInitialized");
+    }
+
+    // Pins this overlay window to WPF's software rendering pipeline and KEEPS it pinned. This is the
+    // root-cause mitigation for the recurring transient "black box" behind the pill.
+    //
+    // The overlay is an AllowsTransparency (per-pixel-alpha) layered window. On the default hardware path
+    // WPF composes it through DirectComposition, whose redirection-surface back-buffer is opaque black; on
+    // a show/move/resize/monitor-DPI change or a GPU-driver hiccup that black back-buffer can present for
+    // one frame before WPF's alpha-correct content lands — exactly the dark rectangle the user sees.
+    // .NET 10 makes this worse (cf. dotnet/wpf #11321, an uninitialised BLENDFUNCTION leaving AlphaFormat=0
+    // so UpdateLayeredWindow rendered transparent pixels black), and brand-new GPUs/drivers stress the
+    // hardware path further. Software rendering rasterises to a 32-bpp DIB and calls UpdateLayeredWindow
+    // with premultiplied per-pixel alpha every frame, so there is no GPU back-buffer that can leak.
+    //
+    // CRITICAL: a DPI/monitor change (or other surface re-creation) can rebuild the window's HwndTarget and
+    // reset RenderMode back to the default hardware path — silently re-introducing the black box even after
+    // it was set once at init. That is why this is RE-ASSERTED on every reveal and DPI change rather than
+    // set once. Setting it on this window's HwndTarget only keeps every other window hardware-accelerated.
+    //
+    // Note: this is also why a GPU-accelerated visualization (WebView2 / D3DImage / SwapChainPanel) cannot
+    // be hosted *inside* this window — a hardware child surface cannot composite into a software layered
+    // window (WPF airspace). Such a surface must live in a separate opaque window over the card.
+    private void EnsureSoftwareRendering(string when)
+    {
+        var src = PresentationSource.FromVisual(this) as HwndSource
+                  ?? HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        if (src?.CompositionTarget is not { } target)
+        {
+            _log?.LogWarning("overlay[{When}] CompositionTarget unavailable; SoftwareOnly NOT applied", when);
+            return;
+        }
+
+        var before = target.RenderMode;
+        if (before == RenderMode.SoftwareOnly)
+        {
+            return;
+        }
+
+        target.RenderMode = RenderMode.SoftwareOnly;
+
+        // Anything other than SoftwareOnly here means the hardware path was (re)active — the exact
+        // condition that leaks the black box. Log it loudly so a repro pinpoints when the surface reverted,
+        // and confirm the re-assert took.
+        _log?.LogWarning(
+            "overlay[{When}] RenderMode was {Before}; re-asserted SoftwareOnly (now {After})",
+            when, before, target.RenderMode);
+    }
+
+    // One-line snapshot of the overlay's window/composition state, logged at every lifecycle transition so
+    // an intermittent-black-box repro can be correlated against exactly what the window was doing.
+    private void LogState(string phase)
+    {
+        if (_log is null)
+        {
+            return;
+        }
+
+        var render = "n/a";
+        var dpi = 1.0;
+        try
+        {
+            if ((PresentationSource.FromVisual(this) as HwndSource)?.CompositionTarget is { } ct)
+            {
+                render = ct.RenderMode.ToString();
+            }
+
+            dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+        }
+        catch
+        {
+            // Diagnostics are best-effort; never let logging throw on the UI thread.
+        }
+
+        var content =
+            FailedContent.Visibility == Visibility.Visible ? "Failed"
+            : ProcessingContent.Visibility == Visibility.Visible ? "Processing"
+            : ListeningContent.Visibility == Visibility.Visible ? "Listening"
+            : "none";
+
+        var holdMs = Math.Max(0, (_failedHoldUntil - DateTime.UtcNow).TotalMilliseconds);
+
+        _log.LogInformation(
+            "overlay[{Phase}] op={Op:0.00} vis={Vis} isVis={IsVis} wstate={WState} render={Render} "
+            + "L={L:0} T={T:0} W={W:0} H={H:0} aw={AW:0} ah={AH:0} dpi={Dpi:0.00} content={Content} "
+            + "shown={Shown} sub={Sub} closing={Closing} holdMs={Hold:0}",
+            phase, Opacity, Visibility, IsVisible, WindowState, render,
+            Left, Top, Width, Height, ActualWidth, ActualHeight, dpi, content,
+            _shown, _subscribed, _closing, holdMs);
+    }
+
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+
+        // A DPI/monitor change can recreate the HwndTarget and revert RenderMode to the leaky hardware
+        // path, so re-assert software rendering immediately and record the transition.
+        _log?.LogInformation("overlay[DpiChanged] {Old:0.00}->{New:0.00}", oldDpi.DpiScaleX, newDpi.DpiScaleX);
+        EnsureSoftwareRendering("DpiChanged");
+        LogState("DpiChanged");
     }
 
     private void OnLevelChanged(object? sender, float level)
@@ -272,6 +384,7 @@ public partial class RecordingOverlay : Window
         {
             timer.Stop();
             _failedHoldUntil = DateTime.MinValue;
+            LogState("FailedTimer.Tick");
             // Only hide if a new dictation hasn't already taken over the overlay.
             if (FailedContent.Visibility == Visibility.Visible)
             {
@@ -285,9 +398,12 @@ public partial class RecordingOverlay : Window
     // its lifetime; only its position and opacity change, so the layered surface is never re-created.
     private void Reveal()
     {
+        LogState("Reveal.enter");
         EnsureShown();
+        EnsureSoftwareRendering("Reveal");
         PositionToWorkArea();
         Opacity = 1;
+        LogState("Reveal.exit");
     }
 
     private void EnsureShown()
@@ -301,6 +417,7 @@ public partial class RecordingOverlay : Window
         PositionOffScreen();
         Show();
         _shown = true;
+        LogState("EnsureShown.shown");
     }
 
     private void PositionOffScreen()
