@@ -38,6 +38,13 @@ internal static class Program
         using var cancel = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
 
+        if (opts.Benchmark)
+        {
+            var cfg = opts.ToBenchmarkConfig();
+            var runner = new Benchmark.BenchmarkRunner(cfg, new VerboseConsoleLogger<Benchmark.BenchmarkRunner>());
+            return await runner.RunAsync(cancel.Token);
+        }
+
         Console.WriteLine($"Scribe evals — provider={opts.Provider}, models=[{string.Join(", ", opts.Models)}]");
         Console.WriteLine($"Raw transcript: \"{EvalScenarios.RawTranscript}\"");
         Console.WriteLine();

@@ -143,6 +143,14 @@ public partial class RecordingOverlay : Window
         var exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
         exStyle |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
         SetWindowLongPtr(hwnd, GWL_EXSTYLE, new IntPtr(exStyle));
+
+        // Belt-and-suspenders for the transient "dark rounded box" artifact: tell DWM never to round
+        // this window's corners. The window is a per-pixel-alpha layered surface whose visible shape is
+        // the WPF Card; if a re-present ever briefly leaked the window's own backing before the alpha
+        // composited, Win11's automatic corner rounding is what made that leak read as a rounded box.
+        // DONOTROUND removes that failure mode entirely (no-op on Win10, which ignores the attribute).
+        var pref = (int)DwmWindowCornerPreference.DoNotRound;
+        _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref pref, sizeof(int));
     }
 
     private void OnLevelChanged(object? sender, float level)
@@ -225,4 +233,18 @@ public partial class RecordingOverlay : Window
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW", SetLastError = true)]
     private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    // DWM corner-rounding control (Windows 11 22000+). Ignored on older builds.
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+
+    private enum DwmWindowCornerPreference
+    {
+        Default = 0,
+        DoNotRound = 1,
+        Round = 2,
+        RoundSmall = 3,
+    }
+
+    [DllImport("dwmapi.dll", SetLastError = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 }

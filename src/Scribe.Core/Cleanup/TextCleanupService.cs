@@ -84,6 +84,12 @@ internal sealed class TextCleanupService : ITextCleanupService
     private int _lastReportedPct = -1;
     private bool _disposed;
 
+    // Benchmark-only escape hatch (Scribe.Evals, via InternalsVisibleTo): when set, replaces the
+    // per-provider per-call cleanup timeout so the eval harness can measure a model's *true* rewrite
+    // latency uncapped, then judge real output, instead of every slow model degrading to raw text at
+    // the 12 s/45 s production ceiling. Never set in the shipping app — production keeps the caps.
+    internal TimeSpan? CleanupTimeoutOverride { get; set; }
+
     public TextCleanupService(ILogger<TextCleanupService> log) => _log = log;
 
     public CleanupStatus Status
@@ -196,12 +202,13 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try
         {
-            var timeoutSeconds = options.Provider == CleanupProvider.AzureFoundry
-                ? AzureCleanupTimeoutSeconds
-                : CleanupTimeoutSeconds;
+            var timeout = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
+                options.Provider == CleanupProvider.AzureFoundry
+                    ? AzureCleanupTimeoutSeconds
+                    : CleanupTimeoutSeconds);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+            cts.CancelAfter(timeout);
 
             // The system prompt is baked into the agent at creation, so we only send the raw text and
             // run statelessly (no thread) — each dictation is independent, with no history to grow.
