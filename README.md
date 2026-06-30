@@ -63,23 +63,17 @@ sensible defaults for tech terms — add your own in seconds.
 
 ## 🚀 Getting started
 
-> **Installers are on the way.** Scribe now builds a [Velopack](https://velopack.io/) installer with
-> built-in automatic updates (current version **0.1.0**); the first signed downloads will be published
-> on the [Releases](../../releases) page. Until then, you can build and run Scribe from source — it
-> takes a couple of minutes.
+**You'll need:** Windows 11 (x64). That's it — the speech model is bundled, so there's nothing else
+to install.
 
-**You'll need:** Windows 11 (x64) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+1. Go to the **[Releases](../../releases/latest)** page.
+2. Download **`Scribe-win-x64-Setup.exe`** (the installer). It installs Scribe and keeps it up to
+   date automatically. Prefer not to install? Grab **`Scribe-win-x64-Portable.zip`** and run it from
+   any folder instead.
+3. Run the installer and launch Scribe — it appears in your **system tray**.
 
-```powershell
-# 1. Download the speech model (~670 MB) into src/Scribe.App/models
-pwsh ./scripts/Download-Models.ps1
-
-# 2. Build
-dotnet build Scribe.slnx -c Debug
-
-# 3. Run — Scribe appears in your system tray
-dotnet run --project src/Scribe.App
-```
+> **Heads up:** current builds are **unsigned**, so Windows SmartScreen may warn you on first run.
+> Click **More info → Run anyway** to continue.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
 Right-click the tray icon for settings, history, and to pause or quit.
@@ -105,6 +99,25 @@ voice-activity detection, post-processing, start-with-Windows, and how text is i
 ## 🛠️ For contributors
 
 Scribe is open source and contributions are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+### Building & running from source
+
+Want to hack on Scribe? Build it locally — it takes a couple of minutes.
+
+**You'll need:** Windows 11 (x64) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+
+```powershell
+# 1. Download the speech model (~670 MB) into src/Scribe.App/models
+pwsh ./scripts/Download-Models.ps1
+
+# 2. Build
+dotnet build Scribe.slnx -c Debug
+
+# 3. Run — Scribe appears in your system tray
+dotnet run --project src/Scribe.App
+```
+
+### Repository layout
 
 ```
 Scribe.slnx
