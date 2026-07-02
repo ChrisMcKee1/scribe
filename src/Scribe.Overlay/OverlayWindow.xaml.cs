@@ -100,6 +100,27 @@ public sealed partial class OverlayWindow : Window
             | NativeMethods.WS_EX_NOACTIVATE;
         NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE, updated);
         OverlayLog.Write($"OverlayWindow.ApplyExtendedStyles ex=0x{ex:X}->0x{updated:X} (LAYERED|TRANSPARENT|TOOLWINDOW|NOACTIVATE)");
+
+        RemoveDwmFrame();
+    }
+
+    // Windows 11's compositor draws a 1px non-client border and rounded corners on every top-level
+    // window, even borderless ones — the visible rectangle around the otherwise transparent pill.
+    // Suppress both so only the XAML card is ever visible. Best-effort: on Windows 10 (or if DWM
+    // rejects the attributes) the calls fail with an HRESULT and the pill simply keeps the frame.
+    private void RemoveDwmFrame()
+    {
+        var corner = NativeMethods.DWMWCP_DONOTROUND;
+        var cornerHr = NativeMethods.DwmSetWindowAttribute(
+            _hwnd, NativeMethods.DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+
+        var borderColor = NativeMethods.DWMWA_COLOR_NONE;
+        var borderHr = NativeMethods.DwmSetWindowAttributeUint(
+            _hwnd, NativeMethods.DWMWA_BORDER_COLOR, ref borderColor, sizeof(uint));
+
+        OverlayLog.Write(
+            $"OverlayWindow.RemoveDwmFrame corner(DONOTROUND) hr=0x{cornerHr:X8} " +
+            $"border(COLOR_NONE) hr=0x{borderHr:X8}");
     }
 
     private double DpiScale
