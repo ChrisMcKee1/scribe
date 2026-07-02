@@ -414,8 +414,26 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </ui:Card>
-                        <TextBlock Grid.Row="2" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
-                                   Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
+                        <Grid Grid.Row="2" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Style="{StaticResource SettingHint}" Margin="2,0,12,0"
+                                       VerticalAlignment="Center"
+                                       Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
+                                           MinWidth="110" Margin="0,0,8,0" Click="DictionaryTemplateButton_Click"
+                                           ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
+                                <ui:Button x:Name="DictionaryImportButton" Content="Import CSV…"
+                                           MinWidth="110" Margin="0,0,8,0" Click="DictionaryImportButton_Click"
+                                           ToolTip="Merge entries from a CSV file into this dictionary."/>
+                                <ui:Button x:Name="DictionaryExportButton" Content="Export CSV…"
+                                           MinWidth="110" Click="DictionaryExportButton_Click"
+                                           ToolTip="Save this dictionary as a CSV file to back up or share."/>
+                            </StackPanel>
+                        </Grid>
                     </Grid>
                 </TabItem>
 

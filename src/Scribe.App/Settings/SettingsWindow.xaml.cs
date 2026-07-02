@@ -1,12 +1,16 @@
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.Win32;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.App.Settings;
 
@@ -1015,6 +1019,189 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         return entries;
+    }
+
+    // --- Dictionary CSV import / export ---------------------------------------------------
+
+    // UTF-8 with BOM so Excel opens accented terms correctly instead of guessing the codepage.
+    private static readonly UTF8Encoding CsvEncoding = new(encoderShouldEmitUTF8Identifier: true);
+
+    private void DictionaryTemplateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            FileName = "scribe-dictionary-template.csv",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, DictionaryCsv.Template, CsvEncoding);
+
+            // Open it straight away so the user can start filling it in.
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not save the template:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void DictionaryExportButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        var dialog = new SaveFileDialog
+        {
+            FileName = "scribe-dictionary.csv",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var entries = _rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+                .Select(r => new DictionaryEntry(
+                    r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim(), r.WholeWord, r.Enabled));
+            File.WriteAllText(dialog.FileName, DictionaryCsv.Export(entries), CsvEncoding);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not export the dictionary:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void DictionaryImportButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        var dialog = new OpenFileDialog
+        {
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        DictionaryCsvResult parsed;
+        try
+        {
+            parsed = DictionaryCsv.Parse(File.ReadAllText(dialog.FileName));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not read that file:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var (added, updated, unchanged) = MergeImportedEntries(parsed.Entries);
+        var summary = new StringBuilder();
+        summary.Append($"Imported {added} new {(added == 1 ? "entry" : "entries")}");
+        if (updated > 0)
+        {
+            summary.Append($", updated {updated}");
+        }
+
+        if (unchanged > 0)
+        {
+            summary.Append($", {unchanged} already up to date");
+        }
+
+        summary.Append('.');
+        if (added + updated > 0)
+        {
+            summary.Append(" The changes apply when you save.");
+        }
+
+        if (parsed.Errors.Count > 0)
+        {
+            summary.Append("\n\nSome rows couldn't be read:\n")
+                   .Append(string.Join('\n', parsed.Errors.Take(8)));
+            if (parsed.Errors.Count > 8)
+            {
+                summary.Append($"\n…and {parsed.Errors.Count - 8} more.");
+            }
+        }
+
+        MessageBox.Show(this, summary.ToString(), "Dictionary import",
+            MessageBoxButton.OK,
+            parsed.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    /// <summary>
+    /// Merges imported entries into the grid (not the database — the save button owns persistence,
+    /// so an import can still be cancelled). Matching is by spoken form, case-insensitive, mirroring
+    /// the duplicate rule the save validation enforces.
+    /// </summary>
+    private (int Added, int Updated, int Unchanged) MergeImportedEntries(IReadOnlyList<DictionaryEntry> imported)
+    {
+        var indexByPattern = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            var pattern = _rows[i].Pattern?.Trim();
+            if (!string.IsNullOrEmpty(pattern))
+            {
+                indexByPattern.TryAdd(pattern, i);
+            }
+        }
+
+        int added = 0, updated = 0, unchanged = 0;
+        foreach (var entry in imported)
+        {
+            if (indexByPattern.TryGetValue(entry.Pattern, out var index))
+            {
+                var row = _rows[index];
+                if (string.Equals(row.Replacement?.Trim(), entry.Replacement, StringComparison.Ordinal) &&
+                    row.WholeWord == entry.WholeWord && row.Enabled == entry.Enabled)
+                {
+                    unchanged++;
+                    continue;
+                }
+
+                // Replace the row object (rather than mutate it) so the grid, which has no property
+                // change notifications on DictionaryRow, refreshes the visible values.
+                _rows[index] = new DictionaryRow
+                {
+                    Id = row.Id,
+                    Pattern = row.Pattern ?? entry.Pattern,
+                    Replacement = entry.Replacement,
+                    WholeWord = entry.WholeWord,
+                    Enabled = entry.Enabled,
+                };
+                updated++;
+            }
+            else
+            {
+                var row = new DictionaryRow
+                {
+                    Pattern = entry.Pattern,
+                    Replacement = entry.Replacement,
+                    WholeWord = entry.WholeWord,
+                    Enabled = entry.Enabled,
+                };
+                _rows.Add(row);
+                indexByPattern[entry.Pattern] = _rows.Count - 1;
+                added++;
+            }
+        }
+
+        return (added, updated, unchanged);
     }
 
     private static string StripDefaultSuffix(string name)
