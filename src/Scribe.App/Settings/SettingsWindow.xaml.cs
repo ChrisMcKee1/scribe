@@ -34,7 +34,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
     private bool _azureAutoListed;
-    private IReadOnlyList<DictionaryEntry> _originalEntries = Array.Empty<DictionaryEntry>();
 
     private HotkeyBinding _pendingBinding;
     private readonly HashSet<Key> _heldModifiers = new();
@@ -210,8 +209,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LoadDictionary()
     {
-        _originalEntries = _dictionary.GetAll();
-        foreach (var entry in _originalEntries)
+        foreach (var entry in _dictionary.GetAll())
         {
             _rows.Add(new DictionaryRow
             {
@@ -893,6 +891,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        // Commit any in-progress grid edit first so validation sees the latest input.
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        // Validate the dictionary before touching anything: a duplicate spoken form would violate
+        // the unique index, and the user deserves a pointer to the offending row rather than a
+        // database error after half the settings were applied.
+        var entries = BuildDictionaryEntries(out var duplicateRow);
+        if (duplicateRow is not null)
+        {
+            DictionaryGrid.SelectedItem = duplicateRow;
+            DictionaryGrid.ScrollIntoView(duplicateRow);
+            MessageBox.Show(
+                this,
+                $"\"{duplicateRow.Pattern.Trim()}\" appears more than once in your dictionary.\n\n" +
+                "Each spoken word or phrase can only have one replacement. Edit or remove the " +
+                "highlighted row, then save again.",
+                "Duplicate dictionary entry",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -927,12 +946,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : writingStyle;
 
-            PersistDictionary();
+            _dictionary.SaveAll(entries);
             _settingsRepository.Save(_settings);
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
 
             Close();
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            // Constraint safety net for anything grid validation didn't anticipate — still phrased
+            // for a person, not a stack trace.
+            MessageBox.Show(
+                this,
+                "Two dictionary entries ended up with the same spoken word or phrase, so the " +
+                "dictionary was not changed.\n\nEach spoken form can only be listed once. Remove " +
+                "the duplicate and save again.",
+                "Duplicate dictionary entry",
+                MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -941,12 +972,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void PersistDictionary()
+    /// <summary>
+    /// Builds the desired dictionary state from the grid rows, skipping blank placeholder rows.
+    /// Reports the first row whose spoken form duplicates an earlier row (case-insensitive, to
+    /// match how the post-processor and AI glossary treat patterns) via <paramref name="duplicate"/>.
+    /// </summary>
+    private List<DictionaryEntry> BuildDictionaryEntries(out DictionaryRow? duplicate)
     {
-        // Commit any in-progress grid edit so the bound row reflects the latest input.
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+        duplicate = null;
+        var entries = new List<DictionaryEntry>();
+        var seenPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var keptIds = new HashSet<long>();
         foreach (var row in _rows)
         {
             if (string.IsNullOrWhiteSpace(row.Pattern))
@@ -955,26 +991,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             var pattern = row.Pattern.Trim();
+            if (!seenPatterns.Add(pattern) && duplicate is null)
+            {
+                duplicate = row;
+            }
+
             var replacement = (row.Replacement ?? string.Empty).Trim();
-
-            if (row.Id == 0)
-            {
-                _dictionary.Add(new DictionaryEntry(0, pattern, replacement, row.WholeWord, row.Enabled));
-            }
-            else
-            {
-                keptIds.Add(row.Id);
-                _dictionary.Update(new DictionaryEntry(row.Id, pattern, replacement, row.WholeWord, row.Enabled));
-            }
+            entries.Add(new DictionaryEntry(row.Id, pattern, replacement, row.WholeWord, row.Enabled));
         }
 
-        foreach (var entry in _originalEntries)
-        {
-            if (!keptIds.Contains(entry.Id))
-            {
-                _dictionary.Delete(entry.Id);
-            }
-        }
+        return entries;
     }
 
     private static string StripDefaultSuffix(string name)

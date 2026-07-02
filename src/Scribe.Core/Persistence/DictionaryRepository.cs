@@ -82,6 +82,70 @@ public sealed class DictionaryRepository : IDictionaryRepository
         command.ExecuteNonQuery();
     }
 
+    public void SaveAll(IReadOnlyList<DictionaryEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        using var connection = _database.Open();
+        using var transaction = connection.BeginTransaction();
+
+        // Delete first so an edit that renames row A to row B's old pattern while deleting B never
+        // trips the unique index mid-save.
+        var keptIds = entries.Where(e => e.Id != 0).Select(e => e.Id).ToHashSet();
+        using (var read = connection.CreateCommand())
+        {
+            read.Transaction = transaction;
+            read.CommandText = "SELECT id FROM dictionary;";
+            var toDelete = new List<long>();
+            using (var reader = read.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    var id = reader.GetInt64(0);
+                    if (!keptIds.Contains(id))
+                    {
+                        toDelete.Add(id);
+                    }
+                }
+            }
+
+            foreach (var id in toDelete)
+            {
+                using var delete = connection.CreateCommand();
+                delete.Transaction = transaction;
+                delete.CommandText = "DELETE FROM dictionary WHERE id = $id;";
+                delete.Parameters.AddWithValue("$id", id);
+                delete.ExecuteNonQuery();
+            }
+        }
+
+        foreach (var entry in entries)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = entry.Id == 0
+                ? """
+                  INSERT INTO dictionary (pattern, replacement, whole_word, enabled)
+                  VALUES ($pattern, $replacement, $whole_word, $enabled);
+                  """
+                : """
+                  UPDATE dictionary
+                  SET pattern = $pattern, replacement = $replacement,
+                      whole_word = $whole_word, enabled = $enabled
+                  WHERE id = $id;
+                  """;
+            BindBody(command, entry);
+            if (entry.Id != 0)
+            {
+                command.Parameters.AddWithValue("$id", entry.Id);
+            }
+
+            command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
     public int SeedIfEmpty(IEnumerable<DictionaryEntry> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
