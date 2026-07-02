@@ -556,6 +556,79 @@
                     </Grid>
                 </TabItem>
 
+                <TabItem Header="Snippets">
+                    <Grid Margin="2,12,2,2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
+                                   Text="Say a trigger phrase — like 'insert my standup update' — and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,8,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <ListBox x:Name="SnippetList" Grid.Row="0" BorderThickness="0"
+                                             Background="Transparent" DisplayMemberPath="Phrase"
+                                             SelectionChanged="SnippetList_SelectionChanged"/>
+                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                        <ui:Button x:Name="SnippetAddButton" Content="Add" MinWidth="70"
+                                                   Margin="0,0,8,0" Click="SnippetAddButton_Click"/>
+                                        <ui:Button x:Name="SnippetDeleteButton" Content="Delete" MinWidth="70"
+                                                   Click="SnippetDeleteButton_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </ui:Card>
+
+                            <ui:Card Grid.Column="1" Padding="16,12">
+                                <Grid>
+                                    <StackPanel x:Name="SnippetEditor" Visibility="Collapsed">
+                                        <TextBlock Text="Trigger phrase" Style="{StaticResource SettingTitle}"/>
+                                        <ui:TextBox x:Name="SnippetPhraseBox" Margin="0,8,0,0"
+                                                    HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                    PlaceholderText="insert my standup update"
+                                                    TextChanged="SnippetPhraseBox_TextChanged"/>
+                                        <Grid Margin="0,14,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Expands to" Style="{StaticResource SettingTitle}"
+                                                       VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <TextBlock Text="Enabled" Style="{StaticResource SettingHint}" Margin="0,0,8,0"
+                                                           VerticalAlignment="Center"/>
+                                                <ui:ToggleSwitch x:Name="SnippetEnabledCheck" VerticalAlignment="Center"
+                                                                 Click="SnippetEnabledCheck_Click"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
+                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                    TextWrapping="Wrap" MinHeight="180" MaxHeight="320"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    SpellCheck.IsEnabled="True"
+                                                    TextChanged="SnippetTemplateBox_TextChanged"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Line breaks are kept — except in terminals when 'Smart' line-break handling is on, where they become spaces so Enter isn't sent."/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="SnippetEmptyHint"
+                                               Text="Select a snippet on the left, or click Add to create one."
+                                               Style="{StaticResource SettingHint}" Margin="0"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
                 <TabItem Header="Diagnostics">
                     <Grid Margin="2,12,2,2">
                         <Grid.RowDefinitions>

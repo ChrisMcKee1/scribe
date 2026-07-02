@@ -9,15 +9,21 @@ namespace Scribe.Core.PostProcessing;
 public sealed partial class TextPostProcessor : ITextPostProcessor
 {
     private readonly IDictionaryRepository _dictionary;
+    private readonly ISnippetRepository? _snippets;
     private readonly ILogger<TextPostProcessor> _logger;
     private readonly object _gate = new();
 
     private CompiledRule[] _rules = [];
+    private SnippetRule[] _snippetRules = [];
     private bool _loaded;
 
-    public TextPostProcessor(IDictionaryRepository dictionary, ILogger<TextPostProcessor> logger)
+    public TextPostProcessor(
+        IDictionaryRepository dictionary,
+        ILogger<TextPostProcessor> logger,
+        ISnippetRepository? snippets = null)
     {
         _dictionary = dictionary;
+        _snippets = snippets;
         _logger = logger;
     }
 
@@ -26,6 +32,11 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
 
         EnsureLoaded();
+
+        // Snippets expand first so their templates then benefit from dictionary canonicalization.
+        var snippetRules = Volatile.Read(ref _snippetRules);
+        foreach (var snippet in snippetRules)
+            text = snippet.Apply(text);
 
         var rules = Volatile.Read(ref _rules);
         foreach (var rule in rules)
@@ -39,6 +50,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         lock (_gate)
         {
             _rules = Build(_dictionary.GetEnabled());
+            _snippetRules = BuildSnippets();
             _loaded = true;
         }
     }
@@ -50,8 +62,39 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             if (_loaded) return;
             _rules = Build(_dictionary.GetEnabled());
+            _snippetRules = BuildSnippets();
             _loaded = true;
         }
+    }
+
+    private SnippetRule[] BuildSnippets()
+    {
+        if (_snippets is null)
+        {
+            return [];
+        }
+
+        var rules = new List<SnippetRule>();
+        foreach (var snippet in _snippets.GetEnabled())
+        {
+            if (string.IsNullOrWhiteSpace(snippet.Phrase) || string.IsNullOrEmpty(snippet.Template))
+            {
+                continue;
+            }
+
+            try
+            {
+                rules.Add(new SnippetRule(snippet));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Skipping invalid snippet {Id} ('{Phrase}').",
+                    snippet.Id, snippet.Phrase);
+            }
+        }
+
+        _logger.LogDebug("Post-processor loaded {Count} snippet(s).", rules.Count);
+        return rules.ToArray();
     }
 
     private CompiledRule[] Build(IReadOnlyList<DictionaryEntry> entries)
@@ -87,6 +130,28 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     [GeneratedRegex(@"[ \t]+([,.!?;:])")]
     private static partial Regex SpaceBeforePunctuation();
+
+    /// <summary>
+    /// A voice-snippet expansion: the spoken trigger phrase — matched whole, case-insensitively,
+    /// and tolerant of the trailing punctuation AI cleanup adds ("Insert my standup update.") —
+    /// is replaced by the saved template. A MatchEvaluator supplies the template so user text
+    /// can never trigger $-substitution.
+    /// </summary>
+    private sealed class SnippetRule
+    {
+        private readonly Regex _regex;
+        private readonly string _template;
+
+        public SnippetRule(Snippet snippet)
+        {
+            _template = snippet.Template;
+            var escaped = Regex.Escape(snippet.Phrase.Trim());
+            _regex = new Regex($@"\b{escaped}\b[.!?,;:]?",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        public string Apply(string text) => _regex.Replace(text, _ => _template);
+    }
 
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
     private sealed class CompiledRule

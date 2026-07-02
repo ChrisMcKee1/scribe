@@ -18,7 +18,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.50.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     private static int s_providerInitialized;
 
@@ -141,6 +141,11 @@ public sealed class ScribeDatabase : IDisposable
             Execute(connection, SchemaV2, transaction);
         }
 
+        if (current < 3)
+        {
+            Execute(connection, SchemaV3, transaction);
+        }
+
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
         Execute(connection, $"PRAGMA user_version={SchemaVersion};", transaction);
         transaction.Commit();
@@ -223,5 +228,19 @@ public sealed class ScribeDatabase : IDisposable
             sample        TEXT NULL
         );
         CREATE INDEX ix_cleanup_failures_timestamp ON cleanup_failures (timestamp_utc DESC);
+        """;
+
+    // v3: voice snippets — a spoken trigger phrase expands to a saved (possibly multi-line)
+    // template during post-processing. Separate from `dictionary` because templates are long,
+    // matched as whole phrases, and never fed to the AI glossary. ("phrase" not "trigger": TRIGGER
+    // is a reserved word in SQLite.)
+    private const string SchemaV3 = """
+        CREATE TABLE snippets (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            phrase   TEXT NOT NULL,
+            template TEXT NOT NULL,
+            enabled  INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE UNIQUE INDEX ux_snippets_phrase ON snippets (phrase);
         """;
 }

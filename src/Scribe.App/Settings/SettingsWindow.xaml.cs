@@ -26,6 +26,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
+    private readonly ISnippetRepository _snippets;
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
@@ -34,6 +35,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private readonly ObservableCollection<SnippetRow> _snippetRows = new();
+    private bool _loadingSnippet;
     private readonly ObservableCollection<FailureRow> _failures = new();
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
@@ -50,6 +53,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
         IDictionaryRepository dictionary,
+        ISnippetRepository snippets,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
@@ -59,6 +63,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _settingsRepository = settingsRepository;
         _audio = audio;
         _dictionary = dictionary;
+        _snippets = snippets;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
@@ -76,6 +81,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateChoices();
         LoadFromSettings();
         LoadDictionary();
+        LoadSnippets();
         LoadFailures();
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
@@ -939,6 +945,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        var snippets = BuildSnippets(out var duplicateSnippet);
+        if (duplicateSnippet is not null)
+        {
+            SnippetList.SelectedItem = duplicateSnippet;
+            SnippetList.ScrollIntoView(duplicateSnippet);
+            MessageBox.Show(
+                this,
+                $"\"{duplicateSnippet.Phrase.Trim()}\" is used as the trigger for more than one snippet.\n\n" +
+                "Each trigger phrase can only expand to one template. Edit or remove the highlighted " +
+                "snippet, then save again.",
+                "Duplicate snippet trigger",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -980,6 +1001,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     : writingStyle;
 
             _dictionary.SaveAll(entries);
+            _snippets.SaveAll(snippets);
             _settingsRepository.Save(_settings);
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
@@ -1034,6 +1056,120 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         return entries;
+    }
+
+    // --- Voice snippets --------------------------------------------------------------------
+
+    private void LoadSnippets()
+    {
+        foreach (var snippet in _snippets.GetAll())
+        {
+            _snippetRows.Add(new SnippetRow
+            {
+                Id = snippet.Id,
+                Phrase = snippet.Phrase,
+                Template = snippet.Template,
+                Enabled = snippet.Enabled,
+            });
+        }
+
+        SnippetList.ItemsSource = _snippetRows;
+    }
+
+    private SnippetRow? SelectedSnippet => SnippetList.SelectedItem as SnippetRow;
+
+    private void SnippetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var row = SelectedSnippet;
+        SnippetEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
+        SnippetEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
+        if (row is null)
+        {
+            return;
+        }
+
+        _loadingSnippet = true;
+        try
+        {
+            SnippetPhraseBox.Text = row.Phrase;
+            SnippetTemplateBox.Text = row.Template;
+            SnippetEnabledCheck.IsChecked = row.Enabled;
+        }
+        finally
+        {
+            _loadingSnippet = false;
+        }
+    }
+
+    private void SnippetAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new SnippetRow { Phrase = "new snippet", Template = string.Empty };
+        _snippetRows.Add(row);
+        SnippetList.SelectedItem = row;
+        SnippetList.ScrollIntoView(row);
+        SnippetPhraseBox.Focus();
+        SnippetPhraseBox.SelectAll();
+    }
+
+    private void SnippetDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedSnippet is { } row)
+        {
+            _snippetRows.Remove(row);
+        }
+    }
+
+    private void SnippetPhraseBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Phrase = SnippetPhraseBox.Text;
+        }
+    }
+
+    private void SnippetTemplateBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Template = SnippetTemplateBox.Text;
+        }
+    }
+
+    private void SnippetEnabledCheck_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Enabled = SnippetEnabledCheck.IsChecked == true;
+        }
+    }
+
+    /// <summary>
+    /// Builds the desired snippet state from the editor rows, skipping rows with a blank phrase or
+    /// template. Reports the first duplicate trigger phrase (case-insensitive) like the dictionary.
+    /// </summary>
+    private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
+    {
+        duplicate = null;
+        var snippets = new List<Snippet>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var row in _snippetRows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template))
+            {
+                continue;
+            }
+
+            var phrase = row.Phrase.Trim();
+            if (!seen.Add(phrase) && duplicate is null)
+            {
+                duplicate = row;
+            }
+
+            snippets.Add(new Snippet(row.Id, phrase, row.Template, row.Enabled));
+        }
+
+        return snippets;
     }
 
     // --- Overlay position picker -----------------------------------------------------------
@@ -1282,6 +1418,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Replacement { get; set; } = string.Empty;
         public bool WholeWord { get; set; } = true;
         public bool Enabled { get; set; } = true;
+    }
+
+    /// <summary>
+    /// Editable snippet row behind the master-detail editor. Phrase raises change notifications so
+    /// the ListBox label tracks edits made in the detail pane.
+    /// </summary>
+    public sealed class SnippetRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _phrase = string.Empty;
+
+        public long Id { get; set; }
+
+        public string Phrase
+        {
+            get => _phrase;
+            set
+            {
+                if (_phrase != value)
+                {
+                    _phrase = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Phrase)));
+                }
+            }
+        }
+
+        public string Template { get; set; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
     public sealed class FailureRow
