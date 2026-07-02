@@ -93,6 +93,10 @@ internal static class InjectionNativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool IsClipboardFormatAvailable(uint format);
 
+    // Does not require OpenClipboard; returns 0 when the clipboard is empty.
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern int CountClipboardFormats();
+
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern nint GlobalAlloc(uint uFlags, nuint dwBytes);
 
