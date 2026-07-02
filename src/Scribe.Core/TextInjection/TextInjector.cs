@@ -94,6 +94,16 @@ public sealed class TextInjector : ITextInjector
     private bool PasteViaClipboard(string text, out (int Sent, int Total) ctrlV)
     {
         ctrlV = (0, 0);
+
+        // An image, copied files or other non-text content can't be saved and restored by
+        // Win32Clipboard (text-only by design), so pasting would silently destroy it. Fall back to
+        // typing — slower, but the user's screenshot or file copy survives the dictation.
+        if (Win32Clipboard.HasNonTextContent())
+        {
+            _logger.LogInformation("Clipboard holds non-text content; typing instead of pasting to preserve it.");
+            return false;
+        }
+
         string? previous = Win32Clipboard.TryGetText();
 
         if (!Win32Clipboard.SetText(text))
@@ -103,6 +113,27 @@ public sealed class TextInjector : ITextInjector
 
         Thread.Sleep(ClipboardSettleDelayMs);
         ctrlV = SendCtrlV();
+
+        // A short send can leave Ctrl (or V) logically held down; release both before anything
+        // else so a typing fallback can't turn the dictation into accidental keyboard shortcuts.
+        if (ctrlV.Sent < ctrlV.Total)
+        {
+            ReleaseCtrlV();
+        }
+
+        // The paste fires on the V-down (the chord's second event). Fewer than two delivered means
+        // no paste happened at all: put the user's clipboard back and report failure so the caller
+        // types the text instead of losing the dictation.
+        if (ctrlV.Sent < 2)
+        {
+            if (previous is not null)
+            {
+                Win32Clipboard.SetText(previous);
+            }
+
+            return false;
+        }
+
         Thread.Sleep(PasteSettleDelayMs);
 
         if (previous is not null)
@@ -111,6 +142,18 @@ public sealed class TextInjector : ITextInjector
         }
 
         return true;
+    }
+
+    // Best-effort key-up pair after a partial Ctrl+V send. Sending an up for a key that was never
+    // down is harmless; leaving Ctrl held down is not.
+    private void ReleaseCtrlV()
+    {
+        INPUT[] inputs = [KeyUp(VK_V), KeyUp(VK_CONTROL)];
+        uint sent = SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
+        if (sent != inputs.Length)
+        {
+            _logger.LogWarning("Releasing a partial Ctrl+V delivered {Sent}/{Total} key-up events.", sent, inputs.Length);
+        }
     }
 
     private (int Sent, int Total) SendCtrlV()

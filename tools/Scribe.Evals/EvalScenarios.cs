@@ -1,10 +1,14 @@
+using Scribe.Core.Cleanup;
+
 namespace Scribe.Evals;
 
 /// <summary>
-/// A single style/format eval case: one writing-style instruction applied to a shared raw transcript,
-/// with the markers that prove the model actually followed it. Because every scenario starts from the
-/// same <see cref="EvalScenarios.RawTranscript"/>, the suite doubles as a prompt hot-swap proof —
-/// swapping the style must change the output and hit different markers.
+/// A single style/format eval case: one writing-style instruction applied to a raw transcript, with
+/// the markers that prove the model actually followed it. Style scenarios share
+/// <see cref="EvalScenarios.RawTranscript"/> so a style swap is the only variable (the suite doubles
+/// as a prompt hot-swap proof); condensation scenarios supply their own <see cref="Transcript"/>
+/// because the disfluency under test must exist in the input. <see cref="ForbiddenPatterns"/> are
+/// regexes that must NOT match the output — e.g. the discarded half of a spoken self-correction.
 /// </summary>
 internal sealed record EvalScenario(
     string Name,
@@ -12,7 +16,9 @@ internal sealed record EvalScenario(
     IReadOnlyList<string> MarkerPatterns,
     int MinMarkersToPass,
     bool RequireChanged = true,
-    bool CountOccurrences = false);
+    bool CountOccurrences = false,
+    string? Transcript = null,
+    IReadOnlyList<string>? ForbiddenPatterns = null);
 
 internal static class EvalScenarios
 {
@@ -61,5 +67,35 @@ internal static class EvalScenarios
             MarkerPatterns: [@"(?m)^\s*[-*\u2022]\s+\S"],
             MinMarkersToPass: 2,
             CountOccurrences: true),
+
+        // The two scenarios below eval the SHIPPED default style's semantic-condensation rules
+        // (spoken self-correction, redundancy merging), so they run against DefaultWritingStyle
+        // verbatim and bring their own transcripts containing the disfluency under test.
+        new EvalScenario(
+            Name: "Self-correction",
+            WritingStyle: CleanupPrompt.DefaultWritingStyle,
+            Transcript:
+                "um so i sent the quarterly report to the finance team on wednesday i mean thursday " +
+                "and uh we should schedule the review meeting for next monday no wait next tuesday " +
+                "afternoon so everyone has time to read it",
+            // The corrected versions must survive...
+            MarkerPatterns: [@"\bthursday\b", @"\btuesday\b"],
+            MinMarkersToPass: 2,
+            // ...and the retracted false starts (and the correction cues themselves) must not.
+            ForbiddenPatterns: [@"\bwednesday\b", @"\bmonday\b", @"\bi mean\b", @"\bno wait\b"]),
+
+        new EvalScenario(
+            Name: "Redundancy collapse",
+            WritingStyle: CleanupPrompt.DefaultWritingStyle,
+            Transcript:
+                "we need to update the documentation before the release um the docs really need " +
+                "updating before we ship you know the documentation has to be updated prior to the " +
+                "release and also please remember to tag the version in git",
+            // Both distinct tasks must survive the merge...
+            MarkerPatterns: [@"updat|documentation|docs", @"\btag\b"],
+            MinMarkersToPass: 2,
+            // ...but "update" may only be asked for once: a second "updat"/"docs" mention means the
+            // model transcribed the repetition instead of merging it into a single statement.
+            ForbiddenPatterns: [@"updat[\s\S]*updat", @"(documentation|docs)[\s\S]*(documentation|docs)"]),
     ];
 }

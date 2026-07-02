@@ -89,13 +89,16 @@ internal static class Program
                 continue;
             }
 
-            var cleaned = (await svc.CleanAsync(EvalScenarios.RawTranscript, ct)).Text;
+            // Style scenarios share the suite transcript; condensation scenarios carry their own
+            // (the disfluency under test has to exist in the input).
+            var transcript = scenario.Transcript ?? EvalScenarios.RawTranscript;
+            var cleaned = (await svc.CleanAsync(transcript, ct)).Text;
 
             var evaluator = new StyleAdherenceEvaluator(
                 scenario.MarkerPatterns, scenario.MinMarkersToPass, scenario.RequireChanged,
-                scenario.CountOccurrences, EvalScenarios.RawTranscript);
+                scenario.CountOccurrences, transcript, scenario.ForbiddenPatterns);
 
-            var request = new ChatMessage(ChatRole.User, EvalScenarios.RawTranscript);
+            var request = new ChatMessage(ChatRole.User, transcript);
             var response = new ChatResponse(new ChatMessage(ChatRole.Assistant, cleaned));
             var result = await evaluator.EvaluateAsync([request], response, cancellationToken: ct);
 
