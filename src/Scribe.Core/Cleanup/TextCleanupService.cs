@@ -1170,9 +1170,6 @@ internal sealed class TextCleanupService : ITextCleanupService
         return Math.Clamp(estimate, 64, 4096);
     }
 
-    private static string Sanitize(string? candidate, string original) =>
-        TrySanitize(candidate, original, out var text) ? text : original;
-
     // Cleans up a model's raw answer and reports whether it is usable. Returns false (and yields the
     // original text) when the output is empty after stripping think-blocks/fences/quotes, or is an
     // over-long ramble — so a caller cleaning a single chunk can treat a rejected answer as a failure
