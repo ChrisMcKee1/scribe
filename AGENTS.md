@@ -27,7 +27,7 @@ online feature is AI cleanup against a user‑configured Azure/Foundry endpoint 
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.1.5**.
+  in `Directory.Build.props`. Current version: **0.1.6**.
 
 ## Commands (run these — include the flags)
 
