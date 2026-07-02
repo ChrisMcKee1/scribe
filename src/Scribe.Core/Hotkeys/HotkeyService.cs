@@ -139,6 +139,13 @@ public sealed class HotkeyService : IHotkeyService
         _logger.LogInformation("Hotkey hook removed.");
     }
 
+    public void CancelToggle()
+    {
+        // A bare bool write is atomic; the hook thread reads it on the next key event, matching
+        // how UpdateBinding already resets the same flag.
+        _toggleActive = false;
+    }
+
     public void UpdateBinding(HotkeyBinding binding)
     {
         _binding = binding ?? throw new ArgumentNullException(nameof(binding));

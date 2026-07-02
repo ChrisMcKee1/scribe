@@ -48,6 +48,11 @@ internal sealed class DictationController : IDisposable
     private bool _started;
     private bool _disposed;
 
+    // Silence auto-stop (toggle mode, opt-in): tracks live input levels while recording and ends
+    // the dictation when the speaker goes quiet, so a forgotten toggle never leaves the mic hot.
+    private SilenceAutoStopTracker? _silenceTracker;
+    private bool _silenceSubscribed;
+
     public DictationController(
         IHotkeyService hotkeys,
         IAudioCaptureService audio,
@@ -212,6 +217,16 @@ internal sealed class DictationController : IDisposable
             _audio.Start(settings.InputDeviceId);
             _log.LogInformation("Recording started.");
             Raise(DictationState.Recording);
+
+            if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)
+            {
+                _silenceTracker = new SilenceAutoStopTracker(Environment.TickCount64);
+                if (!_silenceSubscribed)
+                {
+                    _audio.LevelChanged += OnLevelForSilence;
+                    _silenceSubscribed = true;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -221,8 +236,30 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void OnDeactivated(object? sender, EventArgs e)
+    private void OnDeactivated(object? sender, EventArgs e) => StopAndProcess();
+
+    // Fired on the audio capture thread for every level sample while subscribed.
+    private void OnLevelForSilence(object? sender, float level)
     {
+        var tracker = _silenceTracker;
+        if (tracker is null || !tracker.Update(level, Environment.TickCount64))
+        {
+            return;
+        }
+
+        _log.LogInformation("Silence auto-stop: ending the toggle dictation.");
+
+        // Reset the hook's toggle flag so the next press starts a new dictation rather than being
+        // swallowed as the "toggle off" for the dictation we just ended ourselves.
+        _hotkeys.CancelToggle();
+        StopAndProcess();
+    }
+
+    /// <summary>Shared stop path for the hotkey release/toggle-off and the silence auto-stop.</summary>
+    private void StopAndProcess()
+    {
+        UnsubscribeSilence();
+
         lock (_gate)
         {
             if (_state != DictationState.Recording)
@@ -235,6 +272,16 @@ internal sealed class DictationController : IDisposable
 
         Raise(DictationState.Processing);
         _ = Task.Run(ProcessAsync);
+    }
+
+    private void UnsubscribeSilence()
+    {
+        _silenceTracker = null;
+        if (_silenceSubscribed)
+        {
+            _audio.LevelChanged -= OnLevelForSilence;
+            _silenceSubscribed = false;
+        }
     }
 
     private async Task ProcessAsync()
@@ -509,6 +556,7 @@ internal sealed class DictationController : IDisposable
         if (_disposed) return;
 
         _disposed = true;
+        UnsubscribeSilence();
         if (_started)
         {
             _hotkeys.Activated -= OnActivated;
