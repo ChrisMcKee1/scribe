@@ -38,6 +38,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
+    private readonly ObservableCollection<ProfileRow> _profileRows = new();
+    private bool _loadingProfile;
     private readonly ObservableCollection<FailureRow> _failures = new();
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
@@ -85,6 +87,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LoadFromSettings();
         LoadDictionary();
         LoadSnippets();
+        LoadProfiles();
         LoadFailures();
         LoadPerformanceStats();
 
@@ -1015,6 +1018,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
+            _settings.Profiles = BuildProfiles();
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
@@ -1208,6 +1212,141 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         return snippets;
     }
+
+    // --- Per-app profiles ------------------------------------------------------------------
+
+    private void LoadProfiles()
+    {
+        ProfileNewlineCombo.DisplayMemberPath = nameof(ProfileNewlineChoice.Label);
+        ProfileNewlineCombo.ItemsSource = new[]
+        {
+            new ProfileNewlineChoice(null, "Use the global setting"),
+            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals"),
+            new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new ProfileNewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+        };
+
+        foreach (var profile in _settings.Profiles)
+        {
+            _profileRows.Add(new ProfileRow
+            {
+                Name = profile.Name,
+                Processes = string.Join(", ", profile.ProcessNames),
+                WritingStyle = profile.WritingStyle ?? string.Empty,
+                NewlineHandling = profile.NewlineHandling,
+            });
+        }
+
+        ProfileList.ItemsSource = _profileRows;
+    }
+
+    private ProfileRow? SelectedProfile => ProfileList.SelectedItem as ProfileRow;
+
+    private void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var row = SelectedProfile;
+        ProfileEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
+        ProfileEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
+        if (row is null)
+        {
+            return;
+        }
+
+        _loadingProfile = true;
+        try
+        {
+            ProfileNameBox.Text = row.Name;
+            ProfileProcessesBox.Text = row.Processes;
+            ProfileStyleBox.Text = row.WritingStyle;
+            var choices = (ProfileNewlineChoice[])ProfileNewlineCombo.ItemsSource;
+            ProfileNewlineCombo.SelectedItem =
+                choices.FirstOrDefault(c => c.Mode == row.NewlineHandling) ?? choices[0];
+        }
+        finally
+        {
+            _loadingProfile = false;
+        }
+    }
+
+    private void ProfileAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new ProfileRow { Name = "New profile" };
+        _profileRows.Add(row);
+        ProfileList.SelectedItem = row;
+        ProfileList.ScrollIntoView(row);
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    private void ProfileDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is { } row)
+        {
+            _profileRows.Remove(row);
+        }
+    }
+
+    private void ProfileNameBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.Name = ProfileNameBox.Text;
+        }
+    }
+
+    private void ProfileProcessesBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.Processes = ProfileProcessesBox.Text;
+        }
+    }
+
+    private void ProfileStyleBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.WritingStyle = ProfileStyleBox.Text;
+        }
+    }
+
+    private void ProfileNewlineCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.NewlineHandling = (ProfileNewlineCombo.SelectedItem as ProfileNewlineChoice)?.Mode;
+        }
+    }
+
+    /// <summary>Builds the profile list to persist, skipping rows with no name and no processes.</summary>
+    private List<AppProfile> BuildProfiles()
+    {
+        var profiles = new List<AppProfile>();
+        foreach (var row in _profileRows)
+        {
+            var processes = row.Processes
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(p => p.Length > 0)
+                .ToList();
+
+            if (string.IsNullOrWhiteSpace(row.Name) && processes.Count == 0)
+            {
+                continue; // an empty placeholder row
+            }
+
+            profiles.Add(new AppProfile
+            {
+                Name = string.IsNullOrWhiteSpace(row.Name) ? "Unnamed profile" : row.Name.Trim(),
+                ProcessNames = processes,
+                WritingStyle = string.IsNullOrWhiteSpace(row.WritingStyle) ? null : row.WritingStyle.Trim(),
+                NewlineHandling = row.NewlineHandling,
+            });
+        }
+
+        return profiles;
+    }
+
+    private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label);
 
     // --- Overlay position picker -----------------------------------------------------------
 
@@ -1547,6 +1686,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public string Template { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    /// <summary>Editable profile row; Name notifies so the ListBox label tracks the detail pane.</summary>
+    public sealed class ProfileRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _name = string.Empty;
+
+        public string Name
+        {
+            get => _name;
+            set
+            {
+                if (_name != value)
+                {
+                    _name = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Name)));
+                }
+            }
+        }
+
+        public string Processes { get; set; } = string.Empty;
+        public string WritingStyle { get; set; } = string.Empty;
+        public NewlineInjectionMode? NewlineHandling { get; set; }
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }

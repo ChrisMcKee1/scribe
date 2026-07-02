@@ -64,6 +64,23 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void Default_style_formats_numbers_times_dates_and_sentence_spacing()
+    {
+        // The shipped default is what most users run with, so it must instruct the model to write
+        // spoken numbers as digits, format clock times and calendar dates, and never fuse sentences
+        // without a space — while still preserving the value the speaker actually said.
+        var style = CleanupPrompt.DefaultWritingStyle;
+
+        Assert.Contains("use digits", style);
+        Assert.Contains("3:30 PM", style);
+        Assert.Contains("July 3, 2026", style);
+        Assert.Contains("single space between sentences", style);
+        Assert.Contains("never invent or change a value", style);
+        // The old "keep numbers exactly as spoken" rule directly contradicted digit formatting.
+        Assert.DoesNotContain("exactly as spoken", style);
+    }
+
+    [Fact]
     public void System_prompt_keeps_the_post_editor_safety_guardrails()
     {
         var prompt = TextCleanupService.BuildSystemPrompt(Foundry());

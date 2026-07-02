@@ -327,6 +327,15 @@ internal sealed class DictationController : IDisposable
                 _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
             }
 
+            // Resolve the target app (and any per-app profile) up front: the profile's writing
+            // style must reach AI cleanup, not just the injection stage.
+            var targetApp = ForegroundProcessName();
+            var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
+            if (profile is not null)
+            {
+                _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
+            }
+
             var result = _transcription.Transcribe(audio);
             if (result.IsEmpty)
             {
@@ -346,7 +355,9 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
-                var cleanup = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
+                var cleanup = await _cleanup
+                    .CleanAsync(recognized, writingStyleOverride: profile?.WritingStyle)
+                    .ConfigureAwait(false);
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
 
@@ -404,17 +415,18 @@ internal sealed class DictationController : IDisposable
                 "Transcribed {Chars} chars in {Decode:F2}s (RTF {Rtf:F2}).",
                 text.Length, result.DecodeDuration.TotalSeconds, result.RealTimeFactor);
 
-            var targetApp = ForegroundProcessName();
             activity?.SetTag(ScribeTelemetry.TagTargetApp, targetApp);
 
             // Terminals treat an injected newline as Enter, so AI-cleanup paragraph breaks would
-            // submit several partial messages; flatten per the configured mode before injecting.
-            var flattened = InjectionTextFormatter.Apply(text, settings.NewlineHandling, targetApp);
+            // submit several partial messages; flatten per the configured mode (the profile's
+            // override wins when set) before injecting.
+            var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
+            var flattened = InjectionTextFormatter.Apply(text, newlineMode, targetApp);
             if (!ReferenceEquals(flattened, text))
             {
                 _log.LogInformation(
                     "Flattened line breaks before injection ({Mode}, target {App}).",
-                    settings.NewlineHandling, targetApp ?? "unknown");
+                    newlineMode, targetApp ?? "unknown");
                 text = flattened;
             }
 
