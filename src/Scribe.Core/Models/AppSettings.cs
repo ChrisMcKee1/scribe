@@ -130,7 +130,26 @@ public sealed class AppSettings
     /// <summary>Persist a copy of each capture's audio alongside its history entry.</summary>
     public bool StoreAudioHistory { get; set; }
 
+    /// <summary>
+    /// Per-app dictation profiles, evaluated in order against the focused app's process name.
+    /// The first match overrides the writing style and/or line-break handling for that dictation.
+    /// </summary>
+    public List<AppProfile> Profiles { get; set; } = new();
+
     public static AppSettings CreateDefault() => new();
 
-    public AppSettings Clone() => (AppSettings)MemberwiseClone();
+    public AppSettings Clone()
+    {
+        // Deep-copy the profile list: MemberwiseClone would share it, so an edit in the settings
+        // editor could mutate the snapshot the dictation loop is reading.
+        var clone = (AppSettings)MemberwiseClone();
+        clone.Profiles = Profiles.Select(p => new AppProfile
+        {
+            Name = p.Name,
+            ProcessNames = new List<string>(p.ProcessNames),
+            WritingStyle = p.WritingStyle,
+            NewlineHandling = p.NewlineHandling,
+        }).ToList();
+        return clone;
+    }
 }

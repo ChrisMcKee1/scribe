@@ -33,7 +33,16 @@ public static class CleanupPrompt
         "meant to go to the store — I mean the park\"), keep only the corrected version and drop " +
         "what it replaced. If I say the same thing more than once, or restate a point in " +
         "slightly different words, merge it into a single clear statement instead of writing " +
-        "both. Keep technical terms, product names, code, URLs, and numbers exactly as spoken.";
+        "both. Always put a single space between sentences. Keep technical terms, product names, " +
+        "code, and URLs verbatim. Write numbers the way they are normally written rather " +
+        "than spelled out: use digits for quantities, measurements, prices, percentages, phone " +
+        "numbers, and version numbers (for example \"twenty three\" becomes \"23\" and \"five " +
+        "point five\" becomes \"5.5\"), but keep a small number as a word where that reads more " +
+        "naturally (for example \"one or two ideas\"). Format clock times as digits with a colon, " +
+        "adding AM or PM when I say it (for example \"three thirty p m\" becomes \"3:30 PM\"). " +
+        "Write dates, calendar months, and years in their normal written form (for example \"july " +
+        "third twenty twenty six\" becomes \"July 3, 2026\"). Only reformat what I actually spoke — " +
+        "never invent or change a value I did not say.";
 
     /// <summary>
     /// Returns the supplied writing style when it has content, otherwise the

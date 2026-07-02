@@ -66,6 +66,14 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static readonly Regex ThinkBlock =
         new("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Models occasionally drop the space between two sentences ("...store.The next..."). Insert one
+    // after sentence-ending punctuation when it butts directly against the capital letter that starts
+    // the next sentence. The lowercase-letter lookbehind keeps decimals ("3.5"), acronyms ("U.S.A"),
+    // and lowercase domains ("example.com") untouched, and an optional closing quote/bracket is allowed
+    // between the punctuation and the next sentence (e.g. a quoted sentence).
+    private static readonly Regex MissingSentenceSpace =
+        new("(?<=[a-z][.!?][\"')\\]]?)(?=[A-Z])", RegexOptions.Compiled);
+
     private readonly ILogger<TextCleanupService> _log;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -85,6 +93,14 @@ internal sealed class TextCleanupService : ITextCleanupService
     // The active cleanup agent (Agent Framework). Rebuilt whenever the provider/model/endpoint
     // changes; null until initialization completes or after the feature is disabled.
     private AIAgent? _agent;
+
+    // Per-app profiles swap the writing style per call. The factory builds an agent for a given
+    // system prompt against the already-initialized client (pure object construction, no I/O), and
+    // built agents are cached per style so an app switch costs nothing after its first dictation.
+    // Both are reset together with _agent whenever the provider/model/endpoint changes.
+    private Func<string, AIAgent>? _agentFactory;
+    private Func<string, AIAgent>? _pendingFactory; // handoff from InitXxx (serialized by _initLock)
+    private readonly Dictionary<string, AIAgent> _styleAgents = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _configureCts;
     private int _lastReportedPct = -1;
@@ -132,13 +148,13 @@ internal sealed class TextCleanupService : ITextCleanupService
             if (!effective.Enabled)
             {
                 _configureCts?.Cancel();
-                _agent = null;
+                DropAgents();
                 nowDisabled = true;
             }
             else if (!effective.IsActionable)
             {
                 _configureCts?.Cancel();
-                _agent = null;
+                DropAgents();
                 notActionable = true;
             }
             else if (!(sameConfig && _status == CleanupStatus.Ready))
@@ -146,10 +162,10 @@ internal sealed class TextCleanupService : ITextCleanupService
                 _configureCts?.Cancel();
                 _configureCts = new CancellationTokenSource();
                 initToken = _configureCts.Token;
-                // Drop the stale agent immediately so a dictation fired right after a save can never
+                // Drop the stale agents immediately so a dictation fired right after a save can never
                 // run against the previous provider/model/prompt; CleanAsync passes through raw text
                 // until the rebuilt agent is published, then the next call reflects the new settings.
-                _agent = null;
+                DropAgents();
                 startInit = true;
             }
         }
@@ -183,7 +199,16 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    public async Task<CleanupResult> CleanAsync(string text, CancellationToken cancellationToken = default)
+    // Must be called under _gate.
+    private void DropAgents()
+    {
+        _agent = null;
+        _agentFactory = null;
+        _styleAgents.Clear();
+    }
+
+    public async Task<CleanupResult> CleanAsync(
+        string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -201,6 +226,24 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             agent = _agent;
             options = _options;
+
+            // Per-app profile: swap in (or lazily build) the agent for the overriding style. An
+            // override matching the configured style falls through to the default agent, and a
+            // missing factory (shouldn't happen when Ready) safely degrades to the default too.
+            var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
+            if (style is not null &&
+                !string.Equals(style, CleanupPrompt.ResolveWritingStyle(options.WritingStyle), StringComparison.Ordinal) &&
+                _agentFactory is { } factory)
+            {
+                if (!_styleAgents.TryGetValue(style, out var styled))
+                {
+                    // Pure object construction against the already-initialized client — no I/O.
+                    styled = factory(BuildSystemPrompt(options with { WritingStyle = style }));
+                    _styleAgents[style] = styled;
+                }
+
+                agent = styled;
+            }
         }
 
         // Split long dictation into bounded chunks on sentence/word boundaries and clean each in turn,
@@ -738,7 +781,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (evicted && _agent is not null)
             {
-                _agent = null;
+                DropAgents();
                 invalidate = true;
             }
             else if (nowResident && _agent is null &&
@@ -796,6 +839,8 @@ internal sealed class TextCleanupService : ITextCleanupService
                 }
 
                 _agent = agent;
+                _agentFactory = _pendingFactory;
+                _styleAgents.Clear();
             }
 
             SetStatus(CleanupStatus.Ready, ReadyDetail(options));
@@ -856,8 +901,9 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         // Present the on-device OpenAI-compatible chat client as an Agent Framework agent so the
         // cleanup call site is identical to the Azure path.
-        return _openAiClient.GetChatClient(model.Id)
-            .AsAIAgent(instructions: BuildSystemPrompt(options), name: AgentName);
+        var chatClient = _openAiClient.GetChatClient(model.Id);
+        _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
+        return _pendingFactory(BuildSystemPrompt(options));
     }
 
     /// <summary>
@@ -886,8 +932,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         var client = new OpenAIClient(
             new ApiKeyCredential(key),
             new OpenAIClientOptions { Endpoint = endpointUri });
-        var agent = client.GetChatClient(options.CustomModel!.Trim())
-            .AsAIAgent(instructions: BuildSystemPrompt(options), name: AgentName);
+        var chatClient = client.GetChatClient(options.CustomModel!.Trim());
+        _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
+        var agent = _pendingFactory(BuildSystemPrompt(options));
 
         // Same tiny validation as Azure so a wrong URL/model/key surfaces in the status pill now,
         // not as a silent no-op on every dictation. The generous budget covers a local server
@@ -946,7 +993,8 @@ internal sealed class TextCleanupService : ITextCleanupService
             // The project data-plane requires an AAD token, so this path is AAD-only.
             var credential = CreateAzureCredential(options.AzureTenantId);
             var project = new AIProjectClient(endpointUri, credential);
-            agent = project.AsAIAgent(model: options.AzureDeployment!, instructions: instructions, name: AgentName);
+            _pendingFactory = i => project.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
+            agent = _pendingFactory(instructions);
         }
         else
         {
@@ -974,9 +1022,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             // uses it. GetResponsesClient is [Experimental("OPENAI001")] in the current SDK, so opt
             // in explicitly at the call site.
 #pragma warning disable OPENAI001
-            agent = azureClient.GetResponsesClient()
-                .AsAIAgent(model: options.AzureDeployment!, instructions: instructions, name: AgentName);
+            var responses = azureClient.GetResponsesClient();
+            _pendingFactory = i => responses.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
 #pragma warning restore OPENAI001
+            agent = _pendingFactory(instructions);
         }
 
         // Validate auth + deployment with a tiny request so the status reflects reality rather than
@@ -1161,7 +1210,8 @@ internal sealed class TextCleanupService : ITextCleanupService
             "Apply only the changes the writing style calls for. By default, fix punctuation, " +
             "capitalization, grammar and speech disfluencies while preserving the speaker's meaning, " +
             "intent and language; if the writing style asks for a different tone, format or language, " +
-            "follow it. Keep technical terms, product names, code, URLs and numbers accurate. " +
+            "follow it. Keep technical terms, product names, code and URLs accurate, and never change the " +
+            "value of a number, time or date — only its written format when the writing style asks for it. " +
             "Do not wrap the output in quotes or code fences and do not add commentary, labels or explanations. " +
             "Return only the corrected text. If it already matches the writing style, return it unchanged.\n\n" +
             "Writing style:\n" + style;
@@ -1291,6 +1341,9 @@ internal sealed class TextCleanupService : ITextCleanupService
             return false;
         }
 
+        // Deterministic net for a model that fused two sentences with no space between them.
+        cleaned = MissingSentenceSpace.Replace(cleaned, " ");
+
         text = cleaned;
         return true;
     }
@@ -1354,7 +1407,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             cts = _configureCts;
             _configureCts = null;
-            _agent = null;
+            DropAgents();
         }
 
         try { cts?.Cancel(); } catch { /* best effort */ }
