@@ -91,6 +91,23 @@ public sealed class AppSettings
     public string? AiCleanupAzureApiKey { get; set; }
 
     /// <summary>
+    /// Base URL of a bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, vLLM,
+    /// OpenRouter, api.openai.com), e.g. <c>http://localhost:11434/v1</c>. Used when
+    /// <see cref="AiCleanupProvider"/> is <see cref="Cleanup.CleanupProvider.OpenAiCompatible"/>.
+    /// </summary>
+    public string? AiCleanupCustomEndpoint { get; set; }
+
+    /// <summary>Model name to request from the custom endpoint (e.g. <c>qwen3:4b</c>).</summary>
+    public string? AiCleanupCustomModel { get; set; }
+
+    /// <summary>
+    /// Optional API key for the custom endpoint (local servers don't need one). DPAPI-encrypted at
+    /// rest, same as the Azure key.
+    /// </summary>
+    [JsonConverter(typeof(DpapiProtectedStringConverter))]
+    public string? AiCleanupCustomApiKey { get; set; }
+
+    /// <summary>
     /// How decoded text is placed into the focused app. Unicode typing is the default because it
     /// works in the widest range of apps (including paste-blocking fields) and never touches the
     /// clipboard.

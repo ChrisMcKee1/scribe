@@ -163,9 +163,12 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         if (notActionable)
         {
-            var detail = effective.Provider == CleanupProvider.AzureFoundry
-                ? "Choose an Azure deployment to enable cleanup."
-                : "Select a model to enable cleanup.";
+            var detail = effective.Provider switch
+            {
+                CleanupProvider.AzureFoundry => "Choose an Azure deployment to enable cleanup.",
+                CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to enable cleanup.",
+                _ => "Select a model to enable cleanup.",
+            };
             SetStatus(CleanupStatus.Unavailable, detail);
             return;
         }
@@ -289,8 +292,10 @@ internal sealed class TextCleanupService : ITextCleanupService
     {
         try
         {
+            // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
+            // reasoning model whose hidden thinking precedes the visible rewrite.
             var timeout = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
-                options.Provider == CleanupProvider.AzureFoundry
+                options.Provider is CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible
                     ? AzureCleanupTimeoutSeconds
                     : CleanupTimeoutSeconds);
 
@@ -772,6 +777,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             var agent = options.Provider switch
             {
                 CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
+                CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
                 _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
             };
 
@@ -852,6 +858,61 @@ internal sealed class TextCleanupService : ITextCleanupService
         // cleanup call site is identical to the Azure path.
         return _openAiClient.GetChatClient(model.Id)
             .AsAIAgent(instructions: BuildSystemPrompt(options), name: AgentName);
+    }
+
+    /// <summary>
+    /// Bring-your-own-endpoint: any server speaking the OpenAI chat protocol (Ollama, LM Studio,
+    /// vLLM, OpenRouter, or api.openai.com itself). The API key is optional because local servers
+    /// don't check it — a placeholder is sent when blank, mirroring the Foundry Local client.
+    /// </summary>
+    private async Task<AIAgent?> InitOpenAiCompatibleAsync(CleanupOptions options, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(options.CustomEndpoint) || string.IsNullOrWhiteSpace(options.CustomModel))
+        {
+            SetStatus(CleanupStatus.Unavailable, "Enter the endpoint URL and model name to enable cleanup.");
+            return null;
+        }
+
+        if (!Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var endpointUri) ||
+            (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
+        {
+            SetStatus(CleanupStatus.Unavailable, "The endpoint is not a valid http(s) URL.");
+            return null;
+        }
+
+        SetStatus(CleanupStatus.Initializing, $"Connecting to {endpointUri.Host}…");
+
+        var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
+        var client = new OpenAIClient(
+            new ApiKeyCredential(key),
+            new OpenAIClientOptions { Endpoint = endpointUri });
+        var agent = client.GetChatClient(options.CustomModel!.Trim())
+            .AsAIAgent(instructions: BuildSystemPrompt(options), name: AgentName);
+
+        // Same tiny validation as Azure so a wrong URL/model/key surfaces in the status pill now,
+        // not as a silent no-op on every dictation. The generous budget covers a local server
+        // cold-loading the model on first request.
+        ct.ThrowIfCancellationRequested();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(AzureValidationTimeoutSeconds));
+        try
+        {
+            _ = await agent.RunAsync("Reply with: ok", cancellationToken: cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "OpenAI-compatible endpoint validation failed for {Endpoint}.", endpointUri.Host);
+            SetStatus(CleanupStatus.Unavailable,
+                $"Couldn't reach '{options.CustomModel}' at {endpointUri.Host}. Check the endpoint URL " +
+                "(it usually ends in /v1), the model name, and the API key if the server needs one.");
+            return null;
+        }
+
+        return agent;
     }
 
     private async Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
@@ -1112,10 +1173,18 @@ internal sealed class TextCleanupService : ITextCleanupService
             prompt += "\n\n" + options.Glossary.Trim();
         }
 
-        // Qwen3-family models (Foundry Local) support a "/no_think" directive that suppresses
-        // chain-of-thought, so they return the corrected text directly with no reasoning preamble.
-        if (options.Provider == CleanupProvider.FoundryLocal &&
-            options.FoundryModelAlias.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase))
+        // Qwen3-family models support a "/no_think" directive that suppresses chain-of-thought, so
+        // they return the corrected text directly with no reasoning preamble. Applies to Foundry
+        // Local aliases and to BYO endpoints (Ollama etc.) serving a qwen3 model.
+        var qwen3 = options.Provider switch
+        {
+            CleanupProvider.FoundryLocal =>
+                options.FoundryModelAlias.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase),
+            CleanupProvider.OpenAiCompatible =>
+                options.CustomModel?.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase) == true,
+            _ => false,
+        };
+        if (qwen3)
         {
             prompt += " /no_think";
         }
@@ -1126,6 +1195,8 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static string ReadyDetail(CleanupOptions options) => options.Provider switch
     {
         CleanupProvider.AzureFoundry => $"Azure deployment '{options.AzureDeployment}' ready.",
+        CleanupProvider.OpenAiCompatible =>
+            $"'{options.CustomModel}' at {(Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var u) ? u.Host : "custom endpoint")} ready.",
         _ => $"{CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName} ready.",
     };
 
@@ -1231,8 +1302,17 @@ internal sealed class TextCleanupService : ITextCleanupService
             : options.FoundryModelAlias.Trim();
         var endpoint = string.IsNullOrWhiteSpace(options.AzureEndpoint) ? null : options.AzureEndpoint.Trim();
         var deployment = string.IsNullOrWhiteSpace(options.AzureDeployment) ? null : options.AzureDeployment.Trim();
+        var customEndpoint = string.IsNullOrWhiteSpace(options.CustomEndpoint) ? null : options.CustomEndpoint.Trim();
+        var customModel = string.IsNullOrWhiteSpace(options.CustomModel) ? null : options.CustomModel.Trim();
 
-        return options with { FoundryModelAlias = alias, AzureEndpoint = endpoint, AzureDeployment = deployment };
+        return options with
+        {
+            FoundryModelAlias = alias,
+            AzureEndpoint = endpoint,
+            AzureDeployment = deployment,
+            CustomEndpoint = customEndpoint,
+            CustomModel = customModel,
+        };
     }
 
     private void SetStatus(CleanupStatus status, string? detail)

@@ -91,6 +91,31 @@ public sealed class CleanupPromptTests
         Assert.DoesNotContain("/no_think", azure);
     }
 
+    // --- OpenAI-compatible BYO endpoint ---------------------------------------------------
+
+    private static CleanupOptions Custom(string? endpoint, string? model, string? key = null) =>
+        new(true, CleanupProvider.OpenAiCompatible, "qwen3-1.7b", null, null,
+            CustomEndpoint: endpoint, CustomModel: model, CustomApiKey: key);
+
+    [Fact]
+    public void Custom_provider_is_actionable_only_with_endpoint_and_model()
+    {
+        Assert.True(Custom("http://localhost:11434/v1", "qwen3:4b").IsActionable);
+        Assert.True(Custom("https://openrouter.ai/api/v1", "gpt-4o-mini", "sk-x").IsActionable);
+        Assert.False(Custom(null, "qwen3:4b").IsActionable);          // no endpoint
+        Assert.False(Custom("http://localhost:11434/v1", " ").IsActionable); // no model
+    }
+
+    [Fact]
+    public void Custom_qwen3_models_get_the_no_think_directive_and_others_do_not()
+    {
+        var qwen = TextCleanupService.BuildSystemPrompt(Custom("http://localhost:11434/v1", "qwen3:4b"));
+        var llama = TextCleanupService.BuildSystemPrompt(Custom("http://localhost:11434/v1", "llama3.1:8b"));
+
+        Assert.EndsWith("/no_think", qwen);
+        Assert.DoesNotContain("/no_think", llama);
+    }
+
     // --- Dictionary glossary (Feature C) -------------------------------------------------
 
     private static DictionaryEntry[] SampleGlossary() =>

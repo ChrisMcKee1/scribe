@@ -429,6 +429,30 @@
                                         </ui:CardExpander>
                                     </StackPanel>
 
+                                    <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
+                                    <StackPanel x:Name="CustomPanel" Visibility="Collapsed">
+                                        <TextBlock Text="Endpoint URL" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    VerticalContentAlignment="Center"
+                                                    PlaceholderText="http://localhost:11434/v1"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Any server that speaks the OpenAI chat protocol: Ollama (http://localhost:11434/v1), LM Studio (http://localhost:1234/v1), vLLM, OpenRouter (https://openrouter.ai/api/v1), or api.openai.com/v1. Usually ends in /v1."/>
+
+                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                    VerticalContentAlignment="Center"
+                                                    PlaceholderText="e.g. qwen3:4b, llama3.1:8b, gpt-4o-mini"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="The model name exactly as the server knows it (for Ollama, what 'ollama list' shows)."/>
+
+                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                        <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="Leave blank for local servers like Ollama or LM Studio"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Text only — your audio never leaves this device."/>
+                                    </StackPanel>
+
                                     <!-- Writing style: shared across providers; sent to the model on every cleanup -->
                                     <TextBlock Text="Writing style" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                     <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
