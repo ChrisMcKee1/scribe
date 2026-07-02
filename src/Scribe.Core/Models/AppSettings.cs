@@ -39,6 +39,12 @@ public sealed class AppSettings
     /// <summary>Trim leading/trailing silence and reject no-speech captures using VAD.</summary>
     public bool UseVoiceActivityDetection { get; set; } = true;
 
+    /// <summary>
+    /// In toggle mode, end the dictation automatically after a few seconds of silence instead of
+    /// waiting for the second key press. Off by default (noisy rooms can misfire the detector).
+    /// </summary>
+    public bool AutoStopOnSilence { get; set; }
+
     /// <summary>Apply the user dictionary and casing/spacing fixups to decoded text.</summary>
     public bool ApplyPostProcessing { get; set; } = true;
 
