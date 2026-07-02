@@ -9,6 +9,8 @@
 Hold a key, speak, release — your words appear in whatever app you're using.
 No cloud. No account. No audio ever leaves your PC.
 
+<img src="docs/screenshots/pill.png" alt="The Scribe recording pill listening, with a live level meter" width="420" />
+
 </div>
 
 ---
@@ -18,48 +20,82 @@ editor, browser, chat, terminal, notes, email. It's built as a private, faster, 
 alternative to Windows Voice Typing, and it runs the speech model **entirely on your own machine**.
 
 Speech is transcribed locally with **NVIDIA Parakeet TDT 0.6b v3** running on your CPU. The result
-is punctuated, capitalized text dropped straight at your cursor — usually within a second of letting
-go of the key.
+is punctuated, capitalized text dropped straight at your cursor — typically in about **a quarter of
+a second** after you let go of the key.
 
 ## ✨ Why you'll like it
 
 - **🔒 Truly private** — audio is captured, transcribed, and discarded on-device. Nothing is uploaded.
-- **⚡ Push-to-talk** — hold **Right Ctrl** (or any key you choose), talk, release. That's the whole gesture.
+- **⚡ Push-to-talk** — hold **Right Ctrl** (or any key you choose), talk, release. That's the whole
+  gesture. Prefer hands-free? Toggle mode can end the dictation by itself when you stop talking.
 - **🎯 Accurate out of the box** — a state-of-the-art model adds punctuation and capitalization for you.
-- **🌍 Works everywhere** — types into any app via Unicode keystrokes; no clipboard hijacking required.
-- **📖 Your vocabulary** — a built-in dictionary fixes brand names and jargon (`azure` → `Azure`, `dot net` → `.NET`).
-- **🧹 Optional AI polish** — clean up grammar and structure with an on-device model, or your own Azure deployment.
-- **🪶 Stays out of the way** — lives in the system tray with a tiny, optional recording overlay.
+- **🧠 It understands how people actually talk** — say *"send it Wednesday… I mean Thursday"* and,
+  with AI cleanup on, only Thursday survives. Repeat yourself and it writes the point once.
+- **🎭 Different apps, different voices** — per-app profiles give Outlook polished prose, Slack a
+  casual tone, and your terminal one terse line, automatically.
+- **⌨️ Terminal-smart** — line breaks become spaces in terminals so a long dictation arrives as one
+  message instead of firing Enter mid-thought.
+- **📖 Your vocabulary, your snippets** — a dictionary locks in your jargon (`azure` → `Azure`,
+  `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms**
+  from your own dictation history. Say a trigger phrase and a saved snippet types itself.
+- **🧹 AI polish, anywhere you want it** — clean up grammar and structure with an on-device model,
+  your Azure deployment, or **any OpenAI-compatible server you already run** (Ollama, LM Studio,
+  OpenRouter…).
+- **🪶 Stays out of the way** — a tray app with a small glass recording pill you can place on any
+  corner or edge of your screen.
 
 ## 📸 A quick look
 
 ### Speak with a single key
-Pick your microphone, choose a push-to-talk key, and toggle the behaviours you want. Hold to record,
-release to insert.
+Pick your microphone, choose a push-to-talk key (hold or toggle), and decide exactly where the
+recording pill appears — click a spot on the mini screen and **preview the real pill** before you
+save. Optional silence auto-stop ends a toggle dictation when you go quiet.
 
-![Scribe general settings — microphone, hotkey and behaviour toggles](docs/screenshots/settings-general.png)
+![Scribe general settings — microphone, hotkey, overlay position picker and behaviour toggles](docs/screenshots/settings-general.png)
+
+### Say a phrase, type a template
+Voice snippets expand a spoken trigger — like *"insert my standup update"* — into a saved,
+multi-line template. Text-expander speed, no keyboard required.
+
+![Scribe snippets — a trigger phrase expands to a saved template](docs/screenshots/snippets.png)
+
+### One voice, many registers
+Profiles adapt dictation to the app you're speaking into: the AI writing style and line-break
+behaviour switch automatically based on the focused window. First matching profile wins; everything
+else uses your global settings.
+
+![Scribe profiles — per-app writing style and line-break overrides](docs/screenshots/profiles.png)
 
 ### Polish your words with AI — on your PC
-Turn on **AI cleanup** to have a small language model fix punctuation, capitalization and sentence
-structure *before* the text is inserted. The default provider runs **fully offline** on your machine
-through [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/). If the model
-isn't ready, dictation just continues with the raw transcript.
+Turn on **AI cleanup** to have a language model fix punctuation, capitalization, sentence structure,
+spoken self-corrections and repeated points *before* the text is inserted. The default provider runs
+**fully offline** through [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).
+If the model isn't ready, dictation just continues with the raw transcript.
 
 ![Scribe AI cleanup with Foundry Local — on-device model](docs/screenshots/ai-foundry-local.png)
 
-### …or bring your own cloud model
-Prefer a model you've already deployed in **Microsoft Foundry**? Point Scribe at your endpoint and
-deployment. It signs in with your existing `az login` (no key stored), or you can paste an API key.
-Both classic Azure OpenAI resources and Foundry **project** endpoints are supported, with an optional
-Tenant ID for multi-tenant accounts.
+### …or bring your own model
+Point Scribe at a model you've already deployed in **Microsoft Foundry** (it signs in with your
+existing `az login`, or an API key), or at **any OpenAI-compatible endpoint** — Ollama or LM Studio
+on localhost, vLLM on your homelab, OpenRouter, or api.openai.com with your own key. Only the
+transcribed *text* is ever sent — never audio — and only to the endpoint **you** configure.
 
 ![Scribe AI cleanup with Microsoft Foundry — your own deployment](docs/screenshots/ai-azure.png)
 
 ### Teach it your words
-The dictionary replaces spoken words and phrases with the spelling you actually want. It ships with
-sensible defaults for tech terms — add your own in seconds.
+The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
+AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **import a CSV** your team
+shares, grab the self-documenting **template**, or let **Suggest from history** spot the acronyms
+and product names you keep saying and add them for you.
 
 ![Scribe dictionary editor — spoken-to-replacement rules](docs/screenshots/dictionary.png)
+
+### Know exactly how fast it is
+The Diagnostics tab computes latency percentiles from your own dictation history — nothing is
+collected, it's your data on your disk. On a typical desktop CPU, Parakeet decodes at a real-time
+factor around **0.03×** — that's ~30× faster than the audio itself.
+
+![Scribe diagnostics — decode latency P50/P95 and real-time factor from local history](docs/screenshots/diagnostics.png)
 
 ## 🚀 Getting started
 
@@ -80,21 +116,24 @@ Right-click the tray icon for settings, history, and to pause or quit.
 
 ## 🎛️ How it works
 
-1. **Hold** your push-to-talk key — a small overlay shows it's listening.
+1. **Hold** your push-to-talk key — the glass pill shows it's listening, with a live level meter.
 2. **Speak** naturally. Voice-activity detection trims the silence around your words.
-3. **Release** — Scribe transcribes on your CPU, applies your dictionary, optionally polishes with AI,
-   and types the result into the focused app.
+3. **Release** — Scribe transcribes on your CPU, optionally polishes with AI (using the profile for
+   the app you're in), applies your dictionary and snippets, and types the result into the focused
+   app.
 
-Everything is configurable from the tray: microphone, hotkey (hold or toggle), the recording overlay,
-voice-activity detection, post-processing, start-with-Windows, and how text is inserted.
+Everything is configurable from the tray: microphone, hotkey (hold or toggle), silence auto-stop,
+the pill and where it appears, voice-activity detection, line-break handling, per-app profiles,
+snippets, post-processing, start-with-Windows, and how text is inserted.
 
 ## 🔐 Your privacy, precisely
 
 - **Audio never leaves your machine — ever.** It is captured, transcribed in memory, and dropped.
 - **Transcription is 100% local** (Parakeet via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on CPU).
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
-  offline. If you choose the Azure provider, only the *transcribed text* (never audio) is sent to the
-  Azure resource **you** configure, under **your** sign-in.
+  offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is
+  sent to the server **you** configure, under **your** credentials.
+- **Even the stats are local.** The performance panel is computed from history already on your disk.
 
 ## 🛠️ For contributors
 
@@ -122,24 +161,28 @@ dotnet run --project src/Scribe.App
 ```
 Scribe.slnx
   src/Scribe.Core            services + domain: audio capture, transcription, VAD, post-processing,
-                             text injection, hotkeys, persistence, settings, AI cleanup
-  src/Scribe.App             WPF tray app: bootstrap + DI, settings window, recording overlay
-  tests/Scribe.Core.Tests    unit tests (post-processor, dictionary, settings, cleanup prompt, engine)
+                             snippets, profiles, text injection, hotkeys, persistence, AI cleanup
+  src/Scribe.App             WPF tray app: bootstrap + DI, settings window, dictation loop
+  src/Scribe.Overlay         the recording pill: a standalone WinUI 3 process driven over a named
+                             pipe (DWM-composited transparency — see AGENTS.md for the why)
+  tests/Scribe.Core.Tests    unit tests (post-processor, snippets, profiles, stats, cleanup prompt…)
   tools/Scribe.Evals         offline style/format eval harness for AI cleanup (model comparison)
   scripts/Download-Models.ps1  fetches the ASR + VAD models into src/Scribe.App/models (gitignored)
-  build/pack.ps1             builds the signed Velopack installer + GitHub-release updates
+  build/pack.ps1             builds the Velopack installer + GitHub-release updates
   Directory.Build.props        shared versioning + package metadata (semver lives here)
   Directory.Packages.props     central NuGet version management
 ```
 
 The optional AI cleanup is built on the **Microsoft Agent Framework** (`AIAgent`), so the on-device
-(Foundry Local) and cloud (Microsoft Foundry) providers share one code path and are easy to extend.
+(Foundry Local), cloud (Microsoft Foundry) and bring-your-own (OpenAI-compatible) providers share
+one code path and are easy to extend.
 
 ### Evaluating cleanup quality
 
 `tools/Scribe.Evals` is an offline harness that drives the real cleanup service across a suite of
-writing-style prompts (pirate, Old English, French translation, bulleted to-do) applied to one shared
-transcript, then scores each output with a deterministic
+writing-style prompts — pirate, Old English, French translation, bulleted to-do, plus **semantic
+condensation scenarios** (spoken self-corrections, redundancy merging) that the shipped default
+style must handle — then scores each output with a deterministic
 [`Microsoft.Extensions.AI.Evaluation`](https://learn.microsoft.com/dotnet/ai/evaluation/) `IEvaluator`.
 It proves a prompt change actually changes the output and lets you compare models head-to-head — with
 no judge model and no network. The eval packages are referenced `PrivateAssets="all"`, so they never
