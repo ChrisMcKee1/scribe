@@ -356,6 +356,18 @@ internal sealed class DictationController : IDisposable
 
             var targetApp = ForegroundProcessName();
             activity?.SetTag(ScribeTelemetry.TagTargetApp, targetApp);
+
+            // Terminals treat an injected newline as Enter, so AI-cleanup paragraph breaks would
+            // submit several partial messages; flatten per the configured mode before injecting.
+            var flattened = InjectionTextFormatter.Apply(text, settings.NewlineHandling, targetApp);
+            if (!ReferenceEquals(flattened, text))
+            {
+                _log.LogInformation(
+                    "Flattened line breaks before injection ({Mode}, target {App}).",
+                    settings.NewlineHandling, targetApp ?? "unknown");
+                text = flattened;
+            }
+
             _injector.Inject(text, settings.InjectionMethod);
             _log.LogInformation("Text injected into {App}.", targetApp ?? "the focused app");
 

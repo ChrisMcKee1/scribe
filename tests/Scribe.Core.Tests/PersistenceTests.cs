@@ -80,6 +80,67 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void Dictionary_save_all_inserts_updates_and_deletes_in_one_pass()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        var kept = repo.Add(DictionaryEntry.New("azure", "Azure"));
+        var removed = repo.Add(DictionaryEntry.New("foundry", "Foundry"));
+
+        repo.SaveAll(
+        [
+            kept with { Replacement = "AZURE" },          // update
+            DictionaryEntry.New("rebac", "ReBAC"),        // insert
+            // 'removed' omitted -> delete
+        ]);
+
+        var all = repo.GetAll();
+        Assert.Equal(2, all.Count);
+        Assert.Equal("AZURE", all.Single(e => e.Id == kept.Id).Replacement);
+        Assert.DoesNotContain(all, e => e.Id == removed.Id);
+        Assert.Contains(all, e => e.Pattern == "rebac" && e.Id > 0);
+    }
+
+    [Fact]
+    public void Dictionary_save_all_rolls_back_completely_on_a_duplicate_pattern()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        var existing = repo.Add(DictionaryEntry.New("azure", "Azure"));
+
+        // The second new row violates ux_dictionary_pattern; nothing from the batch may stick.
+        Assert.ThrowsAny<Microsoft.Data.Sqlite.SqliteException>(() => repo.SaveAll(
+        [
+            existing,
+            DictionaryEntry.New("rebac", "ReBAC"),
+            DictionaryEntry.New("rebac", "REBAC"),
+        ]));
+
+        var all = repo.GetAll();
+        Assert.Single(all);
+        Assert.Equal(existing.Id, all[0].Id);
+    }
+
+    [Fact]
+    public void Dictionary_save_all_supports_swapping_a_deleted_rows_pattern_onto_a_new_row()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        var old = repo.Add(DictionaryEntry.New("kubernetes", "K8s"));
+
+        // Delete the old row and reuse its pattern on a fresh one in the same save.
+        repo.SaveAll([DictionaryEntry.New("kubernetes", "Kubernetes")]);
+
+        var all = repo.GetAll();
+        Assert.Single(all);
+        Assert.NotEqual(old.Id, all[0].Id);
+        Assert.Equal("Kubernetes", all[0].Replacement);
+    }
+
+    [Fact]
     public void Dictionary_seed_only_runs_once()
     {
         using var db = ScribeDatabase.CreateInMemory();

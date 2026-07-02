@@ -20,6 +20,9 @@ public sealed class AppSettings
     /// <summary>Show the always-on-top recording overlay while capturing.</summary>
     public bool ShowOverlay { get; set; } = true;
 
+    /// <summary>Where the recording overlay appears on screen.</summary>
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
+
     /// <summary>Register the app to start at user logon.</summary>
     public bool LaunchOnLogin { get; set; }
 
@@ -93,6 +96,13 @@ public sealed class AppSettings
     /// clipboard.
     /// </summary>
     public InjectionMethod InjectionMethod { get; set; } = InjectionMethod.UnicodeType;
+
+    /// <summary>
+    /// What happens to line breaks before injection. Defaults to flattening them to spaces only
+    /// when the focused app is a known terminal, where an injected newline acts as Enter and
+    /// would submit a partial message.
+    /// </summary>
+    public NewlineInjectionMode NewlineHandling { get; set; } = NewlineInjectionMode.SmartFlatten;
 
     /// <summary>Persist a copy of each capture's audio alongside its history entry.</summary>
     public bool StoreAudioHistory { get; set; }

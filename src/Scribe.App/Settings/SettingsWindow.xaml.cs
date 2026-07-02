@@ -1,12 +1,16 @@
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.Win32;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.App.Settings;
 
@@ -25,6 +29,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
+    private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
 
     private readonly AppSettings _settings;
@@ -34,7 +39,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
     private bool _azureAutoListed;
-    private IReadOnlyList<DictionaryEntry> _originalEntries = Array.Empty<DictionaryEntry>();
 
     private HotkeyBinding _pendingBinding;
     private readonly HashSet<Key> _heldModifiers = new();
@@ -49,6 +53,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
+        Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings)
     {
         _settingsRepository = settingsRepository;
@@ -57,6 +62,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
+        _previewOverlay = previewOverlay;
         _applySettings = applySettings;
 
         _settings = settingsRepository.Load();
@@ -109,6 +115,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             new InjectionChoice(InjectionMethod.UnicodeType, "Unicode typing (recommended)"),
             new InjectionChoice(InjectionMethod.ClipboardPaste, "Clipboard paste"),
         };
+
+        NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
+        NewlineCombo.ItemsSource = new[]
+        {
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+        };
     }
 
     private void LoadFromSettings()
@@ -120,6 +134,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
+            LoadOverlayPosition(_settings.OverlayPosition);
             VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
@@ -129,6 +144,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
             InjectionCombo.SelectedItem =
                 items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
+
+            var newlineItems = (NewlineChoice[])NewlineCombo.ItemsSource;
+            NewlineCombo.SelectedItem =
+                newlineItems.FirstOrDefault(i => i.Mode == _settings.NewlineHandling) ?? newlineItems[0];
 
             ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
             UpdateThreadsLabel();
@@ -210,8 +229,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void LoadDictionary()
     {
-        _originalEntries = _dictionary.GetAll();
-        foreach (var entry in _originalEntries)
+        foreach (var entry in _dictionary.GetAll())
         {
             _rows.Add(new DictionaryRow
             {
@@ -893,6 +911,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        // Commit any in-progress grid edit first so validation sees the latest input.
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        // Validate the dictionary before touching anything: a duplicate spoken form would violate
+        // the unique index, and the user deserves a pointer to the offending row rather than a
+        // database error after half the settings were applied.
+        var entries = BuildDictionaryEntries(out var duplicateRow);
+        if (duplicateRow is not null)
+        {
+            DictionaryGrid.SelectedItem = duplicateRow;
+            DictionaryGrid.ScrollIntoView(duplicateRow);
+            MessageBox.Show(
+                this,
+                $"\"{duplicateRow.Pattern.Trim()}\" appears more than once in your dictionary.\n\n" +
+                "Each spoken word or phrase can only have one replacement. Edit or remove the " +
+                "highlighted row, then save again.",
+                "Duplicate dictionary entry",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -901,6 +940,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.Hotkey = _pendingBinding with { Mode = SelectedMode };
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
+            _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
@@ -908,6 +948,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.UseHighAccuracyDecoding = BeamSearchCheck.IsChecked == true;
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
+            _settings.NewlineHandling =
+                ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
@@ -927,12 +969,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : writingStyle;
 
-            PersistDictionary();
+            _dictionary.SaveAll(entries);
             _settingsRepository.Save(_settings);
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
 
             Close();
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            // Constraint safety net for anything grid validation didn't anticipate — still phrased
+            // for a person, not a stack trace.
+            MessageBox.Show(
+                this,
+                "Two dictionary entries ended up with the same spoken word or phrase, so the " +
+                "dictionary was not changed.\n\nEach spoken form can only be listed once. Remove " +
+                "the duplicate and save again.",
+                "Duplicate dictionary entry",
+                MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
@@ -941,12 +995,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void PersistDictionary()
+    /// <summary>
+    /// Builds the desired dictionary state from the grid rows, skipping blank placeholder rows.
+    /// Reports the first row whose spoken form duplicates an earlier row (case-insensitive, to
+    /// match how the post-processor and AI glossary treat patterns) via <paramref name="duplicate"/>.
+    /// </summary>
+    private List<DictionaryEntry> BuildDictionaryEntries(out DictionaryRow? duplicate)
     {
-        // Commit any in-progress grid edit so the bound row reflects the latest input.
-        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+        duplicate = null;
+        var entries = new List<DictionaryEntry>();
+        var seenPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var keptIds = new HashSet<long>();
         foreach (var row in _rows)
         {
             if (string.IsNullOrWhiteSpace(row.Pattern))
@@ -955,26 +1014,233 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             var pattern = row.Pattern.Trim();
-            var replacement = (row.Replacement ?? string.Empty).Trim();
-
-            if (row.Id == 0)
+            if (!seenPatterns.Add(pattern) && duplicate is null)
             {
-                _dictionary.Add(new DictionaryEntry(0, pattern, replacement, row.WholeWord, row.Enabled));
+                duplicate = row;
+            }
+
+            var replacement = (row.Replacement ?? string.Empty).Trim();
+            entries.Add(new DictionaryEntry(row.Id, pattern, replacement, row.WholeWord, row.Enabled));
+        }
+
+        return entries;
+    }
+
+    // --- Overlay position picker -----------------------------------------------------------
+
+    private void LoadOverlayPosition(OverlayPosition position)
+    {
+        foreach (var child in OverlayPositionGrid.Children)
+        {
+            if (child is RadioButton zone)
+            {
+                zone.IsChecked = string.Equals((string)zone.Tag, position.ToString(), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    /// <summary>The position currently picked in the mini-monitor (pending until save).</summary>
+    private OverlayPosition SelectedOverlayPosition
+    {
+        get
+        {
+            foreach (var child in OverlayPositionGrid.Children)
+            {
+                if (child is RadioButton { IsChecked: true } zone &&
+                    Enum.TryParse<OverlayPosition>((string)zone.Tag, out var position))
+                {
+                    return position;
+                }
+            }
+
+            return OverlayPosition.BottomCenter;
+        }
+    }
+
+    private void OverlayPreviewButton_Click(object sender, RoutedEventArgs e) =>
+        _previewOverlay(SelectedOverlayPosition);
+
+    // --- Dictionary CSV import / export ---------------------------------------------------
+
+    // UTF-8 with BOM so Excel opens accented terms correctly instead of guessing the codepage.
+    private static readonly UTF8Encoding CsvEncoding = new(encoderShouldEmitUTF8Identifier: true);
+
+    private void DictionaryTemplateButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            FileName = "scribe-dictionary-template.csv",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, DictionaryCsv.Template, CsvEncoding);
+
+            // Open it straight away so the user can start filling it in.
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not save the template:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void DictionaryExportButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        var dialog = new SaveFileDialog
+        {
+            FileName = "scribe-dictionary.csv",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var entries = _rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+                .Select(r => new DictionaryEntry(
+                    r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim(), r.WholeWord, r.Enabled));
+            File.WriteAllText(dialog.FileName, DictionaryCsv.Export(entries), CsvEncoding);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not export the dictionary:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void DictionaryImportButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        var dialog = new OpenFileDialog
+        {
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        DictionaryCsvResult parsed;
+        try
+        {
+            parsed = DictionaryCsv.Parse(File.ReadAllText(dialog.FileName));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not read that file:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var (added, updated, unchanged) = MergeImportedEntries(parsed.Entries);
+        var summary = new StringBuilder();
+        summary.Append($"Imported {added} new {(added == 1 ? "entry" : "entries")}");
+        if (updated > 0)
+        {
+            summary.Append($", updated {updated}");
+        }
+
+        if (unchanged > 0)
+        {
+            summary.Append($", {unchanged} already up to date");
+        }
+
+        summary.Append('.');
+        if (added + updated > 0)
+        {
+            summary.Append(" The changes apply when you save.");
+        }
+
+        if (parsed.Errors.Count > 0)
+        {
+            summary.Append("\n\nSome rows couldn't be read:\n")
+                   .Append(string.Join('\n', parsed.Errors.Take(8)));
+            if (parsed.Errors.Count > 8)
+            {
+                summary.Append($"\n…and {parsed.Errors.Count - 8} more.");
+            }
+        }
+
+        MessageBox.Show(this, summary.ToString(), "Dictionary import",
+            MessageBoxButton.OK,
+            parsed.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+    }
+
+    /// <summary>
+    /// Merges imported entries into the grid (not the database — the save button owns persistence,
+    /// so an import can still be cancelled). Matching is by spoken form, case-insensitive, mirroring
+    /// the duplicate rule the save validation enforces.
+    /// </summary>
+    private (int Added, int Updated, int Unchanged) MergeImportedEntries(IReadOnlyList<DictionaryEntry> imported)
+    {
+        var indexByPattern = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            var pattern = _rows[i].Pattern?.Trim();
+            if (!string.IsNullOrEmpty(pattern))
+            {
+                indexByPattern.TryAdd(pattern, i);
+            }
+        }
+
+        int added = 0, updated = 0, unchanged = 0;
+        foreach (var entry in imported)
+        {
+            if (indexByPattern.TryGetValue(entry.Pattern, out var index))
+            {
+                var row = _rows[index];
+                if (string.Equals(row.Replacement?.Trim(), entry.Replacement, StringComparison.Ordinal) &&
+                    row.WholeWord == entry.WholeWord && row.Enabled == entry.Enabled)
+                {
+                    unchanged++;
+                    continue;
+                }
+
+                // Replace the row object (rather than mutate it) so the grid, which has no property
+                // change notifications on DictionaryRow, refreshes the visible values.
+                _rows[index] = new DictionaryRow
+                {
+                    Id = row.Id,
+                    Pattern = row.Pattern ?? entry.Pattern,
+                    Replacement = entry.Replacement,
+                    WholeWord = entry.WholeWord,
+                    Enabled = entry.Enabled,
+                };
+                updated++;
             }
             else
             {
-                keptIds.Add(row.Id);
-                _dictionary.Update(new DictionaryEntry(row.Id, pattern, replacement, row.WholeWord, row.Enabled));
+                var row = new DictionaryRow
+                {
+                    Pattern = entry.Pattern,
+                    Replacement = entry.Replacement,
+                    WholeWord = entry.WholeWord,
+                    Enabled = entry.Enabled,
+                };
+                _rows.Add(row);
+                indexByPattern[entry.Pattern] = _rows.Count - 1;
+                added++;
             }
         }
 
-        foreach (var entry in _originalEntries)
-        {
-            if (!keptIds.Contains(entry.Id))
-            {
-                _dictionary.Delete(entry.Id);
-            }
-        }
+        return (added, updated, unchanged);
     }
 
     private static string StripDefaultSuffix(string name)
@@ -993,6 +1259,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private sealed record DeviceChoice(string? Id, string Name);
 
     private sealed record InjectionChoice(InjectionMethod Method, string Label);
+
+    private sealed record NewlineChoice(NewlineInjectionMode Mode, string Label);
 
     private sealed record ProviderChoice(CleanupProvider Provider, string Label);
 

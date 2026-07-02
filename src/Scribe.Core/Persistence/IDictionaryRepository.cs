@@ -20,6 +20,13 @@ public interface IDictionaryRepository
     /// <summary>Deletes an entry by id.</summary>
     void Delete(long id);
 
+    /// <summary>
+    /// Replaces the stored dictionary with the supplied entries in a single transaction: entries
+    /// with Id 0 are inserted, entries with an id are updated, and stored rows missing from the
+    /// list are deleted. All-or-nothing, so a mid-save failure never leaves a half-applied edit.
+    /// </summary>
+    void SaveAll(IReadOnlyList<DictionaryEntry> entries);
+
     /// <summary>Inserts the supplied seed entries only when the table is empty; returns rows added.</summary>
     int SeedIfEmpty(IEnumerable<DictionaryEntry> entries);
 }
