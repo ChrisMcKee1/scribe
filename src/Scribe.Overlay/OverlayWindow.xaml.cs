@@ -33,6 +33,7 @@ public sealed partial class OverlayWindow : Window
     private readonly AppWindow _appWindow;
 
     private OverlayState _state = OverlayState.Hidden;
+    private OverlayAnchor _anchor = OverlayAnchor.BottomCenter;
     private bool _activatedOnce;
 
     private DispatcherQueueTimer? _failedTimer;
@@ -141,14 +142,49 @@ public sealed partial class OverlayWindow : Window
 
         var display = DisplayArea.GetFromWindowId(_windowId, DisplayAreaFallback.Nearest);
         var work = display.WorkArea;
-        var x = work.X + (work.Width - w) / 2;
-        var y = work.Y + work.Height - h - (int)Math.Round(8 * scale);
+        var margin = (int)Math.Round(8 * scale);
+
+        var x = _anchor switch
+        {
+            OverlayAnchor.TopLeft or OverlayAnchor.MiddleLeft or OverlayAnchor.BottomLeft
+                => work.X + margin,
+            OverlayAnchor.TopRight or OverlayAnchor.MiddleRight or OverlayAnchor.BottomRight
+                => work.X + work.Width - w - margin,
+            _ => work.X + (work.Width - w) / 2,
+        };
+        var y = _anchor switch
+        {
+            OverlayAnchor.TopLeft or OverlayAnchor.TopCenter or OverlayAnchor.TopRight
+                => work.Y + margin,
+            OverlayAnchor.MiddleLeft or OverlayAnchor.Center or OverlayAnchor.MiddleRight
+                => work.Y + (work.Height - h) / 2,
+            _ => work.Y + work.Height - h - margin,
+        };
         _appWindow.Move(new PointInt32(x, y));
 
         OverlayLog.Write(
             $"OverlayWindow.SizeAndPosition scale={scale:0.##} size={w}x{h} pos={x},{y} " +
-            $"work=({work.X},{work.Y},{work.Width},{work.Height})");
+            $"anchor={_anchor} work=({work.X},{work.Y},{work.Width},{work.Height})");
     }
+
+    /// <summary>
+    /// Moves the pill's anchor (driven by the engine's POSITION command). Takes effect immediately
+    /// when the pill is on screen, otherwise on the next show via <see cref="EnsureShown"/>.
+    /// </summary>
+    public void SetAnchor(OverlayAnchor anchor) => RunOnUi(() =>
+    {
+        if (_anchor == anchor)
+        {
+            return;
+        }
+
+        _anchor = anchor;
+        OverlayLog.Write($"OverlayWindow.SetAnchor {anchor}");
+        if (_appWindow.IsVisible)
+        {
+            SizeAndPosition();
+        }
+    });
 
     /// <summary>Switches the visible content panel and shows/hides the window. UI-thread marshalled.</summary>
     public void ShowState(OverlayState state)

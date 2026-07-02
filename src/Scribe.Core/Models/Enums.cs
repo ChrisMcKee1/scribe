@@ -22,6 +22,24 @@ public enum KeyModifiers
 }
 
 /// <summary>
+/// Where the recording pill sits within the active monitor's work area. Names are also the wire
+/// tokens of the overlay's <c>POSITION</c> IPC command, so keep them in sync with the overlay
+/// process's <c>OverlayAnchor</c>.
+/// </summary>
+public enum OverlayPosition
+{
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    Center,
+    MiddleRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+/// <summary>
 /// What happens to line breaks in dictated text before it is injected. Terminals treat a typed or
 /// pasted newline as Enter, so a multi-paragraph dictation can submit a half-finished command or
 /// chat message; flattening replaces line breaks with spaces to keep the input as one line.

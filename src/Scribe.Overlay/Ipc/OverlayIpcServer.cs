@@ -104,6 +104,16 @@ internal sealed class OverlayIpcServer : IDisposable
                     _window.SetMeter(v / 1000.0);
                 }
                 break;
+            case "POSITION":
+                if (Enum.TryParse<OverlayAnchor>(arg.Trim(), ignoreCase: true, out var anchor))
+                {
+                    _window.SetAnchor(anchor);
+                }
+                else
+                {
+                    OverlayLog.Warn($"OverlayIpcServer POSITION with unknown anchor '{arg}'");
+                }
+                break;
             case "WARMUP":
                 break; // the window is already constructed and warm
             case "EXIT":

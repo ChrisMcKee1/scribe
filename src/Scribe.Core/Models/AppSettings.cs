@@ -20,6 +20,9 @@ public sealed class AppSettings
     /// <summary>Show the always-on-top recording overlay while capturing.</summary>
     public bool ShowOverlay { get; set; } = true;
 
+    /// <summary>Where the recording overlay appears on screen.</summary>
+    public OverlayPosition OverlayPosition { get; set; } = OverlayPosition.BottomCenter;
+
     /// <summary>Register the app to start at user logon.</summary>
     public bool LaunchOnLogin { get; set; }
 

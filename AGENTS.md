@@ -139,7 +139,13 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 (`SystemBackdropElement`/`TransparentBackdrop`) and sidesteps the legacy layered path.
 
 - The WPF engine drives the overlay one‑way over a **named pipe** via
-  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, meter levels, hide/exit).
+  `src/Scribe.App/Overlay/OverlayProcessClient.cs` (state changes, meter levels, position,
+  hide/exit).
+- The pill's screen anchor is set with the `POSITION <name>` pipe command. The wire tokens are the
+  value names of **two enums kept in sync by name**: `Scribe.Core.Models.OverlayPosition` (engine)
+  and `Scribe.Overlay.OverlayAnchor` (overlay — it deliberately has no Scribe.Core reference).
+  Add/rename values in BOTH or the overlay silently ignores the command. The client replays the
+  applied position right after every pipe (re)connect, so relaunches keep the user's anchor.
 - `Scribe.Overlay.exe` is resolved in this order: `SCRIBE_OVERLAY_EXE` env →
   **installer layout** `AppContext.BaseDirectory\Overlay\Scribe.Overlay.exe` → dev fallback
   walking the repo to `src\Scribe.Overlay\bin\...\Scribe.Overlay.exe`.

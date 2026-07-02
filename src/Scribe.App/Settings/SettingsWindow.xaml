@@ -30,6 +30,42 @@
             <Setter Property="Margin" Value="0,0,0,8"/>
             <Setter Property="Padding" Value="16,12"/>
         </Style>
+
+        <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
+             ghost pill on hover and an accent-coloured pill when selected. -->
+        <Style TargetType="RadioButton" x:Key="OverlayZone">
+            <Setter Property="Margin" Value="3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Cell" CornerRadius="6" Background="Transparent">
+                            <Border x:Name="Pill" Width="44" Height="15" CornerRadius="8"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                    Opacity="0">
+                                <Ellipse Width="5" Height="5" Fill="#E5484D"
+                                         HorizontalAlignment="Left" VerticalAlignment="Center"
+                                         Margin="7,0,0,0"/>
+                            </Border>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Cell" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                                <Setter TargetName="Pill" Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Pill" Property="Opacity" Value="1"/>
+                                <Setter TargetName="Pill" Property="Background"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </ui:FluentWindow.Resources>
 
     <Grid>
@@ -105,6 +141,65 @@
                                     </StackPanel>
                                     <ui:ToggleSwitch x:Name="OverlayCheck" Grid.Column="1" VerticalAlignment="Center"/>
                                 </Grid>
+                            </ui:Card>
+                            <ui:Card Style="{StaticResource SettingCard}">
+                                <StackPanel>
+                                    <TextBlock Text="Overlay position" Style="{StaticResource SettingTitle}"/>
+                                    <TextBlock Style="{StaticResource SettingHint}"
+                                               Text="Click where the pill should appear while you dictate, then try it on your real screen."/>
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Mini monitor: a 16:9 screen mock-up with nine clickable
+                                             anchor zones and a taskbar strip for orientation. -->
+                                        <Border Grid.Column="0" Width="264" Height="150" CornerRadius="8"
+                                                BorderThickness="2"
+                                                BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="*"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                <UniformGrid x:Name="OverlayPositionGrid" Grid.Row="0"
+                                                             Rows="3" Columns="3" Margin="4">
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopLeft"
+                                                                 ToolTip="Top left"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopCenter"
+                                                                 ToolTip="Top centre"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopRight"
+                                                                 ToolTip="Top right"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleLeft"
+                                                                 ToolTip="Middle left"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="Center"
+                                                                 ToolTip="Centre"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleRight"
+                                                                 ToolTip="Middle right"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomLeft"
+                                                                 ToolTip="Bottom left"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomCenter"
+                                                                 ToolTip="Bottom centre (default)"/>
+                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomRight"
+                                                                 ToolTip="Bottom right"/>
+                                                </UniformGrid>
+                                                <Border Grid.Row="1" Height="8" Margin="2,0,2,2" CornerRadius="0,0,5,5"
+                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                        IsHitTestVisible="False"/>
+                                            </Grid>
+                                        </Border>
+
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
+                                            <ui:Button x:Name="OverlayPreviewButton" Content="Preview on screen"
+                                                       Icon="{ui:SymbolIcon Eye24}"
+                                                       Click="OverlayPreviewButton_Click"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0"
+                                                       Text="Shows the real pill at the selected spot for a moment."/>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
                             </ui:Card>
                             <ui:Card Style="{StaticResource SettingCard}">
                                 <Grid>

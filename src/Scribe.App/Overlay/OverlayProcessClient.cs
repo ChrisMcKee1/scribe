@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
+using Scribe.Core.Models;
 
 namespace Scribe.App.Overlay;
 
@@ -48,6 +49,14 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private long _lastMeterMs;
     private bool _closed;
 
+    // The applied (saved) anchor. Volatile: written from the UI thread, read by the consumer thread
+    // when a relaunch replays it to the fresh process. Previews change what is on screen but never
+    // this field, so a cancelled settings dialog costs nothing.
+    private volatile OverlayPosition _position = OverlayPosition.BottomCenter;
+
+    // Monotonic preview id so a second preview click cancels the first one's scheduled hide/restore.
+    private int _previewGeneration;
+
     public OverlayProcessClient(IAudioCaptureService audio, ILogger<OverlayProcessClient>? log = null)
     {
         _audio = audio ?? throw new ArgumentNullException(nameof(audio));
@@ -82,6 +91,52 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         Unsubscribe();
         Enqueue("HIDE", ensureAlive: false);
+    }
+
+    public void SetPosition(OverlayPosition position)
+    {
+        _position = position;
+        // Don't launch the helper just to move it — a relaunch replays the anchor from _position.
+        Enqueue("POSITION " + position, ensureAlive: false);
+    }
+
+    public void Preview(OverlayPosition position)
+    {
+        var generation = Interlocked.Increment(ref _previewGeneration);
+
+        Enqueue("POSITION " + position, ensureAlive: true);
+        Enqueue("RECORDING", ensureAlive: true);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Synthetic level sweep so the preview pill reads as "recording" rather than dead.
+                const int steps = 24;
+                for (var i = 0; i < steps; i++)
+                {
+                    await Task.Delay(70).ConfigureAwait(false);
+                    if (Volatile.Read(ref _previewGeneration) != generation)
+                    {
+                        return; // a newer preview took over; it owns the hide/restore
+                    }
+
+                    var level = (Math.Sin(i / 2.5) + 1) / 2 * 0.8 + 0.1;
+                    Enqueue("METER " + ((int)(level * 1000)).ToString(CultureInfo.InvariantCulture),
+                        ensureAlive: false);
+                }
+
+                if (Volatile.Read(ref _previewGeneration) == generation)
+                {
+                    Enqueue("HIDE", ensureAlive: false);
+                    Enqueue("POSITION " + _position, ensureAlive: false);
+                }
+            }
+            catch
+            {
+                // Preview is cosmetic; never let it surface an error.
+            }
+        });
     }
 
     public void CloseOverlay()
@@ -220,6 +275,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             _pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
             _pipe.Connect(ConnectTimeoutMs);
             _writer = new StreamWriter(_pipe, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+
+            // A fresh process starts at the built-in default anchor; replay the applied position so
+            // relaunches (crash recovery, lazy launch) come up where the user chose.
+            _writer.WriteLine("POSITION " + _position);
         }
         catch (Exception ex)
         {

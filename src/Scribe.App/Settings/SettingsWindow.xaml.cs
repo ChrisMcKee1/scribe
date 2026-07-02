@@ -29,6 +29,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
+    private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
 
     private readonly AppSettings _settings;
@@ -52,6 +53,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
+        Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings)
     {
         _settingsRepository = settingsRepository;
@@ -60,6 +62,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
+        _previewOverlay = previewOverlay;
         _applySettings = applySettings;
 
         _settings = settingsRepository.Load();
@@ -131,6 +134,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
+            LoadOverlayPosition(_settings.OverlayPosition);
             VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
@@ -936,6 +940,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.Hotkey = _pendingBinding with { Mode = SelectedMode };
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
+            _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
@@ -1020,6 +1025,40 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         return entries;
     }
+
+    // --- Overlay position picker -----------------------------------------------------------
+
+    private void LoadOverlayPosition(OverlayPosition position)
+    {
+        foreach (var child in OverlayPositionGrid.Children)
+        {
+            if (child is RadioButton zone)
+            {
+                zone.IsChecked = string.Equals((string)zone.Tag, position.ToString(), StringComparison.Ordinal);
+            }
+        }
+    }
+
+    /// <summary>The position currently picked in the mini-monitor (pending until save).</summary>
+    private OverlayPosition SelectedOverlayPosition
+    {
+        get
+        {
+            foreach (var child in OverlayPositionGrid.Children)
+            {
+                if (child is RadioButton { IsChecked: true } zone &&
+                    Enum.TryParse<OverlayPosition>((string)zone.Tag, out var position))
+                {
+                    return position;
+                }
+            }
+
+            return OverlayPosition.BottomCenter;
+        }
+    }
+
+    private void OverlayPreviewButton_Click(object sender, RoutedEventArgs e) =>
+        _previewOverlay(SelectedOverlayPosition);
 
     // --- Dictionary CSV import / export ---------------------------------------------------
 

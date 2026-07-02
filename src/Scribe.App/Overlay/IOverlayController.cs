@@ -1,4 +1,6 @@
-﻿namespace Scribe.App.Overlay;
+﻿using Scribe.Core.Models;
+
+namespace Scribe.App.Overlay;
 
 /// <summary>
 /// Abstraction over the recording pill so the WPF host can drive it without caring whether it is the
@@ -23,6 +25,16 @@ public interface IOverlayController
 
     /// <summary>Hides the pill (suppressed while a failure flash is still holding).</summary>
     void HideOverlay();
+
+    /// <summary>Anchors the pill at the given screen position, now and across overlay relaunches.</summary>
+    void SetPosition(OverlayPosition position);
+
+    /// <summary>
+    /// Briefly shows the pill at a candidate position — with a synthetic level-meter sweep so it
+    /// looks alive — then hides it and restores the applied position. Lets the settings window
+    /// demonstrate a position before the user saves it.
+    /// </summary>
+    void Preview(OverlayPosition position);
 
     /// <summary>Permanently tears the overlay down during application shutdown.</summary>
     void CloseOverlay();

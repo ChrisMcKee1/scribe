@@ -100,6 +100,7 @@ public partial class App : Application
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<ILogger<OverlayProcessClient>>());
+        _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first use.
         // The pill renders via DWM composition in a separate kept-warm process, sidestepping the WPF
         // layered-window path that produced the recurring black box. Only spawn the helper when the
@@ -228,7 +229,12 @@ public partial class App : Application
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
             services.GetRequiredService<ICleanupFailureLog>(),
-            settings => _controller!.ApplySettings(settings));
+            position => _overlay?.Preview(position),
+            settings =>
+            {
+                _controller!.ApplySettings(settings);
+                _overlay?.SetPosition(settings.OverlayPosition);
+            });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
