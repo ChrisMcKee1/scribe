@@ -169,6 +169,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             new ProviderChoice(CleanupProvider.FoundryLocal, "On-device — Foundry Local"),
             new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry — your Azure sign-in"),
+            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Custom endpoint — Ollama, LM Studio, OpenRouter…"),
         };
 
         // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
@@ -197,6 +198,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
+
+        CustomEndpointBox.Text = _settings.AiCleanupCustomEndpoint ?? string.Empty;
+        CustomModelBox.Text = _settings.AiCleanupCustomModel ?? string.Empty;
+        CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
 
         // Open Advanced automatically when manual auth is configured, so an override isn't hidden away.
         AzureAdvancedExpander.IsExpanded =
@@ -831,14 +836,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateAiProviderPanels()
     {
-        if (FoundryPanel is null || AzurePanel is null)
+        if (FoundryPanel is null || AzurePanel is null || CustomPanel is null)
         {
             return;
         }
 
-        var azure = SelectedProvider == CleanupProvider.AzureFoundry;
-        FoundryPanel.Visibility = azure ? Visibility.Collapsed : Visibility.Visible;
-        AzurePanel.Visibility = azure ? Visibility.Visible : Visibility.Collapsed;
+        var provider = SelectedProvider;
+        FoundryPanel.Visibility = provider == CleanupProvider.FoundryLocal ? Visibility.Visible : Visibility.Collapsed;
+        AzurePanel.Visibility = provider == CleanupProvider.AzureFoundry ? Visibility.Visible : Visibility.Collapsed;
+        CustomPanel.Visibility = provider == CleanupProvider.OpenAiCompatible ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void UpdateAiEnabledState()
@@ -847,6 +853,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCombo.IsEnabled = on;
         FoundryPanel.IsEnabled = on;
         AzurePanel.IsEnabled = on;
+        CustomPanel.IsEnabled = on;
         AiWritingStyleBox.IsEnabled = on;
         ResetWritingStyleButton.IsEnabled = on;
     }
@@ -960,6 +967,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
             _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
+            _settings.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
+            _settings.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
+            _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
 
             // Persist the writing style only when it differs from the default; storing blank for the
             // default keeps users tracking future improvements to the built-in guidance.

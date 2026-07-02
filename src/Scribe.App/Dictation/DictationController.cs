@@ -150,7 +150,10 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureApiKey,
         settings.AiCleanupAzureTenantId,
         settings.AiCleanupWritingStyle,
-        BuildGlossary());
+        BuildGlossary(),
+        settings.AiCleanupCustomEndpoint,
+        settings.AiCleanupCustomModel,
+        settings.AiCleanupCustomApiKey);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —
