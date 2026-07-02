@@ -170,6 +170,11 @@
                                     <TextBlock Style="{StaticResource SettingHint}"
                                                Text="Unicode typing works in the widest range of apps and never touches your clipboard. Clipboard paste can be faster, but some apps block it."/>
                                     <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+
+                                    <TextBlock Text="Line breaks" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                    <TextBlock Style="{StaticResource SettingHint}"
+                                               Text="Terminals treat a line break as Enter, so a long dictation with paragraphs can send several partial messages. Smart replaces line breaks with spaces only in terminals."/>
+                                    <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
                                 </StackPanel>
                             </ui:Card>
 

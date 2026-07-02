@@ -108,6 +108,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             new InjectionChoice(InjectionMethod.UnicodeType, "Unicode typing (recommended)"),
             new InjectionChoice(InjectionMethod.ClipboardPaste, "Clipboard paste"),
         };
+
+        NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
+        NewlineCombo.ItemsSource = new[]
+        {
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+        };
     }
 
     private void LoadFromSettings()
@@ -128,6 +136,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
             InjectionCombo.SelectedItem =
                 items.FirstOrDefault(i => i.Method == _settings.InjectionMethod) ?? items[0];
+
+            var newlineItems = (NewlineChoice[])NewlineCombo.ItemsSource;
+            NewlineCombo.SelectedItem =
+                newlineItems.FirstOrDefault(i => i.Mode == _settings.NewlineHandling) ?? newlineItems[0];
 
             ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
             UpdateThreadsLabel();
@@ -927,6 +939,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.UseHighAccuracyDecoding = BeamSearchCheck.IsChecked == true;
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
+            _settings.NewlineHandling =
+                ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
@@ -1019,6 +1033,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private sealed record DeviceChoice(string? Id, string Name);
 
     private sealed record InjectionChoice(InjectionMethod Method, string Label);
+
+    private sealed record NewlineChoice(NewlineInjectionMode Mode, string Label);
 
     private sealed record ProviderChoice(CleanupProvider Provider, string Label);
 

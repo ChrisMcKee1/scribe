@@ -94,6 +94,13 @@ public sealed class AppSettings
     /// </summary>
     public InjectionMethod InjectionMethod { get; set; } = InjectionMethod.UnicodeType;
 
+    /// <summary>
+    /// What happens to line breaks before injection. Defaults to flattening them to spaces only
+    /// when the focused app is a known terminal, where an injected newline acts as Enter and
+    /// would submit a partial message.
+    /// </summary>
+    public NewlineInjectionMode NewlineHandling { get; set; } = NewlineInjectionMode.SmartFlatten;
+
     /// <summary>Persist a copy of each capture's audio alongside its history entry.</summary>
     public bool StoreAudioHistory { get; set; }
 
