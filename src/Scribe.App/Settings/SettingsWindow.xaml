@@ -222,6 +222,20 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                        <TextBlock Text="End dictation on silence (toggle mode)" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early — leave it off if that happens."/>
+                                    </StackPanel>
+                                    <ui:ToggleSwitch x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                            <ui:Card Style="{StaticResource SettingCard}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                         <TextBlock Text="Post-processing" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
                                                    Text="Apply the dictionary and spacing fix-ups to transcribed text."/>
@@ -542,6 +556,9 @@
                                        VerticalAlignment="Center"
                                        Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
+                                           MinWidth="120" Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
+                                           ToolTip="Scan your recent dictations for recurring technical terms and acronyms worth locking in."/>
                                 <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
                                            MinWidth="110" Margin="0,0,8,0" Click="DictionaryTemplateButton_Click"
                                            ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
@@ -633,12 +650,46 @@
                     <Grid Margin="2,12,2,2">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
+
+                        <!-- Local latency stats from stored history — decode only; nothing new is
+                             collected and nothing leaves the machine. -->
+                        <ui:Card Grid.Row="0" Padding="16,12" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="Performance — last 7 days" Style="{StaticResource SettingTitle}"/>
+                                <TextBlock x:Name="StatsSummaryText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                           Text="No dictations recorded in the last week."/>
+                                <UniformGrid x:Name="StatsGrid" Columns="4" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatDecodeP50" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="decode, typical (P50)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatDecodeP95" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="decode, slow runs (P95)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatRtfP50" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="speed, typical (RTF P50)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatRtfP95" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="speed, slow runs (RTF P95)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </ui:Card>
+
+                        <TextBlock Grid.Row="1" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
                                    Text="When AI cleanup fails at runtime, Scribe falls back to the raw transcription and records why here. Entries older than a week are removed automatically."/>
-                        <ui:Card Grid.Row="1" Padding="0">
+                        <ui:Card Grid.Row="2" Padding="0">
                             <Grid>
                                 <DataGrid x:Name="FailuresGrid"
                                           AutoGenerateColumns="False" IsReadOnly="True"
@@ -657,7 +708,7 @@
                                            Visibility="Collapsed"/>
                             </Grid>
                         </ui:Card>
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                             <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
                                        MinWidth="120" Click="ClearFailuresButton_Click"/>
                         </StackPanel>

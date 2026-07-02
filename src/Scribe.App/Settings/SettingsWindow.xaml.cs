@@ -27,6 +27,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
     private readonly ISnippetRepository _snippets;
+    private readonly IHistoryRepository _history;
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
@@ -54,6 +55,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IAudioCaptureService audio,
         IDictionaryRepository dictionary,
         ISnippetRepository snippets,
+        IHistoryRepository history,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
@@ -64,6 +66,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _audio = audio;
         _dictionary = dictionary;
         _snippets = snippets;
+        _history = history;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
@@ -83,6 +86,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LoadDictionary();
         LoadSnippets();
         LoadFailures();
+        LoadPerformanceStats();
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
@@ -142,6 +146,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
             VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
+            AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
@@ -253,6 +258,37 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
+    }
+
+    private void LoadPerformanceStats()
+    {
+        try
+        {
+            var entries = _history.GetRecent(1000);
+            var stats = Scribe.Core.Diagnostics.DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
+            if (stats is null)
+            {
+                return; // keep the friendly empty-state text
+            }
+
+            StatsSummaryText.Text =
+                $"{stats.Count} dictation{(stats.Count == 1 ? string.Empty : "s")}, " +
+                $"{stats.TotalAudio.TotalMinutes:0.#} min of speech. Decode only — lower is faster; " +
+                "RTF is decode time relative to audio length.";
+            StatDecodeP50.Text = FormatSeconds(stats.DecodeP50Ms);
+            StatDecodeP95.Text = FormatSeconds(stats.DecodeP95Ms);
+            StatRtfP50.Text = $"{stats.RtfP50:0.00}×";
+            StatRtfP95.Text = $"{stats.RtfP95:0.00}×";
+            StatsGrid.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            // Stats are a nicety; never block the settings window over them.
+            System.Diagnostics.Debug.WriteLine($"Performance stats unavailable: {ex.Message}");
+        }
+
+        static string FormatSeconds(double ms) =>
+            ms < 1000 ? $"{ms:0} ms" : $"{ms / 1000.0:0.0} s";
     }
 
     private void LoadFailures()
@@ -970,6 +1006,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
             _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
+            _settings.AutoStopOnSilence = AutoStopCheck.IsChecked == true;
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
@@ -1205,6 +1242,71 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OverlayPreviewButton_Click(object sender, RoutedEventArgs e) =>
         _previewOverlay(SelectedOverlayPosition);
+
+    // --- Dictionary suggestions from history -----------------------------------------------
+
+    private void DictionarySuggestButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        IReadOnlyList<DictionarySuggestionMiner.Suggestion> suggestions;
+        try
+        {
+            // The grid is the live source of truth for "already covered", so terms added but not
+            // yet saved are excluded too.
+            var current = _rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+                .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
+                .ToList();
+            suggestions = DictionarySuggestionMiner.Mine(_history.GetRecent(1000), current);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not scan your history:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (suggestions.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "No recurring technical terms found in your recent dictations yet.\n\n" +
+                "Suggestions appear once a term shows up in three or more dictations, so keep " +
+                "dictating and try again later.",
+                "Nothing to suggest",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        DictionaryRow? first = null;
+        foreach (var suggestion in suggestions)
+        {
+            // Lock the spelling: the lowercase spoken form maps to the surface form seen most
+            // often. Same-cased terms (e.g. "net10") still land in the AI vocabulary.
+            var row = new DictionaryRow
+            {
+                Pattern = suggestion.Term.ToLowerInvariant(),
+                Replacement = suggestion.Term,
+            };
+            _rows.Add(row);
+            first ??= row;
+        }
+
+        if (first is not null)
+        {
+            DictionaryGrid.SelectedItem = first;
+            DictionaryGrid.ScrollIntoView(first);
+        }
+
+        MessageBox.Show(
+            this,
+            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+            "from your recent dictations.\n\nReview them in the grid — delete any you don't want — " +
+            "then save.",
+            "Suggestions added",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
 
     // --- Dictionary CSV import / export ---------------------------------------------------
 
