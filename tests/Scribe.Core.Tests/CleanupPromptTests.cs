@@ -49,6 +49,21 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void Default_style_teaches_self_correction_and_redundancy_merging()
+    {
+        // The default is what almost every user runs with; it must authorize the model to digest
+        // spoken self-corrections ("I mean the park") and merge repeated statements — not just fix
+        // punctuation. "I mean" is deliberately NOT in the filler list: it is the correction cue,
+        // and deleting it as filler would contradict the correction rule.
+        var style = CleanupPrompt.DefaultWritingStyle;
+
+        Assert.Contains("correct myself", style);
+        Assert.Contains("keep only the corrected version", style);
+        Assert.Contains("merge it into a single clear statement", style);
+        Assert.DoesNotContain("\"I mean\"", style);
+    }
+
+    [Fact]
     public void System_prompt_keeps_the_post_editor_safety_guardrails()
     {
         var prompt = TextCleanupService.BuildSystemPrompt(Foundry());

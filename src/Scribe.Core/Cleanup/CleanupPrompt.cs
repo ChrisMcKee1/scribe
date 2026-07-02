@@ -28,9 +28,12 @@ public static class CleanupPrompt
         "periods, semicolons, colons, question marks, and parentheses — according to sentence " +
         "structure. Break long run-on speech into properly formed sentences, and start a new " +
         "paragraph when the topic shifts. Remove filler words and false starts (such as \"um\", " +
-        "\"uh\", \"you know\", \"like\", and \"I mean\") and fix small grammar slips, while keeping " +
-        "my meaning, intent, and vocabulary. Keep technical terms, product names, code, URLs, and " +
-        "numbers exactly as spoken.";
+        "\"uh\", \"you know\", and \"like\") and fix small grammar slips, while keeping my " +
+        "meaning, intent, and vocabulary. When I correct myself mid-speech (for example \"I " +
+        "meant to go to the store — I mean the park\"), keep only the corrected version and drop " +
+        "what it replaced. If I say the same thing more than once, or restate a point in " +
+        "slightly different words, merge it into a single clear statement instead of writing " +
+        "both. Keep technical terms, product names, code, URLs, and numbers exactly as spoken.";
 
     /// <summary>
     /// Returns the supplied writing style when it has content, otherwise the
