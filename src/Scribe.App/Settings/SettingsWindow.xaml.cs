@@ -353,8 +353,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not clear the failure log:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not clear the failure log:\n{ex.Message}");
         }
     }
 
@@ -1049,6 +1048,56 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Closed -= OnClosed;
     }
 
+    // --- Themed dialogs / inline notifications -------------------------------------------
+
+    /// <summary>
+    /// Shows a Fluent-themed message dialog that matches the rest of the window, replacing the
+    /// dated Win32 <see cref="System.Windows.MessageBox"/>. Fire-and-forget so existing synchronous
+    /// click handlers stay simple; the dialog itself is modal to this window.
+    /// </summary>
+    private void ShowThemedMessage(string title, string content)
+    {
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = title,
+            Content = content,
+            PrimaryButtonText = "OK",
+            IsSecondaryButtonEnabled = false,
+            IsCloseButtonEnabled = false,
+            Owner = this,
+        };
+        _ = dialog.ShowDialogAsync();
+    }
+
+    /// <summary>
+    /// Raises the shared inline notification at the top of the content area and auto-dismisses it
+    /// after a few seconds. Used for non-blocking success and summary messages instead of a modal.
+    /// </summary>
+    private void ShowInfo(string message, Wpf.Ui.Controls.InfoBarSeverity severity = Wpf.Ui.Controls.InfoBarSeverity.Success)
+    {
+        InfoNotice.Title = string.Empty;
+        InfoNotice.Message = message;
+        InfoNotice.Severity = severity;
+        InfoNotice.IsOpen = true;
+
+        _infoDismissTimer ??= new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(6),
+        };
+        _infoDismissTimer.Stop();
+        _infoDismissTimer.Tick -= DismissInfo;
+        _infoDismissTimer.Tick += DismissInfo;
+        _infoDismissTimer.Start();
+    }
+
+    private void DismissInfo(object? sender, EventArgs e)
+    {
+        _infoDismissTimer?.Stop();
+        InfoNotice.IsOpen = false;
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _infoDismissTimer;
+
     // --- Save / cancel -------------------------------------------------------------------
 
     private void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -1064,13 +1113,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             DictionaryGrid.SelectedItem = duplicateRow;
             DictionaryGrid.ScrollIntoView(duplicateRow);
-            MessageBox.Show(
-                this,
+            ShowThemedMessage(
+                "Duplicate dictionary entry",
                 $"\"{duplicateRow.Pattern.Trim()}\" appears more than once in your dictionary.\n\n" +
                 "Each spoken word or phrase can only have one replacement. Edit or remove the " +
-                "highlighted row, then save again.",
-                "Duplicate dictionary entry",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+                "highlighted row, then save again.");
             return;
         }
 
@@ -1079,13 +1126,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             SnippetList.SelectedItem = duplicateSnippet;
             SnippetList.ScrollIntoView(duplicateSnippet);
-            MessageBox.Show(
-                this,
+            ShowThemedMessage(
+                "Duplicate snippet trigger",
                 $"\"{duplicateSnippet.Phrase.Trim()}\" is used as the trigger for more than one snippet.\n\n" +
                 "Each trigger phrase can only expand to one template. Edit or remove the highlighted " +
-                "snippet, then save again.",
-                "Duplicate snippet trigger",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+                "snippet, then save again.");
             return;
         }
 
@@ -1143,18 +1188,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Constraint safety net for anything grid validation didn't anticipate — still phrased
             // for a person, not a stack trace.
-            MessageBox.Show(
-                this,
+            ShowThemedMessage(
+                "Duplicate dictionary entry",
                 "Two dictionary entries ended up with the same spoken word or phrase, so the " +
                 "dictionary was not changed.\n\nEach spoken form can only be listed once. Remove " +
-                "the duplicate and save again.",
-                "Duplicate dictionary entry",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+                "the duplicate and save again.");
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not save settings:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not save settings:\n{ex.Message}");
         }
     }
 
@@ -1438,20 +1480,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not scan your history:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
             return;
         }
 
         if (suggestions.Count == 0)
         {
-            MessageBox.Show(
-                this,
+            ShowThemedMessage(
+                "Nothing to suggest",
                 "No recurring technical terms found in your recent dictations yet.\n\n" +
                 "Suggestions appear once a term shows up in three or more dictations, so keep " +
-                "dictating and try again later.",
-                "Nothing to suggest",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+                "dictating and try again later.");
             return;
         }
 
@@ -1475,13 +1514,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             DictionaryGrid.ScrollIntoView(first);
         }
 
-        MessageBox.Show(
-            this,
+        ShowInfo(
             $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
             "from your recent dictations.\n\nReview them in the grid — delete any you don't want — " +
-            "then save.",
-            "Suggestions added",
-            MessageBoxButton.OK, MessageBoxImage.Information);
+            "then save.");
     }
 
     // --- Dictionary CSV import / export ---------------------------------------------------
@@ -1512,8 +1548,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not save the template:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not save the template:\n{ex.Message}");
         }
     }
 
@@ -1542,8 +1577,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not export the dictionary:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not export the dictionary:\n{ex.Message}");
         }
     }
 
@@ -1568,8 +1602,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, $"Could not read that file:\n{ex.Message}", "Scribe",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowThemedMessage("Scribe", $"Could not read that file:\n{ex.Message}");
             return;
         }
 
@@ -1602,9 +1635,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
         }
 
-        MessageBox.Show(this, summary.ToString(), "Dictionary import",
-            MessageBoxButton.OK,
-            parsed.Errors.Count > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        ShowInfo(
+            summary.ToString(),
+            parsed.Errors.Count > 0
+                ? Wpf.Ui.Controls.InfoBarSeverity.Warning
+                : Wpf.Ui.Controls.InfoBarSeverity.Success);
     }
 
     /// <summary>

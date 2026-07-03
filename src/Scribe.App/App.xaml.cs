@@ -47,8 +47,7 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         if (!isNew)
         {
-            MessageBox.Show("Scribe is already running. Look for the microphone icon in the system tray.",
-                "Scribe", MessageBoxButton.OK, MessageBoxImage.Information);
+            ShowSingleInstanceNotice();
             Shutdown();
             return;
         }
@@ -162,6 +161,29 @@ public partial class App : Application
         _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
         _updates.UpdateReady += message => _tray?.ShowInfo(message);
         _ = _updates.CheckAsync();
+    }
+
+    /// <summary>
+    /// Shows the Fluent-themed "already running" notice modally during startup. The dispatcher loop
+    /// has not begun pumping yet at this point, so a nested <see cref="DispatcherFrame"/> keeps the
+    /// dialog responsive until the user dismisses it, then unwinds so the second instance can exit.
+    /// </summary>
+    private void ShowSingleInstanceNotice()
+    {
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Scribe",
+            Content = "Scribe is already running. Look for the microphone icon in the system tray.",
+            PrimaryButtonText = "OK",
+            IsSecondaryButtonEnabled = false,
+            IsCloseButtonEnabled = false,
+        };
+
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        _ = dialog.ShowDialogAsync().ContinueWith(
+            _ => frame.Continue = false,
+            System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
     }
 
     /// <summary>

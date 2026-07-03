@@ -173,6 +173,12 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
+                <!-- Shared inline notification; any section can raise it via ShowInfo(...). Floats over
+                     the content at the top so it never shifts the section layout. -->
+                <ui:InfoBar x:Name="InfoNotice" Grid.Row="0" Panel.ZIndex="1"
+                            VerticalAlignment="Top" Margin="2,4,2,0"
+                            IsClosable="True" IsOpen="False"/>
+
                 <Grid Grid.Row="0">
 
                     <!-- ============================ General ============================ -->

@@ -78,21 +78,23 @@ public partial class HistoryWindow : Wpf.Ui.Controls.FluentWindow
         Load();
     }
 
-    private void ClearButton_Click(object sender, RoutedEventArgs e)
+    private async void ClearButton_Click(object sender, RoutedEventArgs e)
     {
         if (_rows.Count == 0)
         {
             return;
         }
 
-        var confirm = MessageBox.Show(
-            this,
-            "Delete all dictation history and any stored audio? This cannot be undone.",
-            "Clear history",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Warning);
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Clear history",
+            Content = "Delete all dictation history and any stored audio? This cannot be undone.",
+            PrimaryButtonText = "OK",
+            CloseButtonText = "Cancel",
+            Owner = this,
+        };
 
-        if (confirm == MessageBoxResult.OK)
+        if (await dialog.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {
             _history.Clear();
             Load();
