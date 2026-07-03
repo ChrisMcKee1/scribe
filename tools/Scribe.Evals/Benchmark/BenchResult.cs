@@ -3,6 +3,18 @@ namespace Scribe.Evals.Benchmark;
 /// <summary>Per-dimension judge scores (0–100). Null when the model produced no gradable output.</summary>
 internal sealed record BenchDimensions(int Mechanics, int Fidelity, int Disfluency, int Instruction);
 
+/// <summary>One case's outcome for a model (the aggregate lives on <see cref="BenchResult"/>).</summary>
+internal sealed record BenchCaseResult(
+    string CaseId,
+    double MedianMs,
+    double[] AllMs,
+    int? Quality,
+    BenchDimensions? Dims,
+    string[] Flags,
+    string? Rationale,
+    bool Changed,
+    string? Output);
+
 /// <summary>
 /// A single model's benchmark outcome. Serialized to <c>results.json</c> after every model so a long
 /// run is always resumable and the markdown board can be regenerated from disk at any time.
@@ -35,6 +47,9 @@ internal sealed record BenchResult
 
     public bool Changed { get; init; }                     // output differed from the raw transcript
     public string? Output { get; init; }                   // cleaned text (stored verbatim for review)
+
+    /// <summary>Per-case breakdown; the top-level numbers aggregate across these.</summary>
+    public BenchCaseResult[] Cases { get; init; } = [];
 
     public required string LoadedAtUtc { get; init; }
     public double LoadSeconds { get; init; }               // time from Configure to Ready (download+load)
