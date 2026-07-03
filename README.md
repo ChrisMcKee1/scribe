@@ -4,45 +4,53 @@
 
 # 🎙️ Scribe
 
-**Private, offline voice dictation for Windows 11.**
+**You talk three times faster than you type. Scribe closes the gap — privately.**
 
-Hold a key, speak, release — your words appear in whatever app you're using.
-No cloud. No account. No audio ever leaves your PC.
+Hold a key, speak, release — polished text lands at your cursor in any app on Windows 11.
+No cloud. No account. No subscription. No audio ever leaves your PC.
 
 <img src="docs/screenshots/pill.png" alt="The Scribe recording pill listening, with a live level meter" width="420" />
+
+**⚡ ~¼-second response** &nbsp;·&nbsp; **🏎️ transcribes ~30× faster than realtime** &nbsp;·&nbsp; **🔒 100% on-device** &nbsp;·&nbsp; **💸 $0 forever**
 
 </div>
 
 ---
 
 Scribe is a lightweight tray app that turns your voice into text anywhere on Windows — your
-editor, browser, chat, terminal, notes, email. It's built as a private, faster, more accurate
-alternative to Windows Voice Typing, and it runs the speech model **entirely on your own machine**.
+editor, browser, chat, terminal, notes, email. Dictation apps usually make you choose: the
+accurate ones ship your voice to someone else's server and charge monthly for the privilege,
+and the private ones type like it's 2009. Scribe refuses the trade: a state-of-the-art speech
+model — **NVIDIA Parakeet TDT 0.6b v3**, the same family topping open ASR leaderboards — runs
+**entirely on your CPU**, decoding a sentence in the time it takes to lift your finger off the
+key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03×**.
 
-Speech is transcribed locally with **NVIDIA Parakeet TDT 0.6b v3** running on your CPU. The result
-is punctuated, capitalized text dropped straight at your cursor — typically in about **a quarter of
-a second** after you let go of the key.
+## ✨ Why people switch
 
-## ✨ Why you'll like it
-
-- **🔒 Truly private** — audio is captured, transcribed, and discarded on-device. Nothing is uploaded.
-- **⚡ Push-to-talk** — hold **Right Ctrl** (or any key you choose), talk, release. That's the whole
-  gesture. Prefer hands-free? Toggle mode can end the dictation by itself when you stop talking.
-- **🎯 Accurate out of the box** — a state-of-the-art model adds punctuation and capitalization for you.
+- **🔒 Private by architecture, not by promise** — audio is captured, transcribed in memory, and
+  discarded on your machine. There is no server to trust, because there is no server.
+- **⚡ One key, zero friction** — hold **Right Ctrl** (or any key), talk, release. That's the whole
+  gesture. Prefer hands-free? Toggle mode ends the dictation by itself when you stop talking.
 - **🧠 It understands how people actually talk** — say *"send it Wednesday… I mean Thursday"* and,
   with AI cleanup on, only Thursday survives. Repeat yourself and it writes the point once.
+- **🔢 Numbers, dates and acronyms come out written, not spoken** — "twenty three licenses at
+  three thirty p m on july third" becomes *23 licenses at 3:30 PM on July 3* — the way an editor
+  would write it, applied automatically.
 - **🎭 Different apps, different voices** — per-app profiles give Outlook polished prose, Slack a
-  casual tone, and your terminal one terse line, automatically.
+  casual tone, and your terminal one terse line, automatically, based on where your cursor is.
 - **⌨️ Terminal-smart** — line breaks become spaces in terminals so a long dictation arrives as one
-  message instead of firing Enter mid-thought.
+  message instead of firing Enter mid-thought. Built by someone who dictates into CLIs all day.
 - **📖 Your vocabulary, your snippets** — a dictionary locks in your jargon (`azure` → `Azure`,
-  `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms**
-  from your own dictation history. Say a trigger phrase and a saved snippet types itself.
-- **🧹 AI polish, anywhere you want it** — clean up grammar and structure with an on-device model,
-  your Azure deployment, or **any OpenAI-compatible server you already run** (Ollama, LM Studio,
-  OpenRouter…).
+  `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms
+  from your own dictation history**. Say a trigger phrase and a whole saved template types itself.
+- **🧹 AI polish on your terms** — grammar and structure cleaned by an on-device model (fully
+  offline), your Azure deployment, or **any OpenAI-compatible server you already run** (Ollama,
+  LM Studio, OpenRouter…). Your models, your keys, your costs — flip it on or off right from the
+  tray.
+- **📊 Performance you can verify** — a built-in diagnostics panel computes latency percentiles
+  from your own dictations, on your own disk. We don't ask you to take the speed claims on faith.
 - **🪶 Stays out of the way** — a tray app with a small glass recording pill you can place on any
-  corner or edge of your screen.
+  corner or edge of your screen, and a Windows 11-style settings app when you want to tune it.
 
 ## 📸 A quick look
 
@@ -81,10 +89,13 @@ If the model isn't ready, dictation just continues with the raw transcript.
 ![Scribe AI cleanup with Foundry Local — on-device model](docs/screenshots/ai-foundry-local.png)
 
 ### …or bring your own model
-Point Scribe at a model you've already deployed in **Microsoft Foundry** (it signs in with your
-existing `az login`, or an API key), or at **any OpenAI-compatible endpoint** — Ollama or LM Studio
-on localhost, vLLM on your homelab, OpenRouter, or api.openai.com with your own key. Only the
-transcribed *text* is ever sent — never audio — and only to the endpoint **you** configure.
+Point Scribe at a model you've already deployed in **Microsoft Foundry** — it signs in with your
+existing `az login`, discovers your deployments, and lists them in a **browsable dropdown** (type
+to filter) so you pick a model instead of remembering deployment names. Or aim it at **any
+OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
+or api.openai.com with your own key. Only the transcribed *text* is ever sent — never audio — and
+only to the endpoint **you** configure. And when you want the raw transcript, **toggle AI cleanup
+straight from the tray menu** — no settings trip required.
 
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
