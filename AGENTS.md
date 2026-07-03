@@ -154,8 +154,6 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
   `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch.
-- `src/Scribe.App/Overlay/RecordingOverlay.xaml.cs` is the **dead‑code WPF fallback** —
-  do not extend it; the WinUI 3 path is canonical.
 
 ## Releases & Velopack (gotchas)
 
