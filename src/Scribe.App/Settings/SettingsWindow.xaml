@@ -3,17 +3,29 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="Scribe Settings"
-        Width="660" Height="780" MinWidth="560" MinHeight="600"
+        Width="1100" Height="800" MinWidth="940" MinHeight="660"
         WindowStartupLocation="CenterScreen"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
         WindowCornerPreference="Round">
     <ui:FluentWindow.Resources>
+        <!-- Page header shown at the top of every section, Windows Settings style. -->
+        <Style TargetType="TextBlock" x:Key="PageTitle">
+            <Setter Property="FontSize" Value="26"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="PageSubtitle">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,6,0,0"/>
+        </Style>
         <Style TargetType="TextBlock" x:Key="GroupHeader">
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
-            <Setter Property="Margin" Value="2,18,0,8"/>
+            <Setter Property="Margin" Value="2,20,0,10"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="SettingTitle">
             <Setter Property="FontSize" Value="14"/>
@@ -27,8 +39,15 @@
             <Setter Property="Margin" Value="0,3,0,0"/>
         </Style>
         <Style TargetType="ui:Card" x:Key="SettingCard">
-            <Setter Property="Margin" Value="0,0,0,8"/>
-            <Setter Property="Padding" Value="16,12"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Padding" Value="18,14"/>
+        </Style>
+        <!-- Master-detail cards must fill their grid cell; ui:Card centres by default. -->
+        <Style TargetType="ui:Card" x:Key="FillCard">
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
 
         <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
@@ -41,13 +60,13 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
                         <Border x:Name="Cell" CornerRadius="6" Background="Transparent">
-                            <Border x:Name="Pill" Width="44" Height="15" CornerRadius="8"
+                            <Border x:Name="Pill" Width="48" Height="16" CornerRadius="8"
                                     HorizontalAlignment="Center" VerticalAlignment="Center"
                                     Background="{DynamicResource ControlFillColorSecondaryBrush}"
                                     Opacity="0">
                                 <Ellipse Width="5" Height="5" Fill="#E5484D"
                                          HorizontalAlignment="Left" VerticalAlignment="Center"
-                                         Margin="7,0,0,0"/>
+                                         Margin="8,0,0,0"/>
                             </Border>
                         </Border>
                         <ControlTemplate.Triggers>
@@ -80,216 +99,387 @@
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <Grid Grid.Row="1" Margin="16,4,16,16">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="232"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
 
-            <TabControl Grid.Row="0" Background="Transparent" BorderThickness="0">
-                <TabItem Header="General">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="2,8,14,4">
-                        <StackPanel>
-                            <TextBlock Text="Audio &amp; input" Style="{StaticResource GroupHeader}" Margin="2,4,0,8"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
-                                    <TextBlock Text="Microphone" Style="{StaticResource SettingTitle}"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="The capture device used while dictating. 'System default' follows your Windows sound settings."/>
-                                    <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name"
-                                              Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
-                                </StackPanel>
-                            </ui:Card>
+            <!-- Left navigation rail -->
+            <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
+                     Background="Transparent" BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     SelectedIndex="0" SelectionChanged="NavList_SelectionChanged">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                        <Setter Property="Padding" Value="12,10"/>
+                        <Setter Property="Margin" Value="0,2"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Settings24" FontSize="18"/>
+                        <TextBlock Text="General" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Mic24" FontSize="18"/>
+                        <TextBlock Text="Dictation" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Desktop24" FontSize="18"/>
+                        <TextBlock Text="Overlay" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Wand24" FontSize="18"/>
+                        <TextBlock Text="AI cleanup" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Book24" FontSize="18"/>
+                        <TextBlock Text="Dictionary" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
+                        <TextBlock Text="Snippets" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Apps24" FontSize="18"/>
+                        <TextBlock Text="Profiles" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
+                        <TextBlock Text="Diagnostics" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+            </ListBox>
 
-                            <TextBlock Text="Dictation hotkey" Style="{StaticResource GroupHeader}"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
+            <!-- Right: the selected section + a persistent Save/Cancel footer -->
+            <Grid Grid.Column="1" Margin="12,4,24,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+
+                    <!-- ============================ General ============================ -->
+                    <Grid x:Name="SectionGeneral">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="General" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Your microphone, the push-to-talk key, and how Scribe starts."/>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Microphone" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="The capture device used while dictating. 'System default' follows your Windows sound settings."/>
+                                        <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name"
+                                                  Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Dictation hotkey" Style="{StaticResource SettingTitle}"/>
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" IsReadOnly="True"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="Press Set… then a key"
+                                                        PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+                                                        PreviewKeyUp="HotkeyBox_PreviewKeyUp"
+                                                        LostFocus="HotkeyBox_LostFocus"/>
+                                            <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Set…"
+                                                       Margin="8,0,0,0" MinWidth="72"
+                                                       Click="CaptureButton_Click"/>
+                                            <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="104" Margin="8,0,0,0"
+                                                      VerticalContentAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Hold: record while the key is down. Toggle: press once to start, again to stop. A lone modifier (e.g. Right Ctrl) makes a clean push-to-talk key."/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" IsReadOnly="True"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="Press Set… then a key"
-                                                    PreviewKeyDown="HotkeyBox_PreviewKeyDown"
-                                                    PreviewKeyUp="HotkeyBox_PreviewKeyUp"
-                                                    LostFocus="HotkeyBox_LostFocus"/>
-                                        <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Set…"
-                                                   Margin="8,0,0,0" MinWidth="72"
-                                                   Click="CaptureButton_Click"/>
-                                        <ComboBox x:Name="ModeCombo" Grid.Column="2" Width="100" Margin="8,0,0,0"
-                                                  VerticalContentAlignment="Center"/>
-                                    </Grid>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Hold: record while the key is down. Toggle: press once to start, again to stop. A lone modifier (e.g. Right Ctrl) makes a clean push-to-talk key."/>
-                                </StackPanel>
-                            </ui:Card>
-
-                            <TextBlock Text="Behaviour" Style="{StaticResource GroupHeader}"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Show the recording overlay" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="A small always-on-top indicator with a live level meter while capturing."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="OverlayCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
-                                    <TextBlock Text="Overlay position" Style="{StaticResource SettingTitle}"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Click where the pill should appear while you dictate, then try it on your real screen."/>
-                                    <Grid Margin="0,12,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-
-                                        <!-- Mini monitor: a 16:9 screen mock-up with nine clickable
-                                             anchor zones and a taskbar strip for orientation. -->
-                                        <Border Grid.Column="0" Width="264" Height="150" CornerRadius="8"
-                                                BorderThickness="2"
-                                                BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}"
-                                                Background="{DynamicResource ControlFillColorDefaultBrush}">
-                                            <Grid>
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="*"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                </Grid.RowDefinitions>
-                                                <UniformGrid x:Name="OverlayPositionGrid" Grid.Row="0"
-                                                             Rows="3" Columns="3" Margin="4">
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopLeft"
-                                                                 ToolTip="Top left"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopCenter"
-                                                                 ToolTip="Top centre"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="TopRight"
-                                                                 ToolTip="Top right"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleLeft"
-                                                                 ToolTip="Middle left"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="Center"
-                                                                 ToolTip="Centre"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleRight"
-                                                                 ToolTip="Middle right"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomLeft"
-                                                                 ToolTip="Bottom left"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomCenter"
-                                                                 ToolTip="Bottom centre (default)"/>
-                                                    <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomRight"
-                                                                 ToolTip="Bottom right"/>
-                                                </UniformGrid>
-                                                <Border Grid.Row="1" Height="8" Margin="2,0,2,2" CornerRadius="0,0,5,5"
-                                                        Background="{DynamicResource ControlFillColorSecondaryBrush}"
-                                                        IsHitTestVisible="False"/>
-                                            </Grid>
-                                        </Border>
-
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
-                                            <ui:Button x:Name="OverlayPreviewButton" Content="Preview on screen"
-                                                       Icon="{ui:SymbolIcon Eye24}"
-                                                       Click="OverlayPreviewButton_Click"/>
-                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0"
-                                                       Text="Shows the real pill at the selected spot for a moment."/>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Start with Windows" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Launch Scribe automatically when you sign in."/>
                                         </StackPanel>
+                                        <ui:ToggleSwitch x:Name="LaunchCheck" Grid.Column="1" VerticalAlignment="Center"/>
                                     </Grid>
-                                </StackPanel>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Voice activity detection" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Trim leading/trailing silence and ignore captures with no speech."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="VadCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="End dictation on silence (toggle mode)" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early — leave it off if that happens."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Post-processing" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Apply the dictionary and spacing fix-ups to transcribed text."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="PostCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Start with Windows" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Launch Scribe automatically when you sign in."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="LaunchCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                        <TextBlock Text="Keep audio with history" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Store a copy of the captured audio with each history entry."/>
-                                    </StackPanel>
-                                    <ui:ToggleSwitch x:Name="StoreAudioCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                </Grid>
-                            </ui:Card>
+                                </ui:Card>
 
-                            <TextBlock Text="Text insertion" Style="{StaticResource GroupHeader}"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
-                                    <TextBlock Text="Insertion method" Style="{StaticResource SettingTitle}"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Unicode typing works in the widest range of apps and never touches your clipboard. Clipboard paste can be faster, but some apps block it."/>
-                                    <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Keep audio with history" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Store a copy of the captured audio with each history entry."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="StoreAudioCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
 
-                                    <TextBlock Text="Line breaks" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Terminals treat a line break as Enter, so a long dictation with paragraphs can send several partial messages. Smart replaces line breaks with spaces only in terminals."/>
-                                    <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
-                                </StackPanel>
-                            </ui:Card>
+                                <ui:CardExpander x:Name="AdvancedDecodingExpander" Margin="0,10,0,8" IsExpanded="False">
+                                    <ui:CardExpander.Header>
+                                        <StackPanel>
+                                            <TextBlock Text="Advanced decoding" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                       Text="Power-user options. The defaults are right for most people — changes take effect after restarting Scribe."/>
+                                        </StackPanel>
+                                    </ui:CardExpander.Header>
+                                    <StackPanel Margin="0,4,0,0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                                <TextBlock Text="Higher-accuracy decoding" Style="{StaticResource SettingTitle}"/>
+                                                <TextBlock Style="{StaticResource SettingHint}"
+                                                           Text="Use beam-search decoding for slightly better accuracy on difficult audio, at a small speed cost."/>
+                                            </StackPanel>
+                                            <ui:ToggleSwitch x:Name="BeamSearchCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                        </Grid>
+                                        <Grid Margin="0,16,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Decode threads" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock x:Name="ThreadsLabel" Grid.Column="1" MinWidth="56"
+                                                       TextAlignment="Right" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </Grid>
+                                        <Slider x:Name="ThreadsSlider" Minimum="0" Maximum="16"
+                                                TickFrequency="1" IsSnapToTickEnabled="True"
+                                                Margin="0,8,0,0"
+                                                ValueChanged="ThreadsSlider_ValueChanged"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="CPU threads for transcription (0 = automatic)."/>
+                                    </StackPanel>
+                                </ui:CardExpander>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
 
-                            <TextBlock Text="AI cleanup" Style="{StaticResource GroupHeader}"/>
-                            <ui:Card Style="{StaticResource SettingCard}">
-                                <StackPanel>
+                    <!-- ============================ Dictation ============================ -->
+                    <Grid x:Name="SectionDictation" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Dictation" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="How captures behave and how the finished text lands in your apps."/>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
+                                <TextBlock Text="Capture" Style="{StaticResource GroupHeader}" Margin="2,4,0,10"/>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Voice activity detection" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Trim leading/trailing silence and ignore captures with no speech."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="VadCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="End dictation on silence (toggle mode)" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early — leave it off if that happens."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Post-processing" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="PostCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
+
+                                <TextBlock Text="Text insertion" Style="{StaticResource GroupHeader}"/>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Insertion method" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Unicode typing works in the widest range of apps and never touches your clipboard. Clipboard paste can be faster, but some apps block it."/>
+                                        <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+                                    </StackPanel>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Line breaks" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Terminals treat a line break as Enter, so a long dictation with paragraphs can send several partial messages. Smart replaces line breaks with spaces only in terminals."/>
+                                        <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+                                    </StackPanel>
+                                </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- ============================ Overlay ============================ -->
+                    <Grid x:Name="SectionOverlay" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Overlay" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="The glass recording pill that shows Scribe is listening — and where it lives on your screen."/>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Show the recording overlay" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="A small always-on-top indicator with a live level meter while capturing."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="OverlayCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Overlay position" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Click where the pill should appear while you dictate, then try it on your real screen."/>
+                                        <Grid Margin="0,14,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Mini monitor: a 16:9 screen mock-up with nine clickable
+                                                 anchor zones and a taskbar strip for orientation. -->
+                                            <Border Grid.Column="0" Width="300" Height="170" CornerRadius="8"
+                                                    BorderThickness="2"
+                                                    BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                    Background="{DynamicResource ControlFillColorDefaultBrush}">
+                                                <Grid>
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="*"/>
+                                                        <RowDefinition Height="Auto"/>
+                                                    </Grid.RowDefinitions>
+                                                    <UniformGrid x:Name="OverlayPositionGrid" Grid.Row="0"
+                                                                 Rows="3" Columns="3" Margin="4">
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="TopLeft"
+                                                                     ToolTip="Top left"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="TopCenter"
+                                                                     ToolTip="Top centre"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="TopRight"
+                                                                     ToolTip="Top right"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleLeft"
+                                                                     ToolTip="Middle left"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="Center"
+                                                                     ToolTip="Centre"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleRight"
+                                                                     ToolTip="Middle right"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomLeft"
+                                                                     ToolTip="Bottom left"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomCenter"
+                                                                     ToolTip="Bottom centre (default)"/>
+                                                        <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomRight"
+                                                                     ToolTip="Bottom right"/>
+                                                    </UniformGrid>
+                                                    <Border Grid.Row="1" Height="9" Margin="2,0,2,2" CornerRadius="0,0,5,5"
+                                                            Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                                            IsHitTestVisible="False"/>
+                                                </Grid>
+                                            </Border>
+
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="20,0,0,0">
+                                                <ui:Button x:Name="OverlayPreviewButton" Content="Preview on screen"
+                                                           Icon="{ui:SymbolIcon Eye24}"
+                                                           Click="OverlayPreviewButton_Click"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0"
+                                                           Text="Shows the real pill at the selected spot for a moment."/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- ============================ AI cleanup ============================ -->
+                    <Grid x:Name="SectionAi" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="AI cleanup" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Polish punctuation, grammar and structure with a language model before the text is inserted. Optional — dictation always works without it."/>
+                        </StackPanel>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -303,237 +493,225 @@
                                         <ui:ToggleSwitch x:Name="AiCleanupCheck" Grid.Column="1" VerticalAlignment="Center"
                                                          Checked="AiCleanupCheck_Toggled" Unchecked="AiCleanupCheck_Toggled"/>
                                     </Grid>
+                                </ui:Card>
 
-                                    <TextBlock Text="Provider" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="Run a model on this PC with Foundry Local (fully offline), or use a model you've deployed in Microsoft Foundry via your Azure sign-in."/>
-                                    <ComboBox x:Name="AiProviderCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                              SelectionChanged="AiProviderCombo_SelectionChanged"/>
-
-                                    <!-- Foundry Local (on-device) -->
-                                    <StackPanel x:Name="FoundryPanel">
-                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:AutoSuggestBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                           PlaceholderText="Search models — type to filter"
-                                                           QuerySubmitted="AiModelBox_QuerySubmitted"
-                                                           SuggestionChosen="AiModelBox_SuggestionChosen"/>
-                                        <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
-
-                                        <!-- Load / unload — only one on-device model stays resident at a time -->
-                                        <Grid Margin="0,12,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock x:Name="AiLoadedModelText" Grid.Column="0" VerticalAlignment="Center"
-                                                       Style="{StaticResource SettingHint}" Margin="0,0,12,0"
-                                                       Text="No on-device model is loaded yet."/>
-                                            <ui:Button x:Name="AiLoadButton" Grid.Column="1" Content="Load" MinWidth="80"
-                                                       Margin="0,0,8,0" Appearance="Primary" Click="AiLoadButton_Click"/>
-                                            <ui:Button x:Name="AiUnloadButton" Grid.Column="2" Content="Unload" MinWidth="80"
-                                                       Appearance="Secondary" Click="AiUnloadButton_Click"/>
-                                        </Grid>
-
-                                        <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
-                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                    <TextBlock Text="Requires Foundry Local" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                    <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="The selected model downloads automatically on first use (about 1–2 GB)."/>
-                                                </StackPanel>
-                                                <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check &amp; list models"
-                                                           MinWidth="76" VerticalAlignment="Center"
-                                                           Click="AiCheckButton_Click"/>
-                                            </Grid>
-                                        </Border>
-                                    </StackPanel>
-
-                                    <!-- Microsoft Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
-                                    <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
-                                        <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="https://my-resource.services.ai.azure.com/"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Your Microsoft Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
-
-                                        <!-- Primary path: reuse the user's az login and list their deployments -->
-                                        <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
-                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                    <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                    <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="Reuses your 'az login' session — no key needed. Sign in to list the models you've deployed."/>
-                                                </StackPanel>
-                                                <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; find models"
-                                                           MinWidth="76" VerticalAlignment="Center"
-                                                           Click="AzureRefreshButton_Click"/>
-                                            </Grid>
-                                        </Border>
-
-                                        <!-- Azure CLI: the 'az login' path needs the Azure CLI present. One-click install/update. -->
-                                        <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="6"
-                                                Background="{DynamicResource ControlFillColorSecondaryBrush}">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*"/>
-                                                    <ColumnDefinition Width="Auto"/>
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                    <TextBlock Text="Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                    <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="The 'az login' path needs the Azure CLI. Install or update it here (uses winget)."/>
-                                                </StackPanel>
-                                                <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install / update"
-                                                           MinWidth="76" VerticalAlignment="Center"
-                                                           Click="AzureCliButton_Click"/>
-                                            </Grid>
-                                        </Border>
-
-                                        <!-- Model picker: the deployments discovered from your sign-in -->
-                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:AutoSuggestBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                           PlaceholderText="Search your deployments — type to filter"
-                                                           QuerySubmitted="AzureModelBox_QuerySubmitted"
-                                                           SuggestionChosen="AzureModelBox_SuggestionChosen"/>
-                                        <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
-
-                                        <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->
-                                        <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
-                                            <ui:CardExpander.Header>
-                                                <StackPanel>
-                                                    <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                               Text="Everything here is optional and overrides the choices above when set. Leave these empty to keep using your Azure sign-in."/>
-                                                </StackPanel>
-                                            </ui:CardExpander.Header>
-                                            <StackPanel Margin="0,4,0,0">
-                                                <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
-                                                <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                            VerticalContentAlignment="Center"
-                                                            PlaceholderText="e.g. gpt-4o"/>
-                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                           Text="The model picker above fills this in for you. Editing it overrides the picked model — leave it as-is unless you're naming a deployment by hand."/>
-
-                                                <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                VerticalContentAlignment="Center"
-                                                                PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
-                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                           Text="When provided, Scribe authenticates with this key and overrides your Azure sign-in. Leave empty to use az login. Stored encrypted on this PC (Windows DPAPI)."/>
-
-                                                <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                            VerticalContentAlignment="Center"
-                                                            PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
-                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                           Text="When provided, discovery and cleanup use this tenant and override your default az login tenant. Leave empty to use the default. Ignored when an API key is set."/>
-                                            </StackPanel>
-                                        </ui:CardExpander>
-                                    </StackPanel>
-
-                                    <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
-                                    <StackPanel x:Name="CustomPanel" Visibility="Collapsed">
-                                        <TextBlock Text="Endpoint URL" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="http://localhost:11434/v1"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Any server that speaks the OpenAI chat protocol: Ollama (http://localhost:11434/v1), LM Studio (http://localhost:1234/v1), vLLM, OpenRouter (https://openrouter.ai/api/v1), or api.openai.com/v1. Usually ends in /v1."/>
-
-                                        <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                    VerticalContentAlignment="Center"
-                                                    PlaceholderText="e.g. qwen3:4b, llama3.1:8b, gpt-4o-mini"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="The model name exactly as the server knows it (for Ollama, what 'ollama list' shows)."/>
-
-                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                        <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                        VerticalContentAlignment="Center"
-                                                        PlaceholderText="Leave blank for local servers like Ollama or LM Studio"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Text only — your audio never leaves this device."/>
-                                    </StackPanel>
-
-                                    <!-- Writing style: shared across providers; sent to the model on every cleanup -->
-                                    <TextBlock Text="Writing style" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                               Text="This guidance is sent to the AI model every time it polishes your dictation. Describe the tone, punctuation and structure you want — or leave the default."/>
-                                    <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
-                                                VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                SpellCheck.IsEnabled="True"/>
-                                    <ui:Button x:Name="ResetWritingStyleButton" Content="Restore default" Margin="0,8,0,0"
-                                               HorizontalAlignment="Left" Appearance="Secondary"
-                                               Click="ResetWritingStyleButton_Click"/>
-                                </StackPanel>
-                            </ui:Card>
-
-                            <ui:CardExpander x:Name="AdvancedDecodingExpander" Margin="0,18,0,8" IsExpanded="False">
-                                <ui:CardExpander.Header>
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
-                                        <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                   Text="Power-user decoding options. The defaults are right for most people — changes here take effect after restarting Scribe."/>
-                                    </StackPanel>
-                                </ui:CardExpander.Header>
-                                <StackPanel Margin="0,4,0,0">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock Text="Higher-accuracy decoding" Style="{StaticResource SettingTitle}"/>
-                                            <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="Use beam-search decoding for slightly better accuracy on difficult audio, at a small speed cost."/>
-                                        </StackPanel>
-                                        <ui:ToggleSwitch x:Name="BeamSearchCheck" Grid.Column="1" VerticalAlignment="Center"/>
-                                    </Grid>
-                                    <Grid Margin="0,16,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Decode threads" Style="{StaticResource SettingTitle}"/>
-                                        <TextBlock x:Name="ThreadsLabel" Grid.Column="1" MinWidth="56"
-                                                   TextAlignment="Right" VerticalAlignment="Center"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
-                                    </Grid>
-                                    <Slider x:Name="ThreadsSlider" Minimum="0" Maximum="16"
-                                            TickFrequency="1" IsSnapToTickEnabled="True"
-                                            Margin="0,8,0,0"
-                                            ValueChanged="ThreadsSlider_ValueChanged"/>
-                                    <TextBlock Style="{StaticResource SettingHint}"
-                                               Text="CPU threads for transcription (0 = automatic)."/>
-                                </StackPanel>
-                            </ui:CardExpander>
-                        </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
+                                        <TextBlock Text="Provider" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Run a model on this PC with Foundry Local (fully offline), use a Microsoft Foundry deployment via your Azure sign-in, or point at any OpenAI-compatible server you already run."/>
+                                        <ComboBox x:Name="AiProviderCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                                  SelectionChanged="AiProviderCombo_SelectionChanged"/>
 
-                <TabItem Header="Dictionary">
-                    <Grid Margin="2,12,2,2">
+                                        <!-- Foundry Local (on-device) -->
+                                        <StackPanel x:Name="FoundryPanel">
+                                            <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:AutoSuggestBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                               PlaceholderText="Search models — type to filter"
+                                                               QuerySubmitted="AiModelBox_QuerySubmitted"
+                                                               SuggestionChosen="AiModelBox_SuggestionChosen"/>
+                                            <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                            <!-- Load / unload — only one on-device model stays resident at a time -->
+                                            <Grid Margin="0,12,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="AiLoadedModelText" Grid.Column="0" VerticalAlignment="Center"
+                                                           Style="{StaticResource SettingHint}" Margin="0,0,12,0"
+                                                           Text="No on-device model is loaded yet."/>
+                                                <ui:Button x:Name="AiLoadButton" Grid.Column="1" Content="Load" MinWidth="80"
+                                                           Margin="0,0,8,0" Appearance="Primary" Click="AiLoadButton_Click"/>
+                                                <ui:Button x:Name="AiUnloadButton" Grid.Column="2" Content="Unload" MinWidth="80"
+                                                           Appearance="Secondary" Click="AiUnloadButton_Click"/>
+                                            </Grid>
+
+                                            <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                                                    Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="Requires Foundry Local" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                                   Text="The selected model downloads automatically on first use (about 1–2 GB)."/>
+                                                    </StackPanel>
+                                                    <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check &amp; list models"
+                                                               MinWidth="76" VerticalAlignment="Center"
+                                                               Click="AiCheckButton_Click"/>
+                                                </Grid>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <!-- Microsoft Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
+                                        <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
+                                            <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="https://my-resource.services.ai.azure.com/"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Your Microsoft Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
+
+                                            <!-- Primary path: reuse the user's az login and list their deployments -->
+                                            <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
+                                                    Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                                   Text="Reuses your 'az login' session — no key needed. Sign in to list the models you've deployed."/>
+                                                    </StackPanel>
+                                                    <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; find models"
+                                                               MinWidth="76" VerticalAlignment="Center"
+                                                               Click="AzureRefreshButton_Click"/>
+                                                </Grid>
+                                            </Border>
+
+                                            <!-- Azure CLI: the 'az login' path needs the Azure CLI present. One-click install/update. -->
+                                            <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="6"
+                                                    Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                                                        <TextBlock Text="Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                                   Text="The 'az login' path needs the Azure CLI. Install or update it here (uses winget)."/>
+                                                    </StackPanel>
+                                                    <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install / update"
+                                                               MinWidth="76" VerticalAlignment="Center"
+                                                               Click="AzureCliButton_Click"/>
+                                                </Grid>
+                                            </Border>
+
+                                            <!-- Model picker: the deployments discovered from your sign-in -->
+                                            <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:AutoSuggestBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                               PlaceholderText="Search your deployments — type to filter"
+                                                               QuerySubmitted="AzureModelBox_QuerySubmitted"
+                                                               SuggestionChosen="AzureModelBox_SuggestionChosen"/>
+                                            <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                            <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->
+                                            <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
+                                                <ui:CardExpander.Header>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                                   Text="Everything here is optional and overrides the choices above when set. Leave these empty to keep using your Azure sign-in."/>
+                                                    </StackPanel>
+                                                </ui:CardExpander.Header>
+                                                <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
+                                                    <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                VerticalContentAlignment="Center"
+                                                                PlaceholderText="e.g. gpt-4o"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                               Text="The model picker above fills this in for you. Editing it overrides the picked model — leave it as-is unless you're naming a deployment by hand."/>
+
+                                                    <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                    <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                    VerticalContentAlignment="Center"
+                                                                    PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                               Text="When provided, Scribe authenticates with this key and overrides your Azure sign-in. Leave empty to use az login. Stored encrypted on this PC (Windows DPAPI)."/>
+
+                                                    <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                    <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                VerticalContentAlignment="Center"
+                                                                PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                               Text="When provided, discovery and cleanup use this tenant and override your default az login tenant. Leave empty to use the default. Ignored when an API key is set."/>
+                                                </StackPanel>
+                                            </ui:CardExpander>
+                                        </StackPanel>
+
+                                        <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
+                                        <StackPanel x:Name="CustomPanel" Visibility="Collapsed">
+                                            <TextBlock Text="Endpoint URL" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="CustomEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="http://localhost:11434/v1"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Any server that speaks the OpenAI chat protocol: Ollama (http://localhost:11434/v1), LM Studio (http://localhost:1234/v1), vLLM, OpenRouter (https://openrouter.ai/api/v1), or api.openai.com/v1. Usually ends in /v1."/>
+
+                                            <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="CustomModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="e.g. qwen3:4b, llama3.1:8b, gpt-4o-mini"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="The model name exactly as the server knows it (for Ollama, what 'ollama list' shows)."/>
+
+                                            <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:PasswordBox x:Name="CustomApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="Leave blank for local servers like Ollama or LM Studio"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Text only — your audio never leaves this device."/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Writing style" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                   Text="This guidance is sent to the AI model every time it polishes your dictation. Describe the tone, punctuation and structure you want — or leave the default."/>
+                                        <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                                    AcceptsReturn="True" TextWrapping="Wrap" MinHeight="140" MaxHeight="260"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    SpellCheck.IsEnabled="True"/>
+                                        <ui:Button x:Name="ResetWritingStyleButton" Content="Restore default" Margin="0,10,0,0"
+                                                   HorizontalAlignment="Left" Appearance="Secondary"
+                                                   Click="ResetWritingStyleButton_Click"/>
+                                    </StackPanel>
+                                </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- ============================ Dictionary ============================ -->
+                    <Grid x:Name="SectionDictionary" Visibility="Collapsed">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
-                                   Text="Replace spoken words or phrases with preferred spellings (e.g. 'azure' → 'Azure'). Whole word matches only on word boundaries; clear it for phrase replacement. Edits apply when you save."/>
-                        <ui:Card Grid.Row="1" Padding="0">
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Dictionary" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Replace spoken words or phrases with the spelling you actually want — 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
+                                       Icon="{ui:SymbolIcon Lightbulb24}"
+                                       Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
+                                       ToolTip="Scan your recent dictations for recurring technical terms and acronyms worth locking in."/>
+                            <ui:Button x:Name="DictionaryImportButton" Content="Import CSV…"
+                                       Icon="{ui:SymbolIcon ArrowDownload24}"
+                                       Margin="0,0,8,0" Click="DictionaryImportButton_Click"
+                                       ToolTip="Merge entries from a CSV file into this dictionary."/>
+                            <ui:Button x:Name="DictionaryExportButton" Content="Export CSV…"
+                                       Icon="{ui:SymbolIcon ArrowUpload24}"
+                                       Margin="0,0,8,0" Click="DictionaryExportButton_Click"
+                                       ToolTip="Save this dictionary as a CSV file to back up or share."/>
+                            <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
+                                       Icon="{ui:SymbolIcon DocumentAdd24}"
+                                       Click="DictionaryTemplateButton_Click"
+                                       ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
+                        </StackPanel>
+                        <ui:Card Grid.Row="2" Padding="0" Style="{StaticResource FillCard}">
                             <DataGrid x:Name="DictionaryGrid"
                                       AutoGenerateColumns="False"
                                       CanUserAddRows="True" CanUserDeleteRows="True"
@@ -547,47 +725,28 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </ui:Card>
-                        <Grid Grid.Row="2" Margin="0,8,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Style="{StaticResource SettingHint}" Margin="2,0,12,0"
-                                       VerticalAlignment="Center"
-                                       Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
-                                           MinWidth="120" Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
-                                           ToolTip="Scan your recent dictations for recurring technical terms and acronyms worth locking in."/>
-                                <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
-                                           MinWidth="110" Margin="0,0,8,0" Click="DictionaryTemplateButton_Click"
-                                           ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
-                                <ui:Button x:Name="DictionaryImportButton" Content="Import CSV…"
-                                           MinWidth="110" Margin="0,0,8,0" Click="DictionaryImportButton_Click"
-                                           ToolTip="Merge entries from a CSV file into this dictionary."/>
-                                <ui:Button x:Name="DictionaryExportButton" Content="Export CSV…"
-                                           MinWidth="110" Click="DictionaryExportButton_Click"
-                                           ToolTip="Save this dictionary as a CSV file to back up or share."/>
-                            </StackPanel>
-                        </Grid>
+                        <TextBlock Grid.Row="3" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
+                                   Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
                     </Grid>
-                </TabItem>
 
-                <TabItem Header="Snippets">
-                    <Grid Margin="2,12,2,2">
+                    <!-- ============================ Snippets ============================ -->
+                    <Grid x:Name="SectionSnippets" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
-                                   Text="Say a trigger phrase — like 'insert my standup update' — and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Snippets" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Say a trigger phrase — like 'insert my standup update' — and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
+                        </StackPanel>
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="250"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,8,0">
+                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource FillCard}">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="*"/>
@@ -605,15 +764,15 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="16,12">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
                                 <Grid>
-                                    <StackPanel x:Name="SnippetEditor" Visibility="Collapsed">
+                                    <StackPanel x:Name="SnippetEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                         <TextBlock Text="Trigger phrase" Style="{StaticResource SettingTitle}"/>
                                         <ui:TextBox x:Name="SnippetPhraseBox" Margin="0,8,0,0"
                                                     HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
                                                     PlaceholderText="insert my standup update"
                                                     TextChanged="SnippetPhraseBox_TextChanged"/>
-                                        <Grid Margin="0,14,0,0">
+                                        <Grid Margin="0,16,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -629,7 +788,7 @@
                                         </Grid>
                                         <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
                                                     HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                    TextWrapping="Wrap" MinHeight="180" MaxHeight="320"
+                                                    TextWrapping="Wrap" MinHeight="220" MaxHeight="380"
                                                     VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
                                                     SpellCheck.IsEnabled="True"
                                                     TextChanged="SnippetTemplateBox_TextChanged"/>
@@ -644,23 +803,25 @@
                             </ui:Card>
                         </Grid>
                     </Grid>
-                </TabItem>
 
-                <TabItem Header="Profiles">
-                    <Grid Margin="2,12,2,2">
+                    <!-- ============================ Profiles ============================ -->
+                    <Grid x:Name="SectionProfiles" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
-                                   Text="Give different apps different dictation behaviour: formal prose in Outlook, casual in Slack, one terse line in the terminal. The first profile matching the focused app wins; apps with no profile use your global settings."/>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Profiles" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Give different apps different dictation behaviour: formal prose in Outlook, casual in Slack, one terse line in the terminal. The first profile matching the focused app wins; apps with no profile use your global settings."/>
+                        </StackPanel>
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="250"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,8,0">
+                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,10,0" Style="{StaticResource FillCard}">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="*"/>
@@ -678,17 +839,17 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="16,12">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
                                 <Grid>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                        <StackPanel x:Name="ProfileEditor" Visibility="Collapsed">
+                                        <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                             <TextBlock Text="Profile name" Style="{StaticResource SettingTitle}"/>
                                             <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
                                                         HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
                                                         PlaceholderText="e.g. Email"
                                                         TextChanged="ProfileNameBox_TextChanged"/>
 
-                                            <TextBlock Text="Apps (process names)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <TextBlock Text="Apps (process names)" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <ui:TextBox x:Name="ProfileProcessesBox" Margin="0,8,0,0"
                                                         HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
                                                         PlaceholderText="OUTLOOK, olk, thunderbird"
@@ -696,17 +857,17 @@
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Comma-separated process names, without .exe (Task Manager's Details tab shows them). Examples: OUTLOOK for classic Outlook, olk for new Outlook, slack, WindowsTerminal, Code for VS Code."/>
 
-                                            <TextBlock Text="Writing style for these apps" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <TextBlock Text="Writing style for these apps" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <ui:TextBox x:Name="ProfileStyleBox" Margin="0,8,0,0"
                                                         HorizontalAlignment="Stretch" AcceptsReturn="True"
-                                                        TextWrapping="Wrap" MinHeight="100" MaxHeight="200"
+                                                        TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
                                                         VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
                                                         SpellCheck.IsEnabled="True"
                                                         TextChanged="ProfileStyleBox_TextChanged"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Leave blank to keep your global writing style. Needs AI cleanup to be enabled to take effect."/>
 
-                                            <TextBlock Text="Line breaks in these apps" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <TextBlock Text="Line breaks in these apps" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                       SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
                                         </StackPanel>
@@ -719,42 +880,46 @@
                             </ui:Card>
                         </Grid>
                     </Grid>
-                </TabItem>
 
-                <TabItem Header="Diagnostics">
-                    <Grid Margin="2,12,2,2">
+                    <!-- ============================ Diagnostics ============================ -->
+                    <Grid x:Name="SectionDiagnostics" Visibility="Collapsed">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Diagnostics" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="How fast dictation runs on this PC, and what happened when AI cleanup fell back to raw text. Everything here is computed from data already on your disk — nothing is collected."/>
+                        </StackPanel>
 
-                        <!-- Local latency stats from stored history — decode only; nothing new is
-                             collected and nothing leaves the machine. -->
-                        <ui:Card Grid.Row="0" Padding="16,12" Margin="0,0,0,10">
+                        <!-- Local latency stats from stored history — decode only. -->
+                        <ui:Card Grid.Row="1" Padding="18,14" Margin="0,0,0,12">
                             <StackPanel>
                                 <TextBlock Text="Performance — last 7 days" Style="{StaticResource SettingTitle}"/>
                                 <TextBlock x:Name="StatsSummaryText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                            Text="No dictations recorded in the last week."/>
-                                <UniformGrid x:Name="StatsGrid" Columns="4" Margin="0,10,0,0" Visibility="Collapsed">
+                                <UniformGrid x:Name="StatsGrid" Columns="4" Margin="0,12,0,0" Visibility="Collapsed">
                                     <StackPanel>
-                                        <TextBlock x:Name="StatDecodeP50" FontSize="20" FontWeight="SemiBold"
+                                        <TextBlock x:Name="StatDecodeP50" FontSize="22" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Text="decode, typical (P50)" Style="{StaticResource SettingHint}"/>
                                     </StackPanel>
                                     <StackPanel>
-                                        <TextBlock x:Name="StatDecodeP95" FontSize="20" FontWeight="SemiBold"
+                                        <TextBlock x:Name="StatDecodeP95" FontSize="22" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Text="decode, slow runs (P95)" Style="{StaticResource SettingHint}"/>
                                     </StackPanel>
                                     <StackPanel>
-                                        <TextBlock x:Name="StatRtfP50" FontSize="20" FontWeight="SemiBold"
+                                        <TextBlock x:Name="StatRtfP50" FontSize="22" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Text="speed, typical (RTF P50)" Style="{StaticResource SettingHint}"/>
                                     </StackPanel>
                                     <StackPanel>
-                                        <TextBlock x:Name="StatRtfP95" FontSize="20" FontWeight="SemiBold"
+                                        <TextBlock x:Name="StatRtfP95" FontSize="22" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Text="speed, slow runs (RTF P95)" Style="{StaticResource SettingHint}"/>
                                     </StackPanel>
@@ -762,9 +927,9 @@
                             </StackPanel>
                         </ui:Card>
 
-                        <TextBlock Grid.Row="1" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
-                                   Text="When AI cleanup fails at runtime, Scribe falls back to the raw transcription and records why here. Entries older than a week are removed automatically."/>
-                        <ui:Card Grid.Row="2" Padding="0">
+                        <TextBlock Grid.Row="2" Style="{StaticResource GroupHeader}" Margin="2,0,0,10"
+                                   Text="AI cleanup failures — last 7 days"/>
+                        <ui:Card Grid.Row="3" Padding="0" Style="{StaticResource FillCard}">
                             <Grid>
                                 <DataGrid x:Name="FailuresGrid"
                                           AutoGenerateColumns="False" IsReadOnly="True"
@@ -777,26 +942,27 @@
                                         <DataGridTextColumn Header="Reason" Binding="{Binding Reason}" Width="*"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
-                                <TextBlock x:Name="NoFailuresText" Text="No failures recorded."
+                                <TextBlock x:Name="NoFailuresText" Text="No failures recorded — cleanup has been healthy."
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            Style="{StaticResource SettingHint}" Margin="0"
                                            Visibility="Collapsed"/>
                             </Grid>
                         </ui:Card>
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                             <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
                                        MinWidth="120" Click="ClearFailuresButton_Click"/>
                         </StackPanel>
                     </Grid>
-                </TabItem>
-            </TabControl>
+                </Grid>
 
-            <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
-                           MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click" IsDefault="True"/>
-                <ui:Button x:Name="CancelButton" Content="Cancel"
-                           MinWidth="96" Click="CancelButton_Click" IsCancel="True"/>
-            </StackPanel>
+                <!-- Footer: explicit save model, always visible -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                    <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
+                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click" IsDefault="True"/>
+                    <ui:Button x:Name="CancelButton" Content="Cancel"
+                               MinWidth="96" Click="CancelButton_Click" IsCancel="True"/>
+                </StackPanel>
+            </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>

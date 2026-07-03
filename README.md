@@ -46,12 +46,18 @@ a second** after you let go of the key.
 
 ## 📸 A quick look
 
-### Speak with a single key
-Pick your microphone, choose a push-to-talk key (hold or toggle), and decide exactly where the
-recording pill appears — click a spot on the mini screen and **preview the real pill** before you
-save. Optional silence auto-stop ends a toggle dictation when you go quiet.
+### A settings app that respects you
+Everything lives in a clean, Windows 11-style settings window: pick your microphone and
+push-to-talk key (hold or toggle), then browse focused sections for dictation behaviour, the
+overlay, AI cleanup, your dictionary, snippets, per-app profiles and diagnostics.
 
-![Scribe general settings — microphone, hotkey, overlay position picker and behaviour toggles](docs/screenshots/settings-general.png)
+![Scribe general settings — microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
+
+### Put the pill exactly where you want it
+Click a spot on the mini screen and **preview the real pill** at that position before you save.
+Optional silence auto-stop ends a toggle dictation when you go quiet.
+
+![Scribe overlay settings — position picker with on-screen preview](docs/screenshots/overlay.png)
 
 ### Say a phrase, type a template
 Voice snippets expand a spoken trigger — like *"insert my standup update"* — into a saved,
@@ -80,8 +86,6 @@ existing `az login`, or an API key), or at **any OpenAI-compatible endpoint** �
 on localhost, vLLM on your homelab, OpenRouter, or api.openai.com with your own key. Only the
 transcribed *text* is ever sent — never audio — and only to the endpoint **you** configure.
 
-![Scribe AI cleanup with Microsoft Foundry — your own deployment](docs/screenshots/ai-azure.png)
-
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
 AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **import a CSV** your team
@@ -91,7 +95,7 @@ and product names you keep saying and add them for you.
 ![Scribe dictionary editor — spoken-to-replacement rules](docs/screenshots/dictionary.png)
 
 ### Know exactly how fast it is
-The Diagnostics tab computes latency percentiles from your own dictation history — nothing is
+The Diagnostics section computes latency percentiles from your own dictation history — nothing is
 collected, it's your data on your disk. On a typical desktop CPU, Parakeet decodes at a real-time
 factor around **0.03×** — that's ~30× faster than the audio itself.
 
