@@ -82,6 +82,7 @@ public partial class App : Application
         _tray.SettingsRequested += OpenSettings;
         _tray.HistoryRequested += OpenHistory;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
+        _tray.AiCleanupToggled += ToggleAiCleanup;
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -100,15 +101,6 @@ public partial class App : Application
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<ILogger<OverlayProcessClient>>());
-        _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
-        // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first use.
-        // The pill renders via DWM composition in a separate kept-warm process, sidestepping the WPF
-        // layered-window path that produced the recurring black box. Only spawn the helper when the
-        // overlay is actually enabled; if the user turns it on later, ShowRecording launches it lazily.
-        if (_controller.CurrentSettings.ShowOverlay)
-        {
-            _overlay.Warmup();
-        }
 
         _controller.StateChanged += OnStateChanged;
         _controller.Error += message => _tray!.ShowError(message);
@@ -134,6 +126,20 @@ public partial class App : Application
         });
 
         _controller.Start();
+
+        // Settings-dependent wiring goes AFTER Start(): CurrentSettings returns compiled defaults
+        // until Start() loads the persisted settings, so reading it earlier silently ignored the
+        // user's saved overlay position, overlay toggle, and AI-cleanup state on every launch.
+        _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
+        // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
+        // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
+        // later, ShowRecording launches it lazily.
+        if (_controller.CurrentSettings.ShowOverlay)
+        {
+            _overlay.Warmup();
+        }
+
+        _tray.SetAiCleanupChecked(_controller.CurrentSettings.EnableAiCleanup);
 
         // Trim any stale AI-failure log entries (older than the rolling one-week window) on startup,
         // off the UI thread, so the Settings failure list never accumulates indefinitely.
@@ -209,6 +215,30 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// Quick tray toggle for AI cleanup: persist the flipped flag and apply it live, without
+    /// opening settings. Lets the user hop between raw Parakeet output and AI-polished text in
+    /// two clicks. Note an already-open settings window keeps its own snapshot; saving it wins.
+    /// </summary>
+    private void ToggleAiCleanup(bool enabled)
+    {
+        try
+        {
+            var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
+            var settings = repo.Load();
+            settings.EnableAiCleanup = enabled;
+            repo.Save(settings);
+            _controller?.ApplySettings(settings);
+            _tray?.ShowInfo(enabled ? "AI cleanup on" : "AI cleanup off");
+        }
+        catch (Exception ex)
+        {
+            _host?.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Toggling AI cleanup from the tray failed.");
+            _tray?.ShowError("couldn't toggle AI cleanup");
+        }
+    }
+
+    /// <summary>
     /// Opens the settings window (or focuses it if already open). Built per-open from the host so
     /// it always reflects the latest persisted state; on save it calls back into the controller to
     /// apply the new binding and dictionary live.
@@ -236,6 +266,7 @@ public partial class App : Application
             {
                 _controller!.ApplySettings(settings);
                 _overlay?.SetPosition(settings.OverlayPosition);
+                _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
             });
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();

@@ -82,6 +82,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
 
         InitializeComponent();
+
+        // Type-to-filter behaviour for the model pickers (browse on click, search on type).
+        AttachComboFilter(AiModelBox, UpdateAiModelHint);
+        AttachComboFilter(AzureModelBox, UpdateAzureDeploymentHint);
+
         PopulateDevices();
         PopulateChoices();
         LoadFromSettings();
@@ -218,7 +223,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _foundryCuratedByAlias[curated.Alias] = curated;
         }
-        AiModelBox.OriginalItemsSource = CleanupModelCatalog.Curated.Select(m => m.Alias).ToList();
+        SetComboItems(AiModelBox, CleanupModelCatalog.Curated.Select(m => m.Alias).ToList());
 
         var providers = (ProviderChoice[])AiProviderCombo.ItemsSource;
         AiProviderCombo.SelectedItem =
@@ -496,57 +501,108 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void AiModelBox_SuggestionChosen(
-        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxSuggestionChosenEventArgs args)
+    // --- Filterable model dropdowns --------------------------------------------------------
+    // The pickers are editable ComboBoxes doing double duty: click the chevron to browse every
+    // discovered model, or type to quick-filter the open list. Users shouldn't need to know a
+    // deployment's name up front — browsing is the primary path, search the accelerator.
+
+    private bool _suppressComboFilter;
+
+    private void AttachComboFilter(ComboBox box, Action onTextChanged)
     {
-        if (_loadingUi)
-        {
-            return;
-        }
+        box.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent,
+            new TextChangedEventHandler((_, _) =>
+            {
+                if (_suppressComboFilter || _loadingUi)
+                {
+                    return;
+                }
 
-        if (args.SelectedItem is string alias)
-        {
-            sender.Text = alias;
-        }
+                onTextChanged();
 
-        UpdateAiModelHint();
+                // Only typing filters; programmatic Text updates and selection commits don't.
+                if (!box.IsKeyboardFocusWithin)
+                {
+                    return;
+                }
+
+                var text = box.Text?.Trim() ?? string.Empty;
+                box.Items.Filter = text.Length == 0
+                    ? null
+                    : item => item?.ToString()?.Contains(text, StringComparison.OrdinalIgnoreCase) == true;
+
+                if (!box.IsDropDownOpen && box.Items.Count > 0)
+                {
+                    box.IsDropDownOpen = true;
+
+                    // Opening the dropdown selects the editable text, so the next keystroke would
+                    // wipe the query; park the caret at the end instead.
+                    if (box.Template.FindName("PART_EditableTextBox", box) is TextBox editor)
+                    {
+                        editor.SelectionStart = editor.Text.Length;
+                        editor.SelectionLength = 0;
+                    }
+                }
+            }));
     }
 
-    private void AiModelBox_QuerySubmitted(
-        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxQuerySubmittedEventArgs args)
+    private void ModelCombo_DropDownOpened(object sender, EventArgs e)
     {
-        if (_loadingUi)
+        // A hand-opened dropdown always shows the full list, not the residue of the last search.
+        if (sender is ComboBox box)
         {
-            return;
-        }
-
-        UpdateAiModelHint();
-    }
-
-    private void AzureModelBox_SuggestionChosen(
-        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxSuggestionChosenEventArgs args)
-    {
-        if (_loadingUi)
-        {
-            return;
-        }
-
-        if (args.SelectedItem is string display)
-        {
-            sender.Text = display;
-            ApplyAzureSelection(display);
+            box.Items.Filter = null;
         }
     }
 
-    private void AzureModelBox_QuerySubmitted(
-        Wpf.Ui.Controls.AutoSuggestBox sender, Wpf.Ui.Controls.AutoSuggestBoxQuerySubmittedEventArgs args)
+    /// <summary>Replaces a picker's items while preserving the visible (typed or saved) text.</summary>
+    private void SetComboItems(ComboBox box, IReadOnlyList<string> items)
+    {
+        _suppressComboFilter = true;
+        try
+        {
+            var text = box.Text;
+            box.ItemsSource = items;
+            box.Items.Filter = null;
+            box.Text = text;
+        }
+        finally
+        {
+            _suppressComboFilter = false;
+        }
+    }
+
+    private void AiModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loadingUi)
         {
             return;
         }
 
-        ApplyAzureSelection(sender.Text);
+        // The editable Text lags SelectionChanged; read it after the combo commits.
+        Dispatcher.BeginInvoke(UpdateAiModelHint);
+    }
+
+    private void AzureModelBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        if (AzureModelBox.SelectedItem is string display)
+        {
+            Dispatcher.BeginInvoke(() => ApplyAzureSelection(display));
+        }
+    }
+
+    private void AzureModelBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        // Covers a deployment name typed in full without picking from the list.
+        if (!_loadingUi)
+        {
+            ApplyAzureSelection(AzureModelBox.Text);
+        }
     }
 
     // A discovered deployment autofills the manual endpoint/deployment fields, which are what Save reads.
@@ -606,7 +662,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     aliases.Add(current);
                 }
 
-                AiModelBox.OriginalItemsSource = aliases;
+                SetComboItems(AiModelBox, aliases);
             }
 
             UpdateFoundryLoadedText(models.FirstOrDefault(m => m.Loaded)?.Alias);
@@ -813,7 +869,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IReadOnlyList<AzureFoundryDeployment> deployments, string? preferEndpoint, string? preferDeployment)
     {
         var items = BuildAzureModelItems(deployments);
-        AzureModelBox.OriginalItemsSource = items;
+        SetComboItems(AzureModelBox, items);
 
         string? selected = null;
         if (!string.IsNullOrWhiteSpace(preferDeployment))
@@ -900,7 +956,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Location: string.Empty);
 
         var items = BuildAzureModelItems(new[] { current });
-        AzureModelBox.OriginalItemsSource = items;
+        SetComboItems(AzureModelBox, items);
         AzureModelBox.Text = items[0];
     }
 
