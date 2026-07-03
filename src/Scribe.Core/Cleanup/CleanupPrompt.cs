@@ -38,11 +38,14 @@ public static class CleanupPrompt
         "than spelled out: use digits for quantities, measurements, prices, percentages, phone " +
         "numbers, and version numbers (for example \"twenty three\" becomes \"23\" and \"five " +
         "point five\" becomes \"5.5\"), but keep a small number as a word where that reads more " +
-        "naturally (for example \"one or two ideas\"). Format clock times as digits with a colon, " +
-        "adding AM or PM when I say it (for example \"three thirty p m\" becomes \"3:30 PM\"). " +
-        "Write dates, calendar months, and years in their normal written form (for example \"july " +
-        "third twenty twenty six\" becomes \"July 3, 2026\"). Only reformat what I actually spoke — " +
-        "never invent or change a value I did not say.";
+        "naturally (for example \"one or two ideas\"). Spell out a number that begins a sentence, " +
+        "or reword the sentence so it doesn't start with one. Format clock times as digits with a " +
+        "colon, adding AM or PM when I say it (for example \"three thirty p m\" becomes " +
+        "\"3:30 PM\"). Write dates, calendar months, and years in their normal written form (for " +
+        "example \"july third twenty twenty six\" becomes \"July 3, 2026\"). Write acronyms " +
+        "spoken letter by letter in capitals with no spaces or periods (for example \"a p i\" " +
+        "becomes \"API\"). Only reformat what I actually spoke — never invent or change a value " +
+        "I did not say.";
 
     /// <summary>
     /// Returns the supplied writing style when it has content, otherwise the

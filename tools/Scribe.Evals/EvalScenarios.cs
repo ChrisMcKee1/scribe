@@ -97,5 +97,17 @@ internal static class EvalScenarios
             // ...but "update" may only be asked for once: a second "updat"/"docs" mention means the
             // model transcribed the repetition instead of merging it into a single statement.
             ForbiddenPatterns: [@"updat[\s\S]*updat", @"(documentation|docs)[\s\S]*(documentation|docs)"]),
+
+        new EvalScenario(
+            Name: "Number formatting",
+            WritingStyle: CleanupPrompt.DefaultWritingStyle,
+            Transcript:
+                "the review moved from three p m to four thirty p m on july third and we will need " +
+                "twenty three licenses plus eight gigabytes of ram per developer",
+            // Times, dates and quantities must land in written form...
+            MarkerPatterns: [@"4:30\s*PM", @"July 3", @"\b23\b", @"\b8\s*(GB|gigabytes)"],
+            MinMarkersToPass: 3,
+            // ...and their spoken spellings must not survive.
+            ForbiddenPatterns: [@"four thirty", @"twenty three", @"\bjuly third\b"]),
     ];
 }

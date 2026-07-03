@@ -81,6 +81,26 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void Default_style_ships_number_date_and_acronym_conventions()
+    {
+        // Spoken numbers/dates/times/acronyms must convert to written form ("twenty three" -> 23,
+        // "three thirty p m" -> 3:30 PM, "a p i" -> API) with the editorial exceptions: small
+        // numbers may stay words where natural, and a sentence never starts with a numeral. The
+        // safety clause keeps the model from inventing values while reformatting.
+        var style = CleanupPrompt.DefaultWritingStyle;
+
+        Assert.Contains("use digits for quantities", style);
+        Assert.Contains("keep a small number as a word", style);
+        Assert.Contains("Spell out a number that begins a sentence", style);
+        Assert.Contains("3:30 PM", style);
+        Assert.Contains("July 3, 2026", style);
+        Assert.Contains("becomes \"API\"", style);
+        Assert.Contains("never invent or change a value", style);
+        // The old "keep numbers exactly as spoken" clause would contradict all of the above.
+        Assert.DoesNotContain("numbers exactly as spoken", style);
+    }
+
+    [Fact]
     public void System_prompt_keeps_the_post_editor_safety_guardrails()
     {
         var prompt = TextCleanupService.BuildSystemPrompt(Foundry());
