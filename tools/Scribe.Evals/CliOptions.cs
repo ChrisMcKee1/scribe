@@ -197,6 +197,14 @@ internal sealed class CliOptions
                         o.LocalLoadTimeout = llt;
                     }
                     break;
+                case "--cloud-ready-timeout":
+                    // Slow-validating deployments (ultra reasoning tiers, capacity-1 cold starts)
+                    // can exceed the 120 s default probe and report a false "not-ready".
+                    if (int.TryParse(Next(), out var crt) && crt > 0)
+                    {
+                        o.CloudReadyTimeout = crt;
+                    }
+                    break;
                 case "--clean-timeout":
                     if (int.TryParse(Next(), out var clt) && clt > 0)
                     {
