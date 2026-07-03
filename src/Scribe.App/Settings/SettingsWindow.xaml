@@ -506,10 +506,10 @@
                                         <!-- Foundry Local (on-device) -->
                                         <StackPanel x:Name="FoundryPanel">
                                             <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ui:AutoSuggestBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                               PlaceholderText="Search models — type to filter"
-                                                               QuerySubmitted="AiModelBox_QuerySubmitted"
-                                                               SuggestionChosen="AiModelBox_SuggestionChosen"/>
+                                            <ComboBox x:Name="AiModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                                      SelectionChanged="AiModelBox_SelectionChanged"
+                                                      DropDownOpened="ModelCombo_DropDownOpened"/>
                                             <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
 
                                             <!-- Load / unload — only one on-device model stays resident at a time -->
@@ -594,12 +594,14 @@
                                                 </Grid>
                                             </Border>
 
-                                            <!-- Model picker: the deployments discovered from your sign-in -->
+                                            <!-- Model picker: a dropdown of the deployments discovered from your sign-in.
+                                                 Click to browse them all, or type to quick-filter the list. -->
                                             <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ui:AutoSuggestBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                               PlaceholderText="Search your deployments — type to filter"
-                                                               QuerySubmitted="AzureModelBox_QuerySubmitted"
-                                                               SuggestionChosen="AzureModelBox_SuggestionChosen"/>
+                                            <ComboBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                                      SelectionChanged="AzureModelBox_SelectionChanged"
+                                                      DropDownOpened="ModelCombo_DropDownOpened"
+                                                      LostFocus="AzureModelBox_LostFocus"/>
                                             <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
 
                                             <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->

@@ -15,6 +15,7 @@ internal sealed class TrayIconHost : IDisposable
 {
     private readonly TaskbarIcon _icon;
     private readonly MenuItem _pauseItem;
+    private readonly MenuItem _aiItem;
 
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
@@ -28,10 +29,23 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user toggles pause; the argument is the requested paused state.</summary>
     public event Action<bool>? PauseToggled;
 
+    /// <summary>Raised when the user toggles AI cleanup; the argument is the requested enabled state.</summary>
+    public event Action<bool>? AiCleanupToggled;
+
     public TrayIconHost()
     {
         var menu = new ContextMenu();
-        menu.Items.Add(new MenuItem { Header = "Scribe", IsEnabled = false });
+
+        // Header: the app name + version, bold and clickable (opens settings) — a live entry
+        // point rather than a greyed-out label that looks like a broken button.
+        var version = typeof(TrayIconHost).Assembly.GetName().Version;
+        var header = new MenuItem
+        {
+            Header = $"Scribe {version?.ToString(3) ?? string.Empty}".TrimEnd(),
+            FontWeight = FontWeights.SemiBold,
+        };
+        header.Click += (_, _) => SettingsRequested?.Invoke();
+        menu.Items.Add(header);
         menu.Items.Add(new Separator());
 
         var settings = new MenuItem { Header = "Settings…" };
@@ -43,9 +57,13 @@ internal sealed class TrayIconHost : IDisposable
         menu.Items.Add(history);
         menu.Items.Add(new Separator());
 
-        // Checkable item: WPF flips IsChecked before Click fires, so it already reflects the
-        // requested state by the time the handler runs. Programmatic IsChecked updates from
-        // SetState do not raise Click, so there is no feedback loop.
+        // Checkable items: WPF flips IsChecked before Click fires, so it already reflects the
+        // requested state by the time the handler runs. Programmatic IsChecked updates
+        // do not raise Click, so there is no feedback loop.
+        _aiItem = new MenuItem { Header = "AI cleanup", IsCheckable = true };
+        _aiItem.Click += (_, _) => AiCleanupToggled?.Invoke(_aiItem.IsChecked);
+        menu.Items.Add(_aiItem);
+
         _pauseItem = new MenuItem { Header = "Pause dictation", IsCheckable = true };
         _pauseItem.Click += (_, _) => PauseToggled?.Invoke(_pauseItem.IsChecked);
         menu.Items.Add(_pauseItem);
@@ -78,6 +96,9 @@ internal sealed class TrayIconHost : IDisposable
 
         _pauseItem.IsChecked = state == DictationState.Paused;
     });
+
+    /// <summary>Reflects the persisted AI-cleanup setting in the quick-toggle check mark.</summary>
+    public void SetAiCleanupChecked(bool enabled) => Dispatch(() => _aiItem.IsChecked = enabled);
 
     /// <summary>Surfaces a transient error to the user via the tray tooltip.</summary>
     public void ShowError(string message) => Dispatch(() =>
