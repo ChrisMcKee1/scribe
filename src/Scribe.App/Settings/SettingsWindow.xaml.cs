@@ -11,6 +11,7 @@ using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 
 namespace Scribe.App.Settings;
 
@@ -1156,28 +1157,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private List<DictionaryEntry> BuildDictionaryEntries(out DictionaryRow? duplicate)
     {
-        duplicate = null;
-        var entries = new List<DictionaryEntry>();
-        var seenPatterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = DictionaryEntryBuilder.Build(
+            _rows.Select(r => new DictionaryEntryBuilder.Row(
+                r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList());
 
-        foreach (var row in _rows)
-        {
-            if (string.IsNullOrWhiteSpace(row.Pattern))
-            {
-                continue; // skip blank placeholder / incomplete rows
-            }
-
-            var pattern = row.Pattern.Trim();
-            if (!seenPatterns.Add(pattern) && duplicate is null)
-            {
-                duplicate = row;
-            }
-
-            var replacement = (row.Replacement ?? string.Empty).Trim();
-            entries.Add(new DictionaryEntry(row.Id, pattern, replacement, row.WholeWord, row.Enabled));
-        }
-
-        return entries;
+        duplicate = result.HasDuplicate ? _rows[result.DuplicateIndex] : null;
+        return result.Entries.ToList();
     }
 
     // --- Voice snippets --------------------------------------------------------------------
@@ -1271,27 +1256,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
     {
-        duplicate = null;
-        var snippets = new List<Snippet>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = SnippetBuilder.Build(
+            _snippetRows.Select(r => new SnippetBuilder.Row(
+                r.Id, r.Phrase, r.Template, r.Enabled)).ToList());
 
-        foreach (var row in _snippetRows)
-        {
-            if (string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template))
-            {
-                continue;
-            }
-
-            var phrase = row.Phrase.Trim();
-            if (!seen.Add(phrase) && duplicate is null)
-            {
-                duplicate = row;
-            }
-
-            snippets.Add(new Snippet(row.Id, phrase, row.Template, row.Enabled));
-        }
-
-        return snippets;
+        duplicate = result.HasDuplicate ? _snippetRows[result.DuplicateIndex] : null;
+        return result.Snippets.ToList();
     }
 
     // --- Per-app profiles ------------------------------------------------------------------
@@ -1400,32 +1370,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     /// <summary>Builds the profile list to persist, skipping rows with no name and no processes.</summary>
-    private List<AppProfile> BuildProfiles()
-    {
-        var profiles = new List<AppProfile>();
-        foreach (var row in _profileRows)
-        {
-            var processes = row.Processes
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(p => p.Length > 0)
-                .ToList();
-
-            if (string.IsNullOrWhiteSpace(row.Name) && processes.Count == 0)
-            {
-                continue; // an empty placeholder row
-            }
-
-            profiles.Add(new AppProfile
-            {
-                Name = string.IsNullOrWhiteSpace(row.Name) ? "Unnamed profile" : row.Name.Trim(),
-                ProcessNames = processes,
-                WritingStyle = string.IsNullOrWhiteSpace(row.WritingStyle) ? null : row.WritingStyle.Trim(),
-                NewlineHandling = row.NewlineHandling,
-            });
-        }
-
-        return profiles;
-    }
+    private List<AppProfile> BuildProfiles() =>
+        ProfileBuilder.Build(
+            _profileRows.Select(r => new ProfileBuilder.Row(
+                r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
 
     private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label);
 
@@ -1658,57 +1606,39 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private (int Added, int Updated, int Unchanged) MergeImportedEntries(IReadOnlyList<DictionaryEntry> imported)
     {
-        var indexByPattern = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 0; i < _rows.Count; i++)
-        {
-            var pattern = _rows[i].Pattern?.Trim();
-            if (!string.IsNullOrEmpty(pattern))
-            {
-                indexByPattern.TryAdd(pattern, i);
-            }
-        }
+        // The pure merge/counting lives in Core; here we apply its plan to the observable grid rows.
+        var existing = _rows
+            .Select((r, i) => new DictionaryImportMerger.ExistingRow(
+                i, r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled))
+            .ToList();
 
-        int added = 0, updated = 0, unchanged = 0;
-        foreach (var entry in imported)
-        {
-            if (indexByPattern.TryGetValue(entry.Pattern, out var index))
-            {
-                var row = _rows[index];
-                if (string.Equals(row.Replacement?.Trim(), entry.Replacement, StringComparison.Ordinal) &&
-                    row.WholeWord == entry.WholeWord && row.Enabled == entry.Enabled)
-                {
-                    unchanged++;
-                    continue;
-                }
+        var plan = DictionaryImportMerger.Merge(existing, imported);
 
-                // Replace the row object (rather than mutate it) so the grid, which has no property
-                // change notifications on DictionaryRow, refreshes the visible values.
-                _rows[index] = new DictionaryRow
-                {
-                    Id = row.Id,
-                    Pattern = row.Pattern ?? entry.Pattern,
-                    Replacement = entry.Replacement,
-                    WholeWord = entry.WholeWord,
-                    Enabled = entry.Enabled,
-                };
-                updated++;
+        foreach (var op in plan.Operations)
+        {
+            var entry = op.Entry;
+            // Replace/append the row object (rather than mutate it) so the grid, which has no property
+            // change notifications on DictionaryRow, refreshes the visible values.
+            var row = new DictionaryRow
+            {
+                Id = entry.Id,
+                Pattern = entry.Pattern,
+                Replacement = entry.Replacement,
+                WholeWord = entry.WholeWord,
+                Enabled = entry.Enabled,
+            };
+
+            if (op.Kind == DictionaryImportMerger.OperationKind.Update)
+            {
+                _rows[op.Index] = row;
             }
             else
             {
-                var row = new DictionaryRow
-                {
-                    Pattern = entry.Pattern,
-                    Replacement = entry.Replacement,
-                    WholeWord = entry.WholeWord,
-                    Enabled = entry.Enabled,
-                };
                 _rows.Add(row);
-                indexByPattern[entry.Pattern] = _rows.Count - 1;
-                added++;
             }
         }
 
-        return (added, updated, unchanged);
+        return (plan.Added, plan.Updated, plan.Unchanged);
     }
 
     private static string StripDefaultSuffix(string name)
