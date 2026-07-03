@@ -511,6 +511,9 @@
                                                       SelectionChanged="AiModelBox_SelectionChanged"
                                                       DropDownOpened="ModelCombo_DropDownOpened"/>
                                             <TextBlock x:Name="AiModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+                                            <!-- Benchmark guidance so users don't pick blind (see docs/model-leaderboard.md). -->
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                       Text="Recommended: mistral-nemo-12b-instruct (best on-device balance) or phi-4 (best quality). See the model leaderboard in the repo docs for the full comparison."/>
 
                                             <!-- Load / unload — only one on-device model stays resident at a time -->
                                             <Grid Margin="0,12,0,0">

@@ -996,9 +996,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var alias = AiModelBox.Text?.Trim() ?? string.Empty;
-        AiModelHint.Text = _foundryCuratedByAlias.TryGetValue(alias, out var model)
+        if (!_foundryCuratedByAlias.TryGetValue(alias, out var model))
+        {
+            AiModelHint.Text = string.Empty;
+            return;
+        }
+
+        // Lead with the benchmark badge when this model is a golden-suite winner so the
+        // recommendation is visible the moment it is selected, not just in the panel hint above.
+        AiModelHint.Text = string.IsNullOrEmpty(model.Recommendation)
             ? model.Hint
-            : string.Empty;
+            : $"Recommended, {model.Recommendation}. {model.Hint}";
     }
 
     private void UpdateAzureDeploymentHint()
