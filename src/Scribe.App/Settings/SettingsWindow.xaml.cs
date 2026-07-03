@@ -97,6 +97,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         RefreshAiStatus();
     }
 
+    // --- Navigation rail -------------------------------------------------------------------
+
+    // Nav order must match the ListBoxItem order in XAML.
+    private Grid[] SectionPanels =>
+    [
+        SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
+        SectionDictionary, SectionSnippets, SectionProfiles, SectionDiagnostics,
+    ];
+
+    private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Fires during InitializeComponent (SelectedIndex is set in XAML) before the panels parse.
+        if (SectionDiagnostics is null)
+        {
+            return;
+        }
+
+        var panels = SectionPanels;
+        var selected = Math.Clamp(NavList.SelectedIndex, 0, panels.Length - 1);
+        for (var i = 0; i < panels.Length; i++)
+        {
+            panels[i].Visibility = i == selected ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
     private void PopulateDevices()
     {
         var choices = new List<DeviceChoice> { new(null, "System default (recommended)") };
