@@ -62,4 +62,23 @@ public sealed class SanitizeTests
         Assert.False(TextCleanupService.TrySanitize(ramble, "hi", out var text));
         Assert.Equal("hi", text);
     }
+
+    [Fact]
+    public void Missing_space_between_sentences_is_inserted()
+    {
+        var raw = "I went to the store.The next day I left.It was fine.";
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal("I went to the store. The next day I left. It was fine.", text);
+    }
+
+    [Theory]
+    [InlineData("The value is 3.5 today.")]   // decimal must not be split
+    [InlineData("I live in the U.S.A now.")]  // acronym must not be split
+    [InlineData("Visit example.com for more.")] // lowercase domain must not be split
+    [InlineData("Well spaced. Sentences here.")] // already correct
+    public void Sentence_space_fix_leaves_valid_text_untouched(string raw)
+    {
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal(raw, text);
+    }
 }

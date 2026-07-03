@@ -48,6 +48,11 @@ internal sealed class DictationController : IDisposable
     private bool _started;
     private bool _disposed;
 
+    // Silence auto-stop (toggle mode, opt-in): tracks live input levels while recording and ends
+    // the dictation when the speaker goes quiet, so a forgotten toggle never leaves the mic hot.
+    private SilenceAutoStopTracker? _silenceTracker;
+    private bool _silenceSubscribed;
+
     public DictationController(
         IHotkeyService hotkeys,
         IAudioCaptureService audio,
@@ -212,6 +217,16 @@ internal sealed class DictationController : IDisposable
             _audio.Start(settings.InputDeviceId);
             _log.LogInformation("Recording started.");
             Raise(DictationState.Recording);
+
+            if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)
+            {
+                _silenceTracker = new SilenceAutoStopTracker(Environment.TickCount64);
+                if (!_silenceSubscribed)
+                {
+                    _audio.LevelChanged += OnLevelForSilence;
+                    _silenceSubscribed = true;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -221,8 +236,30 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void OnDeactivated(object? sender, EventArgs e)
+    private void OnDeactivated(object? sender, EventArgs e) => StopAndProcess();
+
+    // Fired on the audio capture thread for every level sample while subscribed.
+    private void OnLevelForSilence(object? sender, float level)
     {
+        var tracker = _silenceTracker;
+        if (tracker is null || !tracker.Update(level, Environment.TickCount64))
+        {
+            return;
+        }
+
+        _log.LogInformation("Silence auto-stop: ending the toggle dictation.");
+
+        // Reset the hook's toggle flag so the next press starts a new dictation rather than being
+        // swallowed as the "toggle off" for the dictation we just ended ourselves.
+        _hotkeys.CancelToggle();
+        StopAndProcess();
+    }
+
+    /// <summary>Shared stop path for the hotkey release/toggle-off and the silence auto-stop.</summary>
+    private void StopAndProcess()
+    {
+        UnsubscribeSilence();
+
         lock (_gate)
         {
             if (_state != DictationState.Recording)
@@ -235,6 +272,16 @@ internal sealed class DictationController : IDisposable
 
         Raise(DictationState.Processing);
         _ = Task.Run(ProcessAsync);
+    }
+
+    private void UnsubscribeSilence()
+    {
+        _silenceTracker = null;
+        if (_silenceSubscribed)
+        {
+            _audio.LevelChanged -= OnLevelForSilence;
+            _silenceSubscribed = false;
+        }
     }
 
     private async Task ProcessAsync()
@@ -280,6 +327,15 @@ internal sealed class DictationController : IDisposable
                 _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
             }
 
+            // Resolve the target app (and any per-app profile) up front: the profile's writing
+            // style must reach AI cleanup, not just the injection stage.
+            var targetApp = ForegroundProcessName();
+            var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
+            if (profile is not null)
+            {
+                _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
+            }
+
             var result = _transcription.Transcribe(audio);
             if (result.IsEmpty)
             {
@@ -299,7 +355,9 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
-                var cleanup = await _cleanup.CleanAsync(recognized).ConfigureAwait(false);
+                var cleanup = await _cleanup
+                    .CleanAsync(recognized, writingStyleOverride: profile?.WritingStyle)
+                    .ConfigureAwait(false);
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
 
@@ -357,17 +415,18 @@ internal sealed class DictationController : IDisposable
                 "Transcribed {Chars} chars in {Decode:F2}s (RTF {Rtf:F2}).",
                 text.Length, result.DecodeDuration.TotalSeconds, result.RealTimeFactor);
 
-            var targetApp = ForegroundProcessName();
             activity?.SetTag(ScribeTelemetry.TagTargetApp, targetApp);
 
             // Terminals treat an injected newline as Enter, so AI-cleanup paragraph breaks would
-            // submit several partial messages; flatten per the configured mode before injecting.
-            var flattened = InjectionTextFormatter.Apply(text, settings.NewlineHandling, targetApp);
+            // submit several partial messages; flatten per the configured mode (the profile's
+            // override wins when set) before injecting.
+            var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
+            var flattened = InjectionTextFormatter.Apply(text, newlineMode, targetApp);
             if (!ReferenceEquals(flattened, text))
             {
                 _log.LogInformation(
                     "Flattened line breaks before injection ({Mode}, target {App}).",
-                    settings.NewlineHandling, targetApp ?? "unknown");
+                    newlineMode, targetApp ?? "unknown");
                 text = flattened;
             }
 
@@ -509,6 +568,7 @@ internal sealed class DictationController : IDisposable
         if (_disposed) return;
 
         _disposed = true;
+        UnsubscribeSilence();
         if (_started)
         {
             _hotkeys.Activated -= OnActivated;

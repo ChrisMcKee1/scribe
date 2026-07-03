@@ -26,6 +26,13 @@ public interface IHotkeyService : IDisposable
     /// <summary>Replaces the active binding; takes effect immediately without restarting the hook.</summary>
     void UpdateBinding(HotkeyBinding binding);
 
+    /// <summary>
+    /// Resets toggle mode's internal on/off state without raising events. Called when the app ends
+    /// a toggle dictation itself (e.g. silence auto-stop), so the next press starts a new dictation
+    /// instead of being swallowed as the missing "toggle off".
+    /// </summary>
+    void CancelToggle();
+
     /// <summary>Raised when dictation should begin (hold key down, or toggle on).</summary>
     event EventHandler? Activated;
 

@@ -226,6 +226,8 @@ public partial class App : Application
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<ISnippetRepository>(),
+            services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
             services.GetRequiredService<ICleanupFailureLog>(),

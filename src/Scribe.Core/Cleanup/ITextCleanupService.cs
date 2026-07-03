@@ -31,8 +31,14 @@ public interface ITextCleanupService : IAsyncDisposable
     /// inject — on a skip or a runtime failure it is the original input — and the
     /// <see cref="CleanupResult.Outcome"/> tells the caller whether the model ran, was skipped (disabled,
     /// not ready, or empty input), or failed at runtime. Never throws.
+    /// <para>
+    /// <paramref name="writingStyleOverride"/> swaps the writing-style portion of the system prompt
+    /// for this call only (per-app profiles). Blank/null keeps the configured style; overrides reuse
+    /// cached per-style agents, so switching apps costs nothing after the first dictation.
+    /// </para>
     /// </summary>
-    Task<CleanupResult> CleanAsync(string text, CancellationToken cancellationToken = default);
+    Task<CleanupResult> CleanAsync(
+        string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null);
 
     /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime

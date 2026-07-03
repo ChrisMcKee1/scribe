@@ -26,6 +26,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
+    private readonly ISnippetRepository _snippets;
+    private readonly IHistoryRepository _history;
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
@@ -34,6 +36,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private readonly ObservableCollection<SnippetRow> _snippetRows = new();
+    private bool _loadingSnippet;
+    private readonly ObservableCollection<ProfileRow> _profileRows = new();
+    private bool _loadingProfile;
     private readonly ObservableCollection<FailureRow> _failures = new();
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
@@ -50,6 +56,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
         IDictionaryRepository dictionary,
+        ISnippetRepository snippets,
+        IHistoryRepository history,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
@@ -59,6 +67,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _settingsRepository = settingsRepository;
         _audio = audio;
         _dictionary = dictionary;
+        _snippets = snippets;
+        _history = history;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
@@ -76,7 +86,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateChoices();
         LoadFromSettings();
         LoadDictionary();
+        LoadSnippets();
+        LoadProfiles();
         LoadFailures();
+        LoadPerformanceStats();
 
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
@@ -136,6 +149,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
             VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
+            AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
@@ -247,6 +261,37 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
+    }
+
+    private void LoadPerformanceStats()
+    {
+        try
+        {
+            var entries = _history.GetRecent(1000);
+            var stats = Scribe.Core.Diagnostics.DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
+            if (stats is null)
+            {
+                return; // keep the friendly empty-state text
+            }
+
+            StatsSummaryText.Text =
+                $"{stats.Count} dictation{(stats.Count == 1 ? string.Empty : "s")}, " +
+                $"{stats.TotalAudio.TotalMinutes:0.#} min of speech. Decode only — lower is faster; " +
+                "RTF is decode time relative to audio length.";
+            StatDecodeP50.Text = FormatSeconds(stats.DecodeP50Ms);
+            StatDecodeP95.Text = FormatSeconds(stats.DecodeP95Ms);
+            StatRtfP50.Text = $"{stats.RtfP50:0.00}×";
+            StatRtfP95.Text = $"{stats.RtfP95:0.00}×";
+            StatsGrid.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            // Stats are a nicety; never block the settings window over them.
+            System.Diagnostics.Debug.WriteLine($"Performance stats unavailable: {ex.Message}");
+        }
+
+        static string FormatSeconds(double ms) =>
+            ms < 1000 ? $"{ms:0} ms" : $"{ms / 1000.0:0.0} s";
     }
 
     private void LoadFailures()
@@ -939,6 +984,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        var snippets = BuildSnippets(out var duplicateSnippet);
+        if (duplicateSnippet is not null)
+        {
+            SnippetList.SelectedItem = duplicateSnippet;
+            SnippetList.ScrollIntoView(duplicateSnippet);
+            MessageBox.Show(
+                this,
+                $"\"{duplicateSnippet.Phrase.Trim()}\" is used as the trigger for more than one snippet.\n\n" +
+                "Each trigger phrase can only expand to one template. Edit or remove the highlighted " +
+                "snippet, then save again.",
+                "Duplicate snippet trigger",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -949,6 +1009,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
             _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
+            _settings.AutoStopOnSilence = AutoStopCheck.IsChecked == true;
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
@@ -957,6 +1018,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
+            _settings.Profiles = BuildProfiles();
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
@@ -980,6 +1042,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     : writingStyle;
 
             _dictionary.SaveAll(entries);
+            _snippets.SaveAll(snippets);
             _settingsRepository.Save(_settings);
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
@@ -1036,6 +1099,255 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return entries;
     }
 
+    // --- Voice snippets --------------------------------------------------------------------
+
+    private void LoadSnippets()
+    {
+        foreach (var snippet in _snippets.GetAll())
+        {
+            _snippetRows.Add(new SnippetRow
+            {
+                Id = snippet.Id,
+                Phrase = snippet.Phrase,
+                Template = snippet.Template,
+                Enabled = snippet.Enabled,
+            });
+        }
+
+        SnippetList.ItemsSource = _snippetRows;
+    }
+
+    private SnippetRow? SelectedSnippet => SnippetList.SelectedItem as SnippetRow;
+
+    private void SnippetList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var row = SelectedSnippet;
+        SnippetEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
+        SnippetEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
+        if (row is null)
+        {
+            return;
+        }
+
+        _loadingSnippet = true;
+        try
+        {
+            SnippetPhraseBox.Text = row.Phrase;
+            SnippetTemplateBox.Text = row.Template;
+            SnippetEnabledCheck.IsChecked = row.Enabled;
+        }
+        finally
+        {
+            _loadingSnippet = false;
+        }
+    }
+
+    private void SnippetAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new SnippetRow { Phrase = "new snippet", Template = string.Empty };
+        _snippetRows.Add(row);
+        SnippetList.SelectedItem = row;
+        SnippetList.ScrollIntoView(row);
+        SnippetPhraseBox.Focus();
+        SnippetPhraseBox.SelectAll();
+    }
+
+    private void SnippetDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedSnippet is { } row)
+        {
+            _snippetRows.Remove(row);
+        }
+    }
+
+    private void SnippetPhraseBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Phrase = SnippetPhraseBox.Text;
+        }
+    }
+
+    private void SnippetTemplateBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Template = SnippetTemplateBox.Text;
+        }
+    }
+
+    private void SnippetEnabledCheck_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_loadingSnippet && SelectedSnippet is { } row)
+        {
+            row.Enabled = SnippetEnabledCheck.IsChecked == true;
+        }
+    }
+
+    /// <summary>
+    /// Builds the desired snippet state from the editor rows, skipping rows with a blank phrase or
+    /// template. Reports the first duplicate trigger phrase (case-insensitive) like the dictionary.
+    /// </summary>
+    private List<Snippet> BuildSnippets(out SnippetRow? duplicate)
+    {
+        duplicate = null;
+        var snippets = new List<Snippet>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var row in _snippetRows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Phrase) || string.IsNullOrWhiteSpace(row.Template))
+            {
+                continue;
+            }
+
+            var phrase = row.Phrase.Trim();
+            if (!seen.Add(phrase) && duplicate is null)
+            {
+                duplicate = row;
+            }
+
+            snippets.Add(new Snippet(row.Id, phrase, row.Template, row.Enabled));
+        }
+
+        return snippets;
+    }
+
+    // --- Per-app profiles ------------------------------------------------------------------
+
+    private void LoadProfiles()
+    {
+        ProfileNewlineCombo.DisplayMemberPath = nameof(ProfileNewlineChoice.Label);
+        ProfileNewlineCombo.ItemsSource = new[]
+        {
+            new ProfileNewlineChoice(null, "Use the global setting"),
+            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals"),
+            new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new ProfileNewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
+        };
+
+        foreach (var profile in _settings.Profiles)
+        {
+            _profileRows.Add(new ProfileRow
+            {
+                Name = profile.Name,
+                Processes = string.Join(", ", profile.ProcessNames),
+                WritingStyle = profile.WritingStyle ?? string.Empty,
+                NewlineHandling = profile.NewlineHandling,
+            });
+        }
+
+        ProfileList.ItemsSource = _profileRows;
+    }
+
+    private ProfileRow? SelectedProfile => ProfileList.SelectedItem as ProfileRow;
+
+    private void ProfileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var row = SelectedProfile;
+        ProfileEditor.Visibility = row is null ? Visibility.Collapsed : Visibility.Visible;
+        ProfileEmptyHint.Visibility = row is null ? Visibility.Visible : Visibility.Collapsed;
+        if (row is null)
+        {
+            return;
+        }
+
+        _loadingProfile = true;
+        try
+        {
+            ProfileNameBox.Text = row.Name;
+            ProfileProcessesBox.Text = row.Processes;
+            ProfileStyleBox.Text = row.WritingStyle;
+            var choices = (ProfileNewlineChoice[])ProfileNewlineCombo.ItemsSource;
+            ProfileNewlineCombo.SelectedItem =
+                choices.FirstOrDefault(c => c.Mode == row.NewlineHandling) ?? choices[0];
+        }
+        finally
+        {
+            _loadingProfile = false;
+        }
+    }
+
+    private void ProfileAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new ProfileRow { Name = "New profile" };
+        _profileRows.Add(row);
+        ProfileList.SelectedItem = row;
+        ProfileList.ScrollIntoView(row);
+        ProfileNameBox.Focus();
+        ProfileNameBox.SelectAll();
+    }
+
+    private void ProfileDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile is { } row)
+        {
+            _profileRows.Remove(row);
+        }
+    }
+
+    private void ProfileNameBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.Name = ProfileNameBox.Text;
+        }
+    }
+
+    private void ProfileProcessesBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.Processes = ProfileProcessesBox.Text;
+        }
+    }
+
+    private void ProfileStyleBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.WritingStyle = ProfileStyleBox.Text;
+        }
+    }
+
+    private void ProfileNewlineCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingProfile && SelectedProfile is { } row)
+        {
+            row.NewlineHandling = (ProfileNewlineCombo.SelectedItem as ProfileNewlineChoice)?.Mode;
+        }
+    }
+
+    /// <summary>Builds the profile list to persist, skipping rows with no name and no processes.</summary>
+    private List<AppProfile> BuildProfiles()
+    {
+        var profiles = new List<AppProfile>();
+        foreach (var row in _profileRows)
+        {
+            var processes = row.Processes
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(p => p.Length > 0)
+                .ToList();
+
+            if (string.IsNullOrWhiteSpace(row.Name) && processes.Count == 0)
+            {
+                continue; // an empty placeholder row
+            }
+
+            profiles.Add(new AppProfile
+            {
+                Name = string.IsNullOrWhiteSpace(row.Name) ? "Unnamed profile" : row.Name.Trim(),
+                ProcessNames = processes,
+                WritingStyle = string.IsNullOrWhiteSpace(row.WritingStyle) ? null : row.WritingStyle.Trim(),
+                NewlineHandling = row.NewlineHandling,
+            });
+        }
+
+        return profiles;
+    }
+
+    private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label);
+
     // --- Overlay position picker -----------------------------------------------------------
 
     private void LoadOverlayPosition(OverlayPosition position)
@@ -1069,6 +1381,71 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OverlayPreviewButton_Click(object sender, RoutedEventArgs e) =>
         _previewOverlay(SelectedOverlayPosition);
+
+    // --- Dictionary suggestions from history -----------------------------------------------
+
+    private void DictionarySuggestButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        IReadOnlyList<DictionarySuggestionMiner.Suggestion> suggestions;
+        try
+        {
+            // The grid is the live source of truth for "already covered", so terms added but not
+            // yet saved are excluded too.
+            var current = _rows
+                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+                .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
+                .ToList();
+            suggestions = DictionarySuggestionMiner.Mine(_history.GetRecent(1000), current);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not scan your history:\n{ex.Message}", "Scribe",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (suggestions.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "No recurring technical terms found in your recent dictations yet.\n\n" +
+                "Suggestions appear once a term shows up in three or more dictations, so keep " +
+                "dictating and try again later.",
+                "Nothing to suggest",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        DictionaryRow? first = null;
+        foreach (var suggestion in suggestions)
+        {
+            // Lock the spelling: the lowercase spoken form maps to the surface form seen most
+            // often. Same-cased terms (e.g. "net10") still land in the AI vocabulary.
+            var row = new DictionaryRow
+            {
+                Pattern = suggestion.Term.ToLowerInvariant(),
+                Replacement = suggestion.Term,
+            };
+            _rows.Add(row);
+            first ??= row;
+        }
+
+        if (first is not null)
+        {
+            DictionaryGrid.SelectedItem = first;
+            DictionaryGrid.ScrollIntoView(first);
+        }
+
+        MessageBox.Show(
+            this,
+            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+            "from your recent dictations.\n\nReview them in the grid — delete any you don't want — " +
+            "then save.",
+            "Suggestions added",
+            MessageBoxButton.OK, MessageBoxImage.Information);
+    }
 
     // --- Dictionary CSV import / export ---------------------------------------------------
 
@@ -1282,6 +1659,60 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Replacement { get; set; } = string.Empty;
         public bool WholeWord { get; set; } = true;
         public bool Enabled { get; set; } = true;
+    }
+
+    /// <summary>
+    /// Editable snippet row behind the master-detail editor. Phrase raises change notifications so
+    /// the ListBox label tracks edits made in the detail pane.
+    /// </summary>
+    public sealed class SnippetRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _phrase = string.Empty;
+
+        public long Id { get; set; }
+
+        public string Phrase
+        {
+            get => _phrase;
+            set
+            {
+                if (_phrase != value)
+                {
+                    _phrase = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Phrase)));
+                }
+            }
+        }
+
+        public string Template { get; set; } = string.Empty;
+        public bool Enabled { get; set; } = true;
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    /// <summary>Editable profile row; Name notifies so the ListBox label tracks the detail pane.</summary>
+    public sealed class ProfileRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _name = string.Empty;
+
+        public string Name
+        {
+            get => _name;
+            set
+            {
+                if (_name != value)
+                {
+                    _name = value;
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Name)));
+                }
+            }
+        }
+
+        public string Processes { get; set; } = string.Empty;
+        public string WritingStyle { get; set; } = string.Empty;
+        public NewlineInjectionMode? NewlineHandling { get; set; }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
     public sealed class FailureRow

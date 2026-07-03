@@ -50,6 +50,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ScribeDatabase>();
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<IDictionaryRepository, DictionaryRepository>();
+        services.AddSingleton<ISnippetRepository, SnippetRepository>();
         services.AddSingleton<IHistoryRepository, HistoryRepository>();
         services.AddSingleton<ICleanupFailureLog, CleanupFailureLog>();
 

@@ -222,6 +222,20 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                        <TextBlock Text="End dictation on silence (toggle mode)" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early — leave it off if that happens."/>
+                                    </StackPanel>
+                                    <ui:ToggleSwitch x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                            <ui:Card Style="{StaticResource SettingCard}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                         <TextBlock Text="Post-processing" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
                                                    Text="Apply the dictionary and spacing fix-ups to transcribed text."/>
@@ -542,6 +556,9 @@
                                        VerticalAlignment="Center"
                                        Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
+                                           MinWidth="120" Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
+                                           ToolTip="Scan your recent dictations for recurring technical terms and acronyms worth locking in."/>
                                 <ui:Button x:Name="DictionaryTemplateButton" Content="Get template"
                                            MinWidth="110" Margin="0,0,8,0" Click="DictionaryTemplateButton_Click"
                                            ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
@@ -556,16 +573,198 @@
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="Diagnostics">
+                <TabItem Header="Snippets">
                     <Grid Margin="2,12,2,2">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
+                                   Text="Say a trigger phrase — like 'insert my standup update' — and Scribe types the saved template instead. Pick distinctive phrases you wouldn't say by accident. Edits apply when you save."/>
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,8,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <ListBox x:Name="SnippetList" Grid.Row="0" BorderThickness="0"
+                                             Background="Transparent" DisplayMemberPath="Phrase"
+                                             SelectionChanged="SnippetList_SelectionChanged"/>
+                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                        <ui:Button x:Name="SnippetAddButton" Content="Add" MinWidth="70"
+                                                   Margin="0,0,8,0" Click="SnippetAddButton_Click"/>
+                                        <ui:Button x:Name="SnippetDeleteButton" Content="Delete" MinWidth="70"
+                                                   Click="SnippetDeleteButton_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </ui:Card>
+
+                            <ui:Card Grid.Column="1" Padding="16,12">
+                                <Grid>
+                                    <StackPanel x:Name="SnippetEditor" Visibility="Collapsed">
+                                        <TextBlock Text="Trigger phrase" Style="{StaticResource SettingTitle}"/>
+                                        <ui:TextBox x:Name="SnippetPhraseBox" Margin="0,8,0,0"
+                                                    HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                    PlaceholderText="insert my standup update"
+                                                    TextChanged="SnippetPhraseBox_TextChanged"/>
+                                        <Grid Margin="0,14,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Expands to" Style="{StaticResource SettingTitle}"
+                                                       VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <TextBlock Text="Enabled" Style="{StaticResource SettingHint}" Margin="0,0,8,0"
+                                                           VerticalAlignment="Center"/>
+                                                <ui:ToggleSwitch x:Name="SnippetEnabledCheck" VerticalAlignment="Center"
+                                                                 Click="SnippetEnabledCheck_Click"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
+                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                    TextWrapping="Wrap" MinHeight="180" MaxHeight="320"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    SpellCheck.IsEnabled="True"
+                                                    TextChanged="SnippetTemplateBox_TextChanged"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Line breaks are kept — except in terminals when 'Smart' line-break handling is on, where they become spaces so Enter isn't sent."/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="SnippetEmptyHint"
+                                               Text="Select a snippet on the left, or click Add to create one."
+                                               Style="{StaticResource SettingHint}" Margin="0"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Profiles">
+                    <Grid Margin="2,12,2,2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
+                                   Text="Give different apps different dictation behaviour: formal prose in Outlook, casual in Slack, one terse line in the terminal. The first profile matching the focused app wins; apps with no profile use your global settings."/>
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <ui:Card Grid.Column="0" Padding="8" Margin="0,0,8,0">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <ListBox x:Name="ProfileList" Grid.Row="0" BorderThickness="0"
+                                             Background="Transparent" DisplayMemberPath="Name"
+                                             SelectionChanged="ProfileList_SelectionChanged"/>
+                                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                        <ui:Button x:Name="ProfileAddButton" Content="Add" MinWidth="70"
+                                                   Margin="0,0,8,0" Click="ProfileAddButton_Click"/>
+                                        <ui:Button x:Name="ProfileDeleteButton" Content="Delete" MinWidth="70"
+                                                   Click="ProfileDeleteButton_Click"/>
+                                    </StackPanel>
+                                </Grid>
+                            </ui:Card>
+
+                            <ui:Card Grid.Column="1" Padding="16,12">
+                                <Grid>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel x:Name="ProfileEditor" Visibility="Collapsed">
+                                            <TextBlock Text="Profile name" Style="{StaticResource SettingTitle}"/>
+                                            <ui:TextBox x:Name="ProfileNameBox" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                        PlaceholderText="e.g. Email"
+                                                        TextChanged="ProfileNameBox_TextChanged"/>
+
+                                            <TextBlock Text="Apps (process names)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <ui:TextBox x:Name="ProfileProcessesBox" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Stretch" VerticalContentAlignment="Center"
+                                                        PlaceholderText="OUTLOOK, olk, thunderbird"
+                                                        TextChanged="ProfileProcessesBox_TextChanged"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Comma-separated process names, without .exe (Task Manager's Details tab shows them). Examples: OUTLOOK for classic Outlook, olk for new Outlook, slack, WindowsTerminal, Code for VS Code."/>
+
+                                            <TextBlock Text="Writing style for these apps" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <ui:TextBox x:Name="ProfileStyleBox" Margin="0,8,0,0"
+                                                        HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                        TextWrapping="Wrap" MinHeight="100" MaxHeight="200"
+                                                        VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                        SpellCheck.IsEnabled="True"
+                                                        TextChanged="ProfileStyleBox_TextChanged"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Leave blank to keep your global writing style. Needs AI cleanup to be enabled to take effect."/>
+
+                                            <TextBlock Text="Line breaks in these apps" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                            <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                    <TextBlock x:Name="ProfileEmptyHint"
+                                               Text="Select a profile on the left, or click Add to create one."
+                                               Style="{StaticResource SettingHint}" Margin="0"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                            </ui:Card>
+                        </Grid>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Diagnostics">
+                    <Grid Margin="2,12,2,2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Local latency stats from stored history — decode only; nothing new is
+                             collected and nothing leaves the machine. -->
+                        <ui:Card Grid.Row="0" Padding="16,12" Margin="0,0,0,10">
+                            <StackPanel>
+                                <TextBlock Text="Performance — last 7 days" Style="{StaticResource SettingTitle}"/>
+                                <TextBlock x:Name="StatsSummaryText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                           Text="No dictations recorded in the last week."/>
+                                <UniformGrid x:Name="StatsGrid" Columns="4" Margin="0,10,0,0" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatDecodeP50" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="decode, typical (P50)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatDecodeP95" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="decode, slow runs (P95)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatRtfP50" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="speed, typical (RTF P50)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                    <StackPanel>
+                                        <TextBlock x:Name="StatRtfP95" FontSize="20" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        <TextBlock Text="speed, slow runs (RTF P95)" Style="{StaticResource SettingHint}"/>
+                                    </StackPanel>
+                                </UniformGrid>
+                            </StackPanel>
+                        </ui:Card>
+
+                        <TextBlock Grid.Row="1" Style="{StaticResource SettingHint}" Margin="2,0,2,10"
                                    Text="When AI cleanup fails at runtime, Scribe falls back to the raw transcription and records why here. Entries older than a week are removed automatically."/>
-                        <ui:Card Grid.Row="1" Padding="0">
+                        <ui:Card Grid.Row="2" Padding="0">
                             <Grid>
                                 <DataGrid x:Name="FailuresGrid"
                                           AutoGenerateColumns="False" IsReadOnly="True"
@@ -584,7 +783,7 @@
                                            Visibility="Collapsed"/>
                             </Grid>
                         </ui:Card>
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
                             <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
                                        MinWidth="120" Click="ClearFailuresButton_Click"/>
                         </StackPanel>
