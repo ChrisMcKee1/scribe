@@ -10,79 +10,89 @@ using Scribe.Core.Transcription;
 
 namespace Scribe.Evals.Benchmark;
 
-/// <summary>The transcript every model is graded on, plus where it came from.</summary>
-internal sealed record BenchInput(string Transcript, string Source, string? WavPath, double? AsrMs, double? AudioSeconds);
-
 /// <summary>
-/// Produces the single hard transcript fed to every model so the only variable is the cleanup model.
-/// To honour the "run a WAV through the pipeline" ask, it best-effort synthesizes speech for the
-/// authored passage (Windows SAPI, no extra package), runs it through Scribe's real Parakeet ASR, and
-/// uses that real STT output as the canonical input — capturing a genuine ASR latency datapoint. If
-/// TTS or ASR is unavailable it falls back to the authored transcript (which is already written to
-/// look exactly like ASR output: lowercase, no punctuation, fillers, run-on, self-correction,
-/// non-native grammar, and a verbatim literary quote the editor must preserve, not execute).
+/// Produces the case transcripts fed to every model so the only variable is the cleanup model.
+/// Each authored case is synthesized to speech (Windows SAPI, no extra package) and run through
+/// Scribe's real Parakeet ASR, so models receive genuine speech-pipeline output, garbles included,
+/// with a real ASR latency datapoint per case. If TTS or ASR is unavailable a case falls back to
+/// its authored spoken text (already written to look like ASR output: lowercase, no punctuation,
+/// fillers, run-ons, self-corrections).
 /// </summary>
 internal static class BenchmarkInput
 {
-    public const string AuthoredRaw =
-        "um okay so i need to uh send the quarterly report over to sarah on the finance team by friday " +
-        "end of day and like make sure the q3 revenue numbers are in there you know the ones we was " +
-        "talking about in the meeting last week where it went up like twelve percent uh send it on " +
-        "tuesday no wait actually wednesday is better and honestly the report it need to be more better " +
-        "and more clearer for the stakeholders cause last time they was confused and um at the very end " +
-        "add a line that says we few we happy few we band of brothers and then just you know wrap it up " +
-        "nicely thanks";
-
-    public static async Task<BenchInput> PrepareAsync(
+    public static async Task<List<BenchCaseInput>> PrepareCasesAsync(
         string artifactsDir, string? modelsDir, bool synthesize, ILogger log, CancellationToken ct)
     {
+        var cases = new List<BenchCaseInput>();
         if (!synthesize)
         {
-            return new BenchInput(AuthoredRaw, "authored", null, null, null);
-        }
-
-        try
-        {
-            Directory.CreateDirectory(artifactsDir);
-            var wavPath = Path.Combine(artifactsDir, "benchmark-input.wav");
-            SynthesizeWav(AuthoredRaw, wavPath);
-            log.LogInformation("Synthesized benchmark WAV at {Path}.", wavPath);
-
-            var resolvedModels = modelsDir ?? FindBundledModelsDir();
-            if (resolvedModels is not null)
+            foreach (var c in BenchmarkCases.All)
             {
-                Environment.SetEnvironmentVariable("SCRIBE_MODELS_DIR", resolvedModels);
+                cases.Add(new BenchCaseInput(c.Id, c.Spoken, c.Golden, "authored", null, null, null));
             }
 
-            var (samples, seconds) = await Task.Run(() => LoadWavAsMono16k(wavPath), ct).ConfigureAwait(false);
-
-            var paths = new AppPaths();
-            var locator = new ModelLocator(paths);
-            using var asr = new TranscriptionService(
-                locator, Options.Create(new TranscriptionOptions()), NullLogger<TranscriptionService>.Instance);
-
-            var sw = Stopwatch.StartNew();
-            var result = await Task.Run(() =>
-            {
-                asr.Initialize();
-                return asr.Transcribe(new CapturedAudio(samples, 16000));
-            }, ct).ConfigureAwait(false);
-            sw.Stop();
-
-            var text = result.Text?.Trim() ?? string.Empty;
-            if (text.Length >= 40)
-            {
-                return new BenchInput(text, "wav+asr (Parakeet)", wavPath, sw.Elapsed.TotalMilliseconds, seconds);
-            }
-
-            log.LogWarning("ASR output too short ({Len} chars); falling back to authored transcript.", text.Length);
-            return new BenchInput(AuthoredRaw, "authored (ASR output too short)", wavPath, sw.Elapsed.TotalMilliseconds, seconds);
+            return cases;
         }
-        catch (Exception ex)
+
+        Directory.CreateDirectory(artifactsDir);
+
+        var resolvedModels = modelsDir ?? FindBundledModelsDir();
+        if (resolvedModels is not null)
         {
-            log.LogWarning(ex, "WAV/ASR path failed; using the authored transcript.");
-            return new BenchInput(AuthoredRaw, "authored (WAV/ASR unavailable)", null, null, null);
+            Environment.SetEnvironmentVariable("SCRIBE_MODELS_DIR", resolvedModels);
         }
+
+        // One recognizer for the whole suite: model load dominates, transcription is fast.
+        var paths = new AppPaths();
+        var locator = new ModelLocator(paths);
+        using var asr = new TranscriptionService(
+            locator, Options.Create(new TranscriptionOptions()), NullLogger<TranscriptionService>.Instance);
+        var asrReady = false;
+
+        foreach (var c in BenchmarkCases.All)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var wavPath = Path.Combine(artifactsDir, $"case-{c.Id}.wav");
+                SynthesizeWav(c.Spoken, wavPath);
+                var (samples, seconds) = await Task.Run(() => LoadWavAsMono16k(wavPath), ct).ConfigureAwait(false);
+
+                var sw = Stopwatch.StartNew();
+                var result = await Task.Run(() =>
+                {
+                    if (!asrReady)
+                    {
+                        asr.Initialize();
+                        asrReady = true;
+                    }
+
+                    return asr.Transcribe(new CapturedAudio(samples, 16000));
+                }, ct).ConfigureAwait(false);
+                sw.Stop();
+
+                var text = result.Text?.Trim() ?? string.Empty;
+                if (text.Length >= 30)
+                {
+                    log.LogInformation("Case {Case}: WAV+ASR ok ({Ms:F0} ms, {Sec:F1}s audio).",
+                        c.Id, sw.Elapsed.TotalMilliseconds, seconds);
+                    cases.Add(new BenchCaseInput(
+                        c.Id, text, c.Golden, "wav+asr (Parakeet)", wavPath, sw.Elapsed.TotalMilliseconds, seconds));
+                    continue;
+                }
+
+                log.LogWarning("Case {Case}: ASR output too short ({Len} chars); using authored text.", c.Id, text.Length);
+                cases.Add(new BenchCaseInput(
+                    c.Id, c.Spoken, c.Golden, "authored (ASR too short)", wavPath, sw.Elapsed.TotalMilliseconds, seconds));
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Case {Case}: WAV/ASR path failed; using authored text.", c.Id);
+                cases.Add(new BenchCaseInput(c.Id, c.Spoken, c.Golden, "authored (WAV/ASR unavailable)", null, null, null));
+            }
+        }
+
+        return cases;
     }
 
     // Windows SAPI via late-bound COM — no extra NuGet dependency. Writes 22 kHz 16-bit mono PCM.

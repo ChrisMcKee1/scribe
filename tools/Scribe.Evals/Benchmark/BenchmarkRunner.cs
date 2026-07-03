@@ -55,24 +55,30 @@ internal sealed class BenchmarkRunner
 
         var style = CleanupPrompt.DefaultWritingStyle;
 
-        Console.WriteLine("Preparing benchmark input (WAV synthesis + ASR)…");
-        var inputCachePath = Path.Combine(_cfg.OutDir, "input.json");
-        BenchInput input;
+        Console.WriteLine($"Preparing {BenchmarkCases.All.Count} benchmark cases (WAV synthesis + ASR)…");
+        var inputCachePath = Path.Combine(_cfg.OutDir, "cases.json");
+        List<BenchCaseInput>? cases = null;
         if (!_cfg.Force && File.Exists(inputCachePath))
         {
-            input = JsonSerializer.Deserialize<BenchInput>(File.ReadAllText(inputCachePath), Json)
-                ?? await BenchmarkInput.PrepareAsync(_cfg.OutDir, _cfg.ModelsDir, _cfg.Synthesize, _log, ct).ConfigureAwait(false);
-            Console.WriteLine($"Reusing cached input from {inputCachePath} (keeps every model on identical bytes).");
-        }
-        else
-        {
-            input = await BenchmarkInput.PrepareAsync(_cfg.OutDir, _cfg.ModelsDir, _cfg.Synthesize, _log, ct)
-                .ConfigureAwait(false);
-            File.WriteAllText(inputCachePath, JsonSerializer.Serialize(input, Json));
+            cases = JsonSerializer.Deserialize<List<BenchCaseInput>>(File.ReadAllText(inputCachePath), Json);
+            if (cases is { Count: > 0 })
+            {
+                Console.WriteLine($"Reusing cached cases from {inputCachePath} (keeps every model on identical bytes).");
+            }
         }
 
-        Console.WriteLine($"Input source: {input.Source}");
-        Console.WriteLine($"Transcript ({input.Transcript.Length} chars): {input.Transcript}");
+        if (cases is not { Count: > 0 })
+        {
+            cases = await BenchmarkInput.PrepareCasesAsync(_cfg.OutDir, _cfg.ModelsDir, _cfg.Synthesize, _log, ct)
+                .ConfigureAwait(false);
+            File.WriteAllText(inputCachePath, JsonSerializer.Serialize(cases, Json));
+        }
+
+        foreach (var c in cases)
+        {
+            Console.WriteLine($"  {c.CaseId,-22} {c.Source,-24} {c.Transcript.Length} chars");
+        }
+
         Console.WriteLine();
 
         // Build the roster.
@@ -130,13 +136,11 @@ internal sealed class BenchmarkRunner
         {
             GeneratedUtc = DateTime.UtcNow.ToString("u"),
             Machine = Environment.MachineName,
-            InputSource = input.Source,
-            InputTranscript = input.Transcript,
+            InputSource = string.Join("; ", cases.Select(c => c.Source).Distinct()),
             WritingStyle = style,
             JudgeModel = judge is null ? "(none)" : $"{_cfg.JudgeModel} @ {_cfg.JudgeEndpoint}",
             Runs = _cfg.Runs,
-            AsrMs = input.AsrMs,
-            AudioSeconds = input.AudioSeconds,
+            Cases = cases.Select(c => new BenchCaseMeta(c.CaseId, c.Source, c.Transcript, c.Golden, c.AsrMs, c.AudioSeconds)).ToList(),
         };
 
         await using var svc = new TextCleanupService(new VerboseConsoleLogger<TextCleanupService>())
@@ -156,7 +160,7 @@ internal sealed class BenchmarkRunner
             }
 
             Console.WriteLine($"[{index}/{roster.Count}] {key} ({model.Target}){(model.Note is null ? "" : $" [{model.Note}]")}");
-            var result = await BenchmarkOneAsync(svc, model, input.Transcript, style, judge, ct).ConfigureAwait(false);
+            var result = await BenchmarkOneAsync(svc, model, cases, style, judge, ct).ConfigureAwait(false);
 
             results.RemoveAll(r => string.Equals($"{r.Group}/{r.Id}", key, StringComparison.OrdinalIgnoreCase));
             results.Add(result);
@@ -190,7 +194,8 @@ internal sealed class BenchmarkRunner
     }
 
     private async Task<BenchResult> BenchmarkOneAsync(
-        TextCleanupService svc, BenchModel model, string transcript, string style, QualityJudge? judge, CancellationToken ct)
+        TextCleanupService svc, BenchModel model, IReadOnlyList<BenchCaseInput> cases, string style,
+        QualityJudge? judge, CancellationToken ct)
     {
         var options = model.Provider == CleanupProvider.AzureFoundry
             ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
@@ -233,51 +238,93 @@ internal sealed class BenchmarkRunner
         try
         {
             // One warmup call (discarded) so steady-state latency excludes any first-call cost.
-            _ = await svc.CleanAsync(transcript, ct).ConfigureAwait(false);
+            _ = await svc.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
 
-            var times = new List<double>(_cfg.Runs);
-            string output = transcript;
-            for (var i = 0; i < _cfg.Runs; i++)
+            var caseResults = new List<BenchCaseResult>(cases.Count);
+            var allTimes = new List<double>(cases.Count * _cfg.Runs);
+
+            foreach (var c in cases)
             {
-                ct.ThrowIfCancellationRequested();
-                var sw = Stopwatch.StartNew();
-                output = (await svc.CleanAsync(transcript, ct).ConfigureAwait(false)).Text;
-                sw.Stop();
-                times.Add(sw.Elapsed.TotalMilliseconds);
+                var times = new List<double>(_cfg.Runs);
+                var output = c.Transcript;
+                for (var i = 0; i < _cfg.Runs; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var sw = Stopwatch.StartNew();
+                    output = (await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false)).Text;
+                    sw.Stop();
+                    times.Add(sw.Elapsed.TotalMilliseconds);
+                }
+
+                allTimes.AddRange(times);
+                var caseChanged = !string.Equals(output.Trim(), c.Transcript.Trim(), StringComparison.Ordinal);
+
+                JudgeVerdict? verdict = null;
+                if (judge is not null)
+                {
+                    try
+                    {
+                        verdict = await judge.JudgeAsync(c.Transcript, output, c.Golden, style, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogWarning(ex, "Judge failed for {Model} case {Case}.", model.Id, c.CaseId);
+                    }
+                }
+
+                var sortedCase = times.OrderBy(t => t).ToList();
+                caseResults.Add(new BenchCaseResult(
+                    c.CaseId, Median(sortedCase), times.ToArray(), verdict?.Overall,
+                    verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output));
+
+                Console.WriteLine(
+                    $"        {c.CaseId,-22} {Median(sortedCase),6:F0} ms  " +
+                    $"q={verdict?.Overall.ToString() ?? "-"}  changed={caseChanged}");
             }
 
-            var changed = !string.Equals(output.Trim(), transcript.Trim(), StringComparison.Ordinal);
+            // Aggregate: latency pools every timed sample (same case mix for every model, so the
+            // comparison is apples-to-apples); quality is the mean of the per-case judge scores;
+            // flags are the union; the leaderboard's verbatim output shows the worst-scoring case.
+            var sorted = allTimes.OrderBy(t => t).ToList();
+            var anyChanged = caseResults.Any(r => r.Changed);
+            var qualities = caseResults.Where(r => r.Quality is not null).Select(r => r.Quality!.Value).ToList();
+            int? quality = qualities.Count > 0 ? (int)Math.Round(qualities.Average()) : null;
 
-            JudgeVerdict? verdict = null;
-            if (judge is not null)
+            BenchDimensions? dims = null;
+            var dimSets = caseResults.Select(r => r.Dims).Where(d => d is not null).Cast<BenchDimensions>().ToList();
+            if (dimSets.Count > 0)
             {
-                try
-                {
-                    verdict = await judge.JudgeAsync(transcript, output, style, ct).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "Judge failed for {Model}.", model.Id);
-                }
+                dims = new BenchDimensions(
+                    (int)Math.Round(dimSets.Average(d => d.Mechanics)),
+                    (int)Math.Round(dimSets.Average(d => d.Fidelity)),
+                    (int)Math.Round(dimSets.Average(d => d.Disfluency)),
+                    (int)Math.Round(dimSets.Average(d => d.Instruction)));
             }
 
-            var sorted = times.OrderBy(t => t).ToList();
+            var flags = caseResults.SelectMany(r => r.Flags)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var worst = caseResults.Where(r => r.Quality is not null).OrderBy(r => r.Quality).FirstOrDefault()
+                ?? caseResults[0];
+
             return baseline with
             {
-                Status = changed ? "ok" : "degraded",
-                Error = changed ? null : "output identical to raw (no-op / internal fallback)",
+                Status = anyChanged ? "ok" : "degraded",
+                Error = anyChanged ? null : "output identical to raw on every case (no-op / internal fallback)",
                 MedianMs = Median(sorted),
                 MinMs = sorted[0],
                 MaxMs = sorted[^1],
                 Runs = _cfg.Runs,
-                AllMs = times.ToArray(),
-                Quality = verdict?.Overall,
-                Grade = verdict is null ? null : BenchResult.GradeFor(verdict.Overall),
-                Dims = verdict?.Dims,
-                Flags = verdict?.Flags ?? [],
-                Rationale = verdict?.Rationale,
-                Changed = changed,
-                Output = output,
+                AllMs = allTimes.ToArray(),
+                Quality = quality,
+                Grade = quality is null ? null : BenchResult.GradeFor(quality.Value),
+                Dims = dims,
+                Flags = flags,
+                Rationale = worst.Rationale is null ? null : $"[worst case: {worst.CaseId}] {worst.Rationale}",
+                Changed = anyChanged,
+                Output = worst.Output,
+                Cases = caseResults.ToArray(),
                 LoadSeconds = loadSw.Elapsed.TotalSeconds,
             };
         }

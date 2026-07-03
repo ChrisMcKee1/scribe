@@ -2,17 +2,18 @@ using System.Text;
 
 namespace Scribe.Evals.Benchmark;
 
+internal sealed record BenchCaseMeta(
+    string Id, string Source, string Transcript, string Golden, double? AsrMs, double? AudioSeconds);
+
 internal sealed record LeaderboardMeta
 {
     public required string GeneratedUtc { get; init; }
     public required string Machine { get; init; }
     public required string InputSource { get; init; }
-    public required string InputTranscript { get; init; }
     public required string WritingStyle { get; init; }
     public required string JudgeModel { get; init; }
     public int Runs { get; init; }
-    public double? AsrMs { get; init; }
-    public double? AudioSeconds { get; init; }
+    public required IReadOnlyList<BenchCaseMeta> Cases { get; init; }
 }
 
 /// <summary>Renders the benchmark results to a self-contained markdown leaderboard.</summary>
@@ -27,7 +28,8 @@ internal static class LeaderboardWriter
         sb.AppendLine("# Scribe AI Cleanup — Model Leaderboard");
         sb.AppendLine();
         sb.AppendLine("Speed + quality benchmark of every available Foundry model (Azure cloud and Foundry Local)");
-        sb.AppendLine("driving Scribe's **real** cleanup pipeline on one shared, deliberately messy dictation.");
+        sb.AppendLine($"driving Scribe's **real** cleanup pipeline across {meta.Cases.Count} deliberately hard dictation");
+        sb.AppendLine("cases, each graded against a golden reference rewrite.");
         sb.AppendLine();
 
         // Metadata.
@@ -36,19 +38,28 @@ internal static class LeaderboardWriter
         sb.AppendLine($"- **Generated (UTC):** {meta.GeneratedUtc}");
         sb.AppendLine($"- **Machine:** {meta.Machine}");
         sb.AppendLine($"- **Input source:** {meta.InputSource}");
-        if (meta.AsrMs is { } asr)
-        {
-            var dur = meta.AudioSeconds is { } s ? $", audio {s:F1}s" : "";
-            sb.AppendLine($"- **ASR (Parakeet) decode:** {asr:F0} ms{dur}");
-        }
-
-        sb.AppendLine($"- **Quality judge:** {meta.JudgeModel}");
-        sb.AppendLine($"- **Timed runs per model:** {meta.Runs} (median reported; 1 warmup discarded; latency uncapped)");
+        sb.AppendLine($"- **Quality judge:** {meta.JudgeModel} (graded against per-case golden references)");
+        sb.AppendLine($"- **Timed runs per model:** {meta.Runs} per case (medians pool all samples; 1 warmup discarded; latency uncapped)");
+        sb.AppendLine($"- **Cases:** {meta.Cases.Count} ({string.Join(", ", meta.Cases.Select(c => c.Id))})");
         sb.AppendLine($"- **Models benchmarked:** {results.Count}");
         sb.AppendLine();
-        sb.AppendLine("**Raw transcript (identical for every model):**");
-        sb.AppendLine();
-        sb.AppendLine("> " + meta.InputTranscript.ReplaceLineEndings(" "));
+
+        foreach (var c in meta.Cases)
+        {
+            var asr = c.AsrMs is { } ms ? $" · ASR {ms:F0} ms{(c.AudioSeconds is { } s ? $", {s:F1}s audio" : "")}" : "";
+            sb.AppendLine($"<details><summary><b>Case: {c.Id}</b> ({c.Source}{asr})</summary>");
+            sb.AppendLine();
+            sb.AppendLine("**Raw transcript (identical for every model):**");
+            sb.AppendLine();
+            sb.AppendLine("> " + c.Transcript.ReplaceLineEndings(" "));
+            sb.AppendLine();
+            sb.AppendLine("**Golden reference rewrite:**");
+            sb.AppendLine();
+            sb.AppendLine("> " + c.Golden.ReplaceLineEndings(" "));
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+        }
+
         sb.AppendLine();
         sb.AppendLine("<details><summary>Writing style applied</summary>");
         sb.AppendLine();
@@ -137,10 +148,39 @@ internal static class LeaderboardWriter
             }
 
             sb.AppendLine();
-            sb.AppendLine("```");
-            sb.AppendLine((r.Output ?? "").Trim());
-            sb.AppendLine("```");
-            sb.AppendLine();
+            if (r.Cases.Length > 0)
+            {
+                sb.AppendLine("| Case | Quality | Median ms | Changed | Flags |");
+                sb.AppendLine("|---|---|---|---|---|");
+                foreach (var c in r.Cases)
+                {
+                    sb.AppendLine(
+                        $"| {c.CaseId} | {(c.Quality?.ToString() ?? "-")} | {c.MedianMs:F0} | " +
+                        $"{(c.Changed ? "yes" : "no")} | {Esc(string.Join(", ", c.Flags))} |");
+                }
+
+                sb.AppendLine();
+                foreach (var c in r.Cases)
+                {
+                    sb.AppendLine($"<details><summary>{c.CaseId} output" +
+                        $"{(string.IsNullOrWhiteSpace(c.Rationale) ? "" : " — " + Esc(Trunc(c.Rationale!, 120)))}</summary>");
+                    sb.AppendLine();
+                    sb.AppendLine("```");
+                    sb.AppendLine((c.Output ?? "").Trim());
+                    sb.AppendLine("```");
+                    sb.AppendLine();
+                    sb.AppendLine("</details>");
+                }
+
+                sb.AppendLine();
+            }
+            else
+            {
+                sb.AppendLine("```");
+                sb.AppendLine((r.Output ?? "").Trim());
+                sb.AppendLine("```");
+                sb.AppendLine();
+            }
         }
 
         File.WriteAllText(path, sb.ToString());
