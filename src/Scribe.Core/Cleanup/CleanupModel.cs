@@ -5,8 +5,11 @@ namespace Scribe.Core.Cleanup;
 /// alias used to download and load the model; <see cref="DisplayName"/> and <see cref="Hint"/> are
 /// for the settings UI. The list is deliberately small and curated to text-only instruct models
 /// that are fast and obedient at "rewrite, don't answer" tasks.
+/// <see cref="Recommendation"/> is set only on the models the golden-suite benchmark named as
+/// on-device winners (see docs/model-leaderboard.md); it is null for everything else so the UI can
+/// flag the picks worth defaulting to without editorialising the rest of the list.
 /// </summary>
-public sealed record CleanupModel(string Alias, string DisplayName, string Hint);
+public sealed record CleanupModel(string Alias, string DisplayName, string Hint, string? Recommendation = null);
 
 /// <summary>
 /// Curated set of Foundry Local models suitable for low-latency grammar/punctuation cleanup,
@@ -28,6 +31,11 @@ public static class CleanupModelCatalog
         new CleanupModel("qwen3.5-2b-text", "Qwen3.5 2B", "Latest Qwen3.5 text model, ~1.4 GB. Slightly higher quality."),
         new CleanupModel("qwen3-4b", "Qwen3 4B", "Higher quality, ~2.7 GB. Slower; best on a GPU."),
         new CleanupModel("phi-4-mini", "Phi-4 Mini", "Microsoft Phi-4 Mini, ~3.6 GB. Strong grammar, larger download."),
+        // Golden-suite winners (docs/model-leaderboard.md). Larger downloads than the lightweight
+        // defaults, but they top the on-device board: mistral-nemo-12b at ~1.0 s median is the
+        // fastest usable local model, and phi-4 earns the best offline quality grade.
+        new CleanupModel("mistral-nemo-12b-instruct", "Mistral NeMo 12B", "Fastest usable on-device model, ~7 GB. Real-time feel with solid quality.", "Best on-device balance"),
+        new CleanupModel("phi-4", "Phi-4", "Microsoft Phi-4, ~9 GB. Best offline quality; slower and a larger download.", "Best on-device quality"),
     };
 
     /// <summary>Resolves an alias to its descriptor, falling back to the default when unknown.</summary>
