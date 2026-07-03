@@ -188,6 +188,10 @@ internal sealed class BenchmarkRunner
         // Release any resident local model.
         svc.Configure(CleanupOptions.Disabled);
 
+        // Always regenerate the markdown at the end: a fully resumed run (everything already
+        // done) still picks up template/format changes without re-benchmarking anything.
+        LeaderboardWriter.Write(markdownPath, meta, results);
+
         Console.WriteLine($"Done. Results: {resultsPath}");
         Console.WriteLine($"Leaderboard: {markdownPath}");
         return 0;

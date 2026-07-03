@@ -25,7 +25,7 @@ internal static class LeaderboardWriter
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine("# Scribe AI Cleanup — Model Leaderboard");
+        sb.AppendLine("# Scribe AI Cleanup: Model Leaderboard");
         sb.AppendLine();
         sb.AppendLine("Speed + quality benchmark of every available Foundry model (Azure cloud and Foundry Local)");
         sb.AppendLine($"driving Scribe's **real** cleanup pipeline across {meta.Cases.Count} deliberately hard dictation");
@@ -133,7 +133,7 @@ internal static class LeaderboardWriter
                 $"median **{r.MedianMs:F0} ms** (min {r.MinMs:F0} / max {r.MaxMs:F0})  ·  changed: {r.Changed}");
             if (r.Dims is { } d)
             {
-                sb.AppendLine($"- Dimensions — mechanics {d.Mechanics}, fidelity {d.Fidelity}, " +
+                sb.AppendLine($"- Dimensions: mechanics {d.Mechanics}, fidelity {d.Fidelity}, " +
                     $"disfluency {d.Disfluency}, instruction {d.Instruction}");
             }
 
@@ -163,7 +163,7 @@ internal static class LeaderboardWriter
                 foreach (var c in r.Cases)
                 {
                     sb.AppendLine($"<details><summary>{c.CaseId} output" +
-                        $"{(string.IsNullOrWhiteSpace(c.Rationale) ? "" : " — " + Esc(Trunc(c.Rationale!, 120)))}</summary>");
+                        $"{(string.IsNullOrWhiteSpace(c.Rationale) ? "" : ": " + Esc(Trunc(c.Rationale!, 120)))}</summary>");
                     sb.AppendLine();
                     sb.AppendLine("```");
                     sb.AppendLine((c.Output ?? "").Trim());
@@ -207,24 +207,24 @@ internal static class LeaderboardWriter
 
         if (bestCloud is not null)
         {
-            sb.AppendLine($"- **Best cloud quality:** `{bestCloud.Id}` — {Q(bestCloud)}, {bestCloud.MedianMs:F0} ms median.");
+            sb.AppendLine($"- **Best cloud quality:** `{bestCloud.Id}`: {Q(bestCloud)}, {bestCloud.MedianMs:F0} ms median.");
         }
 
         if (bestLocal is not null)
         {
-            sb.AppendLine($"- **Best local quality:** `{bestLocal.Id}` — {Q(bestLocal)}, {bestLocal.MedianMs:F0} ms median.");
+            sb.AppendLine($"- **Best local quality:** `{bestLocal.Id}`: {Q(bestLocal)}, {bestLocal.MedianMs:F0} ms median.");
         }
 
         if (bestRealtimeLocal is not null)
         {
             sb.AppendLine($"- **Best on-device default (≤ {RealtimeBudgetMs:F0} ms, fully offline):** " +
-                $"`{bestRealtimeLocal.Id}` — {Q(bestRealtimeLocal)}, {bestRealtimeLocal.MedianMs:F0} ms median. " +
+                $"`{bestRealtimeLocal.Id}`: {Q(bestRealtimeLocal)}, {bestRealtimeLocal.MedianMs:F0} ms median. " +
                 "Strong quality with real-time feel and no data leaving the machine.");
         }
 
         if (fastest is not null)
         {
-            sb.AppendLine($"- **Fastest overall:** `{fastest.Id}` ({fastest.Group}) — {fastest.MedianMs:F0} ms median, {Q(fastest)}.");
+            sb.AppendLine($"- **Fastest overall:** `{fastest.Id}` ({fastest.Group}): {fastest.MedianMs:F0} ms median, {Q(fastest)}.");
         }
 
         sb.AppendLine();
