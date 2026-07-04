@@ -26,6 +26,9 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "History…" from the tray menu.</summary>
     public event Action? HistoryRequested;
 
+    /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
+    public event Action? WelcomeRequested;
+
     /// <summary>Raised when the user toggles pause; the argument is the requested paused state.</summary>
     public event Action<bool>? PauseToggled;
 
@@ -55,6 +58,11 @@ internal sealed class TrayIconHost : IDisposable
         var history = new MenuItem { Header = "History…" };
         history.Click += (_, _) => HistoryRequested?.Invoke();
         menu.Items.Add(history);
+
+        // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
+        var welcome = new MenuItem { Header = "Show welcome" };
+        welcome.Click += (_, _) => WelcomeRequested?.Invoke();
+        menu.Items.Add(welcome);
         menu.Items.Add(new Separator());
 
         // Checkable items: WPF flips IsChecked before Click fires, so it already reflects the

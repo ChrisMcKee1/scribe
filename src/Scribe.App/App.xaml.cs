@@ -38,6 +38,7 @@ public partial class App : Application
     private IOverlayController? _overlay;
     private SettingsWindow? _settingsWindow;
     private HistoryWindow? _historyWindow;
+    private Onboarding.WelcomeWindow? _welcomeWindow;
     private UpdateService? _updates;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -80,6 +81,7 @@ public partial class App : Application
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
         _tray.SettingsRequested += OpenSettings;
         _tray.HistoryRequested += OpenHistory;
+        _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
 
@@ -149,6 +151,20 @@ public partial class App : Application
         StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
+
+        // --- Onboarding (first-run welcome) -------------------------------------------------
+        // Tray-only app has no main window, so a brand-new user sees nothing and may never learn
+        // the push-to-talk gesture. Show a one-time welcome once settings are loaded, then persist
+        // the flag so it never reappears. Kept as a self-contained block for a clean merge.
+        if (!_controller.CurrentSettings.HasCompletedFirstRun)
+        {
+            ShowWelcome();
+            var repo = services.GetRequiredService<ISettingsRepository>();
+            var settings = repo.Load();
+            settings.HasCompletedFirstRun = true;
+            repo.Save(settings);
+        }
+        // --- End onboarding -----------------------------------------------------------------
 
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
         if (e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase)))
@@ -312,6 +328,26 @@ public partial class App : Application
         _historyWindow.Closed += (_, _) => _historyWindow = null;
         _historyWindow.Show();
         _historyWindow.Activate();
+    });
+
+    /// <summary>
+    /// Shows the first-run welcome (or focuses it if already open). Non-modal so the tray and
+    /// dictation loop keep running behind it. The gesture text uses the user's actual push-to-talk
+    /// key, and "Open settings" routes to the existing settings window.
+    /// </summary>
+    private void ShowWelcome() => Dispatcher.Invoke(() =>
+    {
+        if (_welcomeWindow is not null)
+        {
+            _welcomeWindow.Activate();
+            return;
+        }
+
+        var hotkey = _controller?.CurrentSettings.Hotkey.DisplayName ?? "Right Ctrl";
+        _welcomeWindow = new Onboarding.WelcomeWindow(hotkey, OpenSettings);
+        _welcomeWindow.Closed += (_, _) => _welcomeWindow = null;
+        _welcomeWindow.Show();
+        _welcomeWindow.Activate();
     });
 
     protected override void OnExit(ExitEventArgs e)
