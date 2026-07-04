@@ -10,8 +10,24 @@
 Private, **fully offline** push‑to‑talk voice dictation for **Windows 11**. Hold a key,
 speak, release — punctuated text is typed into whatever app has focus. Audio is captured,
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
-online feature is AI cleanup against a user‑configured Azure/Foundry endpoint (sends the
-*transcribed text only*, never audio, and is strictly opt‑in).
+online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
+endpoint (sends the *transcribed text only*, never audio, and is strictly opt‑in).
+
+**Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
+position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
+suggestions); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
+(writing style + newline mode by focused process); **AI cleanup** across three providers
+(Foundry Local on‑device, Microsoft Foundry via `az login`, or any OpenAI‑compatible
+endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
+**diagnostics** panel (P50/P95 decode latency + RTF from local history); tray quick toggles
+(AI cleanup on/off, pause) and a first‑run **welcome**. The default writing style ships
+editorial number/date/time/acronym + self‑correction + redundancy rules and is the
+benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
+
+**The model is multilingual already.** The bundled `parakeet-tdt-0.6b-v3-int8` handles ~25
+European languages out of the box. It is a **transducer** with the vocabulary baked in, so
+there is **no runtime language parameter**, so do NOT build a "language picker" setting; the
+model auto‑handles whatever is spoken. (Whisper takes a language hint; this does not.)
 
 ## Tech stack (be specific — versions matter)
 
@@ -27,7 +43,7 @@ online feature is AI cleanup against a user‑configured Azure/Foundry endpoint 
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.1.10**.
+  in `Directory.Build.props`. Current version: **0.1.11**.
 
 ## Commands (run these — include the flags)
 
@@ -44,7 +60,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; currently 86/86)
+# Run the unit tests (must stay green; currently 197)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone (it is x64-only — Platform MUST be x64)
@@ -67,18 +83,24 @@ Target 0 warnings / 0 errors — warnings are treated seriously.
 Scribe.slnx                         solution (Core, App, Overlay[x64], tests, tools)
   src/Scribe.Core/                  services + domain — UNIT-TESTABLE, no UI
     Audio/ Vad/ Transcription/      capture → 16 kHz mono, Silero VAD, Parakeet ASR
-    PostProcessing/ Cleanup/        dictionary fixups; optional AI cleanup (Agent Framework)
-    TextInjection/ Hotkeys/         Unicode keystroke injection; Right Ctrl push-to-talk
-    Persistence/ Settings/ Security/ Infrastructure/ Diagnostics/ Models/ DependencyInjection/
-  src/Scribe.App/                   WPF tray shell: bootstrap + DI, Settings, Tray, History
-    Overlay/                        OverlayProcessClient (drives the WinUI 3 pill over a pipe)
+    PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework)
+    Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
+                                    SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested)
+    Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles)
+    TextInjection/ Hotkeys/         Unicode/clipboard injection; Right Ctrl push-to-talk
+    Persistence/ Security/ Infrastructure/ Models/ DependencyInjection/
+  src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
+    Settings/                       the nav-rail settings window (adapters call Core builders)
+    Onboarding/                     WelcomeWindow (one-time first-run intro)
+    Tray/ History/ Overlay/         tray menu + quick toggles; history viewer; OverlayProcessClient
     Infrastructure/                 FileLoggerProvider (shared daily log — see Logging mandate)
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core
-  tools/Scribe.Evals/               offline cleanup eval harness (eval pkgs are PrivateAssets=all)
+  tests/Scribe.Core.Tests/          xUnit tests for Core (currently 197)
+  tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
+    Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   scripts/Download-Models.ps1       fetches ASR + VAD models
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   Directory.Build.props             single source of version truth (<VersionPrefix>)
@@ -87,11 +109,17 @@ Scribe.slnx                         solution (Core, App, Overlay[x64], tests, to
 
 **Architectural rule:** most logic lives in **Scribe.Core** so it is testable without a UI.
 New behavior lands in Core *with a test*; `Scribe.App` is a thin shell that binds it to the UI.
+Settings-page validation/build logic belongs in `Scribe.Core/Settings/` (pure, tested); the
+WPF row types are thin adapters that map to/from those Core inputs. Do not let logic drift
+back into the code-behind; that is a recurring smell.
 
 ## Code style
 
 - Honor `.editorconfig`. Keep the build warning‑clean.
 - **Comment the *why*, not the *what*.** Only annotate genuinely non‑obvious decisions.
+- **No em dashes or en dashes in user‑facing prose** (README, marketing, UI strings shown to
+  users): rewrite with commas, colons, periods, or "to" for ranges. House style. (This dev doc
+  predates the rule and still has some; don't add new ones.)
 - Add NuGet versions to `Directory.Packages.props` (central management is on). Prefer
   current **stable** releases; justify any prerelease in the PR.
 - Example of the expected style (descriptive names, real error handling, `why` comment):
@@ -221,5 +249,14 @@ self‑contained into the payload under `Overlay\`, packs with Velopack, and (wi
   `%LOCALAPPDATA%\Scribe\current\` (overlay at `current\Overlay\`, models at `current\models`).
 - When killing Scribe processes here, query PIDs first and use **`Stop-Process -Id <literal-PID>`**
   (name/pipe kills and `-Id $_.Id` in a pipeline are blocked by the sandbox guard).
-- `gh` is authenticated (`ChrisMcKee1`, `repo`+`workflow` scopes); there is no `GITHUB_TOKEN`
-  env var, so set `$env:GITHUB_TOKEN = gh auth token` for `vpk upload`/`pack.ps1 -Publish`.
+- **`gh` has two accounts:** `chrismckee_microsoft` (an Enterprise Managed User, often active)
+  and `ChrisMcKee1` (owns the repo). PR/issue/API calls on the repo fail under the EMU account
+  ("As an Enterprise Managed User, you cannot access this content"), though `git push` still
+  works. Run `gh auth switch --user ChrisMcKee1` before `gh pr create`/`gh pr merge`/`gh issue
+  create`, then switch back to `chrismckee_microsoft` afterward.
+- For `vpk upload`/`pack.ps1 -Publish`, capture the token into a variable first
+  (`$t = (gh auth token | Out-String).Trim()`) and pass `--token $t`; an inline
+  `$env:GITHUB_TOKEN = gh auth token` in the same statement chain has produced an empty token.
+- **Merge stacked/dependent PRs one at a time**, confirming each retargeted to `main` before the
+  next, because GitHub's base retargeting lags a rapid merge loop and can merge PRs into
+  intermediate branches or auto‑close them.

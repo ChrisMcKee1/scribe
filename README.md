@@ -31,6 +31,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   discarded on your machine. There is no server to trust, because there is no server.
 - **⚡ One key, zero friction.** Hold **Right Ctrl** (or any key), talk, release. That's the whole
   gesture. Prefer hands-free? Toggle mode ends the dictation by itself when you stop talking.
+- **🌍 Speaks your language.** The bundled model transcribes about 25 European languages out of the
+  box, no setup: dictate in English, German, Spanish, French, Italian and more, and it just works.
 - **🧠 It understands how people actually talk.** Say *"send it Wednesday… I mean Thursday"* and,
   with AI cleanup on, only Thursday survives. Repeat yourself and it writes the point once.
 - **🔢 Numbers, dates and acronyms come out written, not spoken.** "Twenty three licenses at
