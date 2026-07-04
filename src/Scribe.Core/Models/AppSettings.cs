@@ -136,6 +136,13 @@ public sealed class AppSettings
     /// </summary>
     public List<AppProfile> Profiles { get; set; } = new();
 
+    /// <summary>
+    /// Set once the first-run welcome has been shown, so it never reappears. Scribe is tray-only
+    /// with no main window, so this gate is what stops a returning user seeing the intro again.
+    /// A plain value type, so the memberwise <see cref="Clone"/> copies it correctly.
+    /// </summary>
+    public bool HasCompletedFirstRun { get; set; }
+
     public static AppSettings CreateDefault() => new();
 
     public AppSettings Clone()

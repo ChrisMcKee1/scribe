@@ -1,0 +1,112 @@
+<ui:FluentWindow x:Class="Scribe.App.Onboarding.WelcomeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Welcome to Scribe"
+        Width="560" Height="620" MinWidth="460" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        WindowCornerPreference="Round">
+    <ui:FluentWindow.Resources>
+        <Style TargetType="TextBlock" x:Key="TipTitle">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="TipBody">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,3,0,0"/>
+        </Style>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Welcome to Scribe">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="Mic24"/>
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <Grid Grid.Row="1" Margin="28,8,28,0">
+            <StackPanel>
+                <!-- Hero -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
+                    <ui:SymbolIcon Symbol="Mic48"
+                                   FontSize="40"
+                                   Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"
+                                   VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Text="Welcome to Scribe"
+                           FontSize="24" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" Margin="0,12,0,0"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <TextBlock Text="Speak, and your words land wherever your cursor is."
+                           FontSize="13" TextAlignment="Center" TextWrapping="Wrap"
+                           Margin="0,6,0,0"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                <!-- The core gesture -->
+                <ui:Card Margin="0,20,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Keyboard24" FontSize="22"
+                                       VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource TipTitle}" Text="Hold, speak, release"/>
+                            <TextBlock x:Name="GestureHint" Style="{StaticResource TipBody}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Privacy -->
+                <ui:Card Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="ShieldTask24" FontSize="22"
+                                       VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource TipTitle}" Text="Private by design"/>
+                            <TextBlock Style="{StaticResource TipBody}"
+                                       Text="Everything runs on your PC. Your audio never leaves the machine."/>
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+
+                <!-- Tips -->
+                <ui:Card Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Lightbulb24" FontSize="22"
+                                       VerticalAlignment="Top" Margin="0,2,14,0"
+                                       Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource TipTitle}" Text="Good to know"/>
+                            <TextBlock Style="{StaticResource TipBody}"
+                                       Text="Scribe lives in your system tray. Right-click the microphone icon for settings and history."/>
+                            <TextBlock Style="{StaticResource TipBody}"
+                                       Text="Turn on optional AI cleanup to polish grammar and punctuation as you dictate."/>
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
+            </StackPanel>
+        </Grid>
+
+        <!-- Buttons -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="28,16,28,20">
+            <ui:Button x:Name="SettingsButton" Content="Open settings" MinWidth="120"
+                       Margin="0,0,8,0" Click="SettingsButton_Click"/>
+            <ui:Button x:Name="GotItButton" Content="Got it" Appearance="Primary"
+                       MinWidth="96" Click="GotItButton_Click" IsDefault="True"/>
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>
