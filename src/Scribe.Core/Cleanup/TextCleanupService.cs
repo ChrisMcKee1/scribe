@@ -74,6 +74,19 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static readonly Regex MissingSentenceSpace =
         new("(?<=[a-z][.!?][\"')\\]]?)(?=[A-Z])", RegexOptions.Compiled);
 
+    // A model sometimes declines the rewrite and answers with a canned safety refusal ("I'm sorry, but
+    // I cannot assist with that request.") instead of the cleaned text. Two intent families detect it:
+    // an apology / AI-identity preamble at the very start, or an inability verb paired with a help
+    // object anywhere. See LooksLikeRefusal / TrySanitize — a match is only acted on when the raw input
+    // isn't phrased the same way, so genuine dictation of these words is preserved.
+    private static readonly Regex RefusalPreamble =
+        new(@"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|as a language model\b)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex RefusalInability =
+        new(@"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private readonly ILogger<TextCleanupService> _log;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -362,7 +375,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             // failed" overlay instead of being logged as a silent unchanged success.
             if (!TrySanitize(result.Text, chunk, out var cleaned))
             {
-                return (chunk, "AI cleanup returned unusable output.");
+                var reason = LooksLikeRefusal(result.Text)
+                    ? "AI cleanup was declined by the model; used raw text."
+                    : "AI cleanup returned unusable output.";
+                return (chunk, reason);
             }
 
             return (cleaned, null);
@@ -1341,12 +1357,30 @@ internal sealed class TextCleanupService : ITextCleanupService
             return false;
         }
 
+        // Some models decline the rewrite and return a canned safety refusal ("I'm sorry, but I cannot
+        // assist with that request.") in place of the cleaned text. It is short and non-empty, so it
+        // slips past the empty/ramble guards and would be injected over the user's words. Reject it so
+        // the chunk falls back to the raw transcription (and the pipeline flashes "intelligence
+        // failed"). Only reject when the raw input isn't itself phrased that way, so a user who
+        // literally dictates such a sentence keeps their words.
+        if (LooksLikeRefusal(cleaned) && !LooksLikeRefusal(original))
+        {
+            return false;
+        }
+
         // Deterministic net for a model that fused two sentences with no space between them.
         cleaned = MissingSentenceSpace.Replace(cleaned, " ");
 
         text = cleaned;
         return true;
     }
+
+    // True when the text reads like a model refusing the cleanup task rather than performing it: an
+    // apology / AI-identity preamble at the start, or an inability verb ("can't/cannot/unable") next to
+    // a help object ("assist/help/comply/…") anywhere. Deliberately narrow so ordinary speech that
+    // merely opens with "Sorry" or "Unfortunately" is not misread as a refusal.
+    internal static bool LooksLikeRefusal(string text) =>
+        !string.IsNullOrWhiteSpace(text) && (RefusalPreamble.IsMatch(text) || RefusalInability.IsMatch(text));
 
     private static CleanupOptions Normalize(CleanupOptions options)
     {

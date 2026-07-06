@@ -63,6 +63,50 @@ public sealed class SanitizeTests
         Assert.Equal("hi", text);
     }
 
+    [Theory]
+    [InlineData("I'm sorry, but I cannot assist with that request.")]
+    [InlineData("I am sorry, but I can't help with that.")]
+    [InlineData("Sorry, I can't assist with this.")]
+    [InlineData("I cannot comply with that request.")]
+    [InlineData("As an AI language model, I cannot fulfill this.")]
+    [InlineData("I'm unable to help with that.")]
+    public void Model_refusal_is_rejected_and_falls_back_to_raw(string refusal)
+    {
+        // The raw transcription is ordinary speech; the model answered with a canned refusal instead
+        // of cleaning it. TrySanitize must reject the refusal so the pipeline injects the raw text.
+        const string raw = "please schedule the meeting for tomorrow morning";
+        Assert.False(TextCleanupService.TrySanitize(refusal, raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Refusal_wrapped_in_quotes_is_rejected()
+    {
+        const string raw = "book the flight for next week";
+        Assert.False(
+            TextCleanupService.TrySanitize("\"I'm sorry, but I cannot assist with that request.\"", raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Genuinely_dictated_refusal_phrasing_is_preserved()
+    {
+        // The user actually said it, so the raw input is phrased the same way. Cleanup must keep the
+        // user's words rather than mistaking their sentence for a model refusal.
+        var raw = "I'm sorry, but I cannot assist with that request.";
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Legitimate_text_containing_cannot_assist_is_preserved()
+    {
+        // "cannot assist" appears in the raw input, so a cleaned copy that keeps it is not a refusal.
+        var raw = "The new policy means staff cannot assist customers after five.";
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
     [Fact]
     public void Missing_space_between_sentences_is_inserted()
     {
