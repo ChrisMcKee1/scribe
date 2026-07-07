@@ -108,6 +108,32 @@ public sealed class SanitizeTests
     }
 
     [Fact]
+    public void Echoed_transcript_tags_are_stripped_and_accepted()
+    {
+        // A literal-minded model sometimes mirrors the delimiters it saw around the user message.
+        Assert.True(TextCleanupService.TrySanitize(
+            "<transcript>\nHello world.\n</transcript>", "Hello world.", out var text));
+        Assert.Equal("Hello world.", text);
+    }
+
+    [Fact]
+    public void Tag_only_answer_is_rejected()
+    {
+        Assert.False(TextCleanupService.TrySanitize("<transcript></transcript>", "raw", out var text));
+        Assert.Equal("raw", text);
+    }
+
+    [Fact]
+    public void User_message_wraps_the_chunk_in_transcript_tags()
+    {
+        var message = TextCleanupService.BuildUserMessage("hey can you make sure the CLI is installed");
+
+        Assert.StartsWith("<transcript>", message);
+        Assert.EndsWith("</transcript>", message);
+        Assert.Contains("hey can you make sure the CLI is installed", message);
+    }
+
+    [Fact]
     public void Missing_space_between_sentences_is_inserted()
     {
         var raw = "I went to the store.The next day I left.It was fine.";
