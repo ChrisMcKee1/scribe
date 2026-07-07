@@ -913,15 +913,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var items = new List<string>(deployments.Count);
         foreach (var deployment in deployments)
         {
-            var label = deployment.DisplayName;
+            // Always show which Foundry account/project serves the deployment, so two deployments
+            // of the same model in different projects are tellable apart at a glance (and the user
+            // knows which endpoint a pick will fill in). The saved-settings stand-in has no account
+            // name and renders as the bare deployment.
+            var baseLabel = string.IsNullOrWhiteSpace(deployment.AccountName)
+                ? deployment.DisplayName
+                : $"{deployment.DisplayName}  ({deployment.AccountName})";
+
+            var label = baseLabel;
             if (_azureModelMap.ContainsKey(label))
             {
-                // Disambiguate same-named deployments that live in different accounts.
-                label = $"{deployment.DisplayName}  —  {deployment.AccountName}";
+                // Same deployment name in the same-named account: fall back to the subscription.
+                label = $"{baseLabel}  —  {deployment.SubscriptionName}";
                 var i = 2;
                 while (_azureModelMap.ContainsKey(label))
                 {
-                    label = $"{deployment.DisplayName}  —  {deployment.AccountName} ({i++})";
+                    label = $"{baseLabel}  —  {deployment.SubscriptionName} ({i++})";
                 }
             }
 

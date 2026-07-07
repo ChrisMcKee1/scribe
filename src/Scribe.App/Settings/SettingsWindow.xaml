@@ -558,13 +558,6 @@
 
                                         <!-- Microsoft Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
                                         <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
-                                            <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                        VerticalContentAlignment="Center"
-                                                        PlaceholderText="https://my-resource.services.ai.azure.com/"/>
-                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Your Microsoft Foundry project or Azure OpenAI endpoint. Don't know it? Sign in below and pick a model — Scribe fills this in for you."/>
-
                                             <!-- Primary path: reuse the user's az login and list their deployments -->
                                             <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
                                                     Background="{DynamicResource ControlFillColorSecondaryBrush}">
@@ -612,6 +605,15 @@
                                                       DropDownOpened="ModelCombo_DropDownOpened"
                                                       LostFocus="AzureModelBox_LostFocus"/>
                                             <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+
+                                            <!-- Endpoint sits BELOW the picker: picking a model fills it in, so the
+                                                 cause-and-effect reads top to bottom. Manual paste still works. -->
+                                            <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="https://my-resource.services.ai.azure.com/"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Filled in automatically when you pick a model above. You can also paste your Microsoft Foundry project or Azure OpenAI endpoint here directly."/>
 
                                             <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->
                                             <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
