@@ -173,6 +173,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    /// <summary>Navigates the rail to the given section, e.g. to show where a save error lives.</summary>
+    private void ShowSection(Grid section)
+    {
+        var index = Array.IndexOf(SectionPanels, section);
+        if (index >= 0)
+        {
+            NavList.SelectedIndex = index;
+        }
+    }
+
     private void PopulateDevices()
     {
         var choices = new List<DeviceChoice> { new(null, "System default (recommended)") };
@@ -337,7 +347,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
+        _dictionarySnapshot = DictionarySignature();
     }
+
+    // Save skips sections the user never touched, so a pre-existing data problem in one section
+    // (e.g. a duplicate dictionary entry loaded from disk) can never block saving a change made in
+    // another. The signatures capture everything the section's SaveAll would write.
+    private string DictionarySignature() => string.Join(
+        "", _rows.Select(r => $"{r.Id}|{r.Pattern}|{r.Replacement}|{r.WholeWord}|{r.Enabled}"));
+
+    private string SnippetSignature() => string.Join(
+        "", _snippetRows.Select(r => $"{r.Id}|{r.Phrase}|{r.Template}|{r.Enabled}"));
+
+    private string _dictionarySnapshot = string.Empty;
+    private string _snippetSnapshot = string.Empty;
 
     private void LoadPerformanceStats()
     {
@@ -1158,12 +1181,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
+        // Only validate and save the dictionary/snippets when the user actually changed them.
+        // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
+        // from disk) must never block saving a change made on a different page.
+        var dictionaryDirty = DictionarySignature() != _dictionarySnapshot;
+        var snippetsDirty = SnippetSignature() != _snippetSnapshot;
+
         // Validate the dictionary before touching anything: a duplicate spoken form would violate
         // the unique index, and the user deserves a pointer to the offending row rather than a
-        // database error after half the settings were applied.
-        var entries = BuildDictionaryEntries(out var duplicateRow);
+        // database error after half the settings were applied. Jump to the section that owns the
+        // problem first — the dialog is meaningless while another page is showing.
+        List<DictionaryEntry>? entries = null;
+        DictionaryRow? duplicateRow = null;
+        if (dictionaryDirty)
+        {
+            entries = BuildDictionaryEntries(out duplicateRow);
+        }
+
         if (duplicateRow is not null)
         {
+            ShowSection(SectionDictionary);
             DictionaryGrid.SelectedItem = duplicateRow;
             DictionaryGrid.ScrollIntoView(duplicateRow);
             ShowThemedMessage(
@@ -1174,9 +1211,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var snippets = BuildSnippets(out var duplicateSnippet);
+        List<Snippet>? snippets = null;
+        SnippetRow? duplicateSnippet = null;
+        if (snippetsDirty)
+        {
+            snippets = BuildSnippets(out duplicateSnippet);
+        }
+
         if (duplicateSnippet is not null)
         {
+            ShowSection(SectionSnippets);
             SnippetList.SelectedItem = duplicateSnippet;
             SnippetList.ScrollIntoView(duplicateSnippet);
             ShowThemedMessage(
@@ -1229,8 +1273,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : writingStyle;
 
-            _dictionary.SaveAll(entries);
-            _snippets.SaveAll(snippets);
+            if (entries is not null)
+            {
+                _dictionary.SaveAll(entries);
+            }
+
+            if (snippets is not null)
+            {
+                _snippets.SaveAll(snippets);
+            }
+
             _settingsRepository.Save(_settings);
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
@@ -1241,6 +1293,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // Constraint safety net for anything grid validation didn't anticipate — still phrased
             // for a person, not a stack trace.
+            ShowSection(SectionDictionary);
             ShowThemedMessage(
                 "Duplicate dictionary entry",
                 "Two dictionary entries ended up with the same spoken word or phrase, so the " +
@@ -1284,6 +1337,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         SnippetList.ItemsSource = _snippetRows;
+        _snippetSnapshot = SnippetSignature();
     }
 
     private SnippetRow? SelectedSnippet => SnippetList.SelectedItem as SnippetRow;
