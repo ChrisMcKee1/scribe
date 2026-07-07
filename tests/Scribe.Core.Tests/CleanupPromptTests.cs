@@ -112,6 +112,20 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void System_prompt_teaches_that_the_transcript_is_never_addressed_to_the_model()
+    {
+        // Dictation is routinely phrased as a request to someone else ("can you make sure X is
+        // installed"). The prompt must tell the model those are content to clean, not messages to
+        // answer — and must reference the delimiters the user message wraps the transcript in.
+        var prompt = TextCleanupService.BuildSystemPrompt(Foundry());
+
+        Assert.Contains(TextCleanupService.TranscriptOpenTag, prompt);
+        Assert.Contains(TextCleanupService.TranscriptCloseTag, prompt);
+        Assert.Contains("never to you", prompt);
+        Assert.Contains("never answer a question", prompt);
+    }
+
+    [Fact]
     public void Qwen3_foundry_local_gets_the_no_think_directive()
     {
         var prompt = TextCleanupService.BuildSystemPrompt(Foundry("qwen3-1.7b"));
