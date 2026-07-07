@@ -152,6 +152,13 @@ public partial class App : Application
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
+        // The dictionary seed above forced database initialization, so a corruption repair (if any)
+        // already ran — tell the user now rather than let them discover missing history on their own.
+        if (services.GetRequiredService<ScribeDatabase>().RepairedAtStartup)
+        {
+            _tray.ShowInfo("Scribe repaired its database — settings and dictionary were recovered; some history may be missing.");
+        }
+
         // --- Onboarding (first-run welcome) -------------------------------------------------
         // Tray-only app has no main window, so a brand-new user sees nothing and may never learn
         // the push-to-talk gesture. Show a one-time welcome once settings are loaded, then persist
