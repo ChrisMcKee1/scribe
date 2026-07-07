@@ -20,6 +20,11 @@ public sealed class ScribeDatabase : IDisposable
     private const int BusyTimeoutMs = 10_000;
     private const int SchemaVersion = 3;
 
+    // Tables copied out of a damaged database during salvage, ordered so foreign-key targets
+    // (audio_blobs) are restored before the rows that reference them (history).
+    private static readonly string[] SalvageTables =
+        { "settings", "dictionary", "snippets", "audio_blobs", "history", "cleanup_failures" };
+
     private static int s_providerInitialized;
 
     private readonly string _connectionString;
@@ -30,6 +35,13 @@ public sealed class ScribeDatabase : IDisposable
     private SqliteConnection? _keepAlive;
     private bool _initialized;
     private bool _disposed;
+
+    /// <summary>
+    /// True when startup found the database file corrupted and rebuilt it from whatever rows were
+    /// still readable. The app can surface this to the user (some history may be missing); the
+    /// damaged original is kept beside the database as <c>scribe.db.corrupt-*</c>.
+    /// </summary>
+    public bool RepairedAtStartup { get; private set; }
 
     private ScribeDatabase(string connectionString, bool isMemory, ILogger<ScribeDatabase> logger)
     {
@@ -100,6 +112,15 @@ public sealed class ScribeDatabase : IDisposable
                 SQLitePCL.Batteries_V2.Init();
             }
 
+            if (!_isMemory)
+            {
+                // A corrupted file must be caught before anything reads through it: a "malformed"
+                // database can serve some tables and fail others, which shows up to the user as
+                // settings or dictionary entries silently vanishing. Detect it now and rebuild
+                // from whatever is still readable, keeping the damaged original beside the new file.
+                EnsureFileDatabaseHealthy();
+            }
+
             _keepAlive = new SqliteConnection(_connectionString);
             _keepAlive.Open();
             Configure(_keepAlive);
@@ -124,6 +145,219 @@ public sealed class ScribeDatabase : IDisposable
 
     private static void Configure(SqliteConnection connection) =>
         Execute(connection, $"PRAGMA busy_timeout={BusyTimeoutMs};");
+
+    // Startup corruption check for the file database. quick_check walks the tree structure of every
+    // table; a healthy database answers "ok". A damaged one either answers with the first problem or
+    // throws outright — both trigger a rebuild that salvages every readable row into a fresh file.
+    // The check runs on a throwaway connection so a rebuild never races the keep-alive.
+    private void EnsureFileDatabaseHealthy()
+    {
+        if (!File.Exists(DataSourcePath()))
+        {
+            return; // Brand-new install; nothing to verify.
+        }
+
+        string verdict;
+        try
+        {
+            using var probe = new SqliteConnection(_connectionString);
+            probe.Open();
+            Configure(probe);
+            verdict = QueryScalar(probe, "PRAGMA quick_check(1);").ToString() ?? string.Empty;
+        }
+        catch (SqliteException ex)
+        {
+            verdict = ex.Message;
+        }
+
+        if (string.Equals(verdict, "ok", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _logger.LogError(
+            "SQLite database failed its startup integrity check ({Verdict}); rebuilding from salvageable data.",
+            verdict);
+
+        try
+        {
+            RebuildFromDamagedFile();
+            RepairedAtStartup = true;
+        }
+        catch (Exception ex)
+        {
+            // Salvage is best-effort: if even the rebuild fails, get the damaged file out of the way
+            // so a completely fresh database can be created — the aside copy remains for manual
+            // recovery. Losing data is bad; failing to start at all is worse.
+            _logger.LogError(ex, "Database salvage failed; starting fresh. The damaged file is kept alongside.");
+            TryMoveDamagedAside();
+        }
+    }
+
+    private string DataSourcePath() => new SqliteConnectionStringBuilder(_connectionString).DataSource;
+
+    private string TryMoveDamagedAside()
+    {
+        var dbPath = DataSourcePath();
+
+        // Release any pooled handles on the damaged file so it can be renamed.
+        SqliteConnection.ClearPool(new SqliteConnection(_connectionString));
+
+        var asidePath = $"{dbPath}.corrupt-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        if (File.Exists(dbPath))
+        {
+            File.Move(dbPath, asidePath);
+        }
+
+        // The sidecars must follow the rename: SQLite associates them by file name, and a fresh
+        // database must never start life against the damaged file's write-ahead log.
+        MoveIfExists(dbPath + "-wal", asidePath + "-wal");
+        MoveIfExists(dbPath + "-shm", asidePath + "-shm");
+        return asidePath;
+    }
+
+    private static void MoveIfExists(string source, string destination)
+    {
+        if (File.Exists(source))
+        {
+            File.Move(source, destination);
+        }
+    }
+
+    // Moves the damaged database aside, creates a fresh one at the original path with the current
+    // schema, then copies every row that can still be read out of the damaged file. Per-table and
+    // per-row failures are skipped: a broken history page must not cost the user their dictionary.
+    private void RebuildFromDamagedFile()
+    {
+        var asidePath = TryMoveDamagedAside();
+
+        using var fresh = new SqliteConnection(_connectionString);
+        fresh.Open();
+        Configure(fresh);
+        Execute(fresh, "PRAGMA journal_mode=WAL;");
+        Migrate(fresh);
+
+        var salvaged = new List<string>();
+        var asideConnectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = asidePath,
+            // ReadWrite (not ReadOnly) so SQLite can recover the moved-along WAL into a snapshot.
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString();
+
+        try
+        {
+            using var damaged = new SqliteConnection(asideConnectionString);
+            damaged.Open();
+            Configure(damaged);
+
+            foreach (var table in SalvageTables)
+            {
+                var copied = TryCopyTable(damaged, fresh, table);
+                salvaged.Add($"{table}: {copied}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The damaged database could not be reopened for salvage; starting fresh.");
+        }
+
+        _logger.LogWarning(
+            "Database rebuilt after corruption. Rows recovered — {Salvaged}. The damaged original was kept at {Aside}.",
+            string.Join(", ", salvaged), asidePath);
+    }
+
+    // Copies one table's readable rows into the rebuilt database. Column lists are intersected so a
+    // damaged file left behind by an older schema still contributes what it has. Reading stops at
+    // the first unreadable page (SQLite cannot seek past it); individual bad rows are skipped.
+    // Table names come from the fixed SalvageTables list, never from data.
+    private int TryCopyTable(SqliteConnection source, SqliteConnection target, string table)
+    {
+        try
+        {
+            var sourceColumns = ListColumns(source, table);
+            var targetColumns = ListColumns(target, table);
+            var columns = sourceColumns.Where(targetColumns.Contains).ToList();
+            if (columns.Count == 0)
+            {
+                return 0;
+            }
+
+            var columnList = string.Join(", ", columns);
+            var placeholders = string.Join(", ", columns.Select((_, i) => $"$p{i}"));
+
+            using var read = source.CreateCommand();
+            read.CommandText = $"SELECT {columnList} FROM {table};";
+
+            using var transaction = target.BeginTransaction();
+            using var insert = target.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = $"INSERT OR IGNORE INTO {table} ({columnList}) VALUES ({placeholders});";
+            // No explicit SqliteType: the binding type is inferred from each row's value, so
+            // integer, text and blob columns all round-trip faithfully.
+            var parameters = new SqliteParameter[columns.Count];
+            for (var i = 0; i < columns.Count; i++)
+            {
+                parameters[i] = insert.CreateParameter();
+                parameters[i].ParameterName = $"$p{i}";
+                insert.Parameters.Add(parameters[i]);
+            }
+
+            var copied = 0;
+            using var reader = read.ExecuteReader();
+            while (true)
+            {
+                try
+                {
+                    if (!reader.Read())
+                    {
+                        break;
+                    }
+                }
+                catch (SqliteException)
+                {
+                    break; // Hit the damaged region; keep what was read so far.
+                }
+
+                try
+                {
+                    for (var i = 0; i < columns.Count; i++)
+                    {
+                        parameters[i].Value = reader.IsDBNull(i) ? DBNull.Value : reader.GetValue(i);
+                    }
+
+                    copied += insert.ExecuteNonQuery();
+                }
+                catch (SqliteException)
+                {
+                    // One unreadable or constraint-violating row must not abandon the rest.
+                }
+            }
+
+            transaction.Commit();
+            return copied;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Table {Table} could not be salvaged.", table);
+            return 0;
+        }
+    }
+
+    private static List<string> ListColumns(SqliteConnection connection, string table)
+    {
+        var columns = new List<string>();
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table});";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        return columns;
+    }
 
     private static void Migrate(SqliteConnection connection)
     {
@@ -172,6 +406,16 @@ public sealed class ScribeDatabase : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+
+            if (_keepAlive is not null && !_isMemory)
+            {
+                // Fold the WAL back into the main file on clean shutdown so scribe.db alone is a
+                // complete, consistent snapshot — anything that copies or backs up just the main
+                // file (migrations, user backups) then can't capture a torn state.
+                try { Execute(_keepAlive, "PRAGMA wal_checkpoint(TRUNCATE);"); }
+                catch { /* best effort */ }
+            }
+
             _keepAlive?.Dispose();
             _keepAlive = null;
         }
