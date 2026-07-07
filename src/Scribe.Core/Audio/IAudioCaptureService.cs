@@ -12,6 +12,12 @@ public interface IAudioCaptureService : IDisposable
     /// <summary>True between <see cref="Start"/> and <see cref="Stop"/>.</summary>
     bool IsCapturing { get; }
 
+    /// <summary>
+    /// Friendly name of the device the most recent capture used (survives <see cref="Stop"/>), or
+    /// null before the first capture. Lets error messages name the microphone that produced nothing.
+    /// </summary>
+    string? LastDeviceName { get; }
+
     /// <summary>Enumerates active input devices, flagging the system default.</summary>
     IReadOnlyList<AudioDevice> GetInputDevices();
 

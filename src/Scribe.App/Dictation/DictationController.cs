@@ -297,7 +297,16 @@ internal sealed class DictationController : IDisposable
             if (captured.IsEmpty)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyCapture);
-                _log.LogInformation("Capture was empty; nothing to transcribe.");
+
+                // Zero samples from a capture that started without error means the endpoint is not
+                // delivering audio at all — classically a Bluetooth headset whose hands-free mic
+                // never engaged (seen with AirPods Max: the endpoint opens but streams nothing).
+                // This must be loud: a silent return here looks to the user like dictation died.
+                var device = _audio.LastDeviceName;
+                _log.LogWarning("Capture from '{Device}' produced no audio.", device ?? "default device");
+                Error?.Invoke(device is null
+                    ? "no audio captured — check your microphone in Settings"
+                    : $"no audio from '{device}' — pick a different microphone in Settings");
                 return;
             }
 

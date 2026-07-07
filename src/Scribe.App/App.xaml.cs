@@ -104,7 +104,13 @@ public partial class App : Application
             services.GetRequiredService<ILogger<OverlayProcessClient>>());
 
         _controller.StateChanged += OnStateChanged;
-        _controller.Error += message => _tray!.ShowError(message);
+        _controller.Error += message =>
+        {
+            _tray!.ShowError(message);
+            // Mirror the failure on the overlay (like cleanup failures): the user is looking at the
+            // pill mid-dictation, not the tray, when the microphone produces nothing.
+            OnCleanupFailed(message);
+        };
         _controller.CleanupFailed += OnCleanupFailed;
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
@@ -173,17 +179,18 @@ public partial class App : Application
         }
         // --- End onboarding -----------------------------------------------------------------
 
+        // Best-effort background update check. No-ops for non-packaged dev builds; for installed
+        // builds it downloads any newer GitHub release and stages it to apply when the user quits.
+        // Created BEFORE the settings shortcut below so the settings window always gets a service.
+        _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
+        _updates.UpdateReady += message => _tray?.ShowInfo(message);
+        _ = _updates.CheckAsync();
+
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
         if (e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase)))
         {
             OpenSettings();
         }
-
-        // Best-effort background update check. No-ops for non-packaged dev builds; for installed
-        // builds it downloads any newer GitHub release and stages it to apply when the user quits.
-        _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
-        _updates.UpdateReady += message => _tray?.ShowInfo(message);
-        _ = _updates.CheckAsync();
     }
 
     /// <summary>
@@ -312,7 +319,8 @@ public partial class App : Application
                 _controller!.ApplySettings(settings);
                 _overlay?.SetPosition(settings.OverlayPosition);
                 _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
-            });
+            },
+            _updates);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
