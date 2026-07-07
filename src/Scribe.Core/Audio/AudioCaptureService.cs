@@ -31,6 +31,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public bool IsCapturing { get; private set; }
 
+    public string? LastDeviceName { get; private set; }
+
     public event EventHandler<float>? LevelChanged;
 
     public IReadOnlyList<AudioDevice> GetInputDevices()
@@ -72,6 +74,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
             _capture.DataAvailable += OnDataAvailable;
             _capture.RecordingStopped += OnRecordingStopped;
+            LastDeviceName = _device.FriendlyName;
 
             _logger.LogInformation(
                 "Starting capture on '{Device}' at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",

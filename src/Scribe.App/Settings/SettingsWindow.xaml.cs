@@ -34,6 +34,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ICleanupFailureLog _failureLog;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
+    private readonly UpdateService? _updates;
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
@@ -63,7 +64,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
         Action<OverlayPosition> previewOverlay,
-        Action<AppSettings> applySettings)
+        Action<AppSettings> applySettings,
+        UpdateService? updates = null)
     {
         _settingsRepository = settingsRepository;
         _audio = audio;
@@ -75,6 +77,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _failureLog = failureLog;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
+        _updates = updates;
 
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
@@ -101,6 +104,48 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _cleanup.StatusChanged += OnCleanupStatusChanged;
         Closed += OnClosed;
         RefreshAiStatus();
+        InitializeUpdateCard();
+    }
+
+    // --- Updates card (General) --------------------------------------------------------------
+
+    private void InitializeUpdateCard()
+    {
+        UpdateStatusText.Text = _updates?.PendingVersion is { } pending
+            ? $"Scribe {UpdateService.RunningVersion} — {pending} is downloaded and ready to install."
+            : $"Scribe {UpdateService.RunningVersion} — updates are checked at startup and installed when you quit.";
+        UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updates is null)
+        {
+            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build — updates apply to installed builds only).";
+            return;
+        }
+
+        UpdateCheckButton.IsEnabled = false;
+        UpdateStatusText.Text = "Checking for updates…";
+        try
+        {
+            UpdateStatusText.Text = await _updates.CheckAndDownloadAsync();
+            UpdateApplyButton.Visibility = _updates.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+        finally
+        {
+            UpdateCheckButton.IsEnabled = true;
+        }
+    }
+
+    private void UpdateApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        // On success this never returns — the process exits, the update applies, and Scribe
+        // relaunches on the new version.
+        if (_updates is null || !_updates.ApplyNowAndRestart())
+        {
+            UpdateStatusText.Text = "Couldn't restart into the update — it will install when you quit Scribe.";
+        }
     }
 
     // --- Navigation rail -------------------------------------------------------------------

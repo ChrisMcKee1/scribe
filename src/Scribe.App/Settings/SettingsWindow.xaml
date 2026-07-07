@@ -299,6 +299,28 @@
                                                    Text="CPU threads for transcription (0 = automatic)."/>
                                     </StackPanel>
                                 </ui:CardExpander>
+
+                                <!-- Updates: current version, on-demand check, and immediate install. -->
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0" VerticalAlignment="Center">
+                                            <TextBlock Text="Updates" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                       Text="Updates are checked at startup and installed when you quit."/>
+                                        </StackPanel>
+                                        <ui:Button x:Name="UpdateCheckButton" Grid.Column="1" Content="Check for updates"
+                                                   MinWidth="76" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                   Click="UpdateCheckButton_Click"/>
+                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart &amp; update"
+                                                   MinWidth="76" VerticalAlignment="Center" Appearance="Primary"
+                                                   Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
+                                    </Grid>
+                                </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
