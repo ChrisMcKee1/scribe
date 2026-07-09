@@ -1,0 +1,119 @@
+# name: Software Development
+# category: Software Development
+# description: Everyday developer acronyms, tools, languages, and formats with the spelling devs expect.
+pattern,replacement
+#
+# --- Tools and platforms ---
+github,GitHub
+git hub,GitHub
+gitlab,GitLab
+bitbucket,Bitbucket
+nuget,NuGet
+npm,npm
+pnpm,pnpm
+docker,Docker
+kubernetes,Kubernetes
+k8s,K8s
+kubectl,kubectl
+kube control,kubectl
+cube control,kubectl
+terraform,Terraform
+ansible,Ansible
+jenkins,Jenkins
+webpack,webpack
+vite,Vite
+#
+# --- Languages and runtimes ---
+typescript,TypeScript
+type script,TypeScript
+javascript,JavaScript
+java script,JavaScript
+python,Python
+golang,Go
+c sharp,C#
+c plus plus,C++
+node js,Node.js
+nodejs,Node.js
+dot net,.NET
+#
+# --- Databases ---
+postgresql,PostgreSQL
+postgres,PostgreSQL
+post gres,PostgreSQL
+mysql,MySQL
+my sql,MySQL
+mongodb,MongoDB
+mongo db,MongoDB
+sqlite,SQLite
+redis,Redis
+#
+# --- Web and data formats ---
+json,JSON
+yaml,YAML
+yml,YAML
+xml,XML
+html,HTML
+css,CSS
+scss,SCSS
+graphql,GraphQL
+graph ql,GraphQL
+markdown,Markdown
+#
+# --- Core acronyms ---
+api,API
+a p i,API
+apis,APIs
+sdk,SDK
+s d k,SDK
+cli,CLI
+c l i,CLI
+ide,IDE
+gui,GUI
+url,URL
+u r l,URL
+uri,URI
+http,HTTP
+https,HTTPS
+rest,REST
+restful,RESTful
+grpc,gRPC
+oauth,OAuth
+o auth,OAuth
+jwt,JWT
+crud,CRUD
+orm,ORM
+mvc,MVC
+mvvm,MVVM
+dto,DTO
+#
+# --- Practices ---
+ci cd,CI/CD
+c i c d,CI/CD
+tdd,TDD
+bdd,BDD
+oop,OOP
+saas,SaaS
+paas,PaaS
+iaas,IaaS
+#
+# --- Networking and security ---
+ssh,SSH
+tcp,TCP
+udp,UDP
+dns,DNS
+tls,TLS
+ssl,SSL
+vpn,VPN
+cdn,CDN
+cors,CORS
+csrf,CSRF
+xss,XSS
+#
+# --- Interface and hardware ---
+ux,UX
+ui,UI
+cpu,CPU
+gpu,GPU
+ssd,SSD
+iot,IoT
+i o t,IoT

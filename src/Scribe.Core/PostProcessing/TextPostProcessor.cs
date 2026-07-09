@@ -10,6 +10,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 {
     private readonly IDictionaryRepository _dictionary;
     private readonly ISnippetRepository? _snippets;
+    private readonly IDictionaryLibraryService? _libraries;
     private readonly ILogger<TextPostProcessor> _logger;
     private readonly object _gate = new();
 
@@ -20,10 +21,12 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     public TextPostProcessor(
         IDictionaryRepository dictionary,
         ILogger<TextPostProcessor> logger,
-        ISnippetRepository? snippets = null)
+        ISnippetRepository? snippets = null,
+        IDictionaryLibraryService? libraries = null)
     {
         _dictionary = dictionary;
         _snippets = snippets;
+        _libraries = libraries;
         _logger = logger;
     }
 
@@ -49,7 +52,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     {
         lock (_gate)
         {
-            _rules = Build(_dictionary.GetEnabled());
+            _rules = BuildRules();
             _snippetRules = BuildSnippets();
             _loaded = true;
         }
@@ -61,9 +64,40 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         lock (_gate)
         {
             if (_loaded) return;
-            _rules = Build(_dictionary.GetEnabled());
+            _rules = BuildRules();
             _snippetRules = BuildSnippets();
             _loaded = true;
+        }
+    }
+
+    // The effective rule set = the user's base dictionary plus any enabled libraries, de-duplicated
+    // with the base winning on conflict. Libraries are optional and best-effort: a failure to load
+    // them must never cost the user their base dictionary.
+    private CompiledRule[] BuildRules()
+    {
+        var baseEntries = _dictionary.GetEnabled();
+        var libraryEntries = SafeLibraryEntries();
+        var effective = libraryEntries.Count == 0
+            ? baseEntries
+            : DictionaryLibraryComposer.Merge(baseEntries, libraryEntries);
+        return Build(effective);
+    }
+
+    private IReadOnlyList<DictionaryEntry> SafeLibraryEntries()
+    {
+        if (_libraries is null)
+        {
+            return [];
+        }
+
+        try
+        {
+            return _libraries.GetEnabledLibraryEntries();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load enabled dictionary libraries; using the base dictionary only.");
+            return [];
         }
     }
 

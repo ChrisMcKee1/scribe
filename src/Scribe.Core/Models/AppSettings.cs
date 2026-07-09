@@ -49,6 +49,15 @@ public sealed class AppSettings
     public bool ApplyPostProcessing { get; set; } = true;
 
     /// <summary>
+    /// Ids of the dictionary libraries the user has switched on. Each enabled library's entries are
+    /// layered on top of the base dictionary (the user's own entries win on conflict) and feed both
+    /// the deterministic post-processor and the AI cleanup glossary. Empty by default, so libraries
+    /// are strictly opt-in and never change behaviour for someone who hasn't chosen any. A plain
+    /// string list, deep-copied in <see cref="Clone"/>.
+    /// </summary>
+    public List<string> EnabledDictionaryLibraryIds { get; set; } = new();
+
+    /// <summary>
     /// Run transcribed text through an AI model to fix punctuation, capitalization and grammar
     /// before injection. Off by default. Depending on <see cref="AiCleanupProvider"/> this uses an
     /// on-device Foundry Local model (downloaded on first use) or a model deployed in the user's
@@ -180,6 +189,8 @@ public sealed class AppSettings
             WritingStyle = p.WritingStyle,
             NewlineHandling = p.NewlineHandling,
         }).ToList();
+        // Same reason as Profiles: the id list is mutable, so give the clone its own copy.
+        clone.EnabledDictionaryLibraryIds = new List<string>(EnabledDictionaryLibraryIds);
         return clone;
     }
 }

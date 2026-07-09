@@ -18,6 +18,34 @@ public sealed class PostProcessorTests
         return (processor, repo, db);
     }
 
+    // Minimal library service that yields a fixed set of enabled entries, for the merge test below.
+    private sealed class StubLibraries(params DictionaryEntry[] entries) : IDictionaryLibraryService
+    {
+        public IReadOnlyList<DictionaryLibrary> GetLibraries() => [];
+        public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries() => entries;
+        public DictionaryLibrary Import(string csv, string? suggestedName) => throw new NotSupportedException();
+        public void Remove(string id) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public void Process_applies_enabled_library_entries_on_top_of_the_base_dictionary()
+    {
+        var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+        repo.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
+        var libraries = new StubLibraries(
+            DictionaryEntry.New("a p i m", "APIM"),
+            DictionaryEntry.New("azure", "AZURE-from-library"));
+        var processor = new TextPostProcessor(
+            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries);
+
+        using (db)
+        {
+            // The library term applies, and the base dictionary wins over the library's 'azure' entry.
+            Assert.Equal("deploy APIM to Azure", processor.Process("deploy a p i m to azure"));
+        }
+    }
+
     [Fact]
     public void Process_applies_whole_word_casing_case_insensitively()
     {

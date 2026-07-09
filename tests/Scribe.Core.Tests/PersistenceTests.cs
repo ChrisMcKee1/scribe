@@ -55,6 +55,35 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void Settings_round_trip_preserves_enabled_dictionary_libraries()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
+        settings.EnabledDictionaryLibraryIds.Add("software-development");
+        repo.Save(settings);
+
+        var loaded = repo.Load();
+
+        Assert.Equal(new[] { "microsoft-azure", "software-development" }, loaded.EnabledDictionaryLibraryIds);
+    }
+
+    [Fact]
+    public void Clone_deep_copies_enabled_dictionary_libraries()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
+
+        var clone = settings.Clone();
+        clone.EnabledDictionaryLibraryIds.Add("data-and-ai");
+
+        Assert.Single(settings.EnabledDictionaryLibraryIds); // original list is not shared
+        Assert.Equal(2, clone.EnabledDictionaryLibraryIds.Count);
+    }
+
+    [Fact]
     public void Settings_load_returns_defaults_when_empty()
     {
         using var db = ScribeDatabase.CreateInMemory();

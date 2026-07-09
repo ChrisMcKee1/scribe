@@ -42,6 +42,7 @@ public sealed class AppPaths
 
         LogsDir = Path.Combine(RootDir, "logs");
         ModelsDir = Path.Combine(RootDir, "models");
+        LibrariesDir = Path.Combine(RootDir, "libraries");
         DatabasePath = Path.Combine(RootDir, "scribe.db");
     }
 
@@ -61,6 +62,9 @@ public sealed class AppPaths
     /// <summary>Installed-model fallback location (see <see cref="ModelLocator"/>).</summary>
     public string ModelsDir { get; }
 
+    /// <summary>Imported custom dictionary libraries (one CSV per library).</summary>
+    public string LibrariesDir { get; }
+
     /// <summary>Full path to the SQLite database file.</summary>
     public string DatabasePath { get; }
 
@@ -69,6 +73,7 @@ public sealed class AppPaths
     {
         Directory.CreateDirectory(RootDir);
         Directory.CreateDirectory(LogsDir);
+        Directory.CreateDirectory(LibrariesDir);
         if (LegacyRootDir is not null)
         {
             TryMigrateDatabase(LegacyRootDir, RootDir);

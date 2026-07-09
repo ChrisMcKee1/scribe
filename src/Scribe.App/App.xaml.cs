@@ -95,6 +95,7 @@ public partial class App : Application
             services.GetRequiredService<ITextInjector>(),
             services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<IDictionaryLibraryService>(),
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
@@ -308,6 +309,7 @@ public partial class App : Application
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<IDictionaryLibraryService>(),
             services.GetRequiredService<ISnippetRepository>(),
             services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<ITextCleanupService>(),

@@ -41,6 +41,15 @@ public interface ITextCleanupService : IAsyncDisposable
         string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null);
 
     /// <summary>
+    /// Runs a one-off prompt against the currently configured cleanup model and returns the raw text
+    /// response, or <c>null</c> when no model is ready or the call fails. Unlike <see cref="CleanAsync"/>
+    /// this uses the caller's own system prompt (not the cleanup guardrails), so opt-in helpers such as
+    /// AI dictionary suggestions can reuse the user's configured model. Never throws.
+    /// </summary>
+    Task<string?> CompleteAsync(
+        string systemPrompt, string userMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime
     /// (without downloading a model) and reports whether it is usable on this machine. Never throws.
     /// Only meaningful for the Foundry Local provider.

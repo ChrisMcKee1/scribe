@@ -148,6 +148,12 @@
                 </ListBoxItem>
                 <ListBoxItem>
                     <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="BookStack24" FontSize="18"/>
+                        <TextBlock Text="Libraries" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
                         <TextBlock Text="Snippets" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
@@ -771,7 +777,7 @@
                             <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
                                        Icon="{ui:SymbolIcon Lightbulb24}"
                                        Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
-                                       ToolTip="Scan your recent dictations for recurring technical terms and acronyms worth locking in."/>
+                                       ToolTip="Learn vocabulary from your recent dictations. When an AI model is set up, it works out how terms are spoken and how they should be spelled; otherwise it scans for repeated technical terms."/>
                             <ui:Button x:Name="DictionaryImportButton" Content="Import CSV…"
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="DictionaryImportButton_Click"
@@ -801,6 +807,56 @@
                         </ui:Card>
                         <TextBlock Grid.Row="3" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
                                    Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
+                    </Grid>
+
+                    <!-- ============================ Libraries ============================ -->
+                    <Grid x:Name="SectionLibraries" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Libraries" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Turn on ready-made vocabulary packs so Scribe spells technical terms the way you say them. 'a p i m' becomes 'APIM', 'cosmos db' becomes 'Cosmos DB'. Enabled libraries layer on top of your dictionary, and your own entries always win. Import a CSV to add your own. Changes apply when you save."/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <ui:Button x:Name="LibraryImportButton" Content="Import library…"
+                                       Icon="{ui:SymbolIcon ArrowDownload24}"
+                                       Margin="0,0,8,0" Click="LibraryImportButton_Click"
+                                       ToolTip="Add a dictionary library from a CSV file."/>
+                            <ui:Button x:Name="LibraryViewButton" Content="View terms"
+                                       Icon="{ui:SymbolIcon Eye24}"
+                                       Margin="0,0,8,0" Click="LibraryViewButton_Click"
+                                       ToolTip="Show the terms in the selected library."/>
+                            <ui:Button x:Name="LibraryExportButton" Content="Export CSV…"
+                                       Icon="{ui:SymbolIcon ArrowUpload24}"
+                                       Margin="0,0,8,0" Click="LibraryExportButton_Click"
+                                       ToolTip="Save the selected library as a CSV file to back up or share."/>
+                            <ui:Button x:Name="LibraryRemoveButton" Content="Remove"
+                                       Icon="{ui:SymbolIcon Delete24}"
+                                       Click="LibraryRemoveButton_Click"
+                                       ToolTip="Remove the selected imported library. Built-in libraries can only be turned off."/>
+                        </StackPanel>
+                        <ui:Card Grid.Row="2" Padding="0" Style="{StaticResource FillCard}">
+                            <DataGrid x:Name="LibraryGrid"
+                                      AutoGenerateColumns="False"
+                                      CanUserAddRows="False" CanUserDeleteRows="False"
+                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                      Background="Transparent" BorderThickness="0">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                    <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="Auto" IsReadOnly="True"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </ui:Card>
+                        <TextBlock Grid.Row="3" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
+                                   Text="Tip: enable a library to add its terms to your dictionary and the AI glossary. Turn off any you don't need."/>
                     </Grid>
 
                     <!-- ============================ Snippets ============================ -->

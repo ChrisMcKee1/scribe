@@ -1,0 +1,112 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Scribe.Core.Infrastructure;
+using Scribe.Core.Models;
+using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
+using Xunit;
+
+namespace Scribe.Core.Tests;
+
+public sealed class DictionaryLibraryServiceTests : IDisposable
+{
+    private readonly string _root;
+    private readonly AppPaths _paths;
+    private readonly ScribeDatabase _db;
+    private readonly SettingsRepository _settings;
+    private readonly DictionaryLibraryService _service;
+
+    public DictionaryLibraryServiceTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "scribe-lib-tests-" + Guid.NewGuid().ToString("N"));
+        _paths = new AppPaths(_root);
+        _db = ScribeDatabase.CreateInMemory();
+        _settings = new SettingsRepository(_db);
+        _service = new DictionaryLibraryService(_paths, _settings, NullLogger<DictionaryLibraryService>.Instance);
+    }
+
+    public void Dispose()
+    {
+        _db.Dispose();
+        try
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+        }
+        catch
+        {
+            // Best effort: a leftover temp dir is harmless.
+        }
+    }
+
+    [Fact]
+    public void GetLibraries_includes_the_built_in_set()
+    {
+        var libraries = _service.GetLibraries();
+
+        Assert.Contains(libraries, l => l.Id == "microsoft-azure" && l.BuiltIn);
+        Assert.True(libraries.Count >= 4);
+    }
+
+    [Fact]
+    public void Import_writes_a_custom_library_that_lists_and_reads_back()
+    {
+        var csv = "# name: My Terms\n# category: Custom\npattern,replacement\nfoo bar,FooBar\n";
+
+        var imported = _service.Import(csv, "fallback-name");
+
+        Assert.False(imported.BuiltIn);
+        Assert.Equal("My Terms", imported.Name);
+        Assert.Single(imported.Entries);
+
+        var listed = _service.GetLibraries().Single(l => l.Id == imported.Id);
+        Assert.False(listed.BuiltIn);
+        Assert.Equal("My Terms", listed.Name);
+        Assert.True(File.Exists(Path.Combine(_paths.LibrariesDir, imported.Id + ".csv")));
+    }
+
+    [Fact]
+    public void Import_uses_the_suggested_name_when_the_csv_has_no_header()
+    {
+        var imported = _service.Import("foo,Foo\n", "My File");
+        Assert.Equal("My File", imported.Name);
+    }
+
+    [Fact]
+    public void Import_rejects_a_csv_with_no_entries()
+    {
+        Assert.Throws<InvalidOperationException>(() => _service.Import("# name: Empty\n", "empty"));
+    }
+
+    [Fact]
+    public void Import_generates_an_id_that_never_collides_with_a_built_in()
+    {
+        var imported = _service.Import("# name: Microsoft Azure\npattern,replacement\nx,Y\n", null);
+        Assert.NotEqual("microsoft-azure", imported.Id);
+    }
+
+    [Fact]
+    public void Remove_deletes_a_custom_library_but_refuses_a_built_in()
+    {
+        var imported = _service.Import("# name: Temp\npattern,replacement\na,B\n", null);
+
+        _service.Remove(imported.Id);
+        Assert.DoesNotContain(_service.GetLibraries(), l => l.Id == imported.Id);
+
+        Assert.Throws<InvalidOperationException>(() => _service.Remove("microsoft-azure"));
+    }
+
+    [Fact]
+    public void GetEnabledLibraryEntries_composes_only_enabled_libraries()
+    {
+        Assert.Empty(_service.GetEnabledLibraryEntries()); // nothing enabled by default
+
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
+        _settings.Save(settings);
+
+        var entries = _service.GetEnabledLibraryEntries();
+        Assert.Contains(entries, e => e.Replacement == "APIM");
+    }
+}

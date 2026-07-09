@@ -63,6 +63,12 @@ internal sealed class TextCleanupService : ITextCleanupService
     private const float CleanupTemperature = 0.1f;
     private const string AgentName = "ScribeCleanup";
 
+    // One-off auxiliary completions (e.g. AI dictionary suggestions) are user-initiated and not on the
+    // inject path, so they get a generous budget: a bigger structured answer on a slow local model
+    // still finishes, and a reasoning model's hidden thinking has room before the visible JSON.
+    private const int AuxiliaryCompletionTimeoutSeconds = 90;
+    private const int AuxiliaryCompletionMaxTokens = 2048;
+
     // The transcript is delimited inside the user message so the model reads it as data to rewrite
     // rather than a message addressed to it. Without this, dictation phrased as a request ("hey, can
     // you make sure X is installed") is routinely *answered* ("Sure, I can help with that") instead
@@ -381,6 +387,58 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         return new CleanupResult(combined, outcome, partial);
+    }
+
+    public async Task<string?> CompleteAsync(
+        string systemPrompt, string userMessage, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(systemPrompt) || string.IsNullOrWhiteSpace(userMessage))
+        {
+            return null;
+        }
+
+        AIAgent agent;
+        CleanupProvider provider;
+        lock (_gate)
+        {
+            // Reuse the initialized client's agent factory, but with the caller's own system prompt
+            // instead of the cleanup guardrails. Unavailable until a model is configured and Ready, so
+            // callers get a clean null (and can fall back) rather than an exception when AI is off.
+            if (_status != CleanupStatus.Ready || _agentFactory is not { } factory)
+            {
+                return null;
+            }
+
+            provider = _options.Provider;
+            agent = factory(systemPrompt); // pure object construction against the initialized client
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
+
+            var chatOptions = new ChatOptions { MaxOutputTokens = AuxiliaryCompletionMaxTokens };
+            if (provider == CleanupProvider.FoundryLocal)
+            {
+                chatOptions.Temperature = CleanupTemperature;
+            }
+
+            var runOptions = new ChatClientAgentRunOptions(chatOptions);
+            var result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
+                .ConfigureAwait(false);
+
+            return string.IsNullOrWhiteSpace(result.Text) ? null : result.Text;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Auxiliary AI completion failed; returning null.");
+            return null;
+        }
     }
 
     // Cleans a single chunk. Returns the cleaned text and a null error on success, or the raw chunk and

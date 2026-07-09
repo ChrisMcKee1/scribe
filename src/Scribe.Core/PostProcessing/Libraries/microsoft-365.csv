@@ -1,0 +1,82 @@
+# name: Microsoft 365 and Products
+# category: Microsoft
+# description: Microsoft 365, Power Platform, Copilot, and developer product names with correct casing.
+pattern,replacement
+#
+# --- Microsoft 365 core ---
+microsoft 365,Microsoft 365
+office 365,Office 365
+m365,Microsoft 365
+o365,Office 365
+microsoft teams,Microsoft Teams
+teams,Teams
+sharepoint,SharePoint
+share point,SharePoint
+onedrive,OneDrive
+one drive,OneDrive
+outlook,Outlook
+exchange online,Exchange Online
+onenote,OneNote
+one note,OneNote
+powerpoint,PowerPoint
+power point,PowerPoint
+microsoft word,Microsoft Word
+microsoft excel,Microsoft Excel
+microsoft loop,Microsoft Loop
+microsoft forms,Microsoft Forms
+microsoft planner,Microsoft Planner
+microsoft bookings,Microsoft Bookings
+visio,Visio
+microsoft graph,Microsoft Graph
+#
+# --- Power Platform ---
+power platform,Power Platform
+power bi,Power BI
+power b i,Power BI
+power apps,Power Apps
+power automate,Power Automate
+power pages,Power Pages
+power fx,Power Fx
+dataverse,Dataverse
+#
+# --- Copilot and AI ---
+copilot,Copilot
+microsoft copilot,Microsoft Copilot
+copilot studio,Copilot Studio
+github copilot,GitHub Copilot
+#
+# --- Identity and management ---
+microsoft entra,Microsoft Entra
+entra id,Microsoft Entra ID
+active directory,Active Directory
+microsoft intune,Microsoft Intune
+intune,Intune
+group policy,Group Policy
+conditional access,Conditional Access
+#
+# --- Viva and collaboration ---
+microsoft viva,Microsoft Viva
+viva engage,Viva Engage
+viva learning,Viva Learning
+#
+# --- Windows and dev tools ---
+windows,Windows
+windows 11,Windows 11
+hyper v,Hyper-V
+powershell,PowerShell
+power shell,PowerShell
+visual studio code,Visual Studio Code
+visual studio,Visual Studio
+vs code,VS Code
+dot net,.NET
+#
+# --- Spoken acronyms ---
+sso,SSO
+mfa,MFA
+mdm,MDM
+gpo,GPO
+dlp,DLP
+e discovery,eDiscovery
+rdp,RDP
+smb,SMB
+uwp,UWP

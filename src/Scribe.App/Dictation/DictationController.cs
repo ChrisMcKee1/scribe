@@ -33,6 +33,7 @@ internal sealed class DictationController : IDisposable
     private readonly ITextInjector _injector;
     private readonly IHistoryRepository _history;
     private readonly IDictionaryRepository _dictionary;
+    private readonly IDictionaryLibraryService _libraries;
     private readonly ICleanupFailureLog _failureLog;
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<DictationController> _log;
@@ -63,6 +64,7 @@ internal sealed class DictationController : IDisposable
         ITextInjector injector,
         IHistoryRepository history,
         IDictionaryRepository dictionary,
+        IDictionaryLibraryService libraries,
         ICleanupFailureLog failureLog,
         ISettingsRepository settingsRepository,
         ILogger<DictationController> log)
@@ -76,6 +78,7 @@ internal sealed class DictationController : IDisposable
         _injector = injector;
         _history = history;
         _dictionary = dictionary;
+        _libraries = libraries;
         _failureLog = failureLog;
         _settingsRepository = settingsRepository;
         _log = log;
@@ -166,12 +169,18 @@ internal sealed class DictationController : IDisposable
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —
     // i.e. right after the dictionary editor saves — and so the value lives on the value-equality
-    // CleanupOptions record, which lets the service detect the change and rebuild its agent.
+    // CleanupOptions record, which lets the service detect the change and rebuild its agent. Enabled
+    // dictionary libraries are layered on top of the base dictionary, the base winning on conflict.
     private string? BuildGlossary()
     {
         try
         {
-            var glossary = CleanupPrompt.BuildGlossary(_dictionary.GetEnabled());
+            var baseEntries = _dictionary.GetEnabled();
+            var libraryEntries = _libraries.GetEnabledLibraryEntries();
+            var effective = libraryEntries.Count == 0
+                ? (IReadOnlyList<DictionaryEntry>)baseEntries
+                : DictionaryLibraryComposer.Merge(baseEntries, libraryEntries);
+            var glossary = CleanupPrompt.BuildGlossary(effective);
             return string.IsNullOrEmpty(glossary) ? null : glossary;
         }
         catch (Exception ex)

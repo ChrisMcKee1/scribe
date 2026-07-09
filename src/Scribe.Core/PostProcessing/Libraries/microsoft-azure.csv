@@ -1,0 +1,114 @@
+# name: Microsoft Azure
+# category: Microsoft
+# description: Azure services, resources, and the acronyms people say for them (APIM, AKS, VNet).
+#
+# One row per substitution: the spoken form as it tends to get transcribed, then the spelling to
+# write instead. whole_word and enabled default to true, so most rows need only two columns.
+pattern,replacement
+#
+# --- Platform and identity ---
+azure,Azure
+azure ad,Microsoft Entra ID
+azure active directory,Microsoft Entra ID
+microsoft entra,Microsoft Entra
+entra id,Microsoft Entra ID
+azure resource manager,Azure Resource Manager
+azure arc,Azure Arc
+azure policy,Azure Policy
+azure devops,Azure DevOps
+azure dev ops,Azure DevOps
+bicep,Bicep
+#
+# --- Compute, web, and containers ---
+app service,App Service
+azure functions,Azure Functions
+logic apps,Logic Apps
+container apps,Container Apps
+container registry,Container Registry
+azure kubernetes service,Azure Kubernetes Service
+service fabric,Service Fabric
+#
+# --- Data and storage ---
+cosmos db,Cosmos DB
+cosmos d b,Cosmos DB
+blob storage,Blob Storage
+table storage,Table Storage
+queue storage,Queue Storage
+data lake,Data Lake
+azure sql,Azure SQL
+sql database,SQL Database
+sql managed instance,SQL Managed Instance
+azure cache for redis,Azure Cache for Redis
+azure managed redis,Azure Managed Redis
+data factory,Data Factory
+azure synapse,Azure Synapse
+synapse,Synapse
+azure databricks,Azure Databricks
+databricks,Databricks
+stream analytics,Stream Analytics
+#
+# --- Messaging and integration ---
+service bus,Service Bus
+event hubs,Event Hubs
+event hub,Event Hub
+event grid,Event Grid
+api management,API Management
+app configuration,App Configuration
+#
+# --- Networking ---
+front door,Front Door
+traffic manager,Traffic Manager
+application gateway,Application Gateway
+express route,ExpressRoute
+private link,Private Link
+azure firewall,Azure Firewall
+azure bastion,Azure Bastion
+#
+# --- Security ---
+key vault,Key Vault
+microsoft sentinel,Microsoft Sentinel
+sentinel,Microsoft Sentinel
+microsoft defender,Microsoft Defender
+microsoft purview,Microsoft Purview
+purview,Microsoft Purview
+#
+# --- AI ---
+cognitive services,Azure AI services
+azure openai,Azure OpenAI
+azure ai foundry,Azure AI Foundry
+ai foundry,AI Foundry
+foundry local,Foundry Local
+azure ai search,Azure AI Search
+cognitive search,Azure AI Search
+document intelligence,Document Intelligence
+azure virtual desktop,Azure Virtual Desktop
+#
+# --- Observability ---
+log analytics,Log Analytics
+application insights,Application Insights
+app insights,Application Insights
+azure monitor,Azure Monitor
+azure advisor,Azure Advisor
+#
+# --- Spoken acronyms (letter-by-letter and word forms) ---
+apim,APIM
+a p i m,APIM
+aks,AKS
+a k s,AKS
+acr,ACR
+a c r,ACR
+aca,ACA
+adf,ADF
+avd,AVD
+vnet,VNet
+v net,VNet
+nsg,NSG
+n s g,NSG
+udr,UDR
+vmss,VMSS
+sku,SKU
+i a c,IaC
+arm template,ARM template
+rbac,RBAC
+r b a c,RBAC
+abac,ABAC

@@ -27,6 +27,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
+    private readonly IDictionaryLibraryService _libraries;
     private readonly ISnippetRepository _snippets;
     private readonly IHistoryRepository _history;
     private readonly ITextCleanupService _cleanup;
@@ -38,6 +39,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
+    private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -58,6 +60,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
         IDictionaryRepository dictionary,
+        IDictionaryLibraryService libraries,
         ISnippetRepository snippets,
         IHistoryRepository history,
         ITextCleanupService cleanup,
@@ -70,6 +73,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _settingsRepository = settingsRepository;
         _audio = audio;
         _dictionary = dictionary;
+        _libraries = libraries;
         _snippets = snippets;
         _history = history;
         _cleanup = cleanup;
@@ -95,6 +99,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateChoices();
         LoadFromSettings();
         LoadDictionary();
+        LoadLibraries();
         LoadSnippets();
         LoadProfiles();
         LoadFailures();
@@ -154,7 +159,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private Grid[] SectionPanels =>
     [
         SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
-        SectionDictionary, SectionSnippets, SectionProfiles, SectionDiagnostics,
+        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionDiagnostics,
     ];
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -363,6 +368,204 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         DictionaryGrid.ItemsSource = _rows;
         _dictionarySnapshot = DictionarySignature();
+    }
+
+    // --- Libraries -----------------------------------------------------------------------
+
+    private void LoadLibraries()
+    {
+        var enabled = new HashSet<string>(_settings.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+        _libraryRows.Clear();
+        foreach (var library in _libraries.GetLibraries())
+        {
+            _libraryRows.Add(new LibraryRow
+            {
+                Id = library.Id,
+                Name = library.Name,
+                Category = library.Category,
+                Terms = library.EnabledEntryCount,
+                Source = library.BuiltIn ? "Built-in" : "Custom",
+                BuiltIn = library.BuiltIn,
+                Enabled = enabled.Contains(library.Id),
+            });
+        }
+
+        LibraryGrid.ItemsSource = _libraryRows;
+    }
+
+    // The enabled-set persisted in settings: the ids of every ticked library still in the list.
+    private List<string> CollectEnabledLibraryIds() =>
+        _libraryRows.Where(r => r.Enabled).Select(r => r.Id).ToList();
+
+    private void LibraryImportButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        DictionaryLibrary imported;
+        try
+        {
+            var csv = File.ReadAllText(dialog.FileName);
+            var suggestedName = Path.GetFileNameWithoutExtension(dialog.FileName);
+            imported = _libraries.Import(csv, suggestedName);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Scribe", $"Could not import that library:\n{ex.Message}");
+            return;
+        }
+
+        // Newly imported libraries start switched off, like the built-in ones, so an import never
+        // silently changes how dictation is spelled until the user turns it on and saves.
+        _libraryRows.Add(new LibraryRow
+        {
+            Id = imported.Id,
+            Name = imported.Name,
+            Category = imported.Category,
+            Terms = imported.EnabledEntryCount,
+            Source = "Custom",
+            BuiltIn = false,
+            Enabled = false,
+        });
+
+        ShowInfo($"Imported \"{imported.Name}\" with {imported.EnabledEntryCount} " +
+                 $"{(imported.EnabledEntryCount == 1 ? "term" : "terms")}. Turn it on, then save to apply.");
+    }
+
+    private void LibraryViewButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedLibrary() is { } library)
+        {
+            ShowLibraryTerms(library);
+        }
+    }
+
+    private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedLibrary() is not { } library)
+        {
+            return;
+        }
+
+        var dialog = new SaveFileDialog
+        {
+            FileName = library.Id + ".csv",
+            Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+            DefaultExt = ".csv",
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, DictionaryLibraryCsv.Export(library), CsvEncoding);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Scribe", $"Could not export the library:\n{ex.Message}");
+        }
+    }
+
+    private async void LibraryRemoveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (LibraryGrid.SelectedItem is not LibraryRow row)
+        {
+            ShowInfo("Select a library to remove.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (row.BuiltIn)
+        {
+            ShowThemedMessage(
+                "Built-in library",
+                $"\"{row.Name}\" is built in and can't be removed. Turn it off with its checkbox instead.");
+            return;
+        }
+
+        if (!await ConfirmAsync(
+                "Remove library",
+                $"Remove the imported library \"{row.Name}\"? This deletes it from Scribe. " +
+                "You can import it again later from the original file.",
+                "Remove"))
+        {
+            return;
+        }
+
+        try
+        {
+            _libraries.Remove(row.Id);
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Scribe", $"Could not remove that library:\n{ex.Message}");
+            return;
+        }
+
+        _libraryRows.Remove(row);
+        ShowInfo($"Removed \"{row.Name}\".");
+    }
+
+    // Resolves the grid's selected row back to its live library (built-in or freshly re-read custom
+    // file), surfacing a friendly hint when nothing is selected or the file has since gone missing.
+    private DictionaryLibrary? SelectedLibrary()
+    {
+        if (LibraryGrid.SelectedItem is not LibraryRow row)
+        {
+            ShowInfo("Select a library first.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return null;
+        }
+
+        var library = _libraries.GetLibraries().FirstOrDefault(l =>
+            string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+        if (library is null)
+        {
+            ShowInfo("That library is no longer available.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+
+        return library;
+    }
+
+    // Read-only viewer for a library's terms, shown in a scrollable, copyable panel.
+    private void ShowLibraryTerms(DictionaryLibrary library)
+    {
+        var text = string.Join(Environment.NewLine,
+            library.Entries.Select(entry => $"{entry.Pattern}  \u2192  {entry.Replacement}"));
+
+        var box = new TextBox
+        {
+            Text = text,
+            IsReadOnly = true,
+            BorderThickness = new Thickness(0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            TextWrapping = TextWrapping.NoWrap,
+            FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"),
+        };
+        var scroll = new ScrollViewer
+        {
+            Content = box,
+            MaxHeight = 380,
+            MinWidth = 360,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = $"{library.Name} ({library.Entries.Count} terms)",
+            Content = scroll,
+            CloseButtonText = "Close",
+            Owner = this,
+        };
+        _ = dialog.ShowDialogAsync();
     }
 
     // Save skips sections the user never touched, so a pre-existing data problem in one section
@@ -1263,6 +1466,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+        LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
         // Only validate and save the dictionary/snippets when the user actually changed them.
         // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
@@ -1334,6 +1538,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.Profiles = BuildProfiles();
+            _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
@@ -1667,19 +1872,97 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Dictionary suggestions from history -----------------------------------------------
 
-    private void DictionarySuggestButton_Click(object sender, RoutedEventArgs e)
+    private async void DictionarySuggestButton_Click(object sender, RoutedEventArgs e)
     {
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
+        // The grid is the live source of truth for "already covered", so terms added but not yet
+        // saved are excluded from new suggestions too.
+        var current = _rows
+            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+            .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
+            .ToList();
+
+        // Prefer the user's configured AI model: it can work out how a term is spoken versus how it is
+        // written (acronyms, phonetic mishears, casing), not just spot repeated words. Fall back to the
+        // offline pattern miner when no model is ready, so the button still helps with no AI configured.
+        if (_cleanup.Status == CleanupStatus.Ready)
+        {
+            await SuggestWithAiAsync(current);
+        }
+        else
+        {
+            SuggestWithMiner(current);
+        }
+    }
+
+    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current)
+    {
+        List<HistoryEntry> history;
+        try
+        {
+            history = _history.GetRecent(1000).ToList();
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
+            return;
+        }
+
+        var sample = AiDictionarySuggester.BuildHistorySample(history);
+        if (string.IsNullOrWhiteSpace(sample))
+        {
+            ShowThemedMessage(
+                "Nothing to suggest",
+                "There are no recent dictations to learn from yet. Keep dictating and try again later.");
+            return;
+        }
+
+        var originalContent = DictionarySuggestButton.Content;
+        DictionarySuggestButton.IsEnabled = false;
+        DictionarySuggestButton.Content = "Thinking…";
+        ShowInfo(
+            "Asking your AI model to learn terms from your recent dictations…",
+            Wpf.Ui.Controls.InfoBarSeverity.Informational);
+        try
+        {
+            var response = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample);
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                // The model was unavailable or returned nothing: fall back to the deterministic miner.
+                SuggestWithMiner(current, aiRanFirst: true);
+                return;
+            }
+
+            var suggestions = AiDictionarySuggester.ParseSuggestions(response, current);
+            if (suggestions.Count == 0)
+            {
+                SuggestWithMiner(current, aiRanFirst: true);
+                return;
+            }
+
+            AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
+            ShowInfo(
+                $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+                "your AI model inferred from recent dictations. Review them in the grid, delete any you " +
+                "don't want, then save.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
+        }
+        finally
+        {
+            DictionarySuggestButton.Content = originalContent;
+            DictionarySuggestButton.IsEnabled = true;
+        }
+    }
+
+    private void SuggestWithMiner(IReadOnlyList<DictionaryEntry> current, bool aiRanFirst = false)
+    {
         IReadOnlyList<DictionarySuggestionMiner.Suggestion> suggestions;
         try
         {
-            // The grid is the live source of truth for "already covered", so terms added but not
-            // yet saved are excluded too.
-            var current = _rows
-                .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-                .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
-                .ToList();
             suggestions = DictionarySuggestionMiner.Mine(_history.GetRecent(1000), current);
         }
         catch (Exception ex)
@@ -1692,22 +1975,28 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             ShowThemedMessage(
                 "Nothing to suggest",
-                "No recurring technical terms found in your recent dictations yet.\n\n" +
-                "Suggestions appear once a term shows up in three or more dictations, so keep " +
-                "dictating and try again later.");
+                aiRanFirst
+                    ? "Your AI model and the history scan didn't find any new terms to add. Keep " +
+                      "dictating and try again later."
+                    : "No recurring technical terms found in your recent dictations yet.\n\n" +
+                      "Suggestions appear once a term shows up in three or more dictations, so keep " +
+                      "dictating and try again later.");
             return;
         }
 
+        // Lock the spelling: the lowercase spoken form maps to the surface form seen most often.
+        AddSuggestionRows(suggestions.Select(s => (s.Term.ToLowerInvariant(), s.Term)));
+        ShowInfo(
+            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
+            "from your recent dictations. Review them in the grid, delete any you don't want, then save.");
+    }
+
+    private void AddSuggestionRows(IEnumerable<(string Pattern, string Replacement)> entries)
+    {
         DictionaryRow? first = null;
-        foreach (var suggestion in suggestions)
+        foreach (var (pattern, replacement) in entries)
         {
-            // Lock the spelling: the lowercase spoken form maps to the surface form seen most
-            // often. Same-cased terms (e.g. "net10") still land in the AI vocabulary.
-            var row = new DictionaryRow
-            {
-                Pattern = suggestion.Term.ToLowerInvariant(),
-                Replacement = suggestion.Term,
-            };
+            var row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
             _rows.Add(row);
             first ??= row;
         }
@@ -1717,11 +2006,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             DictionaryGrid.SelectedItem = first;
             DictionaryGrid.ScrollIntoView(first);
         }
-
-        ShowInfo(
-            $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
-            "from your recent dictations.\n\nReview them in the grid — delete any you don't want — " +
-            "then save.");
     }
 
     // --- Dictionary CSV import / export ---------------------------------------------------
@@ -1918,6 +2202,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Replacement { get; set; } = string.Empty;
         public bool WholeWord { get; set; } = true;
         public bool Enabled { get; set; } = true;
+    }
+
+    /// <summary>Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable.</summary>
+    public sealed class LibraryRow
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public int Terms { get; set; }
+        public string Source { get; set; } = string.Empty;
+        public bool BuiltIn { get; set; }
+        public bool Enabled { get; set; }
     }
 
     /// <summary>

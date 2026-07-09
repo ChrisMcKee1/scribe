@@ -1,0 +1,80 @@
+# name: Data and AI
+# category: Data and AI
+# description: Data engineering, machine learning, and AI terms with the spelling and casing they use.
+pattern,replacement
+#
+# --- Platforms and libraries ---
+databricks,Databricks
+snowflake,Snowflake
+apache kafka,Apache Kafka
+kafka,Kafka
+apache spark,Apache Spark
+spark,Spark
+hadoop,Hadoop
+airflow,Airflow
+tableau,Tableau
+pandas,pandas
+numpy,NumPy
+num py,NumPy
+pytorch,PyTorch
+py torch,PyTorch
+tensorflow,TensorFlow
+tensor flow,TensorFlow
+scikit learn,scikit-learn
+hugging face,Hugging Face
+langchain,LangChain
+lang chain,LangChain
+jupyter,Jupyter
+parquet,Parquet
+onnx,ONNX
+o n n x,ONNX
+cuda,CUDA
+#
+# --- AI and ML terms ---
+llm,LLM
+l l m,LLM
+llms,LLMs
+gpt,GPT
+gen ai,GenAI
+nlp,NLP
+n l p,NLP
+cnn,CNN
+rnn,RNN
+gan,GAN
+mlops,MLOps
+ml ops,MLOps
+rlhf,RLHF
+sft,SFT
+lora,LoRA
+fine tuning,fine-tuning
+fine tune,fine-tune
+vector db,vector database
+#
+# --- Data engineering ---
+etl,ETL
+e t l,ETL
+elt,ELT
+nosql,NoSQL
+no sql,NoSQL
+olap,OLAP
+oltp,OLTP
+#
+# --- Analytics and metrics ---
+kpi,KPI
+kpis,KPIs
+eda,EDA
+#
+# --- Formats and hardware ---
+csv,CSV
+tsv,TSV
+gpu,GPU
+tpu,TPU
+#
+# --- Speech and vision ---
+ocr,OCR
+tts,TTS
+stt,STT
+asr,ASR
+#
+# --- Governance ---
+pii,PII
