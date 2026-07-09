@@ -43,8 +43,13 @@ internal sealed class DictationController : IDisposable
     private static readonly TimeSpan FailureRetention = TimeSpan.FromDays(7);
 
     private readonly object _gate = new();
+    private readonly CancellationTokenSource _lifetimeCts = new();
     private DictationState _state = DictationState.Idle;
     private AppSettings _settings = AppSettings.CreateDefault();
+    private AppSettings? _captureSettings;
+    private nint _captureTargetWindow;
+    private string? _captureTargetApp;
+    private Task? _processingTask;
     private bool _paused;
     private bool _started;
     private bool _disposed;
@@ -142,7 +147,10 @@ internal sealed class DictationController : IDisposable
             _settings = settings.Clone();
         }
 
-        _hotkeys.UpdateBinding(settings.Hotkey);
+        if (_hotkeys.Binding != settings.Hotkey)
+        {
+            _hotkeys.UpdateBinding(settings.Hotkey);
+        }
         _postProcessor.Reload();
         _cleanup.Configure(BuildCleanupOptions(settings));
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
@@ -193,14 +201,26 @@ internal sealed class DictationController : IDisposable
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
     {
+        bool stopRecording;
+        bool raiseState;
         lock (_gate)
         {
             if (_paused == paused) return;
             _paused = paused;
+            stopRecording = paused && _state == DictationState.Recording;
+            raiseState = _state == DictationState.Idle;
         }
 
         _log.LogInformation("Dictation {State}.", paused ? "paused" : "resumed");
-        Raise(paused ? DictationState.Paused : DictationState.Idle);
+        if (stopRecording)
+        {
+            _hotkeys.CancelToggle();
+            StopAndProcess();
+        }
+        else if (raiseState)
+        {
+            Raise(paused ? DictationState.Paused : DictationState.Idle);
+        }
     }
 
     private void OnActivated(object? sender, EventArgs e)
@@ -221,11 +241,15 @@ internal sealed class DictationController : IDisposable
             }
 
             _state = DictationState.Recording;
-            settings = _settings;
+            settings = _settings.Clone();
+            _captureSettings = settings;
+            _captureTargetWindow = GetForegroundWindow();
+            _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
         }
 
         try
         {
+            _audio.CaptureFaulted += OnCaptureFaulted;
             _audio.Start(settings.InputDeviceId);
             _log.LogInformation("Recording started.");
             Raise(DictationState.Recording);
@@ -242,6 +266,7 @@ internal sealed class DictationController : IDisposable
         }
         catch (Exception ex)
         {
+            _audio.CaptureFaulted -= OnCaptureFaulted;
             _log.LogError(ex, "Failed to start audio capture.");
             ResetToIdle();
             Error?.Invoke("microphone unavailable");
@@ -249,6 +274,13 @@ internal sealed class DictationController : IDisposable
     }
 
     private void OnDeactivated(object? sender, EventArgs e) => StopAndProcess();
+
+    private void OnCaptureFaulted(object? sender, Exception error)
+    {
+        _log.LogError(error, "The active microphone stopped unexpectedly.");
+        Error?.Invoke("microphone disconnected");
+        StopAndProcess();
+    }
 
     // Fired on the audio capture thread for every level sample while subscribed.
     private void OnLevelForSilence(object? sender, float level)
@@ -272,6 +304,8 @@ internal sealed class DictationController : IDisposable
     {
         UnsubscribeSilence();
 
+        DictationSession session;
+        TaskCompletionSource completion;
         lock (_gate)
         {
             if (_state != DictationState.Recording)
@@ -280,10 +314,29 @@ internal sealed class DictationController : IDisposable
             }
 
             _state = DictationState.Processing;
+            session = new DictationSession(
+                _captureSettings ?? _settings.Clone(),
+                _captureTargetWindow,
+                _captureTargetApp);
+            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _processingTask = completion.Task;
         }
 
+        _audio.CaptureFaulted -= OnCaptureFaulted;
+        _audio.RequestStop();
         Raise(DictationState.Processing);
-        _ = Task.Run(ProcessAsync);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ProcessAsync(session, _lifetimeCts.Token).ConfigureAwait(false);
+                completion.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        });
     }
 
     private void UnsubscribeSilence()
@@ -296,12 +349,13 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private async Task ProcessAsync()
+    private async Task ProcessAsync(DictationSession session, CancellationToken cancellationToken)
     {
         using var activity = ScribeTelemetry.Source.StartActivity(ScribeTelemetry.DictationActivity);
-        var settings = CurrentSettings;
+        var settings = session.Settings;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var captured = _audio.Stop();
             activity?.SetTag(ScribeTelemetry.TagCaptureSeconds, Math.Round(captured.Duration.TotalSeconds, 2));
             _log.LogInformation("Captured {Seconds:F2}s of audio.", captured.Duration.TotalSeconds);
@@ -348,9 +402,7 @@ internal sealed class DictationController : IDisposable
                 _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
             }
 
-            // Resolve the target app (and any per-app profile) up front: the profile's writing
-            // style must reach AI cleanup, not just the injection stage.
-            var targetApp = ForegroundProcessName();
+            var targetApp = session.TargetApp;
             var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
             if (profile is not null)
             {
@@ -377,7 +429,7 @@ internal sealed class DictationController : IDisposable
             if (settings.EnableAiCleanup)
             {
                 var cleanup = await _cleanup
-                    .CleanAsync(recognized, writingStyleOverride: profile?.WritingStyle)
+                    .CleanAsync(recognized, cancellationToken, profile?.WritingStyle)
                     .ConfigureAwait(false);
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
@@ -451,12 +503,30 @@ internal sealed class DictationController : IDisposable
                 text = flattened;
             }
 
-            _injector.Inject(text, settings.InjectionMethod);
-            _log.LogInformation("Text injected into {App}.", targetApp ?? "the focused app");
+            cancellationToken.ThrowIfCancellationRequested();
+            var injection = _injector.Inject(text, settings.InjectionMethod, session.TargetWindow);
+            if (!injection.Succeeded)
+            {
+                activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
+                activity?.SetStatus(ActivityStatusCode.Error, injection.Error);
+                _log.LogWarning(
+                    "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
+                Error?.Invoke(injection.Error == "The focused window changed while processing."
+                    ? "focus changed — dictation was not inserted"
+                    : "text could not be inserted completely");
+                return;
+            }
+
+            _log.LogInformation("Text injected into {App} using {Method}.", targetApp ?? "the focused app", injection.Method);
 
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
             RecordHistory(settings, audio, result, text, targetApp);
             Dictated?.Invoke(text);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
+            _log.LogInformation("Dictation processing canceled during shutdown.");
         }
         catch (Exception ex)
         {
@@ -476,15 +546,14 @@ internal sealed class DictationController : IDisposable
     {
         try
         {
-            long? blobId = settings.StoreAudioHistory ? _history.AddAudioBlob(audio) : null;
             _history.Add(new HistoryEntry(
                 Id: 0,
                 TimestampUtc: DateTimeOffset.UtcNow,
                 Text: text,
                 AudioMilliseconds: (int)result.AudioDuration.TotalMilliseconds,
                 DecodeMilliseconds: (int)result.DecodeDuration.TotalMilliseconds,
-                TargetApp: targetApp,
-                AudioBlobId: blobId));
+                TargetApp: targetApp),
+                settings.StoreAudioHistory ? audio : null);
         }
         catch (Exception ex)
         {
@@ -499,6 +568,10 @@ internal sealed class DictationController : IDisposable
         lock (_gate)
         {
             _state = DictationState.Idle;
+            _captureSettings = null;
+            _captureTargetWindow = 0;
+            _captureTargetApp = null;
+            _processingTask = null;
             paused = _paused; // a pause requested mid-capture takes effect once processing finishes
         }
 
@@ -565,11 +638,10 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private static string? ForegroundProcessName()
+    private static string? ProcessNameForWindow(nint handle)
     {
         try
         {
-            var handle = GetForegroundWindow();
             if (handle == 0) return null;
 
             _ = GetWindowThreadProcessId(handle, out var pid);
@@ -589,14 +661,39 @@ internal sealed class DictationController : IDisposable
         if (_disposed) return;
 
         _disposed = true;
+        _lifetimeCts.Cancel();
         UnsubscribeSilence();
+        _audio.CaptureFaulted -= OnCaptureFaulted;
+        if (_audio.IsCapturing)
+        {
+            _audio.RequestStop();
+        }
         if (_started)
         {
             _hotkeys.Activated -= OnActivated;
             _hotkeys.Deactivated -= OnDeactivated;
             _hotkeys.Stop();
         }
+
+        Task? processing;
+        lock (_gate)
+        {
+            processing = _processingTask;
+        }
+
+        try
+        {
+            processing?.Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException))
+        {
+            // Normal shutdown cancellation.
+        }
+
+        _lifetimeCts.Dispose();
     }
+
+    private sealed record DictationSession(AppSettings Settings, nint TargetWindow, string? TargetApp);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

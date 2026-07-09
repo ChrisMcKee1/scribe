@@ -93,6 +93,37 @@ public class PersistenceTests
 
         Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
         Assert.True(loaded.ShowOverlay);
+        Assert.False(repo.LastLoadFailed);
+    }
+
+    [Fact]
+    public void Settings_load_preserves_invalid_json_and_reports_recovery()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", "{not-json");
+
+        var loaded = repo.Load();
+
+        Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
+        Assert.True(repo.LastLoadFailed);
+        Assert.Equal("{not-json", repo.Get("app_settings"));
+        Assert.Equal("{not-json", repo.Get("app_settings_recovery"));
+    }
+
+    [Fact]
+    public void Settings_load_normalizes_null_required_members()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", "{\"hotkey\":null,\"profiles\":null,\"enabledDictionaryLibraryIds\":null}");
+
+        var loaded = repo.Load();
+
+        Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
+        Assert.Empty(loaded.Profiles);
+        Assert.Empty(loaded.EnabledDictionaryLibraryIds);
+        Assert.False(repo.LastLoadFailed);
     }
 
     [Fact]
@@ -156,6 +187,30 @@ public class PersistenceTests
         var all = repo.GetAll();
         Assert.Single(all);
         Assert.Equal(existing.Id, all[0].Id);
+    }
+
+    [Fact]
+    public void Settings_bundle_rolls_back_all_sections_when_a_later_section_fails()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var settingsRepo = new SettingsRepository(db);
+        var dictionaryRepo = new DictionaryRepository(db);
+        var snippetRepo = new SnippetRepository(db);
+        var originalSettings = AppSettings.CreateDefault();
+        settingsRepo.Save(originalSettings);
+        var originalDictionary = dictionaryRepo.Add(DictionaryEntry.New("azure", "Azure"));
+
+        var changedSettings = originalSettings.Clone();
+        changedSettings.ShowOverlay = false;
+
+        Assert.ThrowsAny<Microsoft.Data.Sqlite.SqliteException>(() => settingsRepo.SaveBundle(
+            changedSettings,
+            [originalDictionary with { Replacement = "AZURE" }],
+            [Snippet.New("duplicate", "one"), Snippet.New("duplicate", "two")]));
+
+        Assert.True(settingsRepo.Load().ShowOverlay);
+        Assert.Equal("Azure", Assert.Single(dictionaryRepo.GetAll()).Replacement);
+        Assert.Empty(snippetRepo.GetAll());
     }
 
     [Fact]
@@ -231,6 +286,34 @@ public class PersistenceTests
 
         Assert.Empty(repo.GetRecent());
         Assert.Null(repo.GetAudio(blobId));
+    }
+
+    [Fact]
+    public void History_add_with_audio_and_delete_owns_blob_atomically()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new HistoryRepository(db);
+        var audio = new CapturedAudio(new[] { 0.1f, 0.2f }, 16000);
+
+        var saved = repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "x", 500, 40), audio);
+
+        Assert.NotNull(saved.AudioBlobId);
+        Assert.NotNull(repo.GetAudio(saved.AudioBlobId!.Value));
+
+        repo.Delete(saved.Id);
+
+        Assert.Empty(repo.GetRecent());
+        Assert.Null(repo.GetAudio(saved.AudioBlobId.Value));
+    }
+
+    [Fact]
+    public void Database_open_after_dispose_throws()
+    {
+        var db = ScribeDatabase.CreateInMemory();
+        db.Initialize();
+        db.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => db.Open());
     }
 
     // --- Cleanup failure log (Feature A) -------------------------------------------------

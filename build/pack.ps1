@@ -36,7 +36,7 @@
 [CmdletBinding()]
 param(
     # Semantic version for this release. Keep in sync with Directory.Build.props (<VersionPrefix>).
-    [string]$Version = '0.1.0',
+    [string]$Version,
 
     # Build configuration.
     [string]$Configuration = 'Release',
@@ -51,7 +51,10 @@ param(
     [string]$SignToolParams,
 
     # When set, uploads the produced artifacts to a GitHub Release (needs $env:GITHUB_TOKEN).
-    [switch]$Publish
+    [switch]$Publish,
+
+    # Run only version/model preflight. Does not publish, install tools, or delete build output.
+    [switch]$ValidateOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,6 +65,25 @@ $releaseDir = Join-Path $repoRoot 'releases'
 $packId = 'Scribe'
 $mainExe = 'Scribe.exe'
 $runtime = 'win-x64'
+
+$propsPath = Join-Path $repoRoot 'Directory.Build.props'
+[xml]$props = Get-Content $propsPath
+$sourceVersion = [string]$props.Project.PropertyGroup.VersionPrefix
+if ([string]::IsNullOrWhiteSpace($sourceVersion)) { throw "VersionPrefix missing from $propsPath" }
+if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $sourceVersion }
+if ($Version -ne $sourceVersion) {
+    throw "Requested version $Version does not match Directory.Build.props version $sourceVersion. Update VersionPrefix first."
+}
+
+. (Join-Path $repoRoot 'scripts/Model-Manifest.ps1')
+$sourceModels = Join-Path $repoRoot 'src/Scribe.App/models'
+Test-ScribeRuntimeModels -ModelsDir $sourceModels -VerifyHashes
+Write-Host "==> Runtime model preflight passed ($($ScribeRuntimeModelManifest.Count) files)." -ForegroundColor Green
+
+if ($ValidateOnly) {
+    Write-Host "==> Release preflight passed for Scribe $Version." -ForegroundColor Green
+    return
+}
 
 Write-Host "==> Scribe pack  v$Version  ($Configuration, $runtime)" -ForegroundColor Cyan
 
@@ -102,6 +124,10 @@ if ($LASTEXITCODE -ne 0) { throw 'dotnet publish (overlay) failed.' }
 $overlayExe = Join-Path $overlayDir 'Scribe.Overlay.exe'
 if (-not (Test-Path $overlayExe)) { throw "Overlay exe missing after publish: $overlayExe" }
 Write-Host "==> Overlay bundled at: $overlayExe" -ForegroundColor Green
+
+$publishedModels = Join-Path $publishDir 'models'
+Test-ScribeRuntimeModels -ModelsDir $publishedModels -VerifyHashes
+Write-Host '==> Published runtime model payload verified.' -ForegroundColor Green
 
 # --- 2. Pack with Velopack -------------------------------------------------------------------------
 # Build the vpk argument list, layering signing on only when requested.

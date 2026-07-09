@@ -44,6 +44,12 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
     public DictionaryLibrary Import(string csv, string? suggestedName)
     {
         var file = DictionaryLibraryCsv.Parse(csv);
+        if (file.Errors.Count > 0)
+        {
+            throw new InvalidOperationException(
+                "That library contains invalid CSV rows:\n" + string.Join("\n", file.Errors.Take(5)));
+        }
+
         if (file.Entries.Count == 0)
         {
             throw new InvalidOperationException(

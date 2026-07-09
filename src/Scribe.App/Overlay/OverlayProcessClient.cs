@@ -25,6 +25,7 @@ namespace Scribe.App.Overlay;
 public sealed class OverlayProcessClient : IOverlayController, IDisposable
 {
     private const int ConnectTimeoutMs = 8000;
+    private const int WriteTimeoutMs = 1500;
     private const long MeterIntervalMs = 25; // ~40 meter updates/sec is plenty for a VU bar
 
 #if DEBUG
@@ -48,6 +49,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private float _meterLevel;
     private long _lastMeterMs;
     private bool _closed;
+    private int _meterQueued;
+    private int _latestMeter;
+    private volatile string _desiredState = "HIDE";
 
     // The applied (saved) anchor. Volatile: written from the UI thread, read by the consumer thread
     // when a relaunch replays it to the fresh process. Previews change what is on screen but never
@@ -69,35 +73,45 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     public void ShowRecording()
     {
+        CancelPreview();
         Subscribe();
         _meterLevel = 0f;
+        _desiredState = "RECORDING";
         Enqueue("RECORDING", ensureAlive: true);
     }
 
     public void ShowProcessing(bool polishing)
     {
+        CancelPreview();
         Unsubscribe();
-        Enqueue($"PROCESSING {(polishing ? 1 : 0)}", ensureAlive: false);
+        _desiredState = $"PROCESSING {(polishing ? 1 : 0)}";
+        Enqueue(_desiredState, ensureAlive: true);
     }
 
     public void ShowFailed(string? reason)
     {
+        CancelPreview();
         Unsubscribe();
         var clean = (reason ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
-        Enqueue($"FAILED {clean}", ensureAlive: false);
+        _desiredState = $"FAILED {clean}";
+        Enqueue(_desiredState, ensureAlive: true);
     }
 
     public void HideOverlay()
     {
+        CancelPreview();
         Unsubscribe();
+        _desiredState = "HIDE";
         Enqueue("HIDE", ensureAlive: false);
     }
 
     public void SetPosition(OverlayPosition position)
     {
+        CancelPreview();
         _position = position;
         // Don't launch the helper just to move it — a relaunch replays the anchor from _position.
         Enqueue("POSITION " + position, ensureAlive: false);
+        Enqueue(_desiredState, ensureAlive: false);
     }
 
     public void Preview(OverlayPosition position)
@@ -147,6 +161,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
 
         _closed = true;
+        CancelPreview();
         Unsubscribe();
 
         try
@@ -164,6 +179,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     }
 
     public void Dispose() => CloseOverlay();
+
+    private void CancelPreview() => Interlocked.Increment(ref _previewGeneration);
 
     // ---- Command queue plumbing -----------------------------------------------------------------
 
@@ -211,13 +228,36 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                     continue; // drop non-essential commands when the overlay isn't running
                 }
 
-                _writer!.WriteLine(item.Text);
+                var text = item.IsMeter
+                    ? "METER " + Volatile.Read(ref _latestMeter).ToString(CultureInfo.InvariantCulture)
+                    : item.Text;
+                WriteWithTimeout(text);
             }
             catch (Exception ex)
             {
                 TryLog(LogLevel.Warning, ex, "Overlay command '{Cmd}' failed; tearing down for relaunch.", item.Text);
                 KillProcess();
+                if (!_closed && !string.Equals(_desiredState, "HIDE", StringComparison.Ordinal))
+                {
+                    EnsureLaunched();
+                }
             }
+            finally
+            {
+                if (item.IsMeter)
+                {
+                    Volatile.Write(ref _meterQueued, 0);
+                }
+            }
+        }
+    }
+
+    private void WriteWithTimeout(string text)
+    {
+        var write = _writer!.WriteLineAsync(text);
+        if (!write.Wait(WriteTimeoutMs))
+        {
+            throw new TimeoutException($"Overlay pipe write exceeded {WriteTimeoutMs} ms.");
         }
     }
 
@@ -277,8 +317,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             _writer = new StreamWriter(_pipe, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
 
             // A fresh process starts at the built-in default anchor; replay the applied position so
-            // relaunches (crash recovery, lazy launch) come up where the user chose.
+            // relaunches (crash recovery, lazy launch) come up where the user chose and in the latest
+            // visible state rather than waiting for a future dictation transition.
             _writer.WriteLine("POSITION " + _position);
+            _writer.WriteLine(_desiredState);
         }
         catch (Exception ex)
         {
@@ -422,7 +464,21 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         _lastMeterMs = now;
         var scaled = (int)Math.Round(Math.Clamp(_meterLevel, 0f, 1f) * 1000f);
-        Enqueue("METER " + scaled.ToString(CultureInfo.InvariantCulture), ensureAlive: false);
+        EnqueueMeter(scaled);
+    }
+
+    private void EnqueueMeter(int scaled)
+    {
+        Volatile.Write(ref _latestMeter, scaled);
+        if (Interlocked.Exchange(ref _meterQueued, 1) != 0)
+        {
+            return;
+        }
+
+        if (_queue.IsAddingCompleted || !_queue.TryAdd(Command.Meter))
+        {
+            Volatile.Write(ref _meterQueued, 0);
+        }
     }
 
     // ---- Overlay executable resolution ----------------------------------------------------------
@@ -489,9 +545,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         return null;
     }
 
-    private readonly record struct Command(string Text, bool EnsureAlive, bool IsExit)
+    private readonly record struct Command(string Text, bool EnsureAlive, bool IsExit, bool IsMeter = false)
     {
         public static Command Exit { get; } = new(string.Empty, false, true);
+        public static Command Meter { get; } = new(string.Empty, false, false, true);
     }
 
     /// <summary>
@@ -543,9 +600,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         private static bool TryCreate(ILogger? log)
         {
+            var handle = IntPtr.Zero;
             try
             {
-                var handle = CreateJobObject(IntPtr.Zero, null);
+                handle = CreateJobObject(IntPtr.Zero, null);
                 if (handle == IntPtr.Zero)
                 {
                     log?.LogDebug("CreateJobObject returned null (err={Err}).", Marshal.GetLastWin32Error());
@@ -563,6 +621,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                     if (!SetInformationJobObject(handle, JobObjectExtendedLimitInformation, ptr, (uint)length))
                     {
                         log?.LogDebug("SetInformationJobObject failed (err={Err}).", Marshal.GetLastWin32Error());
+                        CloseHandle(handle);
+                        handle = IntPtr.Zero;
                         return false;
                     }
                 }
@@ -572,11 +632,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 }
 
                 _handle = handle; // kept open for the engine's lifetime; OS closes it on exit -> kills overlay
+                handle = IntPtr.Zero;
                 return true;
             }
             catch (Exception ex)
             {
                 log?.LogDebug(ex, "Job object creation failed; relying on parent watchdog instead.");
+                if (handle != IntPtr.Zero)
+                {
+                    CloseHandle(handle);
+                }
+
                 return false;
             }
         }
@@ -591,6 +657,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
 
         // These mirror the Win32 job-object structures; most fields are populated by the marshaller, not
         // by managed code, so CS0649 ("never assigned") is expected and intentional here.

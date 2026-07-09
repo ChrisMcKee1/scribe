@@ -1,4 +1,5 @@
 using Scribe.Core.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Scribe.Core.Tests;
@@ -46,19 +47,32 @@ public class AppPathsTests
     }
 
     [Fact]
-    public void TryMigrateDatabase_copies_database_and_sidecars_when_destination_empty()
+    public void TryMigrateDatabase_backs_up_committed_wal_data_when_destination_empty()
     {
         var (legacy, fresh) = CreateTempPair();
         try
         {
             Directory.CreateDirectory(legacy);
-            File.WriteAllText(Path.Combine(legacy, "scribe.db"), "main");
-            File.WriteAllText(Path.Combine(legacy, "scribe.db-wal"), "wal");
+            var legacyDb = Path.Combine(legacy, "scribe.db");
+            using var connection = new SqliteConnection($"Data Source={legacyDb}");
+            connection.Open();
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText =
+                    "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; " +
+                    "CREATE TABLE sample (value TEXT); INSERT INTO sample VALUES ('from-wal');";
+                command.ExecuteNonQuery();
+            }
+
+            Assert.True(File.Exists(legacyDb + "-wal"));
 
             AppPaths.TryMigrateDatabase(legacy, fresh);
 
-            Assert.Equal("main", File.ReadAllText(Path.Combine(fresh, "scribe.db")));
-            Assert.Equal("wal", File.ReadAllText(Path.Combine(fresh, "scribe.db-wal")));
+            using var migrated = new SqliteConnection($"Data Source={Path.Combine(fresh, "scribe.db")}");
+            migrated.Open();
+            using var read = migrated.CreateCommand();
+            read.CommandText = "SELECT value FROM sample;";
+            Assert.Equal("from-wal", read.ExecuteScalar());
         }
         finally
         {
@@ -74,7 +88,10 @@ public class AppPathsTests
         {
             Directory.CreateDirectory(legacy);
             Directory.CreateDirectory(fresh);
-            File.WriteAllText(Path.Combine(legacy, "scribe.db"), "legacy");
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(legacy, "scribe.db")}"))
+            {
+                connection.Open();
+            }
             File.WriteAllText(Path.Combine(fresh, "scribe.db"), "current");
 
             AppPaths.TryMigrateDatabase(legacy, fresh);

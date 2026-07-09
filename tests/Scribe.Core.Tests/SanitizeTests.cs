@@ -12,6 +12,15 @@ namespace Scribe.Core.Tests;
 public sealed class SanitizeTests
 {
     [Fact]
+    public void Preserves_intentionally_quoted_text_and_code_identifiers()
+    {
+        const string quoted = "\"Use Console.WriteLine here.\"";
+
+        Assert.True(TextCleanupService.TrySanitize(quoted, quoted, out var text));
+        Assert.Equal(quoted, text);
+    }
+
+    [Fact]
     public void Legitimate_unchanged_output_is_accepted()
     {
         Assert.True(TextCleanupService.TrySanitize("Hello world.", "Hello world.", out var text));
@@ -149,6 +158,14 @@ public sealed class SanitizeTests
         var raw = "The release slipped to 2024.Next year we retry.";
         Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
         Assert.Equal("The release slipped to 2024. Next year we retry.", text);
+    }
+
+    [Fact]
+    public void Missing_sentence_space_fix_does_not_split_clear_code_member_access()
+    {
+        const string raw = "Call Console.WriteLine(value) next.";
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal(raw, text);
     }
 
     [Theory]

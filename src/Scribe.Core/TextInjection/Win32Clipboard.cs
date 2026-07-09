@@ -21,7 +21,12 @@ internal static class Win32Clipboard
     /// Neither Win32 call requires opening the clipboard, so this never contends for the lock.
     /// </summary>
     public static bool HasNonTextContent() =>
-        CountClipboardFormats() > 0 && !IsClipboardFormatAvailable(CF_UNICODETEXT);
+        CountClipboardFormats() > 0 &&
+        (!IsClipboardFormatAvailable(CF_UNICODETEXT) || CountClipboardFormats() > 4);
+
+    public static int FormatCount => CountClipboardFormats();
+
+    public static uint SequenceNumber => GetClipboardSequenceNumber();
 
     /// <summary>Returns the current clipboard text, or null if the clipboard holds no text.</summary>
     public static string? TryGetText()
@@ -110,6 +115,23 @@ internal static class Win32Clipboard
             }
 
             return true;
+        }
+        finally
+        {
+            CloseClipboard();
+        }
+    }
+
+    public static bool Clear()
+    {
+        if (!TryOpen())
+        {
+            return false;
+        }
+
+        try
+        {
+            return EmptyClipboard();
         }
         finally
         {

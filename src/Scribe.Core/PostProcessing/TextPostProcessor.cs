@@ -36,16 +36,20 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
         EnsureLoaded();
 
+        // Normalize only the dictated source. Snippet templates are literal user content and may
+        // intentionally contain tabs, indentation, aligned columns, or repeated spaces.
+        text = NormalizeWhitespace(text);
+
         // Snippets expand first so their templates then benefit from dictionary canonicalization.
+        // Each phase matches its original input once; generated text is never fed back through later
+        // rules in the same phase.
         var snippetRules = Volatile.Read(ref _snippetRules);
-        foreach (var snippet in snippetRules)
-            text = snippet.Apply(text);
+        text = ApplySinglePass(text, snippetRules.SelectMany((rule, order) => rule.Find(text, order)));
 
         var rules = Volatile.Read(ref _rules);
-        foreach (var rule in rules)
-            text = rule.Apply(text);
+        text = ApplySinglePass(text, rules.SelectMany((rule, order) => rule.Find(text, order)));
 
-        return NormalizeWhitespace(text);
+        return text;
     }
 
     public void Reload()
@@ -165,6 +169,50 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     [GeneratedRegex(@"[ \t]+([,.!?;:])")]
     private static partial Regex SpaceBeforePunctuation();
 
+    private static string ApplySinglePass(string text, IEnumerable<ReplacementCandidate> candidates)
+    {
+        var selected = candidates
+            .OrderBy(candidate => candidate.Index)
+            .ThenByDescending(candidate => candidate.Length)
+            .ThenBy(candidate => candidate.RuleOrder)
+            .ToList();
+        if (selected.Count == 0)
+        {
+            return text;
+        }
+
+        var builder = new System.Text.StringBuilder(text.Length);
+        var position = 0;
+        foreach (var candidate in selected)
+        {
+            if (candidate.Index < position)
+            {
+                continue;
+            }
+
+            var prefixLength = candidate.Index - position;
+            if (prefixLength > 0 &&
+                char.IsWhiteSpace(text[candidate.Index - 1]) &&
+                candidate.Replacement.Length > 0 &&
+                candidate.Replacement.All(IsTightPunctuation))
+            {
+                prefixLength--;
+            }
+
+            builder.Append(text, position, prefixLength);
+            builder.Append(candidate.Replacement);
+            position = candidate.Index + candidate.Length;
+        }
+
+        builder.Append(text, position, text.Length - position);
+        return builder.ToString();
+    }
+
+    private static bool IsTightPunctuation(char value) => value is ',' or '.' or '!' or '?' or ';' or ':';
+
+    private sealed record ReplacementCandidate(
+        int Index, int Length, string Replacement, int RuleOrder);
+
     /// <summary>
     /// A voice-snippet expansion: the spoken trigger phrase — matched whole, case-insensitively,
     /// and tolerant of the trailing punctuation AI cleanup adds ("Insert my standup update.") —
@@ -180,11 +228,13 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             _template = snippet.Template;
             var escaped = Regex.Escape(snippet.Phrase.Trim());
-            _regex = new Regex($@"\b{escaped}\b[.!?,;:]?",
+            _regex = new Regex($@"(?<!\w){escaped}(?!\w)[.!?,;:]?",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
-        public string Apply(string text) => _regex.Replace(text, _ => _template);
+        public IEnumerable<ReplacementCandidate> Find(string text, int order) =>
+            _regex.Matches(text).Select(match =>
+                new ReplacementCandidate(match.Index, match.Length, _template, order));
     }
 
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
@@ -198,7 +248,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             _replacement = entry.Replacement;
             var escaped = Regex.Escape(entry.Pattern);
-            var pattern = entry.WholeWord ? $@"\b{escaped}\b" : escaped;
+            var pattern = entry.WholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
             _regex = new Regex(pattern,
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -216,26 +266,17 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         }
 
         // MatchEvaluator avoids $-substitution surprises in user-supplied replacement text.
-        public string Apply(string text)
+        public IEnumerable<ReplacementCandidate> Find(string text, int order)
         {
-            if (!_replacementContainsPattern)
+            var canonicalStarts = _replacementContainsPattern ? CollectReplacementStarts(text) : [];
+            foreach (Match match in _regex.Matches(text))
             {
-                return _regex.Replace(text, _ => _replacement);
+                var replacement = canonicalStarts.Count > 0 &&
+                    IsInsideAnyReplacement(canonicalStarts, match.Index, match.Length)
+                    ? match.Value
+                    : _replacement;
+                yield return new ReplacementCandidate(match.Index, match.Length, replacement, order);
             }
-
-            // Idempotency guard for the combination with AI cleanup: leave a pattern match that is
-            // already part of an existing occurrence of the replacement, so applying the rule to text
-            // the AI already canonicalized is a no-op rather than a second expansion ("New York" must
-            // not become "New New York"). Precompute the replacement spans once so each match is a
-            // cheap membership check instead of rescanning the whole input per match.
-            var canonicalStarts = CollectReplacementStarts(text);
-            if (canonicalStarts.Count == 0)
-            {
-                return _regex.Replace(text, _ => _replacement);
-            }
-
-            return _regex.Replace(text, m =>
-                IsInsideAnyReplacement(canonicalStarts, m.Index, m.Length) ? m.Value : _replacement);
         }
 
         // Ascending start offsets of every existing occurrence of the replacement. Case-insensitive

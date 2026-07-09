@@ -56,6 +56,17 @@ public sealed class SnippetTests
     }
 
     [Fact]
+    public void Template_preserves_tabs_indentation_and_repeated_spaces()
+    {
+        const string template = "Header:\n\tfirst  column\n    indented";
+        var (processor, _, db) = Create(Snippet.New("formatted block", template));
+        using (db)
+        {
+            Assert.Equal(template, processor.Process("formatted block"));
+        }
+    }
+
+    [Fact]
     public void Trigger_matches_case_insensitively_and_swallows_trailing_punctuation()
     {
         // AI cleanup capitalizes and adds a period; the trigger must still fire, and the period

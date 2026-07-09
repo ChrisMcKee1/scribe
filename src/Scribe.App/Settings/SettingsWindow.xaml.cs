@@ -54,7 +54,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _azureAutoListed;
 
     private HotkeyBinding _pendingBinding;
-    private readonly HashSet<Key> _heldModifiers = new();
+    private readonly List<Key> _capturedKeys = new(2);
+    private readonly HashSet<Key> _pressedCaptureKeys = new();
     private bool _capturing;
     private bool _finalized;
     private bool _loadingUi;
@@ -121,8 +122,30 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
             ? $"Scribe {UpdateService.RunningVersion} — {pending} is downloaded and ready to install."
-            : $"Scribe {UpdateService.RunningVersion} — updates are checked at startup and installed when you quit.";
+            : $"Scribe {UpdateService.RunningVersion} — use Check for updates when you want to connect.";
         UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
+        if (_updates is not null)
+        {
+            _updates.UpdateReady += OnUpdateReady;
+        }
+    }
+
+    private void OnUpdateReady(string message) => Dispatcher.BeginInvoke(() =>
+    {
+        UpdateStatusText.Text = message;
+        UpdateApplyButton.Visibility = Visibility.Visible;
+    });
+
+    public void ReloadExternalSettings()
+    {
+        if (_capturing)
+        {
+            return;
+        }
+
+        var latest = _settingsRepository.Load();
+        _settings.EnableAiCleanup = latest.EnableAiCleanup;
+        AiCleanupCheck.IsChecked = latest.EnableAiCleanup;
     }
 
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
@@ -205,6 +228,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch
         {
             // Device enumeration can fail transiently; the default choice is always available.
+        }
+
+        if (!string.IsNullOrWhiteSpace(_settings.InputDeviceId) &&
+            choices.All(choice => !string.Equals(choice.Id, _settings.InputDeviceId, StringComparison.Ordinal)))
+        {
+            choices.Add(new DeviceChoice(
+                _settings.InputDeviceId,
+                $"Unavailable — {_settings.InputDeviceName ?? "saved microphone"}",
+                _settings.InputDeviceName));
         }
 
         DeviceCombo.ItemsSource = choices;
@@ -344,11 +376,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAzureDeploymentHint();
 
         // Best-effort: merge the live on-device catalog + loaded status in without blocking window open.
-        if (SelectedProvider == CleanupProvider.FoundryLocal)
+        if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.FoundryLocal)
         {
             _ = RefreshFoundryModelsAsync();
         }
-        else if (SelectedProvider == CleanupProvider.AzureFoundry)
+        else if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
         {
             // Detect an existing Azure sign-in and auto-list deployments so search works immediately.
             _ = ProbeAzureSignInAsync();
@@ -672,8 +704,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         _capturing = true;
         _finalized = false;
-        _heldModifiers.Clear();
-        HotkeyBox.Text = "Press a key…";
+        _capturedKeys.Clear();
+        _pressedCaptureKeys.Clear();
+        HotkeyBox.Text = "Press one or two keys…";
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -692,16 +725,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        if (HotkeyCapture.IsModifierKey(key))
+        if (_pressedCaptureKeys.Add(key) && !_capturedKeys.Contains(key))
         {
-            // Defer: a lone modifier is finalized on key-up, but a modifier+key combo is
-            // finalized when the non-modifier key arrives below.
-            _heldModifiers.Add(key);
-            HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding) + "  (press a key…)";
-            return;
+            if (_capturedKeys.Count == 2)
+            {
+                ShowInfo("A dictation hotkey can contain up to two keys.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            }
+            else
+            {
+                _capturedKeys.Add(key);
+                HotkeyBox.Text = string.Join("+", _capturedKeys.Select(k => k.ToString())) +
+                    (_capturedKeys.Count == 1 ? "  (add another key or release)" : "  (release to set)");
+            }
         }
-
-        Finalize(HotkeyCapture.FromKeyEvent(e, SelectedMode));
     }
 
     private void HotkeyBox_PreviewKeyUp(object sender, KeyEventArgs e)
@@ -711,18 +747,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        e.Handled = true;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (!HotkeyCapture.IsModifierKey(key))
+        _pressedCaptureKeys.Remove(key);
+        if (_capturedKeys.Count == 0 || _pressedCaptureKeys.Count > 0)
         {
             return;
         }
 
-        _heldModifiers.Remove(key);
-        if (_heldModifiers.Count == 0)
-        {
-            // Released a modifier with nothing else held: bind it as a push-to-talk key.
-            Finalize(HotkeyCapture.FromKeyEvent(e, SelectedMode));
-        }
+        Finalize(HotkeyCapture.FromKeys(_capturedKeys, SelectedMode));
     }
 
     private void Finalize(HotkeyBinding binding)
@@ -730,15 +763,29 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _pendingBinding = binding;
         _finalized = true;
         _capturing = false;
-        _heldModifiers.Clear();
+        _capturedKeys.Clear();
+        _pressedCaptureKeys.Clear();
         HotkeyBox.Text = HotkeyCapture.Describe(binding);
         Keyboard.ClearFocus();
+
+        var risk = HotkeyCapture.AccessibilityRisk(binding);
+        if (risk is not null)
+        {
+            ShowInfo(risk + " Consider a two-key chord instead.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
+        else if (HotkeyCapture.IsReservedWindowsChord(binding))
+        {
+            ShowInfo(
+                "This chord overrides a Windows shortcut while Scribe is running.",
+                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
     }
 
     private void CancelCapture()
     {
         _capturing = false;
-        _heldModifiers.Clear();
+        _capturedKeys.Clear();
+        _pressedCaptureKeys.Clear();
         HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
         Keyboard.ClearFocus();
     }
@@ -1407,6 +1454,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void OnClosed(object? sender, EventArgs e)
     {
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
+        if (_updates is not null)
+        {
+            _updates.UpdateReady -= OnUpdateReady;
+        }
+
         Closed -= OnClosed;
     }
 
@@ -1559,7 +1611,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
             _settings.InputDeviceId = device?.Id;
-            _settings.InputDeviceName = device?.Id is null ? null : StripDefaultSuffix(device.Name);
+            _settings.InputDeviceName = device?.Id is null
+                ? null
+                : device.PersistedName ?? StripDefaultSuffix(device.Name);
 
             _settings.Hotkey = _pendingBinding with { Mode = SelectedMode };
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
@@ -1612,18 +1666,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : localPrompt;
 
-            if (entries is not null)
+            var previousLaunchState = StartupRegistration.IsEnabled();
+            if (!StartupRegistration.Set(_settings.LaunchOnLogin))
             {
-                _dictionary.SaveAll(entries);
+                throw new InvalidOperationException("Windows did not accept the Start with Windows change.");
             }
 
-            if (snippets is not null)
+            try
             {
-                _snippets.SaveAll(snippets);
+                _settingsRepository.SaveBundle(_settings, entries, snippets);
+            }
+            catch
+            {
+                StartupRegistration.Set(previousLaunchState);
+                throw;
             }
 
-            _settingsRepository.Save(_settings);
-            StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
@@ -2228,7 +2286,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
 
-    private sealed record DeviceChoice(string? Id, string Name);
+    private sealed record DeviceChoice(string? Id, string Name, string? PersistedName = null);
 
     private sealed record InjectionChoice(InjectionMethod Method, string Label);
 

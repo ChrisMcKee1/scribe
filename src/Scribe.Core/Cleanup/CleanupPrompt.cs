@@ -24,7 +24,8 @@ public static class CleanupPrompt
     /// instructions to the model.
     /// </summary>
     public const string DefaultWritingStyle =
-        "Write in clear, natural, well-structured English. Use correct punctuation — commas, " +
+        "Write in the speaker's language using clear, natural, well-structured prose. Never " +
+        "translate the dictation unless I explicitly ask you to. Use correct punctuation — commas, " +
         "periods, semicolons, colons, question marks, and parentheses — according to sentence " +
         "structure. Break long run-on speech into properly formed sentences, and start a new " +
         "paragraph when the topic shifts. Remove filler words and false starts (such as \"um\", " +

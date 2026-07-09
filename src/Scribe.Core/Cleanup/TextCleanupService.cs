@@ -50,6 +50,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // a couple of seconds regardless, so the cap only ever bites a genuinely slow model.
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
+    private const int TotalCleanupTimeoutSeconds = 90;
     // Cold-start validation gets a longer budget than a per-cleanup call: a reasoning model's first
     // request can take far longer than its warm steady-state latency, and a spurious timeout here
     // would wrongly report an otherwise-working deployment as Unavailable.
@@ -173,6 +174,10 @@ internal sealed class TextCleanupService : ITextCleanupService
     // latency uncapped, then judge real output, instead of every slow model degrading to raw text at
     // the 12 s/45 s production ceiling. Never set in the shipping app — production keeps the caps.
     internal TimeSpan? CleanupTimeoutOverride { get; set; }
+
+    // Test-only override for the whole multi-chunk operation. Production has one deadline across all
+    // chunks; benchmark runs that override the per-call timeout remain intentionally uncapped.
+    internal TimeSpan? CleanupTotalTimeoutOverride { get; set; }
 
     public TextCleanupService(ILogger<TextCleanupService> log) => _log = log;
 
@@ -324,21 +329,52 @@ internal sealed class TextCleanupService : ITextCleanupService
         var failures = 0;
         string? firstFailure = null;
 
+        using var totalCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var totalTimeout = CleanupTotalTimeoutOverride ??
+            (CleanupTimeoutOverride is null ? TimeSpan.FromSeconds(TotalCleanupTimeoutSeconds) : Timeout.InfiniteTimeSpan);
+        if (totalTimeout != Timeout.InfiniteTimeSpan)
+        {
+            totalCts.CancelAfter(totalTimeout);
+        }
+
         for (var i = 0; i < chunks.Count; i++)
         {
-            var (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], cancellationToken)
-                .ConfigureAwait(false);
+            string cleanedChunk;
+            string? error;
+            try
+            {
+                (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], totalCts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                firstFailure ??= "AI cleanup exceeded the total time limit.";
+                failures += chunks.Count - i;
+                for (var remaining = i; remaining < chunks.Count; remaining++)
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.Append(' ');
+                    }
+
+                    builder.Append(chunks[remaining]);
+                }
+
+                break;
+            }
+
             if (error is not null)
             {
                 failures++;
                 firstFailure ??= error;
             }
 
-            builder.Append(cleanedChunk);
-            if (i < chunks.Count - 1)
+            if (builder.Length > 0)
             {
                 builder.Append(' ');
             }
+
+            builder.Append(cleanedChunk);
         }
 
         // Every cleaned segment failed — the user effectively got raw text back (any overflow tail is
@@ -1037,10 +1073,9 @@ internal sealed class TextCleanupService : ITextCleanupService
             return null;
         }
 
-        if (!Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var endpointUri) ||
-            (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
+        if (!TryValidateCustomEndpoint(options.CustomEndpoint, out var endpointUri, out var endpointError))
         {
-            SetStatus(CleanupStatus.Unavailable, "The endpoint is not a valid http(s) URL.");
+            SetStatus(CleanupStatus.Unavailable, endpointError);
             return null;
         }
 
@@ -1456,7 +1491,8 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         // Strip a single pair of enclosing quotes if the model wrapped the whole answer in them.
         if (cleaned.Length >= 2 &&
-            ((cleaned[0] == '"' && cleaned[^1] == '"') || (cleaned[0] == '\'' && cleaned[^1] == '\'')))
+            ((cleaned[0] == '"' && cleaned[^1] == '"') || (cleaned[0] == '\'' && cleaned[^1] == '\'')) &&
+            !HasMatchingOuterQuotes(original))
         {
             cleaned = cleaned[1..^1].Trim();
         }
@@ -1494,11 +1530,67 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         // Deterministic net for a model that fused two sentences with no space between them.
-        cleaned = MissingSentenceSpace.Replace(cleaned, " ");
+        cleaned = MissingSentenceSpace.Replace(cleaned, match =>
+            OriginalContainsIdentifierAt(cleaned, original, match.Index) ? string.Empty : " ");
 
         text = cleaned;
         return true;
     }
+
+    internal static bool TryValidateCustomEndpoint(string? value, out Uri endpoint, out string error)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out endpoint!) ||
+            (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps))
+        {
+            error = "The endpoint is not a valid http(s) URL.";
+            return false;
+        }
+
+        if (endpoint.Scheme == Uri.UriSchemeHttp && !endpoint.IsLoopback)
+        {
+            error = "Remote custom endpoints must use HTTPS. HTTP is allowed only for this PC.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool HasMatchingOuterQuotes(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length >= 2 &&
+            ((trimmed[0] == '"' && trimmed[^1] == '"') || (trimmed[0] == '\'' && trimmed[^1] == '\''));
+    }
+
+    private static bool OriginalContainsIdentifierAt(string candidate, string original, int boundary)
+    {
+        var leftEnd = boundary - 1; // the period immediately before the fused capital
+        var leftStart = leftEnd - 1;
+        while (leftStart >= 0 && IsIdentifierCharacter(candidate[leftStart]))
+        {
+            leftStart--;
+        }
+
+        var rightEnd = boundary;
+        while (rightEnd < candidate.Length && IsIdentifierCharacter(candidate[rightEnd]))
+        {
+            rightEnd++;
+        }
+
+        if (leftEnd <= leftStart + 1 || rightEnd == boundary)
+        {
+            return false;
+        }
+
+        var token = candidate[(leftStart + 1)..rightEnd];
+        var typeQualified = char.IsUpper(candidate[leftStart + 1]);
+        var methodCall = rightEnd < candidate.Length && candidate[rightEnd] == '(';
+        return (typeQualified || methodCall || token.Contains('_')) &&
+            original.Contains(token, StringComparison.Ordinal);
+    }
+
+    private static bool IsIdentifierCharacter(char value) => char.IsLetterOrDigit(value) || value == '_';
 
     // True when the text reads like a model refusing the cleanup task rather than performing it: an
     // apology / AI-identity preamble at the start, or an inability verb ("can't/cannot/unable") next to

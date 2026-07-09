@@ -13,6 +13,16 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class TextCleanupServiceTests
 {
+    [Theory]
+    [InlineData("http://localhost:11434/v1", true)]
+    [InlineData("http://127.0.0.1:1234/v1", true)]
+    [InlineData("https://example.com/v1", true)]
+    [InlineData("http://example.com/v1", false)]
+    public void Custom_endpoint_requires_https_except_for_loopback(string value, bool expected)
+    {
+        Assert.Equal(expected, TextCleanupService.TryValidateCustomEndpoint(value, out _, out _));
+    }
+
     [Fact]
     public async Task Unchecking_cleanup_disables_it_immediately_without_restart()
     {

@@ -43,6 +43,16 @@ public sealed class SnippetRepository : ISnippetRepository
 
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
+        SaveAll(connection, transaction, snippets);
+        transaction.Commit();
+    }
+
+    internal static void SaveAll(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        IReadOnlyList<Snippet> snippets)
+    {
+        ArgumentNullException.ThrowIfNull(snippets);
 
         // Delete first so a phrase can move from a deleted row to a new one within one save
         // without tripping the unique index (same pattern as DictionaryRepository.SaveAll).
@@ -97,6 +107,5 @@ public sealed class SnippetRepository : ISnippetRepository
             command.ExecuteNonQuery();
         }
 
-        transaction.Commit();
     }
 }

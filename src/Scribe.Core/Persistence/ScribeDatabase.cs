@@ -18,7 +18,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.50.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
 
     // Tables copied out of a damaged database during salvage, ordered so foreign-key targets
     // (audio_blobs) are restored before the rows that reference them (history).
@@ -87,10 +87,14 @@ public sealed class ScribeDatabase : IDisposable
     public SqliteConnection Open()
     {
         EnsureInitialized();
-        var connection = new SqliteConnection(_connectionString);
-        connection.Open();
-        Configure(connection);
-        return connection;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            Configure(connection);
+            return connection;
+        }
     }
 
     /// <summary>Forces provider initialization and schema migration without returning a connection.</summary>
@@ -98,6 +102,7 @@ public sealed class ScribeDatabase : IDisposable
 
     private void EnsureInitialized()
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
         if (Volatile.Read(ref _initialized)) return;
 
         lock (_gate)
@@ -121,25 +126,34 @@ public sealed class ScribeDatabase : IDisposable
                 EnsureFileDatabaseHealthy();
             }
 
-            _keepAlive = new SqliteConnection(_connectionString);
-            _keepAlive.Open();
-            Configure(_keepAlive);
-
-            if (!_isMemory)
+            var keepAlive = new SqliteConnection(_connectionString);
+            try
             {
-                // WAL is persistent and only meaningful for a file database; on :memory: SQLite
-                // silently keeps its MEMORY journal, so this is best-effort.
-                Execute(_keepAlive, "PRAGMA journal_mode=WAL;");
+                keepAlive.Open();
+                Configure(keepAlive);
+
+                if (!_isMemory)
+                {
+                    // WAL is persistent and only meaningful for a file database; on :memory: SQLite
+                    // silently keeps its MEMORY journal, so this is best-effort.
+                    Execute(keepAlive, "PRAGMA journal_mode=WAL;");
+                }
+
+                Migrate(keepAlive);
+
+                var version = QueryScalar(keepAlive, "SELECT sqlite_version();");
+                _logger.LogInformation(
+                    "SQLite database ready (native {Version}, schema v{Schema}, {Mode}).",
+                    version, SchemaVersion, _isMemory ? "in-memory" : "file");
+
+                _keepAlive = keepAlive;
+                _initialized = true;
             }
-
-            Migrate(_keepAlive);
-
-            var version = QueryScalar(_keepAlive, "SELECT sqlite_version();");
-            _logger.LogInformation(
-                "SQLite database ready (native {Version}, schema v{Schema}, {Mode}).",
-                version, SchemaVersion, _isMemory ? "in-memory" : "file");
-
-            _initialized = true;
+            catch
+            {
+                keepAlive.Dispose();
+                throw;
+            }
         }
     }
 
@@ -257,6 +271,11 @@ public sealed class ScribeDatabase : IDisposable
                 var copied = TryCopyTable(damaged, fresh, table);
                 salvaged.Add($"{table}: {copied}");
             }
+
+            // Data migrations run before salvage because the fresh database starts empty. Reapply
+            // the idempotent v4 cleanup after copying so damaged pre-v4 databases cannot restore the
+            // timestamp-keyed snippet rows that migration intentionally removes.
+            Execute(fresh, SchemaV4);
         }
         catch (Exception ex)
         {
@@ -362,7 +381,14 @@ public sealed class ScribeDatabase : IDisposable
     private static void Migrate(SqliteConnection connection)
     {
         var current = Convert.ToInt32(QueryScalar(connection, "PRAGMA user_version;"));
-        if (current >= SchemaVersion) return;
+        if (current > SchemaVersion)
+        {
+            throw new InvalidOperationException(
+                $"This database uses schema v{current}, but this Scribe build supports only v{SchemaVersion}. " +
+                "Install a newer Scribe version instead of downgrading.");
+        }
+
+        if (current == SchemaVersion) return;
 
         using var transaction = connection.BeginTransaction();
         if (current < 1)
@@ -378,6 +404,11 @@ public sealed class ScribeDatabase : IDisposable
         if (current < 3)
         {
             Execute(connection, SchemaV3, transaction);
+        }
+
+        if (current < 4)
+        {
+            Execute(connection, SchemaV4, transaction);
         }
 
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
@@ -486,5 +517,15 @@ public sealed class ScribeDatabase : IDisposable
             enabled  INTEGER NOT NULL DEFAULT 1
         );
         CREATE UNIQUE INDEX ux_snippets_phrase ON snippets (phrase);
+        """;
+
+    // v4: purge snippets whose trigger phrase is exactly the round-trip DateTimeOffset timestamp
+    // written by a past uncommitted build. Match the complete 33-character shape, including seven
+    // fractional digits and a numeric offset, so a legitimate phrase that merely starts with a
+    // timestamp remains untouched.
+    internal const string SchemaV4 = """
+        DELETE FROM snippets
+        WHERE length(phrase) = 33
+          AND phrase GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]';
         """;
 }

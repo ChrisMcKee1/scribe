@@ -7,42 +7,36 @@ namespace Scribe.Core.Hotkeys;
 
 /// <summary>
 /// Global push-to-talk hotkey via a <c>WH_KEYBOARD_LL</c> hook. The hook runs on its own
-/// thread with a native message pump (required for low-level hooks). The hook callback does
-/// almost no work — it dedupes key-repeat, optionally suppresses the key, and enqueues a
-/// transition — so it always returns well within the 300 ms <c>LowLevelHooksTimeout</c>.
-/// A separate consumer thread turns transitions into ordered Activated/Deactivated events.
+/// thread with a native message pump (required for low-level hooks). The hook callback performs
+/// only key-set tracking, optional suppression, and transition enqueueing so it returns promptly.
 /// </summary>
 public sealed class HotkeyService : IHotkeyService
 {
-    private enum Transition
-    {
-        Down,
-        Up,
-    }
-
     private readonly ILogger<HotkeyService> _logger;
     private readonly object _sync = new();
-
-    // Held as a field so the GC never collects the delegate while the hook is installed.
     private readonly NativeMethods.LowLevelKeyboardProc _proc;
+    private readonly ChordStateMachine _state;
 
     private volatile HotkeyBinding _binding = HotkeyBinding.Default;
-    private BlockingCollection<Transition>? _queue;
+    private BlockingCollection<HotkeyTransition>? _queue;
     private Thread? _hookThread;
     private Thread? _consumerThread;
     private uint _hookThreadId;
     private nint _hookId;
-    private bool _keyHeld;
-    private bool _toggleActive;
 
     public HotkeyService(ILogger<HotkeyService> logger)
     {
         _logger = logger;
         _proc = HookCallback;
+        _state = new ChordStateMachine(_binding);
     }
 
     public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
-        : this(logger) => _binding = binding;
+        : this(logger)
+    {
+        _binding = binding;
+        _state.UpdateBinding(binding);
+    }
 
     public bool IsRunning { get; private set; }
 
@@ -61,9 +55,8 @@ public sealed class HotkeyService : IHotkeyService
                 return;
             }
 
-            _queue = new BlockingCollection<Transition>(new ConcurrentQueue<Transition>());
-            _keyHeld = false;
-            _toggleActive = false;
+            _queue = new BlockingCollection<HotkeyTransition>(new ConcurrentQueue<HotkeyTransition>());
+            _state.Reset();
 
             using var installed = new ManualResetEventSlim(false);
             Exception? installError = null;
@@ -134,23 +127,29 @@ public sealed class HotkeyService : IHotkeyService
             _consumerThread = null;
             _hookThreadId = 0;
             _hookId = 0;
+            _state.Reset();
         }
 
         _logger.LogInformation("Hotkey hook removed.");
     }
 
-    public void CancelToggle()
-    {
-        // A bare bool write is atomic; the hook thread reads it on the next key event, matching
-        // how UpdateBinding already resets the same flag.
-        _toggleActive = false;
-    }
+    public void CancelToggle() => _state.CancelToggle();
 
     public void UpdateBinding(HotkeyBinding binding)
     {
-        _binding = binding ?? throw new ArgumentNullException(nameof(binding));
-        _keyHeld = false;
-        _toggleActive = false;
+        ArgumentNullException.ThrowIfNull(binding);
+        if (_binding == binding)
+        {
+            return;
+        }
+
+        _binding = binding;
+        var transition = _state.UpdateBinding(binding);
+        if (transition != HotkeyTransition.None)
+        {
+            _queue?.TryAdd(transition);
+        }
+
         _logger.LogInformation("Hotkey binding updated to {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
     }
 
@@ -181,8 +180,6 @@ public sealed class HotkeyService : IHotkeyService
             return;
         }
 
-        // Pump messages so the low-level hook keeps being serviced. The loop exits when
-        // Stop() posts WM_QUIT to this thread (GetMessage returns 0).
         while (NativeMethods.GetMessage(out NativeMethods.MSG msg, nint.Zero, 0, 0) > 0)
         {
             NativeMethods.TranslateMessage(ref msg);
@@ -202,46 +199,29 @@ public sealed class HotkeyService : IHotkeyService
         int message = (int)wParam;
         bool isDown = message is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN;
         bool isUp = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
-
-        if (isDown || isUp)
+        if (!isDown && !isUp)
         {
-            var data = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam);
-            HotkeyBinding binding = _binding;
-
-            if (data.vkCode == binding.VirtualKey)
-            {
-                bool accepted = false;
-
-                if (isDown && ModifiersHeld(binding.Modifiers))
-                {
-                    if (!_keyHeld)
-                    {
-                        _keyHeld = true;
-                        _queue?.TryAdd(Transition.Down);
-                    }
-
-                    accepted = true;
-                }
-                else if (isUp && _keyHeld)
-                {
-                    _keyHeld = false;
-                    _queue?.TryAdd(Transition.Up);
-                    accepted = true;
-                }
-
-                if (accepted && binding.Suppress)
-                {
-                    return 1;
-                }
-            }
+            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
 
-        return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        var data = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam);
+        if (data.dwExtraInfo == SyntheticInputMarker.Value)
+        {
+            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+
+        var update = _state.Process(data.vkCode, isDown);
+        if (update.Transition != HotkeyTransition.None)
+        {
+            _queue?.TryAdd(update.Transition);
+        }
+
+        return update.ShouldSuppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
     }
 
     private void ConsumeTransitions()
     {
-        BlockingCollection<Transition>? queue = _queue;
+        var queue = _queue;
         if (queue is null)
         {
             return;
@@ -249,49 +229,26 @@ public sealed class HotkeyService : IHotkeyService
 
         try
         {
-            foreach (Transition transition in queue.GetConsumingEnumerable())
+            foreach (var transition in queue.GetConsumingEnumerable())
             {
                 DispatchTransition(transition);
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
         {
-            // Queue completed/disposed during shutdown.
+            // Queue completed or disposed during shutdown.
         }
     }
 
-    private void DispatchTransition(Transition transition)
+    private void DispatchTransition(HotkeyTransition transition)
     {
-        HotkeyBinding binding = _binding;
-
         try
         {
-            if (binding.Mode == HotkeyMode.Hold)
-            {
-                if (transition == Transition.Down)
-                {
-                    Activated?.Invoke(this, EventArgs.Empty);
-                }
-                else
-                {
-                    Deactivated?.Invoke(this, EventArgs.Empty);
-                }
-
-                return;
-            }
-
-            // Toggle mode: react on the down transition only.
-            if (transition != Transition.Down)
-            {
-                return;
-            }
-
-            _toggleActive = !_toggleActive;
-            if (_toggleActive)
+            if (transition == HotkeyTransition.Activated)
             {
                 Activated?.Invoke(this, EventArgs.Empty);
             }
-            else
+            else if (transition == HotkeyTransition.Deactivated)
             {
                 Deactivated?.Invoke(this, EventArgs.Empty);
             }
@@ -302,39 +259,6 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    private static bool ModifiersHeld(KeyModifiers modifiers)
-    {
-        if (modifiers == KeyModifiers.None)
-        {
-            return true;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Control) && !IsDown(NativeMethods.VK_CONTROL))
-        {
-            return false;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Alt) && !IsDown(NativeMethods.VK_MENU))
-        {
-            return false;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Shift) && !IsDown(NativeMethods.VK_SHIFT))
-        {
-            return false;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Win)
-            && !IsDown(NativeMethods.VK_LWIN) && !IsDown(NativeMethods.VK_RWIN))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    private static bool IsDown(int virtualKey) => (NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
-
     private static string DescribeBinding(HotkeyBinding binding)
     {
         if (!string.IsNullOrWhiteSpace(binding.DisplayName))
@@ -342,8 +266,9 @@ public sealed class HotkeyService : IHotkeyService
             return binding.DisplayName!;
         }
 
-        string mods = binding.Modifiers == KeyModifiers.None ? string.Empty : binding.Modifiers + "+";
-        return $"{mods}0x{binding.VirtualKey:X2}";
+        var modifiers = binding.Modifiers == KeyModifiers.None ? string.Empty : binding.Modifiers + "+";
+        var secondary = binding.SecondaryVirtualKey is { } second ? $"+0x{second:X2}" : string.Empty;
+        return $"{modifiers}0x{binding.VirtualKey:X2}{secondary}";
     }
 
     public void Dispose() => Stop();

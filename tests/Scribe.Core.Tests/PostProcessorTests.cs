@@ -72,6 +72,31 @@ public sealed class PostProcessorTests
     }
 
     [Fact]
+    public void Process_whole_word_supports_punctuation_edged_terms()
+    {
+        var (processor, _, db) = Create(
+            DictionaryEntry.New("dot net", ".NET"),
+            DictionaryEntry.New("c plus plus", "C++"));
+        using (db)
+        {
+            Assert.Equal("Use .NET and C++.", processor.Process("Use dot net and c plus plus."));
+        }
+    }
+
+    [Fact]
+    public void Process_uses_longest_match_and_does_not_reprocess_generated_text()
+    {
+        var (processor, _, db) = Create(
+            DictionaryEntry.New("new", "old"),
+            DictionaryEntry.New("new york", "NYC"),
+            DictionaryEntry.New("old", "OLDER"));
+        using (db)
+        {
+            Assert.Equal("NYC and old", processor.Process("new york and new"));
+        }
+    }
+
+    [Fact]
     public void Process_substitutes_multi_word_phrases()
     {
         var (processor, _, db) = Create(DictionaryEntry.New("re back", "ReBAC"));
@@ -100,6 +125,16 @@ public sealed class PostProcessorTests
         using (db)
         {
             Assert.Equal("the $5", processor.Process("the price"));
+        }
+    }
+
+    [Fact]
+    public void Process_removes_space_before_punctuation_produced_by_a_rule()
+    {
+        var (processor, _, db) = Create(DictionaryEntry.New("comma", ","));
+        using (db)
+        {
+            Assert.Equal("hello, world", processor.Process("hello comma world"));
         }
     }
 

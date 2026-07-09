@@ -70,7 +70,7 @@ public static class DictionaryCsv
             return new DictionaryCsvResult(entries, errors);
         }
 
-        foreach (var (fields, lineNumber) in ReadRecords(csv))
+        foreach (var (fields, lineNumber) in ReadRecords(csv, errors))
         {
             // Skip blank lines, comment lines, and the header row wherever it appears.
             if (fields.Count == 0 || (fields.Count == 1 && string.IsNullOrWhiteSpace(fields[0])))
@@ -153,7 +153,8 @@ public static class DictionaryCsv
 
     // Character-level RFC 4180 reader: quoted fields may contain commas, doubled quotes, and even
     // line breaks (spreadsheets emit all three), so a naive Split on newline/comma is not enough.
-    private static IEnumerable<(List<string> Fields, int LineNumber)> ReadRecords(string csv)
+    private static IEnumerable<(List<string> Fields, int LineNumber)> ReadRecords(
+        string csv, List<string> errors)
     {
         var fields = new List<string>();
         var field = new StringBuilder();
@@ -215,6 +216,12 @@ public static class DictionaryCsv
                     field.Append(ch);
                     break;
             }
+        }
+
+        if (inQuotes)
+        {
+            errors.Add($"Line {recordStartLine}: quoted field is missing its closing quote.");
+            yield break;
         }
 
         if (field.Length > 0 || fields.Count > 0)

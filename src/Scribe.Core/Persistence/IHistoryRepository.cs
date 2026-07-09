@@ -8,6 +8,9 @@ public interface IHistoryRepository
     /// <summary>Inserts a history row and returns it with its assigned id.</summary>
     HistoryEntry Add(HistoryEntry entry);
 
+    /// <summary>Atomically inserts a history row and its optional captured audio.</summary>
+    HistoryEntry Add(HistoryEntry entry, CapturedAudio? audio);
+
     /// <summary>Stores raw capture samples and returns the new blob id.</summary>
     long AddAudioBlob(CapturedAudio audio);
 
@@ -17,7 +20,7 @@ public interface IHistoryRepository
     /// <summary>Loads a stored audio blob, or <see langword="null"/> when it no longer exists.</summary>
     CapturedAudio? GetAudio(long blobId);
 
-    /// <summary>Deletes a history row (the referenced blob's link is cleared, not the blob).</summary>
+    /// <summary>Deletes a history row and its uniquely owned audio blob.</summary>
     void Delete(long id);
 
     /// <summary>Removes all history and stored audio.</summary>

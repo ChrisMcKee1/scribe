@@ -155,7 +155,11 @@ public partial class App : Application
 
         // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
         // if the app was moved, and clears if the user disabled it elsewhere.
-        StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
+        var settingsRepository = services.GetRequiredService<ISettingsRepository>();
+        if (!settingsRepository.LastLoadFailed)
+        {
+            StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
+        }
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
@@ -174,18 +178,24 @@ public partial class App : Application
         {
             ShowWelcome();
             var repo = services.GetRequiredService<ISettingsRepository>();
-            var settings = repo.Load();
-            settings.HasCompletedFirstRun = true;
-            repo.Save(settings);
+            if (!repo.LastLoadFailed)
+            {
+                var settings = repo.Load();
+                settings.HasCompletedFirstRun = true;
+                repo.Save(settings);
+            }
+            else
+            {
+                _tray.ShowError("settings were recovered — review and save them in Settings");
+            }
         }
         // --- End onboarding -----------------------------------------------------------------
 
-        // Best-effort background update check. No-ops for non-packaged dev builds; for installed
-        // builds it downloads any newer GitHub release and stages it to apply when the user quits.
-        // Created BEFORE the settings shortcut below so the settings window always gets a service.
+        // Update checks are user-initiated from Settings so the offline-first startup path performs
+        // no network access. Previously staged updates are detected by the same manual check.
         _updates = new UpdateService(services.GetRequiredService<ILogger<UpdateService>>());
         _updates.UpdateReady += message => _tray?.ShowInfo(message);
-        _ = _updates.CheckAsync();
+        _updates.ProbePendingLocal();
 
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
         if (e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase)))
@@ -277,16 +287,25 @@ public partial class App : Application
         try
         {
             var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
+            if (repo.LastLoadFailed)
+            {
+                _tray?.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
+                _tray?.ShowError("review recovered settings before changing AI cleanup");
+                return;
+            }
+
             var settings = repo.Load();
             settings.EnableAiCleanup = enabled;
             repo.Save(settings);
             _controller?.ApplySettings(settings);
+            _settingsWindow?.ReloadExternalSettings();
             _tray?.ShowInfo(enabled ? "AI cleanup on" : "AI cleanup off");
         }
         catch (Exception ex)
         {
             _host?.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning(ex, "Toggling AI cleanup from the tray failed.");
+            _tray?.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
             _tray?.ShowError("couldn't toggle AI cleanup");
         }
     }

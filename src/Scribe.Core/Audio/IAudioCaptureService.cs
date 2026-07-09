@@ -24,9 +24,15 @@ public interface IAudioCaptureService : IDisposable
     /// <summary>Begins capturing from the given device id, or the default device when null.</summary>
     void Start(string? deviceId = null);
 
+    /// <summary>Requests that the capture endpoint stop immediately without waiting or resampling.</summary>
+    void RequestStop();
+
     /// <summary>Stops capturing and returns the resampled 16 kHz mono capture.</summary>
     CapturedAudio Stop();
 
     /// <summary>Normalized input level (0..1 peak) for the current buffer while recording.</summary>
     event EventHandler<float>? LevelChanged;
+
+    /// <summary>Raised when the active audio endpoint stops because of a device or driver failure.</summary>
+    event EventHandler<Exception>? CaptureFaulted;
 }

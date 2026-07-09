@@ -11,6 +11,28 @@ namespace Scribe.App.Infrastructure;
 /// </summary>
 internal static class HotkeyCapture
 {
+    /// <summary>Builds an exact physical one- or two-key binding in the order keys were pressed.</summary>
+    public static HotkeyBinding FromKeys(IReadOnlyList<Key> keys, HotkeyMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        if (keys.Count is < 1 or > 2)
+        {
+            throw new ArgumentException("A hotkey must contain one or two keys.", nameof(keys));
+        }
+
+        var primary = (uint)KeyInterop.VirtualKeyFromKey(keys[0]);
+        uint? secondary = keys.Count == 2 ? (uint)KeyInterop.VirtualKeyFromKey(keys[1]) : null;
+        var display = string.Join("+", keys.Select(FriendlyKeyName));
+        return new HotkeyBinding(
+            primary,
+            KeyModifiers.None,
+            mode,
+            Suppress: true,
+            display,
+            SecondaryVirtualKey: secondary,
+            SuppressChordMembers: secondary is not null);
+    }
+
     /// <summary>
     /// Builds a binding from a captured key press. A lone modifier key (the common push-to-talk
     /// case, e.g. Right Ctrl) becomes a standalone trigger with no modifiers; any other key keeps
@@ -47,7 +69,55 @@ internal static class HotkeyCapture
             keyName = Describe(binding.Modifiers, keyName);
         }
 
+        if (binding.SecondaryVirtualKey is { } second && !keyName.Contains('+'))
+        {
+            keyName += "+" + FriendlyKeyName(KeyInterop.KeyFromVirtualKey((int)second));
+        }
+
         return keyName;
+    }
+
+    public static bool IsReservedWindowsChord(HotkeyBinding binding)
+    {
+        var keys = PhysicalKeys(binding);
+        return keys.Contains(Key.LWin) || keys.Contains(Key.RWin);
+    }
+
+    public static string? AccessibilityRisk(HotkeyBinding binding)
+    {
+        var keys = PhysicalKeys(binding);
+        if (binding.Mode != HotkeyMode.Hold)
+        {
+            return null;
+        }
+
+        if (keys.Count == 1 && keys[0] == Key.RightShift)
+        {
+            return "Holding Right Shift can activate Windows FilterKeys.";
+        }
+
+        if (keys.Count == 1 && keys[0] == Key.NumLock)
+        {
+            return "Holding Num Lock can activate Windows ToggleKeys.";
+        }
+
+        if (keys.Count == 1 && IsModifierKey(keys[0]))
+        {
+            return "Modifier-only hold keys can interact with Windows StickyKeys when that feature is enabled.";
+        }
+
+        return null;
+    }
+
+    private static List<Key> PhysicalKeys(HotkeyBinding binding)
+    {
+        var keys = new List<Key> { KeyInterop.KeyFromVirtualKey((int)binding.VirtualKey) };
+        if (binding.SecondaryVirtualKey is { } second)
+        {
+            keys.Add(KeyInterop.KeyFromVirtualKey((int)second));
+        }
+
+        return keys;
     }
 
     private static string Describe(KeyModifiers modifiers, string keyName)

@@ -16,6 +16,7 @@ namespace Scribe.Overlay.Ipc;
 /// </summary>
 internal sealed class OverlayIpcServer : IDisposable
 {
+    private static readonly TimeSpan InitialConnectionTimeout = TimeSpan.FromSeconds(12);
     private readonly string _pipeName;
     private readonly OverlayWindow _window;
     private readonly Action _onDisconnected;
@@ -42,7 +43,18 @@ internal sealed class OverlayIpcServer : IDisposable
                 _pipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
             OverlayLog.Write("OverlayIpcServer waiting for connection");
-            await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
+            using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            connectionCts.CancelAfter(InitialConnectionTimeout);
+            try
+            {
+                await server.WaitForConnectionAsync(connectionCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                OverlayLog.Warn("OverlayIpcServer connection timed out; exiting orphaned helper");
+                return;
+            }
+
             OverlayLog.Write("OverlayIpcServer client connected");
 
             using var reader = new StreamReader(server, Encoding.UTF8);

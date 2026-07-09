@@ -11,7 +11,9 @@ public sealed record HotkeyBinding(
     KeyModifiers Modifiers,
     HotkeyMode Mode,
     bool Suppress,
-    string? DisplayName = null)
+    string? DisplayName = null,
+    uint? SecondaryVirtualKey = null,
+    bool SuppressChordMembers = false)
 {
     // 0xA3 == VK_RCONTROL. Right Ctrl is a comfortable, rarely-soloed push-to-talk key
     // and is distinguishable from Left Ctrl in a WH_KEYBOARD_LL hook.
@@ -22,4 +24,7 @@ public sealed record HotkeyBinding(
         new(DefaultVirtualKey, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Right Ctrl");
 
     public bool HasModifiers => Modifiers != KeyModifiers.None;
+
+    /// <summary>True when the binding requires two physical non-generic key identities.</summary>
+    public bool IsPhysicalChord => SecondaryVirtualKey is not null;
 }

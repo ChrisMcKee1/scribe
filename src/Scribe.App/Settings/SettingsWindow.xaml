@@ -232,7 +232,7 @@
                                                       VerticalContentAlignment="Center"/>
                                         </Grid>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Hold: record while the key is down. Toggle: press once to start, again to stop. A lone modifier (e.g. Right Ctrl) makes a clean push-to-talk key."/>
+                                                   Text="Hold: keep the full one- or two-key chord down while speaking. Toggle: press once to start, again to stop. Two-key chords reserve both selected keys while Scribe runs, including Windows shortcuts."/>
                                     </StackPanel>
                                 </ui:Card>
 

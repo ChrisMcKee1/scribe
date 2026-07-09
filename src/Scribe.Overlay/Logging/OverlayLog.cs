@@ -15,26 +15,34 @@ public static class OverlayLog
 {
     private static readonly object Gate = new();
     private static string? _path;
+    private static DateOnly _pathDate;
 
     private static string Path
     {
         get
         {
-            if (_path is not null)
+            var today = DateOnly.FromDateTime(DateTime.Now);
+            if (_path is not null && _pathDate == today)
             {
                 return _path;
             }
 
             lock (Gate)
             {
-                if (_path is null)
+                if (_path is null || _pathDate != today)
                 {
-                    var dir = System.IO.Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                        "ScribeData",
-                        "logs");
+                    var root = Environment.GetEnvironmentVariable("SCRIBE_DATA_DIR");
+                    if (string.IsNullOrWhiteSpace(root))
+                    {
+                        root = System.IO.Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                            "ScribeData");
+                    }
+
+                    var dir = System.IO.Path.Combine(root, "logs");
                     Directory.CreateDirectory(dir);
-                    _path = System.IO.Path.Combine(dir, $"scribe-{DateTime.Now:yyyyMMdd}.log");
+                    _path = System.IO.Path.Combine(dir, $"scribe-{today:yyyyMMdd}.log");
+                    _pathDate = today;
                 }
             }
 

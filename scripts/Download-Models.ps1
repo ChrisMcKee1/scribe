@@ -37,17 +37,18 @@ $AsrRepo  = 'csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
 $AsrBase  = "https://huggingface.co/$AsrRepo/resolve/main"
 $VadBase  = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models'
 
+. (Join-Path $PSScriptRoot 'Model-Manifest.ps1')
+
 # Manifest: relative path under ModelsDir, source URL, expected size, optional SHA-256.
 $Manifest = @(
-    [pscustomobject]@{ Path = 'encoder.int8.onnx'; Url = "$AsrBase/encoder.int8.onnx"; Size = 652184281; Sha256 = 'acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247' }
-    [pscustomobject]@{ Path = 'decoder.int8.onnx'; Url = "$AsrBase/decoder.int8.onnx"; Size = 11845275;  Sha256 = '179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e' }
-    [pscustomobject]@{ Path = 'joiner.int8.onnx';  Url = "$AsrBase/joiner.int8.onnx";  Size = 6355277;   Sha256 = '3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3' }
-    [pscustomobject]@{ Path = 'tokens.txt';        Url = "$AsrBase/tokens.txt";        Size = 93939;     Sha256 = $null }
+    $ScribeRuntimeModelManifest | ForEach-Object {
+        $base = if ($_.Path -eq 'silero_vad_v5.onnx') { $VadBase } else { $AsrBase }
+        [pscustomobject]@{ Path = $_.Path; Url = "$base/$($_.Path)"; Size = $_.Size; Sha256 = $_.Sha256 }
+    }
     [pscustomobject]@{ Path = 'test_wavs/en.wav';  Url = "$AsrBase/test_wavs/en.wav";  Size = $null;     Sha256 = $null }
     [pscustomobject]@{ Path = 'test_wavs/de.wav';  Url = "$AsrBase/test_wavs/de.wav";  Size = $null;     Sha256 = $null }
     [pscustomobject]@{ Path = 'test_wavs/es.wav';  Url = "$AsrBase/test_wavs/es.wav";  Size = $null;     Sha256 = $null }
     [pscustomobject]@{ Path = 'test_wavs/fr.wav';  Url = "$AsrBase/test_wavs/fr.wav";  Size = $null;     Sha256 = $null }
-    [pscustomobject]@{ Path = 'silero_vad_v5.onnx'; Url = "$VadBase/silero_vad_v5.onnx"; Size = 2313101; Sha256 = $null }
 )
 
 $Curl = Join-Path $env:SystemRoot 'System32\curl.exe'

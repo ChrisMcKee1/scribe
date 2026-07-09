@@ -135,4 +135,15 @@ public class DictionaryCsvTests
         Assert.Equal("multi\nline", entry.Pattern);
         Assert.Equal("Value", entry.Replacement);
     }
+
+    [Fact]
+    public void Unterminated_quoted_field_is_rejected_without_absorbing_following_rows()
+    {
+        const string csv = "azure,\"Azure\nrebac,ReBAC";
+
+        var result = DictionaryCsv.Parse(csv);
+
+        Assert.Empty(result.Entries);
+        Assert.Contains(result.Errors, error => error.Contains("closing quote"));
+    }
 }

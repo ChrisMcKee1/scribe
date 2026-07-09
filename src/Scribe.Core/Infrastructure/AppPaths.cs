@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace Scribe.Core.Infrastructure;
 
 /// <summary>
@@ -105,23 +107,55 @@ public sealed class AppPaths
             return;
         }
 
+        var stagedDb = Path.Combine(newRoot, $".scribe-migration-{Guid.NewGuid():N}.db");
         try
         {
-            // Copy (not move) so the legacy copy survives as a fallback until Velopack reclaims it.
-            // SQLite recovers cleanly from the -wal/-shm sidecars copied alongside the main file.
             Directory.CreateDirectory(newRoot);
-            foreach (var name in new[] { "scribe.db", "scribe.db-wal", "scribe.db-shm" })
+            var sourceConnectionString = new SqliteConnectionStringBuilder
             {
-                var src = Path.Combine(legacyRoot, name);
-                if (File.Exists(src))
-                {
-                    File.Copy(src, Path.Combine(newRoot, name), overwrite: false);
-                }
+                DataSource = legacyDb,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString();
+            var destinationConnectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = stagedDb,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Pooling = false,
+            }.ToString();
+
+            // SQLite's online backup API folds committed WAL data into one consistent staged file.
+            // Publishing that file only after backup succeeds makes the destination main file a
+            // reliable completion marker, so an interrupted attempt is retried next launch.
+            using (var source = new SqliteConnection(sourceConnectionString))
+            using (var destination = new SqliteConnection(destinationConnectionString))
+            {
+                source.Open();
+                destination.Open();
+                source.BackupDatabase(destination);
+            }
+
+            File.Move(stagedDb, newDb);
+        }
+        catch
+        {
+            // Best-effort: leave the destination absent so the next launch retries migration.
+            TryDelete(stagedDb);
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
             }
         }
         catch
         {
-            // Best-effort: a fresh database is created from defaults if migration fails.
+            // Cleanup is best-effort; the unique staging name cannot block a later retry.
         }
     }
 }

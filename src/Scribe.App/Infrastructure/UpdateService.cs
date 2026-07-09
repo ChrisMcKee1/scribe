@@ -20,6 +20,7 @@ public sealed class UpdateService
     private const string RepositoryUrl = "https://github.com/ChrisMcKee1/scribe";
 
     private readonly ILogger<UpdateService> _log;
+    private readonly SemaphoreSlim _checkGate = new(1, 1);
     private UpdateManager? _manager;
     private UpdateInfo? _pending;
 
@@ -27,6 +28,34 @@ public sealed class UpdateService
 
     /// <summary>Raised (once) with a user-facing message when an update has been staged.</summary>
     public event Action<string>? UpdateReady;
+
+    /// <summary>Checks only local Velopack state for an update staged by an earlier session.</summary>
+    public void ProbePendingLocal()
+    {
+        try
+        {
+            var manager = _manager ?? new UpdateManager(
+                new GithubSource(RepositoryUrl, accessToken: null, prerelease: false));
+            if (!manager.IsInstalled)
+            {
+                return;
+            }
+
+            _manager = manager;
+            var staged = manager.UpdatePendingRestart;
+            if (staged is null)
+            {
+                return;
+            }
+
+            PendingVersion = staged.Version.ToString();
+            UpdateReady?.Invoke($"Scribe {PendingVersion} is downloaded and ready — restart to install.");
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not inspect local staged-update state.");
+        }
+    }
 
     /// <summary>The version of the binaries actually running (assembly version, no build metadata).</summary>
     public static string RunningVersion
@@ -72,6 +101,7 @@ public sealed class UpdateService
     /// </summary>
     public async Task<string> CheckAndDownloadAsync(CancellationToken ct = default)
     {
+        await _checkGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var manager = _manager ?? new UpdateManager(
@@ -131,6 +161,10 @@ public sealed class UpdateService
         {
             _log.LogWarning(ex, "Update check failed.");
             return "Couldn't check for updates — check your connection and try again.";
+        }
+        finally
+        {
+            _checkGate.Release();
         }
     }
 

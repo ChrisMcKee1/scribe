@@ -26,6 +26,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private WaveFormat? _captureFormat;
     private ManualResetEventSlim? _stopped;
     private Exception? _captureError;
+    private bool _stopRequested;
 
     public AudioCaptureService(ILogger<AudioCaptureService> logger) => _logger = logger;
 
@@ -34,6 +35,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
     public string? LastDeviceName { get; private set; }
 
     public event EventHandler<float>? LevelChanged;
+
+    public event EventHandler<Exception>? CaptureFaulted;
 
     public IReadOnlyList<AudioDevice> GetInputDevices()
     {
@@ -65,27 +68,62 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 return;
             }
 
-            _device = ResolveDevice(deviceId);
-            _capture = new WasapiCapture(_device, useEventSync: true);
-            _captureFormat = _capture.WaveFormat;
-            _raw = new MemoryStream();
-            _stopped = new ManualResetEventSlim(false);
-            _captureError = null;
+            try
+            {
+                _device = ResolveDevice(deviceId);
+                _capture = new WasapiCapture(_device, useEventSync: true);
+                _captureFormat = _capture.WaveFormat;
+                _raw = new MemoryStream();
+                _stopped = new ManualResetEventSlim(false);
+                _captureError = null;
+                _stopRequested = false;
 
-            _capture.DataAvailable += OnDataAvailable;
-            _capture.RecordingStopped += OnRecordingStopped;
-            LastDeviceName = _device.FriendlyName;
+                _capture.DataAvailable += OnDataAvailable;
+                _capture.RecordingStopped += OnRecordingStopped;
+                LastDeviceName = _device.FriendlyName;
 
-            _logger.LogInformation(
-                "Starting capture on '{Device}' at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",
-                _device.FriendlyName,
-                _captureFormat.SampleRate,
-                _captureFormat.Channels,
-                _captureFormat.BitsPerSample,
-                _captureFormat.Encoding);
+                _logger.LogInformation(
+                    "Starting capture on '{Device}' at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",
+                    _device.FriendlyName,
+                    _captureFormat.SampleRate,
+                    _captureFormat.Channels,
+                    _captureFormat.BitsPerSample,
+                    _captureFormat.Encoding);
 
-            _capture.StartRecording();
-            IsCapturing = true;
+                _capture.StartRecording();
+                IsCapturing = true;
+            }
+            catch
+            {
+                Cleanup(_capture, _raw, _stopped);
+                throw;
+            }
+        }
+    }
+
+    public void RequestStop()
+    {
+        WasapiCapture? capture;
+        lock (_sync)
+        {
+            if (!IsCapturing || _stopRequested)
+            {
+                return;
+            }
+
+            _stopRequested = true;
+            capture = _capture;
+        }
+
+        try
+        {
+            capture?.StopRecording();
+        }
+        catch (Exception ex)
+        {
+            _captureError = ex;
+            _stopped?.Set();
+            CaptureFaulted?.Invoke(this, ex);
         }
     }
 
@@ -112,8 +150,15 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
         try
         {
-            capture?.StopRecording();
-            stopped?.Wait(TimeSpan.FromSeconds(3));
+            if (!_stopRequested)
+            {
+                capture?.StopRecording();
+            }
+
+            if (stopped is not null && !stopped.Wait(TimeSpan.FromSeconds(3)))
+            {
+                throw new TimeoutException("The microphone did not stop within three seconds.");
+            }
 
             if (_captureError is not null)
             {
@@ -157,6 +202,10 @@ public sealed class AudioCaptureService : IAudioCaptureService
     {
         _captureError = e.Exception;
         _stopped?.Set();
+        if (e.Exception is not null)
+        {
+            CaptureFaulted?.Invoke(this, e.Exception);
+        }
     }
 
     private void RaiseLevel(byte[] buffer, int bytes, WaveFormat format)
@@ -297,6 +346,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
             _captureFormat = null;
             _stopped = null;
             _device = null;
+            _stopRequested = false;
         }
     }
 

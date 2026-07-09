@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
@@ -32,42 +33,78 @@ public sealed class TextInjector : ITextInjector
 
     public TextInjector(ILogger<TextInjector> logger) => _logger = logger;
 
-    public void Inject(string text, InjectionMethod method = InjectionMethod.ClipboardPaste)
+    public InjectionResult Inject(
+        string text,
+        InjectionMethod method = InjectionMethod.ClipboardPaste,
+        nint expectedForegroundWindow = 0)
     {
         if (string.IsNullOrEmpty(text))
         {
-            return;
+            return InjectionResult.Empty;
+        }
+
+        if (expectedForegroundWindow != 0 && GetForegroundWindow() != expectedForegroundWindow)
+        {
+            return new InjectionResult(false, "none", 0, text.Length, "The focused window changed while processing.");
         }
 
         // Capture the ambient dictation span on the calling thread; the STA worker is a fresh
         // Thread, so Activity.Current would not flow to it. We re-parent the child span explicitly.
         var parent = Activity.Current;
 
-        RunOnStaThread(() =>
+        return RunOnStaThread(() =>
         {
             using var activity = ScribeTelemetry.Source.StartActivity(
                 ScribeTelemetry.InjectActivity, ActivityKind.Internal, parent?.Context ?? default);
             activity?.SetTag(ScribeTelemetry.TagInjectChars, text.Length);
 
-            if (method == InjectionMethod.UnicodeType)
+            if (!IsExpectedForeground(expectedForegroundWindow))
             {
-                var typed = TypeUnicode(text);
-                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: false);
-                return;
+                return FocusChanged(text.Length);
             }
 
-            if (PasteViaClipboard(text, out var ctrl))
+            if (TryInsertIntoStandardEdit(text, expectedForegroundWindow))
+            {
+                ReportInjection(activity, "win32-edit", text.Length, text.Length, fallback: false);
+                return new InjectionResult(true, "win32-edit", text.Length, text.Length);
+            }
+
+            if (method == InjectionMethod.UnicodeType)
+            {
+                var typed = TypeUnicode(text, expectedForegroundWindow);
+                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: false);
+                return new InjectionResult(
+                    typed.Sent == typed.Total, "unicode", typed.Sent, typed.Total,
+                    typed.Sent == typed.Total ? null : "Only part of the text was accepted by Windows.");
+            }
+
+            if (PasteViaClipboard(text, expectedForegroundWindow, out var ctrl, out var focusChanged))
             {
                 ReportInjection(activity, "clipboard", ctrl.Sent, ctrl.Total, fallback: false);
+                return new InjectionResult(
+                    true, "clipboard", ctrl.Sent, ctrl.Total,
+                    ctrl.Sent == ctrl.Total ? null : "Paste completed, but modifier cleanup was partial.");
             }
-            else
+
+            if (focusChanged)
             {
-                _logger.LogWarning("Clipboard paste failed; falling back to Unicode typing.");
-                var typed = TypeUnicode(text);
-                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: true);
+                return FocusChanged(text.Length);
             }
+
+            _logger.LogWarning("Clipboard paste failed; falling back to Unicode typing.");
+            var fallback = TypeUnicode(text, expectedForegroundWindow);
+            ReportInjection(activity, "unicode", fallback.Sent, fallback.Total, fallback: true);
+            return new InjectionResult(
+                fallback.Sent == fallback.Total, "unicode", fallback.Sent, fallback.Total,
+                fallback.Sent == fallback.Total ? null : "Only part of the text was accepted by Windows.");
         });
     }
+
+    private static InjectionResult FocusChanged(int total) =>
+        new(false, "none", 0, total, "The focused window changed while processing.");
+
+    private static bool IsExpectedForeground(nint expected) =>
+        expected == 0 || GetForegroundWindow() == expected;
 
     private static void ReportInjection(Activity? activity, string method, int sent, int total, bool fallback)
     {
@@ -91,9 +128,14 @@ public sealed class TextInjector : ITextInjector
         }
     }
 
-    private bool PasteViaClipboard(string text, out (int Sent, int Total) ctrlV)
+    private bool PasteViaClipboard(
+        string text,
+        nint expectedForegroundWindow,
+        out (int Sent, int Total) ctrlV,
+        out bool focusChanged)
     {
         ctrlV = (0, 0);
+        focusChanged = false;
 
         // An image, copied files or other non-text content can't be saved and restored by
         // Win32Clipboard (text-only by design), so pasting would silently destroy it. Fall back to
@@ -104,14 +146,37 @@ public sealed class TextInjector : ITextInjector
             return false;
         }
 
+        var wasEmpty = Win32Clipboard.FormatCount == 0;
         string? previous = Win32Clipboard.TryGetText();
+        if (!wasEmpty && previous is null)
+        {
+            return false;
+        }
 
         if (!Win32Clipboard.SetText(text))
         {
             return false;
         }
 
+        var injectedSequence = Win32Clipboard.SequenceNumber;
+
         Thread.Sleep(ClipboardSettleDelayMs);
+        if (!IsExpectedForeground(expectedForegroundWindow))
+        {
+            focusChanged = true;
+            if (Win32Clipboard.SequenceNumber == injectedSequence)
+            {
+                RestoreClipboard(wasEmpty, previous);
+            }
+
+            return false;
+        }
+
+        if (Win32Clipboard.SequenceNumber != injectedSequence)
+        {
+            return false;
+        }
+
         ctrlV = SendCtrlV();
 
         // A short send can leave Ctrl (or V) logically held down; release both before anything
@@ -126,9 +191,9 @@ public sealed class TextInjector : ITextInjector
         // types the text instead of losing the dictation.
         if (ctrlV.Sent < 2)
         {
-            if (previous is not null)
+            if (Win32Clipboard.SequenceNumber == injectedSequence)
             {
-                Win32Clipboard.SetText(previous);
+                RestoreClipboard(wasEmpty, previous);
             }
 
             return false;
@@ -136,25 +201,73 @@ public sealed class TextInjector : ITextInjector
 
         Thread.Sleep(PasteSettleDelayMs);
 
-        if (previous is not null)
+        if (Win32Clipboard.SequenceNumber == injectedSequence)
         {
-            Win32Clipboard.SetText(previous);
+            RestoreClipboard(wasEmpty, previous);
         }
 
         return true;
+    }
+
+    private static void RestoreClipboard(bool wasEmpty, string? previous)
+    {
+        if (wasEmpty)
+        {
+            Win32Clipboard.Clear();
+        }
+        else if (previous is not null)
+        {
+            Win32Clipboard.SetText(previous);
+        }
+    }
+
+    private static bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
+    {
+        var foreground = GetForegroundWindow();
+        if (foreground == 0 || (expectedForegroundWindow != 0 && foreground != expectedForegroundWindow))
+        {
+            return false;
+        }
+
+        var threadId = GetWindowThreadProcessId(foreground, out _);
+        var info = new GUITHREADINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
+        if (threadId == 0 || !GetGUIThreadInfo(threadId, ref info) || info.hwndFocus == 0)
+        {
+            return false;
+        }
+
+        var className = new char[128];
+        var length = GetClassName(info.hwndFocus, className, className.Length);
+        if (length == 0)
+        {
+            return false;
+        }
+
+        var controlClass = new string(className, 0, length);
+        if (!string.Equals(controlClass, "Edit", StringComparison.OrdinalIgnoreCase) &&
+            !controlClass.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return SendMessageTimeout(
+            info.hwndFocus, EM_REPLACESEL, (nint)1, text, SMTO_ABORTIFHUNG, 1000, out _) != 0;
     }
 
     // Best-effort key-up pair after a partial Ctrl+V send. Sending an up for a key that was never
     // down is harmless; leaving Ctrl held down is not.
     private void ReleaseCtrlV()
     {
-        INPUT[] inputs = [KeyUp(VK_V), KeyUp(VK_CONTROL)];
-        uint sent = SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
+        var inputs = BuildCtrlVReleaseInputs();
+        var sent = SendWithRetry(inputs);
         if (sent != inputs.Length)
         {
             _logger.LogWarning("Releasing a partial Ctrl+V delivered {Sent}/{Total} key-up events.", sent, inputs.Length);
         }
     }
+
+    internal static INPUT[] BuildCtrlVReleaseInputs() =>
+        [KeyUp(VK_CONTROL), KeyUp(VK_V)];
 
     private (int Sent, int Total) SendCtrlV()
     {
@@ -175,7 +288,7 @@ public sealed class TextInjector : ITextInjector
         return ((int)sent, inputs.Length);
     }
 
-    private (int Sent, int Total) TypeUnicode(string text)
+    private (int Sent, int Total) TypeUnicode(string text, nint expectedForegroundWindow)
     {
         int total = text.Length * 2;
         if (total == 0)
@@ -192,6 +305,11 @@ public sealed class TextInjector : ITextInjector
         int sent = 0;
         for (int start = 0; start < text.Length; start += UnicodeChunkChars)
         {
+            if (!IsExpectedForeground(expectedForegroundWindow))
+            {
+                break;
+            }
+
             int count = Math.Min(UnicodeChunkChars, text.Length - start);
             var inputs = BuildUnicodeChunk(text, start, count);
 
@@ -287,19 +405,20 @@ public sealed class TextInjector : ITextInjector
                 wScan = scanCode,
                 dwFlags = flags,
                 time = 0,
-                dwExtraInfo = 0,
+                dwExtraInfo = SyntheticInputMarker.Value,
             },
         },
     };
 
-    private static void RunOnStaThread(Action action)
+    private static T RunOnStaThread<T>(Func<T> action)
     {
         Exception? captured = null;
+        T? result = default;
         var thread = new Thread(() =>
         {
             try
             {
-                action();
+                result = action();
             }
             catch (Exception ex)
             {
@@ -319,5 +438,7 @@ public sealed class TextInjector : ITextInjector
         {
             throw new InvalidOperationException("Text injection failed.", captured);
         }
+
+        return result!;
     }
 }

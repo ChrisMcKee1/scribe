@@ -88,6 +88,16 @@ public sealed class DictionaryRepository : IDictionaryRepository
 
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
+        SaveAll(connection, transaction, entries);
+        transaction.Commit();
+    }
+
+    internal static void SaveAll(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction,
+        IReadOnlyList<DictionaryEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
 
         // Delete first so an edit that renames row A to row B's old pattern while deleting B never
         // trips the unique index mid-save.
@@ -143,7 +153,6 @@ public sealed class DictionaryRepository : IDictionaryRepository
             command.ExecuteNonQuery();
         }
 
-        transaction.Commit();
     }
 
     public int SeedIfEmpty(IEnumerable<DictionaryEntry> entries)
