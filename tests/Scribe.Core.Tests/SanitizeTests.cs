@@ -141,8 +141,20 @@ public sealed class SanitizeTests
         Assert.Equal("I went to the store. The next day I left. It was fine.", text);
     }
 
+    [Fact]
+    public void Missing_space_after_a_number_ending_a_sentence_is_inserted()
+    {
+        // A sentence that ends in a number glued to the next capitalized sentence must still split;
+        // the uppercase-letter lookahead keeps decimals, versions and IPs (all followed by a digit) safe.
+        var raw = "The release slipped to 2024.Next year we retry.";
+        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
+        Assert.Equal("The release slipped to 2024. Next year we retry.", text);
+    }
+
     [Theory]
     [InlineData("The value is 3.5 today.")]   // decimal must not be split
+    [InlineData("Ship version 2.5 tomorrow.")] // version number must not be split
+    [InlineData("The server is at 192.168.0.1 now.")] // IP address must not be split
     [InlineData("I live in the U.S.A now.")]  // acronym must not be split
     [InlineData("Visit example.com for more.")] // lowercase domain must not be split
     [InlineData("Well spaced. Sentences here.")] // already correct
@@ -150,5 +162,123 @@ public sealed class SanitizeTests
     {
         Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
         Assert.Equal(raw, text);
+    }
+
+    // ---- Invented-reply guard ---------------------------------------------------------------
+    // A weaker model (e.g. a small Foundry Local model) sometimes ANSWERS a dictated question or
+    // acknowledges a request instead of cleaning it — the exact bug behind "Can you hear me now?"
+    // producing "Yeah." The guard must reject a reply the speaker never dictated so the chunk falls
+    // back to the raw transcription (and the pipeline flashes "intelligence failed").
+
+    [Theory]
+    [InlineData("Yeah.")]
+    [InlineData("Yes.")]
+    [InlineData("No.")]
+    [InlineData("Sure.")]
+    [InlineData("Nope.")]
+    [InlineData("Of course.")]
+    [InlineData("I think so.")]
+    [InlineData("Yes, I can.")]
+    public void Terse_answer_to_a_dictated_question_is_rejected(string answer)
+    {
+        const string raw = "Can you hear me now?";
+        Assert.False(TextCleanupService.TrySanitize(answer, raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Answer_that_echoes_the_question_as_a_statement_is_rejected()
+    {
+        // The model converted the question into an affirmed statement — still an answer, not a clean-up.
+        const string raw = "can you hear me now";
+        Assert.False(TextCleanupService.TrySanitize("Yes, I can hear you now.", raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Offer_to_help_instead_of_cleaning_a_request_is_rejected()
+    {
+        // The prompt's canonical failure: a request phrased in the dictation gets answered with an
+        // offer to help rather than transcribed. "make sure" contains "sure", so only the offer
+        // signal (not the affirmation opener) may fire here.
+        const string raw = "hey can you make sure the CLI is installed";
+        Assert.False(TextCleanupService.TrySanitize("Sure, I can help with that.", raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Greeting_and_offer_of_assistance_is_rejected()
+    {
+        const string raw = "can you hear me";
+        Assert.False(TextCleanupService.TrySanitize("Hello! How can I help you today?", raw, out var text));
+        Assert.Equal(raw, text);
+    }
+
+    [Fact]
+    public void Genuinely_dictated_affirmation_is_preserved()
+    {
+        // The speaker actually opened with "yes", so a cleaned copy that keeps it is not an invented
+        // reply. A declarative statement (not a question) must never be mistaken for an answer.
+        const string raw = "so yes we should ship it on thursday";
+        Assert.True(TextCleanupService.TrySanitize("Yes, we should ship it on Thursday.", raw, out var text));
+        Assert.Equal("Yes, we should ship it on Thursday.", text);
+    }
+
+    [Fact]
+    public void Acknowledgement_to_a_dictated_request_is_rejected()
+    {
+        // A weak model acknowledges an imperative ("Will do.", "Sure, I'll do that.") instead of
+        // cleaning it. The request contains no affirmation, so an invented reply opener must be rejected.
+        const string raw = "please update the ticket before the standup";
+        Assert.False(TextCleanupService.TrySanitize("Will do.", raw, out var a));
+        Assert.Equal(raw, a);
+        Assert.False(TextCleanupService.TrySanitize("Sure, I'll do that.", raw, out var b));
+        Assert.Equal(raw, b);
+    }
+
+    [Fact]
+    public void Genuinely_dictated_acknowledgement_is_preserved()
+    {
+        // The speaker actually opened with "will do", so keeping it is a clean-up, not an invented reply.
+        const string raw = "will do that first thing tomorrow morning";
+        Assert.True(TextCleanupService.TrySanitize("Will do that first thing tomorrow morning.", raw, out var text));
+        Assert.Equal("Will do that first thing tomorrow morning.", text);
+    }
+
+    [Fact]
+    public void Correctly_cleaned_question_is_preserved()
+    {
+        // Cleaning a question keeps it a question; that must always be accepted.
+        const string raw = "can you hear me now";
+        Assert.True(TextCleanupService.TrySanitize("Can you hear me now?", raw, out var text));
+        Assert.Equal("Can you hear me now?", text);
+    }
+
+    [Fact]
+    public void Genuinely_dictated_offer_to_help_is_preserved()
+    {
+        const string raw = "let me help you with the report";
+        Assert.True(TextCleanupService.TrySanitize("Let me help you with the report.", raw, out var text));
+        Assert.Equal("Let me help you with the report.", text);
+    }
+
+    [Fact]
+    public void Short_self_correction_that_keeps_a_dictated_word_is_preserved()
+    {
+        // A four-word capture collapsing to one word is short, but the surviving word came from the
+        // input (a resolved self-correction), so it is a clean-up, not an answer.
+        const string raw = "monday no wait tuesday";
+        Assert.True(TextCleanupService.TrySanitize("Tuesday.", raw, out var text));
+        Assert.Equal("Tuesday.", text);
+    }
+
+    [Fact]
+    public void Short_number_reformat_is_preserved()
+    {
+        // Reformatting spoken numbers legitimately replaces words with digits (zero word overlap),
+        // so a numeric result must never be mistaken for a terse answer.
+        const string raw = "the budget is nine hundred fifty";
+        Assert.True(TextCleanupService.TrySanitize("$950.", raw, out var text));
+        Assert.Equal("$950.", text);
     }
 }

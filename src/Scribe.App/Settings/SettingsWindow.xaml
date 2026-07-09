@@ -711,6 +711,45 @@
                                                    Click="ResetWritingStyleButton_Click"/>
                                     </StackPanel>
                                 </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Cleanup prompt" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                   Text="Which system prompt drives cleanup. Automatic uses a prompt tuned for small on-device models when you run Foundry Local, and the frontier prompt for cloud models. You can force either, or edit them below."/>
+                                        <ComboBox x:Name="AiPromptStyleCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                                  SelectionChanged="AiPromptStyleCombo_SelectionChanged"/>
+
+                                        <ui:CardExpander x:Name="PromptEditExpander" Margin="0,14,0,0" IsExpanded="False">
+                                            <ui:CardExpander.Header>
+                                                <StackPanel>
+                                                    <TextBlock Text="Edit the prompts (advanced)" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                               Text="Fine-tune the instructions sent to the model. Leave a box on its default to keep tracking future improvements. Each prompt restores on its own."/>
+                                                </StackPanel>
+                                            </ui:CardExpander.Header>
+                                            <StackPanel Margin="0,4,0,0">
+                                                <TextBlock Text="Frontier prompt (cloud and capable models)" Style="{StaticResource SettingTitle}"/>
+                                                <ui:TextBox x:Name="AiFrontierPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                            VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                            SpellCheck.IsEnabled="True"/>
+                                                <ui:Button x:Name="ResetFrontierPromptButton" Content="Restore default frontier prompt" Margin="0,8,0,0"
+                                                           HorizontalAlignment="Left" Appearance="Secondary"
+                                                           Click="ResetFrontierPromptButton_Click"/>
+
+                                                <TextBlock Text="Local prompt (on-device and small models)" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="AiLocalPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
+                                                            VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                            SpellCheck.IsEnabled="True"/>
+                                                <ui:Button x:Name="ResetLocalPromptButton" Content="Restore default local prompt" Margin="0,8,0,0"
+                                                           HorizontalAlignment="Left" Appearance="Secondary"
+                                                           Click="ResetLocalPromptButton_Click"/>
+                                            </StackPanel>
+                                        </ui:CardExpander>
+                                    </StackPanel>
+                                </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>

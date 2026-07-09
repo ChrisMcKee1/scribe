@@ -158,7 +158,10 @@ internal sealed class DictationController : IDisposable
         BuildGlossary(),
         settings.AiCleanupCustomEndpoint,
         settings.AiCleanupCustomModel,
-        settings.AiCleanupCustomApiKey);
+        settings.AiCleanupCustomApiKey,
+        settings.AiCleanupPromptStyle,
+        settings.AiCleanupFrontierPrompt,
+        settings.AiCleanupLocalPrompt);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —

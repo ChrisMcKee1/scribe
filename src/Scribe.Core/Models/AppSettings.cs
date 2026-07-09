@@ -80,6 +80,29 @@ public sealed class AppSettings
     public string AiCleanupWritingStyle { get; set; } = string.Empty;
 
     /// <summary>
+    /// Which cleanup prompt preamble to use. <see cref="Cleanup.CleanupPromptStyle.Auto"/> (default)
+    /// picks by provider — the terse local-optimized prompt for on-device Foundry Local, the frontier
+    /// prompt for cloud/bring-your-own — while letting the user force either. Hot-swappable: changing it
+    /// re-applies on the next dictation with no restart, like the other cleanup settings.
+    /// </summary>
+    public Cleanup.CleanupPromptStyle AiCleanupPromptStyle { get; set; } = Cleanup.CleanupPromptStyle.Auto;
+
+    /// <summary>
+    /// User override for the frontier-model cleanup prompt (the guardrail preamble that precedes the
+    /// writing style). Blank uses <see cref="Cleanup.CleanupPrompt.DefaultFrontierPrompt"/>, so
+    /// improvements to the built-in default flow through to users who never customized it. Restorable
+    /// on its own from settings.
+    /// </summary>
+    public string AiCleanupFrontierPrompt { get; set; } = string.Empty;
+
+    /// <summary>
+    /// User override for the local-model cleanup prompt (the guardrail preamble that precedes the
+    /// writing style). Blank uses <see cref="Cleanup.CleanupPrompt.DefaultLocalPrompt"/>. Restorable on
+    /// its own from settings, independently of the frontier prompt.
+    /// </summary>
+    public string AiCleanupLocalPrompt { get; set; } = string.Empty;
+
+    /// <summary>
     /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Microsoft Foundry and
     /// authentication falls back to the user's sign-in. <see cref="DefaultAzureCredential"/> otherwise
     /// uses whichever tenant the Azure CLI is currently set to, which is wrong for users who juggle a

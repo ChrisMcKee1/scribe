@@ -15,6 +15,21 @@ public enum CleanupProvider
 }
 
 /// <summary>
+/// Which guardrail preamble drives AI cleanup. Both preambles carry the same rules; the
+/// <see cref="Local"/> one is terser and more directive because small on-device models follow short,
+/// explicit instructions (and a worked example) more reliably than long nuanced prose, while the
+/// <see cref="Frontier"/> one is the golden-suite-tuned prompt capable cloud models score best on.
+/// <see cref="Auto"/> (the default) picks by provider so users get a sensible default without losing
+/// the ability to force either prompt.
+/// </summary>
+public enum CleanupPromptStyle
+{
+    Auto = 0,
+    Frontier = 1,
+    Local = 2,
+}
+
+/// <summary>
 /// Immutable snapshot of the cleanup configuration handed to <see cref="ITextCleanupService"/>.
 /// Carries everything both providers need so the service can (re)build its chat client whenever
 /// the user changes the toggle, the provider, the local model, or the Azure deployment.
@@ -31,7 +46,10 @@ public sealed record CleanupOptions(
     string? Glossary = null,
     string? CustomEndpoint = null,
     string? CustomModel = null,
-    string? CustomApiKey = null)
+    string? CustomApiKey = null,
+    CleanupPromptStyle PromptStyle = CleanupPromptStyle.Auto,
+    string? FrontierPrompt = null,
+    string? LocalPrompt = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

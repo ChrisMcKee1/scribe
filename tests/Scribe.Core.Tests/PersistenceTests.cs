@@ -35,6 +35,9 @@ public class PersistenceTests
         settings.DecodeThreads = 6;
         settings.InjectionMethod = InjectionMethod.UnicodeType;
         settings.Hotkey = new HotkeyBinding(0x20, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Toggle, Suppress: false, "Ctrl+Shift+Space");
+        settings.AiCleanupPromptStyle = Scribe.Core.Cleanup.CleanupPromptStyle.Local;
+        settings.AiCleanupFrontierPrompt = "my custom frontier prompt";
+        settings.AiCleanupLocalPrompt = "my custom local prompt";
 
         repo.Save(settings);
         var loaded = repo.Load();
@@ -46,6 +49,9 @@ public class PersistenceTests
         Assert.Equal(6, loaded.DecodeThreads);
         Assert.Equal(InjectionMethod.UnicodeType, loaded.InjectionMethod);
         Assert.Equal(settings.Hotkey, loaded.Hotkey);
+        Assert.Equal(Scribe.Core.Cleanup.CleanupPromptStyle.Local, loaded.AiCleanupPromptStyle);
+        Assert.Equal("my custom frontier prompt", loaded.AiCleanupFrontierPrompt);
+        Assert.Equal("my custom local prompt", loaded.AiCleanupLocalPrompt);
     }
 
     [Fact]

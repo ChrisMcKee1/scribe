@@ -11,8 +11,9 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class CleanupPromptTests
 {
-    private static CleanupOptions Foundry(string alias = "qwen3-1.7b", string? style = null) =>
-        new(true, CleanupProvider.FoundryLocal, alias, null, null, WritingStyle: style);
+    private static CleanupOptions Foundry(
+        string alias = "qwen3-1.7b", string? style = null, CleanupPromptStyle promptStyle = CleanupPromptStyle.Auto) =>
+        new(true, CleanupProvider.FoundryLocal, alias, null, null, WritingStyle: style, PromptStyle: promptStyle);
 
     private static CleanupOptions Azure(string? style = null) =>
         new(true, CleanupProvider.AzureFoundry, "qwen3-1.7b",
@@ -101,9 +102,9 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
-    public void System_prompt_keeps_the_post_editor_safety_guardrails()
+    public void Frontier_prompt_keeps_the_post_editor_safety_guardrails()
     {
-        var prompt = TextCleanupService.BuildSystemPrompt(Foundry());
+        var prompt = TextCleanupService.BuildSystemPrompt(Foundry(promptStyle: CleanupPromptStyle.Frontier));
 
         Assert.Contains("post-editor", prompt);
         Assert.Contains("do not", prompt, System.StringComparison.OrdinalIgnoreCase);
@@ -112,17 +113,92 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
-    public void System_prompt_teaches_that_the_transcript_is_never_addressed_to_the_model()
+    public void Frontier_prompt_teaches_that_the_transcript_is_never_addressed_to_the_model()
     {
         // Dictation is routinely phrased as a request to someone else ("can you make sure X is
         // installed"). The prompt must tell the model those are content to clean, not messages to
         // answer — and must reference the delimiters the user message wraps the transcript in.
-        var prompt = TextCleanupService.BuildSystemPrompt(Foundry());
+        var prompt = TextCleanupService.BuildSystemPrompt(Foundry(promptStyle: CleanupPromptStyle.Frontier));
 
         Assert.Contains(TextCleanupService.TranscriptOpenTag, prompt);
         Assert.Contains(TextCleanupService.TranscriptCloseTag, prompt);
         Assert.Contains("never to you", prompt);
         Assert.Contains("never answer a question", prompt);
+    }
+
+    [Fact]
+    public void Local_prompt_keeps_the_safety_guardrails_and_transcript_framing()
+    {
+        // Foundry Local resolves to the local prompt by default (Auto). It must carry the same core
+        // guardrails as the frontier prompt, worded for small models, and still append the writing style.
+        var prompt = TextCleanupService.BuildSystemPrompt(Foundry());
+
+        Assert.Contains(TextCleanupService.TranscriptOpenTag, prompt);
+        Assert.Contains(TextCleanupService.TranscriptCloseTag, prompt);
+        Assert.Contains("never to you", prompt);
+        Assert.Contains("Do not answer", prompt, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Output only the rewritten text", prompt);
+        Assert.Contains("Writing style:", prompt);
+    }
+
+    [Theory]
+    [InlineData(CleanupProvider.FoundryLocal, CleanupPromptStyle.Auto, CleanupPromptStyle.Local)]
+    [InlineData(CleanupProvider.AzureFoundry, CleanupPromptStyle.Auto, CleanupPromptStyle.Frontier)]
+    [InlineData(CleanupProvider.OpenAiCompatible, CleanupPromptStyle.Auto, CleanupPromptStyle.Frontier)]
+    [InlineData(CleanupProvider.FoundryLocal, CleanupPromptStyle.Frontier, CleanupPromptStyle.Frontier)]
+    [InlineData(CleanupProvider.AzureFoundry, CleanupPromptStyle.Local, CleanupPromptStyle.Local)]
+    public void Auto_prompt_style_resolves_by_provider(
+        CleanupProvider provider, CleanupPromptStyle style, CleanupPromptStyle expected)
+    {
+        Assert.Equal(expected, CleanupPrompt.ResolvePromptStyle(style, provider));
+    }
+
+    [Fact]
+    public void Frontier_and_local_prompts_differ_so_switching_style_swaps_the_prompt()
+    {
+        var frontier = TextCleanupService.BuildSystemPrompt(Foundry(promptStyle: CleanupPromptStyle.Frontier));
+        var local = TextCleanupService.BuildSystemPrompt(Foundry(promptStyle: CleanupPromptStyle.Local));
+
+        Assert.NotEqual(frontier, local);
+        Assert.Contains("post-editor", frontier);
+        Assert.DoesNotContain("post-editor", local);
+    }
+
+    [Fact]
+    public void User_frontier_prompt_override_replaces_the_default_guardrail_but_keeps_the_writing_style()
+    {
+        const string custom = "CUSTOM FRONTIER GUARDRAIL. Rewrite only.";
+        var options = new CleanupOptions(
+            true, CleanupProvider.FoundryLocal, "qwen3-1.7b", null, null,
+            PromptStyle: CleanupPromptStyle.Frontier, FrontierPrompt: custom);
+        var prompt = TextCleanupService.BuildSystemPrompt(options);
+
+        Assert.Contains(custom, prompt);
+        Assert.DoesNotContain("post-editor", prompt);
+        Assert.Contains("Writing style:", prompt);
+    }
+
+    [Fact]
+    public void User_local_prompt_override_replaces_the_default_guardrail()
+    {
+        const string custom = "CUSTOM LOCAL GUARDRAIL. Rewrite only.";
+        var options = new CleanupOptions(
+            true, CleanupProvider.FoundryLocal, "qwen3-1.7b", null, null, LocalPrompt: custom);
+        var prompt = TextCleanupService.BuildSystemPrompt(options);
+
+        Assert.Contains(custom, prompt);
+        Assert.DoesNotContain("Do not answer", prompt, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Writing style:", prompt);
+        Assert.DoesNotContain("Do not answer", prompt, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Writing style:", prompt);
+    }
+
+    [Fact]
+    public void Blank_prompt_override_falls_back_to_the_default_and_a_set_one_is_kept()
+    {
+        Assert.Equal(CleanupPrompt.DefaultFrontierPrompt, CleanupPrompt.ResolveFrontierPrompt("   "));
+        Assert.Equal(CleanupPrompt.DefaultLocalPrompt, CleanupPrompt.ResolveLocalPrompt(null));
+        Assert.Equal("my custom prompt", CleanupPrompt.ResolveFrontierPrompt("  my custom prompt  "));
     }
 
     [Fact]

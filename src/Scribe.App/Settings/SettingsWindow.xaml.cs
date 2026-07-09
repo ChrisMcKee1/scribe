@@ -315,6 +315,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // they can see and edit exactly what gets sent to the model.
         AiWritingStyleBox.Text = CleanupPrompt.ResolveWritingStyle(_settings.AiCleanupWritingStyle);
 
+        // Cleanup prompt: the style selector plus the editable frontier/local guardrail prompts. Each box
+        // shows the effective prompt (the user's override, or the built-in default) so it is visible and tunable.
+        AiPromptStyleCombo.DisplayMemberPath = nameof(PromptStyleChoice.Label);
+        AiPromptStyleCombo.ItemsSource = new[]
+        {
+            new PromptStyleChoice(CleanupPromptStyle.Auto, "Automatic (recommended), by provider"),
+            new PromptStyleChoice(CleanupPromptStyle.Frontier, "Frontier, for cloud and capable models"),
+            new PromptStyleChoice(CleanupPromptStyle.Local, "Local, for on-device and small models"),
+        };
+        var promptStyles = (PromptStyleChoice[])AiPromptStyleCombo.ItemsSource;
+        AiPromptStyleCombo.SelectedItem =
+            promptStyles.FirstOrDefault(s => s.Style == _settings.AiCleanupPromptStyle) ?? promptStyles[0];
+        AiFrontierPromptBox.Text = CleanupPrompt.ResolveFrontierPrompt(_settings.AiCleanupFrontierPrompt);
+        AiLocalPromptBox.Text = CleanupPrompt.ResolveLocalPrompt(_settings.AiCleanupLocalPrompt);
+
         UpdateAiProviderPanels();
         UpdateAiEnabledState();
         UpdateAiModelHint();
@@ -538,6 +553,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private CleanupProvider SelectedProvider =>
         (AiProviderCombo.SelectedItem as ProviderChoice)?.Provider ?? CleanupProvider.FoundryLocal;
+
+    private CleanupPromptStyle SelectedPromptStyle =>
+        (AiPromptStyleCombo.SelectedItem as PromptStyleChoice)?.Style ?? CleanupPromptStyle.Auto;
 
     private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
     {
@@ -1058,10 +1076,58 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CustomPanel.IsEnabled = on;
         AiWritingStyleBox.IsEnabled = on;
         ResetWritingStyleButton.IsEnabled = on;
+        AiPromptStyleCombo.IsEnabled = on;
+        AiFrontierPromptBox.IsEnabled = on;
+        ResetFrontierPromptButton.IsEnabled = on;
+        AiLocalPromptBox.IsEnabled = on;
+        ResetLocalPromptButton.IsEnabled = on;
     }
 
     private void ResetWritingStyleButton_Click(object sender, RoutedEventArgs e) =>
         AiWritingStyleBox.Text = CleanupPrompt.DefaultWritingStyle;
+
+    // Prompt-style selector has no live side effects; the choice is applied on Save with the other
+    // cleanup settings. The handler exists only because the XAML binds SelectionChanged.
+    private void AiPromptStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
+
+    private async void ResetFrontierPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (await ConfirmAsync("Restore frontier prompt",
+                    "Replace the frontier prompt with Scribe's built-in default? Your local prompt is not affected.",
+                    "Restore frontier prompt"))
+            {
+                AiFrontierPromptBox.Text = CleanupPrompt.DefaultFrontierPrompt;
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Restore failed", $"Couldn't restore the frontier prompt: {ex.Message}");
+        }
+    }
+
+    private async void ResetLocalPromptButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (await ConfirmAsync("Restore local prompt",
+                    "Replace the local prompt with Scribe's built-in default? Your frontier prompt is not affected.",
+                    "Restore local prompt"))
+            {
+                AiLocalPromptBox.Text = CleanupPrompt.DefaultLocalPrompt;
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Restore failed", $"Couldn't restore the local prompt: {ex.Message}");
+        }
+    }
+
+    // Normalizes a prompt text box for comparison/storage: unify newlines and trim, so an unedited box
+    // (WPF returns CRLF line breaks) compares equal to the LF-based default and is stored as blank.
+    private static string NormalizePrompt(string? text) =>
+        (text ?? string.Empty).Replace("\r\n", "\n").Replace("\r", "\n").Trim();
 
     private void UpdateAiModelHint()
     {
@@ -1125,6 +1191,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     // --- Themed dialogs / inline notifications -------------------------------------------
+
+    /// <summary>
+    /// Shows a Fluent-themed confirm dialog (two buttons) and returns true only when the user picks the
+    /// primary action. Used for the individually-confirmed prompt resets so one restore never touches the other.
+    /// </summary>
+    private async Task<bool> ConfirmAsync(string title, string content, string confirmText)
+    {
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = title,
+            Content = content,
+            PrimaryButtonText = confirmText,
+            CloseButtonText = "Cancel",
+            Owner = this,
+        };
+        return await dialog.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary;
+    }
 
     /// <summary>
     /// Shows a Fluent-themed message dialog that matches the rest of the window, replacing the
@@ -1272,6 +1355,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
                     ? string.Empty
                     : writingStyle;
+
+            // Persist the prompt style and, like the writing style, store a prompt override only when it
+            // differs from the built-in default so users keep tracking future default improvements.
+            _settings.AiCleanupPromptStyle = SelectedPromptStyle;
+            var frontierPrompt = NormalizePrompt(AiFrontierPromptBox.Text);
+            _settings.AiCleanupFrontierPrompt =
+                frontierPrompt.Length == 0 || frontierPrompt == CleanupPrompt.DefaultFrontierPrompt
+                    ? string.Empty
+                    : frontierPrompt;
+            var localPrompt = NormalizePrompt(AiLocalPromptBox.Text);
+            _settings.AiCleanupLocalPrompt =
+                localPrompt.Length == 0 || localPrompt == CleanupPrompt.DefaultLocalPrompt
+                    ? string.Empty
+                    : localPrompt;
 
             if (entries is not null)
             {
@@ -1811,6 +1908,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private sealed record NewlineChoice(NewlineInjectionMode Mode, string Label);
 
     private sealed record ProviderChoice(CleanupProvider Provider, string Label);
+    private sealed record PromptStyleChoice(CleanupPromptStyle Style, string Label);
 
     /// <summary>Editable dictionary row backing the grid. Parameterless ctor enables grid add-row.</summary>
     public sealed class DictionaryRow

@@ -29,6 +29,7 @@ internal sealed class CliOptions
     public string? JudgeTenantId { get; private set; }
     public bool NoJudge { get; private set; }
     public bool NoWav { get; private set; }
+    public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
     public bool Force { get; private set; }
     public int LocalLoadTimeout { get; private set; } = 1800;
     public int CloudReadyTimeout { get; private set; } = 120;
@@ -59,6 +60,7 @@ internal sealed class CliOptions
             UseJudge = !NoJudge,
             Synthesize = !NoWav,
             Force = Force,
+            PromptStyle = PromptStyle,
             CloudReadyTimeoutSeconds = CloudReadyTimeout,
             LocalReadyTimeoutSeconds = LocalLoadTimeout,
             CleanTimeoutSeconds = CleanTimeout,
@@ -187,6 +189,14 @@ internal sealed class CliOptions
                     break;
                 case "--no-wav":
                     o.NoWav = true;
+                    break;
+                case "--prompt-style":
+                    o.PromptStyle = Next().ToLowerInvariant() switch
+                    {
+                        "frontier" => CleanupPromptStyle.Frontier,
+                        "local" => CleanupPromptStyle.Local,
+                        _ => CleanupPromptStyle.Auto,
+                    };
                     break;
                 case "--force":
                     o.Force = true;

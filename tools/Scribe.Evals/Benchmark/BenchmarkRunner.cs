@@ -23,6 +23,7 @@ internal sealed record BenchmarkConfig
     public bool Synthesize { get; init; } = true;
     public string? ModelsDir { get; init; }
     public bool Force { get; init; }
+    public CleanupPromptStyle PromptStyle { get; init; } = CleanupPromptStyle.Auto;
     public int CloudReadyTimeoutSeconds { get; init; } = 120;
     public int LocalReadyTimeoutSeconds { get; init; } = 1800;
     public int CleanTimeoutSeconds { get; init; } = 180;
@@ -203,8 +204,8 @@ internal sealed class BenchmarkRunner
     {
         var options = model.Provider == CleanupProvider.AzureFoundry
             ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
-                model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style)
-            : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null, WritingStyle: style);
+                model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style, PromptStyle: _cfg.PromptStyle)
+            : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null, WritingStyle: style, PromptStyle: _cfg.PromptStyle);
 
         var loadTimeout = TimeSpan.FromSeconds(
             model.Group == BenchGroup.Cloud ? _cfg.CloudReadyTimeoutSeconds : _cfg.LocalReadyTimeoutSeconds);
