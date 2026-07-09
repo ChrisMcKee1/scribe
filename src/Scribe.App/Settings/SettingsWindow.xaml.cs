@@ -1479,7 +1479,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Save / cancel -------------------------------------------------------------------
 
+    // "Save" persists and keeps the window open so the user can move page by page; "Save and close"
+    // does the same and then closes.
     private void SaveButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TrySave())
+        {
+            ShowInfo("Settings saved.");
+        }
+    }
+
+    private void SaveCloseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TrySave())
+        {
+            Close();
+        }
+    }
+
+    // Validates, persists and applies the settings. Returns true on success; on a validation problem
+    // or a save error it surfaces its own message, leaves the window open, and returns false.
+    private bool TrySave()
     {
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
@@ -1512,7 +1532,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 $"\"{duplicateRow.Pattern.Trim()}\" appears more than once in your dictionary.\n\n" +
                 "Each spoken word or phrase can only have one replacement. Edit or remove the " +
                 "highlighted row, then save again.");
-            return;
+            return false;
         }
 
         List<Snippet>? snippets = null;
@@ -1532,7 +1552,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 $"\"{duplicateSnippet.Phrase.Trim()}\" is used as the trigger for more than one snippet.\n\n" +
                 "Each trigger phrase can only expand to one template. Edit or remove the highlighted " +
                 "snippet, then save again.");
-            return;
+            return false;
         }
 
         try
@@ -1606,7 +1626,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             StartupRegistration.Set(_settings.LaunchOnLogin);
             _applySettings(_settings);
 
-            Close();
+            // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
+            // no-op — important now that Save keeps the window open for page-by-page editing.
+            _dictionarySnapshot = DictionarySignature();
+            _snippetSnapshot = SnippetSignature();
+            return true;
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -1618,10 +1642,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 "Two dictionary entries ended up with the same spoken word or phrase, so the " +
                 "dictionary was not changed.\n\nEach spoken form can only be listed once. Remove " +
                 "the duplicate and save again.");
+            return false;
         }
         catch (Exception ex)
         {
             ShowThemedMessage("Scribe", $"Could not save settings:\n{ex.Message}");
+            return false;
         }
     }
 

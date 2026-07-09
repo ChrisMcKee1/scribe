@@ -1120,7 +1120,11 @@
                 <!-- Footer: explicit save model, always visible -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
-                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click" IsDefault="True"/>
+                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click" IsDefault="True"
+                               ToolTip="Save your changes and keep this window open."/>
+                    <ui:Button x:Name="SaveCloseButton" Content="Save and close"
+                               MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"
+                               ToolTip="Save your changes and close the window."/>
                     <ui:Button x:Name="CancelButton" Content="Cancel"
                                MinWidth="96" Click="CancelButton_Click" IsCancel="True"/>
                 </StackPanel>
