@@ -109,4 +109,42 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
         var entries = _service.GetEnabledLibraryEntries();
         Assert.Contains(entries, e => e.Replacement == "APIM");
     }
+
+    [Fact]
+    public void Enabled_builtin_library_substitutes_through_the_real_post_processor()
+    {
+        // Enable the shipped Microsoft Azure library.
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
+        _settings.Save(settings);
+
+        // A real post-processor wired to the real library service over an empty base dictionary, so
+        // this exercises the actual shipped library data end to end (compose + compiled regex rules),
+        // not a stub. Confirms an enabled library canonicalizes terms in transcriber-style output.
+        var dictionary = new DictionaryRepository(_db);
+        var processor = new TextPostProcessor(
+            dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: _service);
+
+        var result = processor.Process("we deployed a p i m and cosmos db to azure");
+
+        Assert.Equal("we deployed APIM and Cosmos DB to Azure", result);
+    }
+
+    [Fact]
+    public void Enabled_github_library_fixes_common_mishears_through_the_post_processor()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("github");
+        _settings.Save(settings);
+
+        var dictionary = new DictionaryRepository(_db);
+        var processor = new TextPostProcessor(
+            dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: _service);
+
+        // "get hub" is how a transcriber often renders spoken "GitHub"; the library canonicalizes it,
+        // and "github copilot" becomes the correctly cased product name.
+        var result = processor.Process("i pushed to get hub and used github copilot");
+
+        Assert.Equal("i pushed to GitHub and used GitHub Copilot", result);
+    }
 }

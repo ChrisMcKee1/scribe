@@ -1,0 +1,28 @@
+# name: GitHub
+# category: Microsoft
+# description: GitHub product names and how they are spoken, including common mishears like "get hub" for GitHub.
+pattern,replacement
+#
+# --- Core ---
+get hub,GitHub
+git hub,GitHub
+github,GitHub
+github copilot,GitHub Copilot
+get hub copilot,GitHub Copilot
+git hub copilot,GitHub Copilot
+copilot,Copilot
+#
+# --- Products ---
+github actions,GitHub Actions
+github enterprise,GitHub Enterprise
+github pages,GitHub Pages
+github desktop,GitHub Desktop
+github cli,GitHub CLI
+github advanced security,GitHub Advanced Security
+github packages,GitHub Packages
+github codespaces,GitHub Codespaces
+codespaces,Codespaces
+code spaces,Codespaces
+dependabot,Dependabot
+octocat,Octocat
+readme,README

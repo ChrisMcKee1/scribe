@@ -40,6 +40,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
+    // Cached snapshot of the loaded libraries (built-in + custom) so the preview panel resolves a
+    // selected row without re-reading files on every click. Kept in sync on import/remove.
+    private readonly List<DictionaryLibrary> _loadedLibraries = new();
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -375,8 +378,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void LoadLibraries()
     {
         var enabled = new HashSet<string>(_settings.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
+        _loadedLibraries.Clear();
+        _loadedLibraries.AddRange(_libraries.GetLibraries());
+
         _libraryRows.Clear();
-        foreach (var library in _libraries.GetLibraries())
+        foreach (var library in _loadedLibraries)
         {
             _libraryRows.Add(new LibraryRow
             {
@@ -391,6 +397,53 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         LibraryGrid.ItemsSource = _libraryRows;
+
+        // Preview the first library so the detail panel is never blank when the page opens.
+        if (_libraryRows.Count > 0)
+        {
+            LibraryGrid.SelectedIndex = 0;
+        }
+        else
+        {
+            UpdateLibraryDetail(null);
+        }
+    }
+
+    private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
+
+    // Drives the right-hand preview panel from the selected library row: header plus a read-only grid
+    // of its spoken-to-written terms. Resolving from the cached snapshot keeps clicking through
+    // libraries instant (no per-click file reads).
+    private void UpdateLibraryDetail(LibraryRow? row)
+    {
+        var library = row is null
+            ? null
+            : _loadedLibraries.FirstOrDefault(l => string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+
+        if (library is null)
+        {
+            LibraryTermsGrid.ItemsSource = null;
+            LibraryTermsGrid.Visibility = Visibility.Collapsed;
+            LibraryDetailEmpty.Visibility = Visibility.Visible;
+            LibraryDetailName.Text = string.Empty;
+            LibraryDetailMeta.Text = string.Empty;
+            LibraryDetailDesc.Text = string.Empty;
+            LibraryDetailDesc.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var count = library.Entries.Count;
+        LibraryDetailName.Text = library.Name;
+        LibraryDetailMeta.Text =
+            $"{library.Category} \u00b7 {count} {(count == 1 ? "term" : "terms")} \u00b7 {(library.BuiltIn ? "Built-in" : "Custom")}";
+        LibraryDetailDesc.Text = library.Description ?? string.Empty;
+        LibraryDetailDesc.Visibility =
+            string.IsNullOrWhiteSpace(library.Description) ? Visibility.Collapsed : Visibility.Visible;
+
+        LibraryTermsGrid.ItemsSource = library.Entries;
+        LibraryTermsGrid.Visibility = Visibility.Visible;
+        LibraryDetailEmpty.Visibility = Visibility.Collapsed;
     }
 
     // The enabled-set persisted in settings: the ids of every ticked library still in the list.
@@ -424,7 +477,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Newly imported libraries start switched off, like the built-in ones, so an import never
         // silently changes how dictation is spelled until the user turns it on and saves.
-        _libraryRows.Add(new LibraryRow
+        _loadedLibraries.Add(imported);
+        var newRow = new LibraryRow
         {
             Id = imported.Id,
             Name = imported.Name,
@@ -433,18 +487,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Source = "Custom",
             BuiltIn = false,
             Enabled = false,
-        });
+        };
+        _libraryRows.Add(newRow);
+        LibraryGrid.SelectedItem = newRow; // preview it immediately
+        LibraryGrid.ScrollIntoView(newRow);
 
         ShowInfo($"Imported \"{imported.Name}\" with {imported.EnabledEntryCount} " +
                  $"{(imported.EnabledEntryCount == 1 ? "term" : "terms")}. Turn it on, then save to apply.");
-    }
-
-    private void LibraryViewButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedLibrary() is { } library)
-        {
-            ShowLibraryTerms(library);
-        }
     }
 
     private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
@@ -510,12 +559,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        _loadedLibraries.RemoveAll(l => string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
         _libraryRows.Remove(row);
+        UpdateLibraryDetail(LibraryGrid.SelectedItem as LibraryRow);
         ShowInfo($"Removed \"{row.Name}\".");
     }
 
-    // Resolves the grid's selected row back to its live library (built-in or freshly re-read custom
-    // file), surfacing a friendly hint when nothing is selected or the file has since gone missing.
+    // Resolves the grid's selected row back to its loaded library from the cached snapshot,
+    // surfacing a friendly hint when nothing is selected or the file has since gone missing.
     private DictionaryLibrary? SelectedLibrary()
     {
         if (LibraryGrid.SelectedItem is not LibraryRow row)
@@ -524,7 +575,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return null;
         }
 
-        var library = _libraries.GetLibraries().FirstOrDefault(l =>
+        var library = _loadedLibraries.FirstOrDefault(l =>
             string.Equals(l.Id, row.Id, StringComparison.OrdinalIgnoreCase));
         if (library is null)
         {
@@ -532,40 +583,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         return library;
-    }
-
-    // Read-only viewer for a library's terms, shown in a scrollable, copyable panel.
-    private void ShowLibraryTerms(DictionaryLibrary library)
-    {
-        var text = string.Join(Environment.NewLine,
-            library.Entries.Select(entry => $"{entry.Pattern}  \u2192  {entry.Replacement}"));
-
-        var box = new TextBox
-        {
-            Text = text,
-            IsReadOnly = true,
-            BorderThickness = new Thickness(0),
-            Background = System.Windows.Media.Brushes.Transparent,
-            TextWrapping = TextWrapping.NoWrap,
-            FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas"),
-        };
-        var scroll = new ScrollViewer
-        {
-            Content = box,
-            MaxHeight = 380,
-            MinWidth = 360,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
-
-        var dialog = new Wpf.Ui.Controls.MessageBox
-        {
-            Title = $"{library.Name} ({library.Entries.Count} terms)",
-            Content = scroll,
-            CloseButtonText = "Close",
-            Owner = this,
-        };
-        _ = dialog.ShowDialogAsync();
     }
 
     // Save skips sections the user never touched, so a pre-existing data problem in one section

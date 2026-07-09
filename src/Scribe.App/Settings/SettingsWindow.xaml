@@ -827,10 +827,6 @@
                                        Icon="{ui:SymbolIcon ArrowDownload24}"
                                        Margin="0,0,8,0" Click="LibraryImportButton_Click"
                                        ToolTip="Add a dictionary library from a CSV file."/>
-                            <ui:Button x:Name="LibraryViewButton" Content="View terms"
-                                       Icon="{ui:SymbolIcon Eye24}"
-                                       Margin="0,0,8,0" Click="LibraryViewButton_Click"
-                                       ToolTip="Show the terms in the selected library."/>
                             <ui:Button x:Name="LibraryExportButton" Content="Export CSV…"
                                        Icon="{ui:SymbolIcon ArrowUpload24}"
                                        Margin="0,0,8,0" Click="LibraryExportButton_Click"
@@ -840,23 +836,59 @@
                                        Click="LibraryRemoveButton_Click"
                                        ToolTip="Remove the selected imported library. Built-in libraries can only be turned off."/>
                         </StackPanel>
-                        <ui:Card Grid.Row="2" Padding="0" Style="{StaticResource FillCard}">
-                            <DataGrid x:Name="LibraryGrid"
-                                      AutoGenerateColumns="False"
-                                      CanUserAddRows="False" CanUserDeleteRows="False"
-                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                                      Background="Transparent" BorderThickness="0">
-                                <DataGrid.Columns>
-                                    <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
-                                    <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
-                                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="Auto" IsReadOnly="True"/>
-                                </DataGrid.Columns>
-                            </DataGrid>
-                        </ui:Card>
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="3*"/>
+                                <ColumnDefinition Width="10"/>
+                                <ColumnDefinition Width="2*" MinWidth="240"/>
+                            </Grid.ColumnDefinitions>
+                            <ui:Card Grid.Column="0" Padding="0" Style="{StaticResource FillCard}">
+                                <DataGrid x:Name="LibraryGrid"
+                                          AutoGenerateColumns="False"
+                                          CanUserAddRows="False" CanUserDeleteRows="False"
+                                          SelectionMode="Single"
+                                          SelectionChanged="LibraryGrid_SelectionChanged"
+                                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                          Background="Transparent" BorderThickness="0">
+                                    <DataGrid.Columns>
+                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                        <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="Auto" IsReadOnly="True"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </ui:Card>
+                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource FillCard}">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <StackPanel Grid.Row="0" Margin="0,0,0,8">
+                                        <TextBlock x:Name="LibraryDetailName" FontSize="15" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock x:Name="LibraryDetailMeta" Style="{StaticResource SettingHint}" Margin="0,2,0,0"/>
+                                        <TextBlock x:Name="LibraryDetailDesc" Style="{StaticResource SettingHint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                    <DataGrid x:Name="LibraryTermsGrid" Grid.Row="1"
+                                              AutoGenerateColumns="False" IsReadOnly="True"
+                                              CanUserAddRows="False" CanUserDeleteRows="False"
+                                              HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                              Background="Transparent" BorderThickness="0">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
+                                            <DataGridTextColumn Header="Written" Binding="{Binding Replacement}" Width="*"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                    <TextBlock x:Name="LibraryDetailEmpty" Grid.Row="1"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center" TextAlignment="Center"
+                                               Style="{StaticResource SettingHint}" TextWrapping="Wrap"
+                                               Text="Select a library on the left to see its terms."/>
+                                </Grid>
+                            </ui:Card>
+                        </Grid>
                         <TextBlock Grid.Row="3" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
-                                   Text="Tip: enable a library to add its terms to your dictionary and the AI glossary. Turn off any you don't need."/>
+                                   Text="Tip: click a library to preview its terms on the right. Enable the ones you want, turn off any you don't, then save."/>
                     </Grid>
 
                     <!-- ============================ Snippets ============================ -->
