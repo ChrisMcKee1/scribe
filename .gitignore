@@ -34,6 +34,13 @@ releases/
 packages/
 .nuget/
 
+# Signing private keys and certificate bundles. Public .cer files are safe to commit.
+*.pfx
+*.p12
+*.pvk
+*.pem
+*.key
+
 # Test / coverage
 [Tt]est[Rr]esults/
 coverage*.json

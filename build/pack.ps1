@@ -11,13 +11,15 @@
         2. vpk pack        -> Setup.exe (installer), a full .nupkg, delta packages, and RELEASES.
         3. vpk upload       -> attaches those artifacts to a GitHub Release (optional, -Publish).
 
-    Code signing is OPT-IN. Unsigned packs work for local testing but Windows SmartScreen will warn
-    users, so production releases should sign. Two supported paths:
+        Production packaging is signed by default. The local self-signed certificate is selected from
+        Cert:\CurrentUser\My by the thumbprint in signing\Scribe-CodeSigning.cer. Two signing paths exist:
 
-      * Azure Trusted Signing (recommended, ~$10/mo, no hardware token) — pass -AzureTrustedSignFile
+            * Azure Trusted Signing — pass -AzureTrustedSignFile
         pointing at a Trusted Signing metadata JSON. Requires the `vpk` Azure signing prerequisites.
         Docs: https://learn.microsoft.com/azure/trusted-signing/
-      * Local certificate via signtool — pass -SignToolParams with a signtool argument string.
+            * Local certificate store — default, or pass -SigningCertificateThumbprint explicitly.
+
+        Unsigned output requires the explicit -AllowUnsigned switch.
 
 .LINK
     https://docs.velopack.io/                         (Velopack)
@@ -25,13 +27,12 @@
     https://learn.microsoft.com/azure/trusted-signing/ (Azure Trusted Signing)
 
 .EXAMPLE
-    # Local unsigned build (for testing the installer + updater locally):
-    ./build/pack.ps1 -Version 0.1.0
+    # Signed local build using signing\Scribe-CodeSigning.cer + CurrentUser\My:
+    ./build/pack.ps1
 
 .EXAMPLE
-    # Signed release published to GitHub:
-    $env:GITHUB_TOKEN = '<pat-with-repo-scope>'
-    ./build/pack.ps1 -Version 0.1.0 -AzureTrustedSignFile ./signing/scribe-trustedsign.json -Publish
+    # Intentional unsigned local test build:
+    ./build/pack.ps1 -AllowUnsigned
 #>
 [CmdletBinding()]
 param(
@@ -47,8 +48,14 @@ param(
     # Path to an Azure Trusted Signing metadata JSON. When set, vpk signs the artifacts with it.
     [string]$AzureTrustedSignFile,
 
-    # Alternatively, a raw signtool parameter string for a local code-signing certificate.
-    [string]$SignToolParams,
+    # Code-signing certificate in Cert:\CurrentUser\My. Defaults to signing\Scribe-CodeSigning.cer.
+    [string]$SigningCertificateThumbprint,
+
+    # RFC 3161 timestamp endpoint used for local Authenticode signing.
+    [string]$TimestampServerUrl = 'http://timestamp.digicert.com',
+
+    # Explicit escape hatch for local unsigned test artifacts.
+    [switch]$AllowUnsigned,
 
     # When set, uploads the produced artifacts to a GitHub Release (needs $env:GITHUB_TOKEN).
     [switch]$Publish,
@@ -65,6 +72,89 @@ $releaseDir = Join-Path $repoRoot 'releases'
 $packId = 'Scribe'
 $mainExe = 'Scribe.exe'
 $runtime = 'win-x64'
+$publicCertificatePath = Join-Path $repoRoot 'signing/Scribe-CodeSigning.cer'
+$codeSigningOid = '1.3.6.1.5.5.7.3.3'
+
+function Find-SignTool {
+    $command = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
+    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    $candidate = Get-ChildItem $kits -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if (-not $candidate) { throw 'signtool.exe was not found. Install the Windows SDK.' }
+    return $candidate.FullName
+}
+
+function Resolve-LocalSigningCertificate {
+    if ([string]::IsNullOrWhiteSpace($script:SigningCertificateThumbprint) -and
+        (Test-Path $publicCertificatePath)) {
+        $publicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($publicCertificatePath)
+        $script:SigningCertificateThumbprint = $publicCertificate.Thumbprint
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:SigningCertificateThumbprint)) { return $null }
+    $normalized = ($script:SigningCertificateThumbprint -replace '\s', '').ToUpperInvariant()
+    $matches = @(Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $normalized })
+    if ($matches.Count -ne 1) { throw "Expected exactly one CurrentUser signing certificate $normalized; found $($matches.Count)." }
+
+    $certificate = $matches[0]
+    if (-not $certificate.HasPrivateKey) { throw "Signing certificate $normalized has no private key." }
+    if ($certificate.NotBefore -gt (Get-Date) -or $certificate.NotAfter -le (Get-Date)) {
+        throw "Signing certificate $normalized is not currently valid."
+    }
+    $ekuExtension = $certificate.Extensions |
+        Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
+        Select-Object -First 1
+    $hasCodeSigningEku = $ekuExtension -and
+        @($ekuExtension.EnhancedKeyUsages | Where-Object { $_.Value -eq $codeSigningOid }).Count -eq 1
+    if (-not $hasCodeSigningEku) {
+        throw "Signing certificate $normalized does not include the Code Signing EKU."
+    }
+    return $certificate
+}
+
+function Assert-AuthenticodeFile {
+    param([Parameter(Mandatory)] [string]$Path, [string]$Thumbprint)
+    if (-not (Test-Path $Path -PathType Leaf)) { throw "Signed artifact missing: $Path" }
+
+    $signature = Get-AuthenticodeSignature $Path
+    if ($signature.Status -ne 'Valid') { throw "Authenticode verification failed for ${Path}: $($signature.StatusMessage)" }
+    if ($Thumbprint -and $signature.SignerCertificate.Thumbprint -ne $Thumbprint) {
+        throw "Unexpected signer for ${Path}: $($signature.SignerCertificate.Thumbprint)"
+    }
+
+    $signTool = Find-SignTool
+    & $signTool verify /pa /all /tw $Path | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $Path." }
+}
+
+function Assert-AuthenticodeArchiveEntry {
+    param(
+        [Parameter(Mandatory)] [string]$ArchivePath,
+        [Parameter(Mandatory)] [string]$EntryPath,
+        [Parameter(Mandatory)] [string]$DestinationPath,
+        [string]$Thumbprint
+    )
+
+    if (-not (Test-Path $ArchivePath -PathType Leaf)) { throw "Release archive missing: $ArchivePath" }
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $normalizedEntryPath = $EntryPath.Replace('\', '/')
+        $entry = $archive.Entries |
+            Where-Object { $_.FullName -eq $normalizedEntryPath } |
+            Select-Object -First 1
+        if (-not $entry) { throw "Archive entry missing from ${ArchivePath}: $EntryPath" }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $DestinationPath, $true)
+    }
+    finally {
+        $archive.Dispose()
+    }
+
+    Assert-AuthenticodeFile -Path $DestinationPath -Thumbprint $Thumbprint
+}
 
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
 [xml]$props = Get-Content $propsPath
@@ -79,6 +169,23 @@ if ($Version -ne $sourceVersion) {
 $sourceModels = Join-Path $repoRoot 'src/Scribe.App/models'
 Test-ScribeRuntimeModels -ModelsDir $sourceModels -VerifyHashes
 Write-Host "==> Runtime model preflight passed ($($ScribeRuntimeModelManifest.Count) files)." -ForegroundColor Green
+
+if ($AzureTrustedSignFile -and $SigningCertificateThumbprint) {
+    throw 'Choose either Azure Trusted Signing or a local signing certificate, not both.'
+}
+
+$localSigningCertificate = $null
+if (-not $AzureTrustedSignFile) {
+    $localSigningCertificate = Resolve-LocalSigningCertificate
+}
+
+if (-not $AzureTrustedSignFile -and -not $localSigningCertificate -and -not $AllowUnsigned) {
+    throw 'No signing certificate is available. Run scripts/New-ScribeCodeSigningCertificate.ps1, or pass -AllowUnsigned for an intentional local test build.'
+}
+
+if ($localSigningCertificate) {
+    Write-Host "==> Signing certificate: $($localSigningCertificate.Subject) [$($localSigningCertificate.Thumbprint)]" -ForegroundColor Green
+}
 
 if ($ValidateOnly) {
     Write-Host "==> Release preflight passed for Scribe $Version." -ForegroundColor Green
@@ -144,17 +251,53 @@ if ($AzureTrustedSignFile) {
     Write-Host "==> Signing with Azure Trusted Signing: $AzureTrustedSignFile" -ForegroundColor Cyan
     $packArgs += @('--azureTrustedSignFile', $AzureTrustedSignFile)
 }
-elseif ($SignToolParams) {
-    Write-Host '==> Signing with signtool params.' -ForegroundColor Cyan
-    $packArgs += @('--signParams', $SignToolParams)
+elseif ($localSigningCertificate) {
+    $signParams = "/sha1 $($localSigningCertificate.Thumbprint) /s My /fd SHA256 /tr $TimestampServerUrl /td SHA256 /d `"Scribe`" /du `"https://github.com/ChrisMcKee1/scribe`""
+    Write-Host '==> Signing with CurrentUser Authenticode certificate.' -ForegroundColor Cyan
+    $packArgs += @('--signParams', $signParams)
 }
 else {
-    Write-Warning 'No signing requested — artifacts will be UNSIGNED (fine for local testing only).'
+    Write-Warning 'Unsigned output explicitly requested with -AllowUnsigned.'
 }
 
 Write-Host '==> vpk pack...' -ForegroundColor Cyan
 vpk @packArgs
 if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed.' }
+
+if ($localSigningCertificate -or $AzureTrustedSignFile) {
+    $expectedThumbprint = if ($localSigningCertificate) { $localSigningCertificate.Thumbprint } else { $null }
+    $verificationDir = Join-Path ([System.IO.Path]::GetTempPath()) ("scribe-signature-verification-{0}" -f [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $verificationDir | Out-Null
+    try {
+        $portablePath = Join-Path $releaseDir 'Scribe-win-x64-Portable.zip'
+        $fullPackagePath = Join-Path $releaseDir "Scribe-$Version-win-x64-full.nupkg"
+        Assert-AuthenticodeArchiveEntry `
+            -ArchivePath $portablePath `
+            -EntryPath 'current/Scribe.exe' `
+            -DestinationPath (Join-Path $verificationDir 'portable-Scribe.exe') `
+            -Thumbprint $expectedThumbprint
+        Assert-AuthenticodeArchiveEntry `
+            -ArchivePath $portablePath `
+            -EntryPath 'current/Overlay/Scribe.Overlay.exe' `
+            -DestinationPath (Join-Path $verificationDir 'portable-Scribe.Overlay.exe') `
+            -Thumbprint $expectedThumbprint
+        Assert-AuthenticodeArchiveEntry `
+            -ArchivePath $fullPackagePath `
+            -EntryPath 'lib/app/Scribe.exe' `
+            -DestinationPath (Join-Path $verificationDir 'package-Scribe.exe') `
+            -Thumbprint $expectedThumbprint
+        Assert-AuthenticodeArchiveEntry `
+            -ArchivePath $fullPackagePath `
+            -EntryPath 'lib/app/Overlay/Scribe.Overlay.exe' `
+            -DestinationPath (Join-Path $verificationDir 'package-Scribe.Overlay.exe') `
+            -Thumbprint $expectedThumbprint
+        Assert-AuthenticodeFile -Path (Join-Path $releaseDir 'Scribe-win-x64-Setup.exe') -Thumbprint $expectedThumbprint
+    }
+    finally {
+        Remove-Item $verificationDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host '==> Authenticode signatures and timestamps verified.' -ForegroundColor Green
+}
 
 Write-Host "==> Artifacts written to: $releaseDir" -ForegroundColor Green
 Get-ChildItem $releaseDir | Select-Object Name, Length | Format-Table -AutoSize

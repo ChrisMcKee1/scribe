@@ -2019,12 +2019,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var originalContent = DictionarySuggestButton.Content;
+        DictionarySuggestButton.ToolTip = null;
         DictionarySuggestButton.IsEnabled = false;
-        DictionarySuggestButton.Content = "Thinking…";
-        ShowInfo(
-            "Asking your AI model to learn terms from your recent dictations…",
-            Wpf.Ui.Controls.InfoBarSeverity.Informational);
+        DictionarySuggestBusy.Visibility = Visibility.Visible;
         try
         {
             var response = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample);
@@ -2054,8 +2051,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            DictionarySuggestButton.Content = originalContent;
+            DictionarySuggestBusy.Visibility = Visibility.Collapsed;
             DictionarySuggestButton.IsEnabled = true;
+            DictionarySuggestButton.ToolTip =
+                "Learn vocabulary from your recent dictations. When an AI model is set up, it " +
+                "works out how terms are spoken and how they should be spelled; otherwise it " +
+                "scans for repeated technical terms.";
         }
     }
 

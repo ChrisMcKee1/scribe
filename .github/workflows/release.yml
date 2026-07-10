@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    environment: release-signing
+    timeout-minutes: 90
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release context
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          $version = [string]$props.Project.PropertyGroup.VersionPrefix
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+              throw "Tag $env:GITHUB_REF_NAME does not match source version v$version."
+          }
+          git fetch origin main --no-tags
+          $head = git rev-parse HEAD
+          $main = git rev-parse origin/main
+          if ($head -ne $main) { throw "Release commit $head is not current origin/main $main." }
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Import signing certificate
+        id: certificate
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SCRIBE_SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SCRIBE_SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) {
+              throw 'The release-signing environment secrets are not configured.'
+          }
+          Write-Output "::add-mask::$env:SIGNING_PFX_BASE64"
+          Write-Output "::add-mask::$env:SIGNING_PFX_PASSWORD"
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx'
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          $password = ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate `
+              -FilePath $pfxPath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password `
+              -Exportable:$false
+          if (-not $certificate.HasPrivateKey) { throw 'Imported signing certificate has no private key.' }
+          $now = Get-Date
+          if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
+            throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
+          }
+
+          $rootPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'
+          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
+          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootPath)
+          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
+          if ($leaf.Thumbprint -ne $certificate.Thumbprint) {
+            throw "Public certificate does not match imported PFX: $($leaf.Thumbprint) != $($certificate.Thumbprint)"
+          }
+          if ($leaf.Issuer -ne $root.Subject) { throw 'Signing certificate issuer does not match Scribe root.' }
+
+          $codeSigningOid = '1.3.6.1.5.5.7.3.3'
+          $eku = $leaf.Extensions |
+            Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
+            Select-Object -First 1
+          if (-not $eku -or
+              @($eku.EnhancedKeyUsages | Where-Object { $_.Value -eq $codeSigningOid }).Count -ne 1) {
+            throw 'Signing certificate does not include the Code Signing EKU.'
+          }
+
+          $rootConstraints = $root.Extensions |
+            Where-Object { $_.Oid.Value -eq '2.5.29.19' } |
+            Select-Object -First 1
+          if (-not $rootConstraints -or -not $rootConstraints.CertificateAuthority) {
+            throw 'Scribe root certificate is not constrained as a certificate authority.'
+          }
+
+          foreach ($item in @(
+            @{ Name = 'Root'; Certificate = $root },
+            @{ Name = 'TrustedPublisher'; Certificate = $leaf }
+          )) {
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+              $item.Name,
+              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            try {
+              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              $store.Add($item.Certificate)
+            }
+            finally {
+              $store.Close()
+            }
+          }
+
+          $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+          $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+          if (-not $chain.Build($leaf)) {
+            $status = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join '; '
+            throw "Windows did not validate the Scribe signing chain: $status"
+          }
+          if ($chain.ChainElements[$chain.ChainElements.Count - 1].Certificate.Thumbprint -ne $root.Thumbprint) {
+            throw 'Validated signing chain did not terminate at the checked-in Scribe root.'
+          }
+          "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Download offline speech models
+        shell: pwsh
+        run: ./scripts/Download-Models.ps1
+
+      - name: Run regression tests
+        shell: pwsh
+        run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release
+
+      - name: Build signed release artifacts
+        shell: pwsh
+        run: ./build/pack.ps1 -SigningCertificateThumbprint '${{ steps.certificate.outputs.thumbprint }}'
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $token = $env:GITHUB_TOKEN
+          vpk upload github `
+              --repoUrl "https://github.com/${{ github.repository }}" `
+              --publish `
+              --releaseName "Scribe $env:VERSION" `
+              --tag "v$env:VERSION" `
+              --targetCommitish "${{ github.sha }}" `
+              --token $token `
+              --outputDir releases `
+              --channel win-x64
+
+      - name: Upload public trust bundle to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          gh release upload "v$env:VERSION" `
+              signing/Scribe-Root-CA.cer `
+              signing/Scribe-CodeSigning.cer `
+              signing/Trust-ScribePublisher.ps1 `
+              signing/README.md#Scribe-Certificate-README.md `
+              --clobber
+
+      - name: Upload signed artifacts for manual run
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scribe-${{ env.VERSION }}-signed
+          path: |
+            releases/releases.win-x64.json
+            releases/Scribe-${{ env.VERSION }}-win-x64-full.nupkg
+            releases/Scribe-${{ env.VERSION }}-win-x64-delta.nupkg
+            releases/Scribe-win-x64-Portable.zip
+            releases/Scribe-win-x64-Setup.exe
+            signing/Scribe-Root-CA.cer
+            signing/Scribe-CodeSigning.cer
+            signing/Trust-ScribePublisher.ps1
+            signing/README.md
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove signing material
+        if: always()
+        shell: pwsh
+        run: |
+          Remove-Item (Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx') -Force -ErrorAction SilentlyContinue
+          $thumbprint = '${{ steps.certificate.outputs.thumbprint }}'
+          if ($thumbprint) {
+              Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+              Remove-Item "Cert:\CurrentUser\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
+              $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'))
+              Remove-Item "Cert:\CurrentUser\Root\$($root.Thumbprint)" -Force -ErrorAction SilentlyContinue
+          }

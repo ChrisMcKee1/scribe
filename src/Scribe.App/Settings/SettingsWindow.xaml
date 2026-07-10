@@ -773,7 +773,7 @@
                             <TextBlock Style="{StaticResource PageSubtitle}"
                                        Text="Replace spoken words or phrases with the spelling you actually want — 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
                         </StackPanel>
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                        <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                             <ui:Button x:Name="DictionarySuggestButton" Content="Suggest from history"
                                        Icon="{ui:SymbolIcon Lightbulb24}"
                                        Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
@@ -790,7 +790,16 @@
                                        Icon="{ui:SymbolIcon DocumentAdd24}"
                                        Click="DictionaryTemplateButton_Click"
                                        ToolTip="Save a starter CSV you can fill in with a spreadsheet and share."/>
-                        </StackPanel>
+                            <StackPanel x:Name="DictionarySuggestBusy" Orientation="Horizontal"
+                                        Margin="12,0,0,0" VerticalAlignment="Center"
+                                        Visibility="Collapsed">
+                                <ProgressBar Width="72" Height="4" IsIndeterminate="True"
+                                             VerticalAlignment="Center"/>
+                                <TextBlock Text="Learning from history…"
+                                           Style="{StaticResource SettingHint}"
+                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </WrapPanel>
                         <ui:Card Grid.Row="2" Padding="0" Style="{StaticResource FillCard}">
                             <DataGrid x:Name="DictionaryGrid"
                                       AutoGenerateColumns="False"

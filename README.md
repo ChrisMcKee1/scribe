@@ -125,8 +125,11 @@ to install.
    any folder instead.
 3. Run the installer and launch Scribe. It appears in your **system tray**.
 
-> **Heads up:** current builds are **unsigned**, so Windows SmartScreen may warn you on first run.
-> Click **More info → Run anyway** to continue.
+> **Publisher verification:** release executables are Authenticode-signed by **Chris McKee / Scribe**
+> and timestamped. Because Scribe uses a private self-signed publisher chain, Windows trusts that
+> identity only after you install the public certificates. See the release's
+> **[certificate trust guide](signing/README.md)** and verify its published fingerprints first.
+> SmartScreen reputation is separate and may still show a warning for a new download.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
 Right-click the tray icon for settings, history, and to pause or quit.
