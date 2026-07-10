@@ -87,13 +87,21 @@ jobs:
             throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
           }
 
-          $rootPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'
           $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
-          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootPath)
           $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
           if ($leaf.Thumbprint -ne $certificate.Thumbprint) {
             throw "Public certificate does not match imported PFX: $($leaf.Thumbprint) != $($certificate.Thumbprint)"
           }
+          Write-Host 'Validated and imported signing PFX.'
+          "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Install public signing chain
+        shell: pwsh
+        run: |
+          $rootPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'
+          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
+          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootPath)
+          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
           if ($leaf.Issuer -ne $root.Subject) { throw 'Signing certificate issuer does not match Scribe root.' }
 
           $codeSigningOid = '1.3.6.1.5.5.7.3.3'
@@ -112,22 +120,11 @@ jobs:
             throw 'Scribe root certificate is not constrained as a certificate authority.'
           }
 
-          Write-Host 'Installing public Scribe trust chain for verification.'
-          foreach ($item in @(
-            @{ Name = 'Root'; Certificate = $root },
-            @{ Name = 'TrustedPublisher'; Certificate = $leaf }
-          )) {
-            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-              $item.Name,
-              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            try {
-              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              $store.Add($item.Certificate)
-            }
-            finally {
-              $store.Close()
-            }
-          }
+          Write-Host 'Installing public Scribe trust chain with certutil.'
+          & certutil.exe -user -f -addstore Root $rootPath | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Scribe root certificate.' }
+          & certutil.exe -user -f -addstore TrustedPublisher $leafPath | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Scribe publisher certificate.' }
 
           $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
           $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
@@ -138,8 +135,7 @@ jobs:
           if ($chain.ChainElements[$chain.ChainElements.Count - 1].Certificate.Thumbprint -ne $root.Thumbprint) {
             throw 'Validated signing chain did not terminate at the checked-in Scribe root.'
           }
-          Write-Host 'Validated signing certificate and private chain.'
-          "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host 'Validated public Scribe signing chain.'
 
       - name: Download offline speech models
         shell: pwsh

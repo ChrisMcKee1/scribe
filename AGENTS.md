@@ -245,6 +245,10 @@ GitHub release signing is owned by `.github\workflows\release.yml`:
   removed in an `always()` cleanup step. Certificate cleanup uses `X509Store.Remove`, not
   `Remove-Item Cert:\...`, because the certificate provider can open an invisible confirmation UI
   and hang an unattended Windows runner.
+- Private-key import and public-chain trust are separate workflow steps. The private PFX is loaded
+  with .NET `X509Certificate2` into `CurrentUser\My`; public root/publisher CERs are installed with
+  non-interactive `certutil -user -f -addstore`, then validated with `X509Chain` and revocation set
+  to `NoCheck` because this private CA publishes no CRL endpoint.
 - The workflow uploads the root CER, leaf CER, trust script, and certificate README alongside
   the Velopack artifacts. Those are public verification material, not secrets.
 
