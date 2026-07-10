@@ -57,13 +57,31 @@ jobs:
           Write-Output "::add-mask::$env:SIGNING_PFX_PASSWORD"
           $pfxPath = Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx'
           [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          $password = ConvertTo-SecureString $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
-          $certificate = Import-PfxCertificate `
-              -FilePath $pfxPath `
-              -CertStoreLocation Cert:\CurrentUser\My `
-              -Password $password `
-              -Exportable:$false
+          Write-Host 'Loading signing PFX into CurrentUser\My.'
+          $pfxBytes = [IO.File]::ReadAllBytes($pfxPath)
+          $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet -bor
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
+          try {
+            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+              $pfxBytes,
+              $env:SIGNING_PFX_PASSWORD,
+              $keyFlags)
+          }
+          finally {
+            [Array]::Clear($pfxBytes, 0, $pfxBytes.Length)
+          }
           if (-not $certificate.HasPrivateKey) { throw 'Imported signing certificate has no private key.' }
+          $personalStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            'My',
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          try {
+            $personalStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            $personalStore.Add($certificate)
+          }
+          finally {
+            $personalStore.Close()
+          }
+          Write-Host "Loaded signing certificate $($certificate.Thumbprint)."
           $now = Get-Date
           if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
             throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
@@ -94,6 +112,7 @@ jobs:
             throw 'Scribe root certificate is not constrained as a certificate authority.'
           }
 
+          Write-Host 'Installing public Scribe trust chain for verification.'
           foreach ($item in @(
             @{ Name = 'Root'; Certificate = $root },
             @{ Name = 'TrustedPublisher'; Certificate = $leaf }
@@ -119,6 +138,7 @@ jobs:
           if ($chain.ChainElements[$chain.ChainElements.Count - 1].Certificate.Thumbprint -ne $root.Thumbprint) {
             throw 'Validated signing chain did not terminate at the checked-in Scribe root.'
           }
+          Write-Host 'Validated signing certificate and private chain.'
           "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Download offline speech models
@@ -182,11 +202,25 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item (Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx') -Force -ErrorAction SilentlyContinue
-          $thumbprint = '${{ steps.certificate.outputs.thumbprint }}'
-          if ($thumbprint) {
-              Remove-Item "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
-              Remove-Item "Cert:\CurrentUser\TrustedPublisher\$thumbprint" -Force -ErrorAction SilentlyContinue
-              $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-                (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'))
-              Remove-Item "Cert:\CurrentUser\Root\$($root.Thumbprint)" -Force -ErrorAction SilentlyContinue
+          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'))
+          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'))
+          foreach ($target in @(
+            @{ Name = 'My'; Thumbprint = $leaf.Thumbprint },
+            @{ Name = 'TrustedPublisher'; Thumbprint = $leaf.Thumbprint },
+            @{ Name = 'Root'; Thumbprint = $root.Thumbprint }
+          )) {
+            if (-not $target.Thumbprint) { continue }
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+              $target.Name,
+              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            try {
+              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              @($store.Certificates | Where-Object { $_.Thumbprint -eq $target.Thumbprint }) |
+                ForEach-Object { $store.Remove($_) }
+            }
+            finally {
+              $store.Close()
+            }
           }
