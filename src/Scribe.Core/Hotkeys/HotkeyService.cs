@@ -147,7 +147,7 @@ public sealed class HotkeyService : IHotkeyService
         var transition = _state.UpdateBinding(binding);
         if (transition != HotkeyTransition.None)
         {
-            _queue?.TryAdd(transition);
+            TryEnqueue(_queue, transition);
         }
 
         _logger.LogInformation("Hotkey binding updated to {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
@@ -213,10 +213,32 @@ public sealed class HotkeyService : IHotkeyService
         var update = _state.Process(data.vkCode, isDown);
         if (update.Transition != HotkeyTransition.None)
         {
-            _queue?.TryAdd(update.Transition);
+            TryEnqueue(_queue, update.Transition);
         }
 
         return update.ShouldSuppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    // A final keyboard message can already be in the hook thread's native queue when Stop marks the
+    // managed transition queue complete. BlockingCollection.TryAdd still throws in that race, and an
+    // exception escaping a low-level Windows hook callback terminates the process. Shutdown simply
+    // discards that stale transition.
+    internal static bool TryEnqueue(
+        BlockingCollection<HotkeyTransition>? queue, HotkeyTransition transition)
+    {
+        if (queue is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return queue.TryAdd(transition);
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private void ConsumeTransitions()

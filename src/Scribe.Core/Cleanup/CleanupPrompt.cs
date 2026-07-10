@@ -28,17 +28,19 @@ public static class CleanupPrompt
         "translate the dictation unless I explicitly ask you to. Use correct punctuation — commas, " +
         "periods, semicolons, colons, question marks, and parentheses — according to sentence " +
         "structure. Break long run-on speech into properly formed sentences, and start a new " +
-        "paragraph when the topic shifts. Remove filler words and false starts (such as \"um\", " +
+        "paragraph when the topic shifts. Separate paragraphs with one blank line. Remove filler " +
+        "words and false starts (such as \"um\", " +
         "\"uh\", \"you know\", and \"like\") and fix small grammar slips, while keeping my " +
         "meaning, intent, and vocabulary. When I correct myself mid-speech (for example \"I " +
         "meant to go to the store — I mean the park\"), keep only the corrected version and drop " +
         "what it replaced. If I say the same thing more than once, or restate a point in " +
         "slightly different words, merge it into a single clear statement instead of writing " +
         "both. Always put a single space between sentences. Keep technical terms, product names, " +
-        "code, and URLs verbatim. Write numbers the way they are normally written rather " +
+        "model names, code, and URLs verbatim. Write numbers the way they are normally written rather " +
         "than spelled out: use digits for quantities, measurements, prices, percentages, phone " +
         "numbers, and version numbers (for example \"twenty three\" becomes \"23\" and \"five " +
-        "point five\" becomes \"5.5\"), but keep a small number as a word where that reads more " +
+        "point five\" becomes \"5.5\"). Keep model and version identifiers together with no inserted " +
+        "spaces (for example, write \"GPT-5.6\", not \"GPT-5. 6\"), but keep a small number as a word where that reads more " +
         "naturally (for example \"one or two ideas\"). Spell out a number that begins a sentence, " +
         "or reword the sentence so it doesn't start with one. Format clock times as digits with a " +
         "colon, adding AM or PM when I say it (for example \"three thirty p m\" becomes " +
@@ -49,11 +51,38 @@ public static class CleanupPrompt
         "I did not say.";
 
     /// <summary>
+    /// Extra guidance used when line breaks would act as Enter in the target. It is appended to the
+    /// effective global or profile style, so terminal safety does not discard the user's tone and
+    /// cleanup preferences.
+    /// </summary>
+    public const string SingleLineWritingStyle =
+        "Return exactly one physical line with no carriage returns or line feeds. Keep exactly one " +
+        "space between sentences, and use punctuation rather than line breaks to structure the text.";
+
+    /// <summary>
     /// Returns the supplied writing style when it has content, otherwise the
     /// <see cref="DefaultWritingStyle"/>. Keeps prompt-building and the settings UI consistent.
     /// </summary>
     public static string ResolveWritingStyle(string? writingStyle) =>
         string.IsNullOrWhiteSpace(writingStyle) ? DefaultWritingStyle : writingStyle.Trim();
+
+    /// <summary>
+    /// Resolves the effective global/profile style and, when required by the injection target,
+    /// appends the terminal-safe single-line contract.
+    /// </summary>
+    public static string? ResolveWritingStyleOverride(
+        string? globalWritingStyle, string? profileWritingStyle, bool requireSingleLine)
+    {
+        if (!requireSingleLine)
+        {
+            return string.IsNullOrWhiteSpace(profileWritingStyle) ? null : profileWritingStyle.Trim();
+        }
+
+        var effective = string.IsNullOrWhiteSpace(profileWritingStyle)
+            ? ResolveWritingStyle(globalWritingStyle)
+            : profileWritingStyle.Trim();
+        return effective + " " + SingleLineWritingStyle;
+    }
 
     /// <summary>
     /// Resolves the effective prompt style. An explicit <see cref="CleanupPromptStyle.Frontier"/> or

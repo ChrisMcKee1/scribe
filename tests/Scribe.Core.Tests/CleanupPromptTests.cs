@@ -76,9 +76,29 @@ public sealed class CleanupPromptTests
         Assert.Contains("3:30 PM", style);
         Assert.Contains("July 3, 2026", style);
         Assert.Contains("single space between sentences", style);
+        Assert.Contains("one blank line", style);
+        Assert.Contains("GPT-5.6", style);
         Assert.Contains("never invent or change a value", style);
         // The old "keep numbers exactly as spoken" rule directly contradicted digit formatting.
         Assert.DoesNotContain("exactly as spoken", style);
+    }
+
+    [Fact]
+    public void Single_line_target_keeps_the_effective_style_and_appends_terminal_contract()
+    {
+        var style = CleanupPrompt.ResolveWritingStyleOverride(
+            "Global editorial style.", "Profile tone.", requireSingleLine: true);
+
+        Assert.StartsWith("Profile tone.", style);
+        Assert.Contains(CleanupPrompt.SingleLineWritingStyle, style);
+        Assert.DoesNotContain("Global editorial style.", style);
+    }
+
+    [Fact]
+    public void Paragraph_target_without_profile_reuses_the_configured_agent()
+    {
+        Assert.Null(CleanupPrompt.ResolveWritingStyleOverride(
+            "Global editorial style.", null, requireSingleLine: false));
     }
 
     [Fact]
@@ -187,8 +207,6 @@ public sealed class CleanupPromptTests
         var prompt = TextCleanupService.BuildSystemPrompt(options);
 
         Assert.Contains(custom, prompt);
-        Assert.DoesNotContain("Do not answer", prompt, System.StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Writing style:", prompt);
         Assert.DoesNotContain("Do not answer", prompt, System.StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Writing style:", prompt);
     }

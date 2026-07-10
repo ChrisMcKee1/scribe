@@ -1,5 +1,11 @@
 # Scribe AI Cleanup: Model Leaderboard (Golden Suite)
 
+> **Latest focused benchmark:** [GPT-5.6 Phonetic Cleanup Benchmark](gpt56-phonetic-benchmark.md)
+> compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and
+> `gpt-5.4-mini` across 11 WAV-backed cases, including three sound-alike transcript challenges.
+> It also records two general prompt-tuning experiments. Neither candidate cleared the five-model
+> regression gate, so the shipped `DefaultWritingStyle` and `DefaultFrontierPrompt` remain in place.
+
 A speed **and** quality benchmark of every Foundry model reachable from Scribe: **24 Microsoft
 Foundry (Azure cloud) deployments across 10 providers** and **22 Foundry Local (on-device)**
 models, each driving Scribe's **real** post-ASR cleanup pipeline across **six deliberately hard
@@ -42,11 +48,13 @@ at 3.0 s. `grok-4.3` reached B- (82), but at 21.8 s it is not a dictation model.
    solved. Resolving spoken self-corrections averages just 75.0, and **merging restated points
    averages 66.9; no model scored above 85 on the redundancy case**. Models reliably compress
    three restatements into two sentences, never one.
-3. **The shipped writing-style prompt is the measured optimum.** We A/B-tested a stricter prompt
+3. **The shipped prompt pair remains the measured default.** We A/B-tested a stricter prompt
    that explicitly forbade the two failure modes above, on identical case bytes, across four
    representative models: it **regressed three of them** (`gpt-5.4` 87 to 82, `gpt-4.1` 85 to 80,
    `DeepSeek-V4-Flash` 85 to 82) while the models kept the very behaviors it forbade. Longer,
-   more prescriptive instructions diluted overall compliance. The default prompt stays as shipped.
+    more prescriptive instructions diluted overall compliance. The 2026-07-10 five-model A/B in the
+    focused GPT-5.6 report reached only a 0.2-point aggregate gain while regressing the best model by
+    four points. The default writing style and frontier prompt therefore stay as shipped.
 4. **Some models no-op or misfire.** `Kimi-K2.5` and `Kimi-K2.6` return the raw text unchanged
    (F, degraded). `Llama-4-Maverick-17B` produced changed but unusable output (F 8).
    `gpt-audio-1.5` and `model-router` are not text-capable on this API surface, and the cloud

@@ -305,6 +305,11 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
                 if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                 {
+                    _log.LogDebug(
+                        "Skipping non-text deployment {Deployment} ({Model}); capabilities: {Capabilities}.",
+                        deploymentName,
+                        modelName,
+                        FormatCapabilities(deployment.Data?.Properties?.Capabilities));
                     continue;
                 }
 
@@ -434,6 +439,11 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
                             if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                             {
+                                _log.LogDebug(
+                                    "Skipping non-text deployment {Deployment} ({Model}); capabilities: {Capabilities}.",
+                                    deploymentName,
+                                    modelName,
+                                    FormatCapabilities(deployment.Data?.Properties?.Capabilities));
                                 continue;
                             }
 
@@ -521,6 +531,11 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         value = false;
         return false;
     }
+
+    private static string FormatCapabilities(IReadOnlyDictionary<string, string>? capabilities) =>
+        capabilities is { Count: > 0 }
+            ? string.Join(", ", capabilities.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}={pair.Value}"))
+            : "(none)";
 
     private static bool IsChatModelByName(string modelName, string deploymentName)
     {

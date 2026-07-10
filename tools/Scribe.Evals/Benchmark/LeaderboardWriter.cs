@@ -11,6 +11,7 @@ internal sealed record LeaderboardMeta
     public required string Machine { get; init; }
     public required string InputSource { get; init; }
     public required string WritingStyle { get; init; }
+    public required string FrontierPrompt { get; init; }
     public required string JudgeModel { get; init; }
     public int Runs { get; init; }
     public required IReadOnlyList<BenchCaseMeta> Cases { get; init; }
@@ -61,6 +62,15 @@ internal static class LeaderboardWriter
         }
 
         sb.AppendLine();
+        sb.AppendLine("<details><summary>Frontier prompt applied</summary>");
+        sb.AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine(meta.FrontierPrompt.Trim());
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("</details>");
+        sb.AppendLine();
+
         sb.AppendLine("<details><summary>Writing style applied</summary>");
         sb.AppendLine();
         sb.AppendLine("```");
@@ -84,6 +94,7 @@ internal static class LeaderboardWriter
 
         // Recommendations.
         WriteRecommendations(sb, graded);
+        WritePhoneticComparison(sb, meta, graded);
 
         // Combined leaderboard.
         sb.AppendLine("## Overall leaderboard (quality, then speed)");
@@ -230,6 +241,64 @@ internal static class LeaderboardWriter
         sb.AppendLine();
     }
 
+    private static void WritePhoneticComparison(
+        StringBuilder sb, LeaderboardMeta meta, IReadOnlyList<BenchResult> graded)
+    {
+        var phoneticCaseIds = meta.Cases
+            .Where(c => c.Source.Contains("phonetic transcript", StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (phoneticCaseIds.Count == 0)
+        {
+            return;
+        }
+
+        var rows = graded
+            .Select(result =>
+            {
+                var cases = result.Cases
+                    .Where(c => phoneticCaseIds.Contains(c.CaseId) && c.Quality is not null)
+                    .ToList();
+                var quality = cases.Count == 0
+                    ? (int?)null
+                    : (int)Math.Round(cases.Average(c => c.Quality!.Value));
+                var latency = cases.Count == 0
+                    ? (double?)null
+                    : Median(cases.Select(c => c.MedianMs).OrderBy(value => value).ToList());
+                var weakest = cases.OrderBy(c => c.Quality).ThenBy(c => c.CaseId).FirstOrDefault();
+                return new { Result = result, Quality = quality, Latency = latency, Weakest = weakest };
+            })
+            .Where(row => row.Quality is not null)
+            .OrderByDescending(row => row.Quality)
+            .ThenBy(row => row.Latency)
+            .ToList();
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine("## Phonetic transcript challenge");
+        sb.AppendLine();
+        sb.AppendLine(
+            $"Mean quality across {phoneticCaseIds.Count} natural-language cases whose transcripts use " +
+            "sound-alike spellings instead of conventional orthography.");
+        sb.AppendLine();
+        sb.AppendLine("| # | Model | Overall quality | Phonetic quality | Phonetic median ms | Weakest phonetic case |");
+        sb.AppendLine("|---|---|---|---|---|---|");
+        for (var index = 0; index < rows.Count; index++)
+        {
+            var row = rows[index];
+            var weakest = row.Weakest is null
+                ? "-"
+                : $"{row.Weakest.CaseId} ({row.Weakest.Quality})";
+            sb.AppendLine(
+                $"| {index + 1} | {Esc(row.Result.Id)} | {row.Result.Quality?.ToString() ?? "-"} | " +
+                $"{row.Quality} | {row.Latency:F0} | {Esc(weakest)} |");
+        }
+
+        sb.AppendLine();
+    }
+
     private static void WriteBoard(StringBuilder sb, IReadOnlyList<BenchResult> rows, bool withGroup)
     {
         if (rows.Count == 0)
@@ -298,6 +367,10 @@ internal static class LeaderboardWriter
 
     private static string Q(BenchResult r) =>
         r.Quality is { } q ? $"quality {q} ({r.Grade})" : "quality n/a";
+
+    private static double Median(IReadOnlyList<double> sorted) => sorted.Count % 2 == 1
+        ? sorted[sorted.Count / 2]
+        : (sorted[(sorted.Count / 2) - 1] + sorted[sorted.Count / 2]) / 2;
 
     private static string Esc(string s) => s.Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ");
 

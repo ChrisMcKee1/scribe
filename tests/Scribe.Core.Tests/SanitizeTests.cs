@@ -143,21 +143,11 @@ public sealed class SanitizeTests
     }
 
     [Fact]
-    public void Missing_space_between_sentences_is_inserted()
+    public void Sanitizer_does_not_guess_at_missing_sentence_boundaries()
     {
         var raw = "I went to the store.The next day I left.It was fine.";
         Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
-        Assert.Equal("I went to the store. The next day I left. It was fine.", text);
-    }
-
-    [Fact]
-    public void Missing_space_after_a_number_ending_a_sentence_is_inserted()
-    {
-        // A sentence that ends in a number glued to the next capitalized sentence must still split;
-        // the uppercase-letter lookahead keeps decimals, versions and IPs (all followed by a digit) safe.
-        var raw = "The release slipped to 2024.Next year we retry.";
-        Assert.True(TextCleanupService.TrySanitize(raw, raw, out var text));
-        Assert.Equal("The release slipped to 2024. Next year we retry.", text);
+        Assert.Equal(raw, text);
     }
 
     [Fact]

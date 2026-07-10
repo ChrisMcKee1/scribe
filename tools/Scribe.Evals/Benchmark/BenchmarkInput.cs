@@ -28,7 +28,14 @@ internal static class BenchmarkInput
         {
             foreach (var c in BenchmarkCases.All)
             {
-                cases.Add(new BenchCaseInput(c.Id, c.Spoken, c.Golden, "authored", null, null, null));
+                cases.Add(new BenchCaseInput(
+                    c.Id,
+                    c.TranscriptOverride ?? c.Spoken,
+                    c.Golden,
+                    c.TranscriptOverride is null ? "authored" : "authored phonetic transcript",
+                    null,
+                    null,
+                    null));
             }
 
             return cases;
@@ -55,7 +62,7 @@ internal static class BenchmarkInput
             try
             {
                 var wavPath = Path.Combine(artifactsDir, $"case-{c.Id}.wav");
-                SynthesizeWav(c.Spoken, wavPath);
+                SynthesizeWav(c.Spoken, c.SpeechMarkup, wavPath);
                 var (samples, seconds) = await Task.Run(() => LoadWavAsMono16k(wavPath), ct).ConfigureAwait(false);
 
                 var sw = Stopwatch.StartNew();
@@ -72,23 +79,51 @@ internal static class BenchmarkInput
                 sw.Stop();
 
                 var text = result.Text?.Trim() ?? string.Empty;
-                if (text.Length >= 30)
+                var transcript = c.TranscriptOverride?.Trim() ?? text;
+                if (transcript.Length >= 30)
                 {
-                    log.LogInformation("Case {Case}: WAV+ASR ok ({Ms:F0} ms, {Sec:F1}s audio).",
-                        c.Id, sw.Elapsed.TotalMilliseconds, seconds);
+                    log.LogInformation(
+                        "Case {Case}: WAV+ASR ok ({Ms:F0} ms, {Sec:F1}s audio){Override}.",
+                        c.Id,
+                        sw.Elapsed.TotalMilliseconds,
+                        seconds,
+                        c.TranscriptOverride is null ? string.Empty : "; using phonetic transcript override");
                     cases.Add(new BenchCaseInput(
-                        c.Id, text, c.Golden, "wav+asr (Parakeet)", wavPath, sw.Elapsed.TotalMilliseconds, seconds));
+                        c.Id,
+                        transcript,
+                        c.Golden,
+                        c.TranscriptOverride is null ? "wav+asr (Parakeet)" : "wav+phonetic transcript",
+                        wavPath,
+                        sw.Elapsed.TotalMilliseconds,
+                        seconds));
                     continue;
                 }
 
                 log.LogWarning("Case {Case}: ASR output too short ({Len} chars); using authored text.", c.Id, text.Length);
                 cases.Add(new BenchCaseInput(
-                    c.Id, c.Spoken, c.Golden, "authored (ASR too short)", wavPath, sw.Elapsed.TotalMilliseconds, seconds));
+                    c.Id,
+                    c.TranscriptOverride ?? c.Spoken,
+                    c.Golden,
+                    c.TranscriptOverride is null
+                        ? "authored (ASR too short)"
+                        : "authored phonetic transcript (ASR too short)",
+                    wavPath,
+                    sw.Elapsed.TotalMilliseconds,
+                    seconds));
             }
             catch (Exception ex)
             {
                 log.LogWarning(ex, "Case {Case}: WAV/ASR path failed; using authored text.", c.Id);
-                cases.Add(new BenchCaseInput(c.Id, c.Spoken, c.Golden, "authored (WAV/ASR unavailable)", null, null, null));
+                cases.Add(new BenchCaseInput(
+                    c.Id,
+                    c.TranscriptOverride ?? c.Spoken,
+                    c.Golden,
+                    c.TranscriptOverride is null
+                        ? "authored (WAV/ASR unavailable)"
+                        : "authored phonetic transcript (WAV/ASR unavailable)",
+                    null,
+                    null,
+                    null));
             }
         }
 
@@ -96,7 +131,7 @@ internal static class BenchmarkInput
     }
 
     // Windows SAPI via late-bound COM — no extra NuGet dependency. Writes 22 kHz 16-bit mono PCM.
-    private static void SynthesizeWav(string text, string wavPath)
+    private static void SynthesizeWav(string text, string? speechMarkup, string wavPath)
     {
         var voiceType = Type.GetTypeFromProgID("SAPI.SpVoice")
             ?? throw new PlatformNotSupportedException("SAPI.SpVoice is not registered.");
@@ -111,7 +146,7 @@ internal static class BenchmarkInput
             stream.Open(wavPath, 3, false);     // SSFMCreateForWrite
             voice.AudioOutputStream = stream;
             voice.Rate = -1;                    // a touch slower → cleaner ASR
-            voice.Speak(text, 0);               // SVSFDefault (synchronous)
+            voice.Speak(speechMarkup ?? text, speechMarkup is null ? 0 : 8); // 8 = SVSFIsXML
         }
         finally
         {

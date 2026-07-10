@@ -30,6 +30,8 @@ internal sealed class CliOptions
     public bool NoJudge { get; private set; }
     public bool NoWav { get; private set; }
     public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
+    public string? BenchWritingStyleFile { get; private set; }
+    public string? BenchFrontierPromptFile { get; private set; }
     public bool Force { get; private set; }
     public int LocalLoadTimeout { get; private set; } = 1800;
     public int CloudReadyTimeout { get; private set; } = 120;
@@ -51,6 +53,7 @@ internal sealed class CliOptions
             LocalOnly = LocalOnly,
             MaxCloud = MaxCloud,
             MaxLocal = MaxLocal,
+            CloudEndpoint = AzureEndpoint,
             TenantId = AzureTenantId,
             JudgeEndpoint = string.IsNullOrWhiteSpace(JudgeEndpoint)
                 ? "https://mtech-project-resource.cognitiveservices.azure.com/"
@@ -61,6 +64,8 @@ internal sealed class CliOptions
             Synthesize = !NoWav,
             Force = Force,
             PromptStyle = PromptStyle,
+            WritingStyle = ReadPromptFile(BenchWritingStyleFile),
+            FrontierPrompt = ReadPromptFile(BenchFrontierPromptFile),
             CloudReadyTimeoutSeconds = CloudReadyTimeout,
             LocalReadyTimeoutSeconds = LocalLoadTimeout,
             CleanTimeoutSeconds = CleanTimeout,
@@ -198,6 +203,12 @@ internal sealed class CliOptions
                         _ => CleanupPromptStyle.Auto,
                     };
                     break;
+                case "--writing-style-file":
+                    o.BenchWritingStyleFile = Next();
+                    break;
+                case "--frontier-prompt-file":
+                    o.BenchFrontierPromptFile = Next();
+                    break;
                 case "--force":
                     o.Force = true;
                     break;
@@ -232,6 +243,25 @@ internal sealed class CliOptions
         return o;
     }
 
+    private static string? ReadPromptFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var fullPath = Path.GetFullPath(path.Trim());
+        if (!File.Exists(fullPath))
+        {
+            throw new FileNotFoundException($"Prompt file not found: {fullPath}", fullPath);
+        }
+
+        var text = File.ReadAllText(fullPath).Trim();
+        return text.Length == 0
+            ? throw new InvalidDataException($"Prompt file is empty: {fullPath}")
+            : text;
+    }
+
     public static void PrintUsage()
     {
         Console.WriteLine(
@@ -246,7 +276,8 @@ internal sealed class CliOptions
               --model <name>                    A model to test (Foundry alias, or Azure deployment).
                                                 Repeatable.
               --models <a,b,c>                  Comma-separated models to compare head-to-head.
-              --endpoint <url>                  Azure/Microsoft Foundry endpoint (azure provider).
+              --endpoint <url>                  Azure/Microsoft Foundry endpoint (azure provider,
+                                                or explicit benchmark deployment fallback).
               --tenant <id>                     Optional Azure tenant id override (azure provider).
               --ready-timeout <seconds>         Max wait for a model to load (default: 240).
               --list                            List the eval scenarios and exit.
@@ -267,6 +298,8 @@ internal sealed class CliOptions
               --judge-tenant <id>               Tenant override for the judge.
               --no-judge                        Latency only (skip quality grading).
               --no-wav                          Use the authored transcript (skip TTS+ASR).
+              --writing-style-file <path>       Benchmark-only writing-style override.
+              --frontier-prompt-file <path>     Benchmark-only frontier-prompt override.
               --force                           Re-run models already present in results.json.
               --local-load-timeout <seconds>    Max wait for a local model to download+load (default: 1800).
               --clean-timeout <seconds>         Per-call cleanup timeout override (default: 180).

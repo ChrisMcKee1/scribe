@@ -1,7 +1,12 @@
 namespace Scribe.Evals.Benchmark;
 
 /// <summary>One authored benchmark case: the passage spoken via TTS and the golden rewrite.</summary>
-internal sealed record BenchCase(string Id, string Spoken, string Golden);
+internal sealed record BenchCase(
+    string Id,
+    string Spoken,
+    string Golden,
+    string? SpeechMarkup = null,
+    string? TranscriptOverride = null);
 
 /// <summary>A prepared case: the (possibly ASR-derived) transcript every model receives.</summary>
 internal sealed record BenchCaseInput(
@@ -107,5 +112,101 @@ internal static class BenchmarkCases
                 "The deploy went out yesterday, but the pipeline kept failing on the test stage because the " +
                 "tests were flaky, and we had to rerun it three times. Anyway, it's out now and everything " +
                 "looks good, but we should fix those flaky tests soon or they're going to bite us again."),
+
+        // Long acoustic pauses exercise the real ASR path. The cleanup model receives only the final
+        // transcript, so this reveals whether Parakeet preserves enough punctuation/context for the
+        // frontier prompt to recover paragraph structure.
+        new BenchCase(
+            "long-pause-paragraphs",
+            Spoken:
+                "first the release update the desktop build passed validation and rollout starts monday " +
+                "separately for customer feedback three teams asked for a simpler onboarding guide and " +
+                "we should schedule interviews next week",
+            Golden:
+                "First, the release update: the desktop build passed validation, and rollout starts Monday.\n\n" +
+                "Separately, for customer feedback, three teams asked for a simpler onboarding guide, " +
+                "and we should schedule interviews next week.",
+            SpeechMarkup:
+                "first the release update the desktop build passed validation and rollout starts monday" +
+                "<silence msec=\"2800\"/>" +
+                "separately for customer feedback three teams asked for a simpler onboarding guide and " +
+                "we should schedule interviews next week"),
+
+        new BenchCase(
+            "model-version-spacing",
+            Spoken:
+                "the GPT five point six model should handle the complete transcript before it writes the " +
+                "answer then version two point five remains available for comparison",
+            Golden:
+                "The GPT-5.6 model should handle the complete transcript before it writes the answer. " +
+                "Version 2.5 remains available for comparison.",
+            SpeechMarkup:
+                "the G P T five point six model should handle the complete transcript before it writes " +
+                "the answer<silence msec=\"1800\"/>then version two point five remains available for comparison"),
+
+        // The WAV contains ordinary dialogue, while the model receives a deliberately phonetic
+        // transcript. This isolates whether cleanup can use sentence context to recover homophones.
+        new BenchCase(
+            "dialogue-phonetic",
+            Spoken:
+                "look i know this sounds strange but when i got to the station they were already leaving " +
+                "their bags were by the door and claire said you're too late we can't wait another hour " +
+                "so i told her i'll meet them at the old theater after eight",
+            Golden:
+                "Look, I know this sounds strange, but when I got to the station, they were already leaving. " +
+                "Their bags were by the door, and Claire said, \"You're too late. We can't wait another " +
+                "hour.\" So I told her, \"I'll meet them at the old theater after 8.\"",
+            TranscriptOverride:
+                "look eye no this sounds strange butt when eye got two the station they were all ready " +
+                "leaving there bags were buy the door and claire said yore too late wee cant weight another " +
+                "our sew eye told her aisle meat them at the old theater after ate"),
+
+        new BenchCase(
+            "story-phonetic",
+            Spoken:
+                "the rain had stopped by dawn and the road through the valley shone like silver maria could " +
+                "hear the church bell beyond the hill but she knew there was no time to turn back",
+            Golden:
+                "The rain had stopped by dawn, and the road through the valley shone like silver. Maria could " +
+                "hear the church bell beyond the hill, but she knew there was no time to turn back.",
+            TranscriptOverride:
+                "the reign had stopped buy dawn and the rode threw the valley shown like silver maria could " +
+                "here the church belle beyond the hill butt she new there was no thyme two turn back"),
+
+        new BenchCase(
+            "colloquial-phonetic",
+            Spoken:
+                "you should have seen his face when i said we were not taking the highway he looked at me and " +
+                "said are you serious we've got twenty minutes then jen laughed and told him relax we'll make it",
+            Golden:
+                "You should have seen his face when I said we were not taking the highway. He looked at me and " +
+                "said, \"Are you serious? We've got 20 minutes.\" Then Jen laughed and told him, \"Relax, " +
+                "we'll make it.\"",
+            TranscriptOverride:
+                "you should of seen his face when eye said wee were knot taking the highway he looked at me " +
+                "and said are yew serious weve got twenty minutes then jen laughed and told hymn relax well " +
+                "make it"),
+
+        // Newly authored adaptation of the public-domain Alice's Adventures in Wonderland narrative,
+        // Project Gutenberg eBook 11 (https://www.gutenberg.org/ebooks/11). Unlike the transcript-only
+        // phonetic cases above, this puts pronunciation-like spelling and pauses into the WAV itself.
+        new BenchCase(
+            "phonetic-wav-narrative",
+            Spoken:
+                "um alice was getting tired beside the river when she noticed a white rabbit in a blue " +
+                "coat hurry past the hedge it pulled a watch from its pocket and said it was late she " +
+                "followed because she was curious then after a long pause she found a hallway with many " +
+                "locked doors and a small golden key",
+            Golden:
+                "Alice was getting tired beside the river when she noticed a white rabbit in a blue coat " +
+                "hurry past the hedge. It pulled a watch from its pocket and said it was late. She followed " +
+                "because she was curious.\n\nAfter a long pause, she found a hallway with many locked doors " +
+                "and a small golden key.",
+            SpeechMarkup:
+                "umm ay liss wuz gettin kinda tired beside thuh river<silence msec=\"700\"/>when she " +
+                "noticed a whyt rabit in a bloo coat hurry past thuh hedge<silence msec=\"350\"/>uh it " +
+                "pulled a wotch from its pockit and sed it wuz late<silence msec=\"900\"/>blah she " +
+                "followed becuz she wuz cure ee us<silence msec=\"3000\"/>then after a long paws she " +
+                "found a hall way with many lokt doors and a small gohlden key"),
     ];
 }

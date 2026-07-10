@@ -87,6 +87,52 @@ public sealed class TextChunkingTests
         Assert.Equal(6000, chunks.Sum(c => c.Length));
     }
 
+    [Fact]
+    public void Version_decimal_is_not_treated_as_a_sentence_boundary()
+    {
+        var prefix = new string('x', 1500) + " ";
+        var text = prefix + "Use GPT-5.6 for this work. " + new string('y', 1200);
+
+        var chunks = TextCleanupService.ChunkForCleanup(text, 1600);
+
+        Assert.DoesNotContain(chunks, chunk => chunk.EndsWith("GPT-5.", StringComparison.Ordinal));
+        Assert.Contains(chunks, chunk => chunk.Contains("GPT-5.6", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Frontier_prompt_keeps_the_complete_transcript_in_one_request()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("paragraph", 1000));
+        var options = CleanupOptions.Disabled with
+        {
+            Enabled = true,
+            Provider = CleanupProvider.AzureFoundry,
+            PromptStyle = CleanupPromptStyle.Auto,
+        };
+
+        var chunks = TextCleanupService.PrepareChunks(text, options);
+
+        Assert.Single(chunks);
+        Assert.Equal(text, chunks[0]);
+    }
+
+    [Fact]
+    public void Local_prompt_keeps_bounded_chunking()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("paragraph", 1000));
+        var options = CleanupOptions.Disabled with
+        {
+            Enabled = true,
+            Provider = CleanupProvider.FoundryLocal,
+            PromptStyle = CleanupPromptStyle.Auto,
+        };
+
+        var chunks = TextCleanupService.PrepareChunks(text, options);
+
+        Assert.True(chunks.Count > 1);
+        Assert.All(chunks, chunk => Assert.True(chunk.Length <= 2400));
+    }
+
     private static string[] Words(string s) =>
         s.Split((char[]?)null, System.StringSplitOptions.RemoveEmptyEntries);
 }

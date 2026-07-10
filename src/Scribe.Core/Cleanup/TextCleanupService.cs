@@ -80,17 +80,6 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static readonly Regex ThinkBlock =
         new("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // Models occasionally drop the space between two sentences ("...store.The next...", "...in
-    // 2024.Next year..."). Insert one after sentence-ending punctuation when it butts directly against
-    // the capital letter that starts the next sentence. The lookbehind admits a lowercase letter or a
-    // digit but never an uppercase letter, and the lookahead requires an uppercase letter; together
-    // those split a sentence that ends in a number while keeping decimals ("3.5"), version numbers
-    // ("2.5"), IP addresses ("192.168.0.1"), acronyms ("U.S.A") and lowercase domains ("example.com")
-    // untouched (each of those is followed by a digit or lowercase letter, never a capital). An optional
-    // closing quote/bracket is allowed between the punctuation and the next sentence (a quoted sentence).
-    private static readonly Regex MissingSentenceSpace =
-        new("(?<=[a-z0-9][.!?][\"')\\]]?)(?=[A-Z])", RegexOptions.Compiled);
-
     // A model sometimes declines the rewrite and answers with a canned safety refusal ("I'm sorry, but
     // I cannot assist with that request.") instead of the cleaned text. Two intent families detect it:
     // an apology / AI-identity preamble at the very start, or an inability verb paired with a help
@@ -313,11 +302,11 @@ internal sealed class TextCleanupService : ITextCleanupService
             }
         }
 
-        // Split long dictation into bounded chunks on sentence/word boundaries and clean each in turn,
-        // so an arbitrarily long capture is polished rather than skipped or truncated. Short input is a
-        // single chunk (the common case). A pathologically long hold is capped: anything past the chunk
-        // ceiling is left raw and flagged as a partial failure.
-        var chunks = ChunkForCleanup(text, ChunkTargetChars);
+        // Capable frontier models should see the complete dictation so they can make coherent sentence
+        // and paragraph decisions. Local-prompt models keep bounded chunks because their context and
+        // output budgets are much smaller. The prompt-style choice is explicit for custom endpoints,
+        // so a local Ollama server can retain chunking by selecting the Local prompt.
+        var chunks = PrepareChunks(text, options);
         string? overflowTail = null;
         if (chunks.Count > MaxCleanupChunks)
         {
@@ -589,11 +578,19 @@ internal sealed class TextCleanupService : ITextCleanupService
         return chunks;
     }
 
+    internal static List<string> PrepareChunks(string text, CleanupOptions options)
+    {
+        var frontierPrompt = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider) ==
+            CleanupPromptStyle.Frontier;
+        return frontierPrompt ? [text.Trim()] : ChunkForCleanup(text, ChunkTargetChars);
+    }
+
     private static int LastSentenceBreak(string window, int minIndex)
     {
         for (var i = window.Length - 1; i >= minIndex; i--)
         {
-            if (window[i] is '.' or '!' or '?' or '\n')
+            if (window[i] is '!' or '?' or '\n' ||
+                (window[i] == '.' && (i == window.Length - 1 || char.IsWhiteSpace(window[i + 1]))))
             {
                 return i;
             }
@@ -1161,9 +1158,17 @@ internal sealed class TextCleanupService : ITextCleanupService
             // existing az / Visual Studio / environment / managed-identity sign-in (optionally pinned
             // to a specific tenant). Interactive browser is excluded so credential resolution never
             // blocks on a popup in the background.
+            var clientOptions = new AzureOpenAIClientOptions();
+            if (CleanupTimeoutOverride is { } networkTimeout)
+            {
+                // Benchmark runs may intentionally measure models beyond the SDK's 100-second default.
+                // The app never sets this override, so its normal transport and cleanup budgets stay put.
+                clientOptions.NetworkTimeout = networkTimeout + TimeSpan.FromSeconds(5);
+            }
+
             var azureClient = useKey
-                ? new AzureOpenAIClient(accountHost, new ApiKeyCredential(options.AzureApiKey!))
-                : new AzureOpenAIClient(accountHost, CreateAzureCredential(options.AzureTenantId));
+                ? new AzureOpenAIClient(accountHost, new ApiKeyCredential(options.AzureApiKey!), clientOptions)
+                : new AzureOpenAIClient(accountHost, CreateAzureCredential(options.AzureTenantId), clientOptions);
 
             // Route cleanup through the Azure OpenAI **Responses API** rather than Chat Completions.
             // Responses is the forward-looking surface and is the only one that serves the newest
@@ -1186,7 +1191,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         // cap, because a clamped budget could be consumed entirely by a reasoning model's thinking.
         ct.ThrowIfCancellationRequested();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(AzureValidationTimeoutSeconds));
+        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(AzureValidationTimeoutSeconds));
         try
         {
             _ = await agent.RunAsync("Reply with: ok", cancellationToken: cts.Token).ConfigureAwait(false);
@@ -1434,7 +1439,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         if (provider == CleanupProvider.AzureFoundry)
         {
             var azureEstimate = (words * 4) + 512;
-            return Math.Clamp(azureEstimate, 512, 4096);
+            return Math.Clamp(azureEstimate, 512, 16384);
         }
 
         // Foundry Local output also has to cover translation/format expansion and any hidden reasoning
@@ -1529,10 +1534,6 @@ internal sealed class TextCleanupService : ITextCleanupService
             return false;
         }
 
-        // Deterministic net for a model that fused two sentences with no space between them.
-        cleaned = MissingSentenceSpace.Replace(cleaned, match =>
-            OriginalContainsIdentifierAt(cleaned, original, match.Index) ? string.Empty : " ");
-
         text = cleaned;
         return true;
     }
@@ -1562,35 +1563,6 @@ internal sealed class TextCleanupService : ITextCleanupService
         return trimmed.Length >= 2 &&
             ((trimmed[0] == '"' && trimmed[^1] == '"') || (trimmed[0] == '\'' && trimmed[^1] == '\''));
     }
-
-    private static bool OriginalContainsIdentifierAt(string candidate, string original, int boundary)
-    {
-        var leftEnd = boundary - 1; // the period immediately before the fused capital
-        var leftStart = leftEnd - 1;
-        while (leftStart >= 0 && IsIdentifierCharacter(candidate[leftStart]))
-        {
-            leftStart--;
-        }
-
-        var rightEnd = boundary;
-        while (rightEnd < candidate.Length && IsIdentifierCharacter(candidate[rightEnd]))
-        {
-            rightEnd++;
-        }
-
-        if (leftEnd <= leftStart + 1 || rightEnd == boundary)
-        {
-            return false;
-        }
-
-        var token = candidate[(leftStart + 1)..rightEnd];
-        var typeQualified = char.IsUpper(candidate[leftStart + 1]);
-        var methodCall = rightEnd < candidate.Length && candidate[rightEnd] == '(';
-        return (typeQualified || methodCall || token.Contains('_')) &&
-            original.Contains(token, StringComparison.Ordinal);
-    }
-
-    private static bool IsIdentifierCharacter(char value) => char.IsLetterOrDigit(value) || value == '_';
 
     // True when the text reads like a model refusing the cleanup task rather than performing it: an
     // apology / AI-identity preamble at the start, or an inability verb ("can't/cannot/unable") next to

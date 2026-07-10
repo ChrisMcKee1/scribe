@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Concurrent;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Xunit;
@@ -44,6 +45,17 @@ public class HotkeyServiceTests
         Assert.Equal(0x20u, service.Binding.VirtualKey);
         Assert.Equal(HotkeyMode.Toggle, service.Binding.Mode);
         Assert.Equal(KeyModifiers.Control, service.Binding.Modifiers);
+    }
+
+    [Fact]
+    public void Enqueue_during_shutdown_is_discarded_without_throwing()
+    {
+        using var queue = new BlockingCollection<HotkeyTransition>();
+        queue.CompleteAdding();
+
+        var added = HotkeyService.TryEnqueue(queue, HotkeyTransition.Activated);
+
+        Assert.False(added);
     }
 
     [Fact]

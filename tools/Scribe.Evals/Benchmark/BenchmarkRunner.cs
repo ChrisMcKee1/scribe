@@ -15,6 +15,7 @@ internal sealed record BenchmarkConfig
     public IReadOnlyList<string>? LocalOnly { get; init; }
     public int MaxCloud { get; init; }
     public int MaxLocal { get; init; }
+    public string? CloudEndpoint { get; init; }
     public string? TenantId { get; init; }
     public string JudgeEndpoint { get; init; } = "https://mtech-project-resource.cognitiveservices.azure.com/";
     public string JudgeModel { get; init; } = "gpt-4.1";
@@ -24,6 +25,8 @@ internal sealed record BenchmarkConfig
     public string? ModelsDir { get; init; }
     public bool Force { get; init; }
     public CleanupPromptStyle PromptStyle { get; init; } = CleanupPromptStyle.Auto;
+    public string? WritingStyle { get; init; }
+    public string? FrontierPrompt { get; init; }
     public int CloudReadyTimeoutSeconds { get; init; } = 120;
     public int LocalReadyTimeoutSeconds { get; init; } = 1800;
     public int CleanTimeoutSeconds { get; init; } = 180;
@@ -54,7 +57,8 @@ internal sealed class BenchmarkRunner
         var resultsPath = Path.Combine(_cfg.OutDir, "results.json");
         var markdownPath = Path.Combine(_cfg.OutDir, "leaderboard.md");
 
-        var style = CleanupPrompt.DefaultWritingStyle;
+        var style = CleanupPrompt.ResolveWritingStyle(_cfg.WritingStyle);
+        var frontierPrompt = CleanupPrompt.ResolveFrontierPrompt(_cfg.FrontierPrompt);
 
         Console.WriteLine($"Preparing {BenchmarkCases.All.Count} benchmark cases (WAV synthesis + ASR)…");
         var inputCachePath = Path.Combine(_cfg.OutDir, "cases.json");
@@ -88,7 +92,8 @@ internal sealed class BenchmarkRunner
         {
             try
             {
-                var cloud = await BenchmarkModels.BuildCloudAsync(_cfg.TenantId, _cfg.CloudOnly, _cfg.MaxCloud, _log, ct)
+                var cloud = await BenchmarkModels.BuildCloudAsync(
+                    _cfg.TenantId, _cfg.CloudEndpoint, _cfg.CloudOnly, _cfg.MaxCloud, _log, ct)
                     .ConfigureAwait(false);
                 roster.AddRange(cloud);
                 Console.WriteLine($"Cloud models ({cloud.Count}): {string.Join(", ", cloud.Select(m => m.Id))}");
@@ -139,6 +144,7 @@ internal sealed class BenchmarkRunner
             Machine = Environment.MachineName,
             InputSource = string.Join("; ", cases.Select(c => c.Source).Distinct()),
             WritingStyle = style,
+            FrontierPrompt = frontierPrompt,
             JudgeModel = judge is null ? "(none)" : $"{_cfg.JudgeModel} @ {_cfg.JudgeEndpoint}",
             Runs = _cfg.Runs,
             Cases = cases.Select(c => new BenchCaseMeta(c.CaseId, c.Source, c.Transcript, c.Golden, c.AsrMs, c.AudioSeconds)).ToList(),
@@ -204,8 +210,10 @@ internal sealed class BenchmarkRunner
     {
         var options = model.Provider == CleanupProvider.AzureFoundry
             ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
-                model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style, PromptStyle: _cfg.PromptStyle)
-            : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null, WritingStyle: style, PromptStyle: _cfg.PromptStyle);
+                model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt)
+            : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
+                WritingStyle: style, PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt);
 
         var loadTimeout = TimeSpan.FromSeconds(
             model.Group == BenchGroup.Cloud ? _cfg.CloudReadyTimeoutSeconds : _cfg.LocalReadyTimeoutSeconds);
@@ -231,11 +239,13 @@ internal sealed class BenchmarkRunner
         if (!ready)
         {
             // Cancel any in-flight load/download before moving on so the next model starts clean.
+            var status = svc.Status;
+            var statusDetail = svc.StatusDetail;
             svc.Configure(CleanupOptions.Disabled);
             return baseline with
             {
                 Status = "not-ready",
-                Error = $"not ready in {loadTimeout.TotalSeconds:F0}s ({svc.Status}: {svc.StatusDetail})",
+                Error = $"not ready in {loadTimeout.TotalSeconds:F0}s ({status}: {statusDetail})",
                 LoadSeconds = loadSw.Elapsed.TotalSeconds,
             };
         }

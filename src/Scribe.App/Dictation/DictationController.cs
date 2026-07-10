@@ -404,6 +404,10 @@ internal sealed class DictationController : IDisposable
 
             var targetApp = session.TargetApp;
             var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
+            var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
+            var requireSingleLine = InjectionTextFormatter.ShouldFlatten(newlineMode, targetApp);
+            var cleanupWritingStyle = CleanupPrompt.ResolveWritingStyleOverride(
+                settings.AiCleanupWritingStyle, profile?.WritingStyle, requireSingleLine);
             if (profile is not null)
             {
                 _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
@@ -429,7 +433,7 @@ internal sealed class DictationController : IDisposable
             if (settings.EnableAiCleanup)
             {
                 var cleanup = await _cleanup
-                    .CleanAsync(recognized, cancellationToken, profile?.WritingStyle)
+                    .CleanAsync(recognized, cancellationToken, cleanupWritingStyle)
                     .ConfigureAwait(false);
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
@@ -493,7 +497,6 @@ internal sealed class DictationController : IDisposable
             // Terminals treat an injected newline as Enter, so AI-cleanup paragraph breaks would
             // submit several partial messages; flatten per the configured mode (the profile's
             // override wins when set) before injecting.
-            var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
             var flattened = InjectionTextFormatter.Apply(text, newlineMode, targetApp);
             if (!ReferenceEquals(flattened, text))
             {

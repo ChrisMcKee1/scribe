@@ -25,6 +25,15 @@ public class InjectionTextFormatterTests
     public void Other_apps_are_not_terminals(string? processName) =>
         Assert.False(InjectionTextFormatter.IsTerminalProcess(processName));
 
+    [Theory]
+    [InlineData(NewlineInjectionMode.SmartFlatten, "pwsh", true)]
+    [InlineData(NewlineInjectionMode.SmartFlatten, "WINWORD", false)]
+    [InlineData(NewlineInjectionMode.AlwaysFlatten, "Code", true)]
+    [InlineData(NewlineInjectionMode.KeepNewlines, "cmd", false)]
+    public void Should_flatten_matches_the_effective_target_policy(
+        NewlineInjectionMode mode, string processName, bool expected) =>
+        Assert.Equal(expected, InjectionTextFormatter.ShouldFlatten(mode, processName));
+
     [Fact]
     public void Smart_mode_flattens_newlines_for_a_terminal_target()
     {

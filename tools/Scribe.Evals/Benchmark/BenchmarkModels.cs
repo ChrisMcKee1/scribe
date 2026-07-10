@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Cleanup;
 
 namespace Scribe.Evals.Benchmark;
@@ -44,29 +43,62 @@ internal static class BenchmarkModels
         ["gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"];
 
     public static async Task<IReadOnlyList<BenchModel>> BuildCloudAsync(
-        string? tenantId, IReadOnlyList<string>? only, int max, ILogger log, CancellationToken ct)
+        string? tenantId,
+        string? explicitEndpoint,
+        IReadOnlyList<string>? only,
+        int max,
+        ILogger log,
+        CancellationToken ct)
     {
-        var discovery = new AzureFoundryDiscovery(NullLogger<AzureFoundryDiscovery>.Instance);
+        var discovery = new AzureFoundryDiscovery(new VerboseConsoleLogger<AzureFoundryDiscovery>());
         var deployments = await discovery.DiscoverAsync(tenantId, ct).ConfigureAwait(false);
         log.LogInformation("Azure discovery returned {Count} text-capable deployments.", deployments.Count);
 
-        // De-dupe by underlying model name, preferring the project resource that hosts the widest set
-        // (it tends to have the best quota), then any classic account.
-        var deduped = deployments
-            .GroupBy(d => d.ModelName, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g
-                .OrderByDescending(d => d.Endpoint.Contains("mtech-project-resource", StringComparison.OrdinalIgnoreCase))
-                .First())
-            .ToList();
+        IReadOnlyList<AzureFoundryDeployment> selected;
+        IReadOnlyList<string> missing = [];
+        if (only is { Count: > 0 })
+        {
+            selected = only
+                .Select(requested => deployments
+                    .Where(d => string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(d.ModelName, requested, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(d =>
+                        string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(d =>
+                        d.Endpoint.Contains("mtech-project-resource", StringComparison.OrdinalIgnoreCase))
+                    .FirstOrDefault())
+                .Where(d => d is not null)
+                .Cast<AzureFoundryDeployment>()
+                .DistinctBy(d => $"{d.Endpoint}/{d.DeploymentName}", StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            missing = only.Where(requested => !selected.Any(d =>
+                string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(d.ModelName, requested, StringComparison.OrdinalIgnoreCase))).ToArray();
+            if (missing.Count > 0 && string.IsNullOrWhiteSpace(explicitEndpoint))
+            {
+                log.LogWarning("Requested cloud deployments were not discovered: {Missing}.", string.Join(", ", missing));
+            }
+        }
+        else
+        {
+            // De-dupe the broad roster by underlying model name, preferring the project resource that
+            // hosts the widest set (it tends to have the best quota), then any classic account.
+            selected = deployments
+                .GroupBy(d => d.ModelName, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g
+                    .OrderByDescending(d =>
+                        d.Endpoint.Contains("mtech-project-resource", StringComparison.OrdinalIgnoreCase))
+                    .First())
+                .ToList();
+        }
 
         var models = new List<BenchModel>();
-        foreach (var d in deduped)
+        foreach (var d in selected)
         {
-            var id = string.IsNullOrWhiteSpace(d.ModelName) ? d.DeploymentName : d.ModelName;
-            if (only is { Count: > 0 } && !only.Any(o => id.Contains(o, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
+            var id = only is { Count: > 0 } || string.IsNullOrWhiteSpace(d.ModelName)
+                ? d.DeploymentName
+                : d.ModelName;
 
             var note = CloudReasoning.Any(r => string.Equals(r, id, StringComparison.OrdinalIgnoreCase))
                 ? "reasoning"
@@ -74,6 +106,21 @@ internal static class BenchmarkModels
 
             models.Add(new BenchModel(
                 BenchGroup.Cloud, id, CleanupProvider.AzureFoundry, d.Endpoint, d.DeploymentName, d.ModelName, note));
+        }
+
+        if (missing.Count > 0 && !string.IsNullOrWhiteSpace(explicitEndpoint))
+        {
+            foreach (var deployment in missing)
+            {
+                models.Add(new BenchModel(
+                    BenchGroup.Cloud,
+                    deployment,
+                    CleanupProvider.AzureFoundry,
+                    explicitEndpoint.Trim(),
+                    deployment,
+                    null,
+                    "explicit endpoint; not returned by ARM discovery"));
+            }
         }
 
         models = models.OrderBy(m => m.Id, StringComparer.OrdinalIgnoreCase).ToList();

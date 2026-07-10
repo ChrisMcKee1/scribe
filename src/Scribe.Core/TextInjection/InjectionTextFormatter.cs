@@ -47,6 +47,15 @@ public static class InjectionTextFormatter
     public static bool IsTerminalProcess(string? processName) =>
         !string.IsNullOrWhiteSpace(processName) && TerminalProcesses.Contains(processName.Trim());
 
+    /// <summary>True when the effective mode will remove line breaks for this target.</summary>
+    public static bool ShouldFlatten(NewlineInjectionMode mode, string? targetProcessName) =>
+        mode switch
+        {
+            NewlineInjectionMode.AlwaysFlatten => true,
+            NewlineInjectionMode.SmartFlatten => IsTerminalProcess(targetProcessName),
+            _ => false,
+        };
+
     /// <summary>
     /// Applies the configured newline handling for the given target process. Returns the input
     /// unchanged when no flattening is called for (including text with no line breaks at all).
@@ -58,12 +67,7 @@ public static class InjectionTextFormatter
             return text;
         }
 
-        var flatten = mode switch
-        {
-            NewlineInjectionMode.AlwaysFlatten => true,
-            NewlineInjectionMode.SmartFlatten => IsTerminalProcess(targetProcessName),
-            _ => false,
-        };
+        var flatten = ShouldFlatten(mode, targetProcessName);
 
         if (!flatten || (text.IndexOf('\n') < 0 && text.IndexOf('\r') < 0))
         {

@@ -109,5 +109,26 @@ internal static class EvalScenarios
             MinMarkersToPass: 3,
             // ...and their spoken spellings must not survive.
             ForbiddenPatterns: [@"four thirty", @"twenty three", @"\bjuly third\b"]),
+
+        new EvalScenario(
+            Name: "Paragraph and model spacing",
+            WritingStyle: CleanupPrompt.DefaultWritingStyle,
+            Transcript:
+                "first the release update the desktop build passed validation and rollout starts monday " +
+                "separately for customer feedback three teams asked about GPT five point six and we should " +
+                "schedule interviews next week",
+            MarkerPatterns: [@"GPT-5\.6", @"\r?\n\r?\n"],
+            MinMarkersToPass: 2,
+            ForbiddenPatterns: [@"GPT\s*-\s*5\.\s+6", @"[.!?][A-Z]"]),
+
+        new EvalScenario(
+            Name: "Phonetic narrative repair",
+            WritingStyle: CleanupPrompt.DefaultWritingStyle,
+            Transcript:
+                "umm ay liss wuz gettin tired beside thuh river then she saw a whyt rabit pull a wotch " +
+                "from its pockit blah she followed becuz she wuz cure ee us",
+            MarkerPatterns: [@"\bAlice\b", @"\bwhite rabbit\b", @"\bwatch\b", @"\bpocket\b", @"\bcurious\b"],
+            MinMarkersToPass: 4,
+            ForbiddenPatterns: [@"\bumm?\b", @"\bblah\b", @"\bwuz\b", @"\bthuh\b", @"\bcure ee us\b"]),
     ];
 }
