@@ -164,11 +164,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
+          $certificateGuide = Join-Path $env:RUNNER_TEMP 'Scribe-Certificate-README.md'
+          Copy-Item signing/README.md $certificateGuide
           gh release upload "v$env:VERSION" `
               signing/Scribe-Root-CA.cer `
               signing/Scribe-CodeSigning.cer `
               signing/Trust-ScribePublisher.ps1 `
-              signing/README.md#Scribe-Certificate-README.md `
+              $certificateGuide `
               --clobber
 
       - name: Upload signed artifacts for manual run
