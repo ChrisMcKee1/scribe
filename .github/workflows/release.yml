@@ -71,6 +71,10 @@ jobs:
             [Array]::Clear($pfxBytes, 0, $pfxBytes.Length)
           }
           if (-not $certificate.HasPrivateKey) { throw 'Imported signing certificate has no private key.' }
+          $now = Get-Date
+          if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
+            throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
+          }
           $personalStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
             'My',
             [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
@@ -82,10 +86,6 @@ jobs:
             $personalStore.Close()
           }
           Write-Host "Loaded signing certificate $($certificate.Thumbprint)."
-          $now = Get-Date
-          if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
-            throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
-          }
 
           $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
           $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
@@ -95,7 +95,7 @@ jobs:
           Write-Host 'Validated and imported signing PFX.'
           "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Install public signing chain
+      - name: Validate public signing chain
         shell: pwsh
         run: |
           $rootPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'
@@ -120,31 +120,10 @@ jobs:
             throw 'Scribe root certificate is not constrained as a certificate authority.'
           }
 
-          function Add-CertificateToStore(
-            [string] $name,
-            [System.Security.Cryptography.X509Certificates.X509Certificate2] $certificate) {
-            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-              $name,
-              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            try {
-              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              if (-not @($store.Certificates | Where-Object { $_.Thumbprint -eq $certificate.Thumbprint })) {
-                $store.Add($certificate)
-              }
-            }
-            finally {
-              $store.Close()
-            }
-          }
-
-          # X509Store.Add is fully non-interactive. certutil can open an invisible root-trust
-          # confirmation window on hosted runners and leave the release job blocked until timeout.
-          Write-Host 'Installing public Scribe trust chain with X509Store.'
-          Add-CertificateToStore 'Root' $root
-          Add-CertificateToStore 'TrustedPublisher' $leaf
-
           $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
           $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+          $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
+          $chain.ChainPolicy.CustomTrustStore.Add($root)
           if (-not $chain.Build($leaf)) {
             $status = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join '; '
             throw "Windows did not validate the Scribe signing chain: $status"
@@ -152,7 +131,7 @@ jobs:
           if ($chain.ChainElements[$chain.ChainElements.Count - 1].Certificate.Thumbprint -ne $root.Thumbprint) {
             throw 'Validated signing chain did not terminate at the checked-in Scribe root.'
           }
-          Write-Host 'Validated public Scribe signing chain.'
+          Write-Host 'Validated public Scribe signing chain without modifying runner trust stores.'
 
       - name: Download offline speech models
         shell: pwsh
@@ -215,25 +194,17 @@ jobs:
         shell: pwsh
         run: |
           Remove-Item (Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx') -Force -ErrorAction SilentlyContinue
-          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-            (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'))
-          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-            (Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'))
-          foreach ($target in @(
-            @{ Name = 'My'; Thumbprint = $leaf.Thumbprint },
-            @{ Name = 'TrustedPublisher'; Thumbprint = $leaf.Thumbprint },
-            @{ Name = 'Root'; Thumbprint = $root.Thumbprint }
-          )) {
-            if (-not $target.Thumbprint) { continue }
-            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-              $target.Name,
-              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-            try {
-              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              @($store.Certificates | Where-Object { $_.Thumbprint -eq $target.Thumbprint }) |
-                ForEach-Object { $store.Remove($_) }
-            }
-            finally {
-              $store.Close()
-            }
+          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
+          if (-not (Test-Path $leafPath)) { return }
+          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
+          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+            'My',
+            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          try {
+            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+            @($store.Certificates | Where-Object { $_.Thumbprint -eq $leaf.Thumbprint }) |
+              ForEach-Object { $store.Remove($_) }
+          }
+          finally {
+            $store.Close()
           }

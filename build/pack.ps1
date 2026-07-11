@@ -73,6 +73,7 @@ $packId = 'Scribe'
 $mainExe = 'Scribe.exe'
 $runtime = 'win-x64'
 $publicCertificatePath = Join-Path $repoRoot 'signing/Scribe-CodeSigning.cer'
+$privateRootCertificatePath = Join-Path $repoRoot 'signing/Scribe-Root-CA.cer'
 $codeSigningOid = '1.3.6.1.5.5.7.3.3'
 
 function Find-SignTool {
@@ -116,19 +117,78 @@ function Resolve-LocalSigningCertificate {
     return $certificate
 }
 
+function Assert-CustomSigningChain {
+    param(
+        [Parameter(Mandatory)]
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$Signer,
+        [Parameter(Mandatory)]
+        [string]$RootCertificatePath
+    )
+
+    $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($RootCertificatePath)
+    $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+    $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
+    $chain.ChainPolicy.CustomTrustStore.Add($root)
+    if (-not $chain.Build($Signer)) {
+        $status = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join '; '
+        throw "Custom Scribe signing chain validation failed: $status"
+    }
+    $validatedRoot = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate
+    if ($validatedRoot.Thumbprint -ne $root.Thumbprint) {
+        throw "Signing chain terminated at unexpected root $($validatedRoot.Thumbprint)."
+    }
+}
+
 function Assert-AuthenticodeFile {
-    param([Parameter(Mandatory)] [string]$Path, [string]$Thumbprint)
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [string]$Thumbprint,
+        [string]$RootCertificatePath
+    )
     if (-not (Test-Path $Path -PathType Leaf)) { throw "Signed artifact missing: $Path" }
 
     $signature = Get-AuthenticodeSignature $Path
-    if ($signature.Status -ne 'Valid') { throw "Authenticode verification failed for ${Path}: $($signature.StatusMessage)" }
+    if (-not $signature.SignerCertificate) {
+        throw "Authenticode signature missing from ${Path}: $($signature.StatusMessage)"
+    }
     if ($Thumbprint -and $signature.SignerCertificate.Thumbprint -ne $Thumbprint) {
         throw "Unexpected signer for ${Path}: $($signature.SignerCertificate.Thumbprint)"
     }
+    if (-not $signature.TimeStamperCertificate) {
+        throw "Authenticode timestamp missing from $Path."
+    }
 
-    $signTool = Find-SignTool
-    & $signTool verify /pa /all /tw $Path | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $Path." }
+    if ($signature.Status -eq 'Valid') {
+        $signTool = Find-SignTool
+        & $signTool verify /pa /all /tw $Path | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $Path." }
+        return
+    }
+
+    $isExpectedPrivateRootFailure = $false
+    if ($RootCertificatePath -and $signature.Status -eq 'UnknownError') {
+        $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($RootCertificatePath)
+        $systemChain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+        $systemChain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+        $systemChain.ChainPolicy.ExtraStore.Add($root)
+        $systemChainValid = $systemChain.Build($signature.SignerCertificate)
+        $systemStatuses = @($systemChain.ChainStatus | ForEach-Object { $_.Status })
+        $isExpectedPrivateRootFailure =
+            -not $systemChainValid -and
+            $systemStatuses.Count -gt 0 -and
+            @($systemStatuses | Where-Object {
+                $_ -ne [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::UntrustedRoot
+            }).Count -eq 0
+    }
+    if (-not $isExpectedPrivateRootFailure) {
+        throw "Authenticode verification failed for ${Path}: $($signature.StatusMessage)"
+    }
+
+    Assert-CustomSigningChain `
+        -Signer $signature.SignerCertificate `
+        -RootCertificatePath $RootCertificatePath
+    Write-Host "Verified Authenticode integrity, timestamp, signer, and pinned Scribe root for $Path."
 }
 
 function Assert-AuthenticodeArchiveEntry {
@@ -136,7 +196,8 @@ function Assert-AuthenticodeArchiveEntry {
         [Parameter(Mandatory)] [string]$ArchivePath,
         [Parameter(Mandatory)] [string]$EntryPath,
         [Parameter(Mandatory)] [string]$DestinationPath,
-        [string]$Thumbprint
+        [string]$Thumbprint,
+        [string]$RootCertificatePath
     )
 
     if (-not (Test-Path $ArchivePath -PathType Leaf)) { throw "Release archive missing: $ArchivePath" }
@@ -153,7 +214,10 @@ function Assert-AuthenticodeArchiveEntry {
         $archive.Dispose()
     }
 
-    Assert-AuthenticodeFile -Path $DestinationPath -Thumbprint $Thumbprint
+    Assert-AuthenticodeFile `
+        -Path $DestinationPath `
+        -Thumbprint $Thumbprint `
+        -RootCertificatePath $RootCertificatePath
 }
 
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
@@ -266,6 +330,7 @@ if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed.' }
 
 if ($localSigningCertificate -or $AzureTrustedSignFile) {
     $expectedThumbprint = if ($localSigningCertificate) { $localSigningCertificate.Thumbprint } else { $null }
+    $verificationRootPath = if ($localSigningCertificate) { $privateRootCertificatePath } else { $null }
     $verificationDir = Join-Path ([System.IO.Path]::GetTempPath()) ("scribe-signature-verification-{0}" -f [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $verificationDir | Out-Null
     try {
@@ -275,23 +340,30 @@ if ($localSigningCertificate -or $AzureTrustedSignFile) {
             -ArchivePath $portablePath `
             -EntryPath 'current/Scribe.exe' `
             -DestinationPath (Join-Path $verificationDir 'portable-Scribe.exe') `
-            -Thumbprint $expectedThumbprint
+            -Thumbprint $expectedThumbprint `
+            -RootCertificatePath $verificationRootPath
         Assert-AuthenticodeArchiveEntry `
             -ArchivePath $portablePath `
             -EntryPath 'current/Overlay/Scribe.Overlay.exe' `
             -DestinationPath (Join-Path $verificationDir 'portable-Scribe.Overlay.exe') `
-            -Thumbprint $expectedThumbprint
+            -Thumbprint $expectedThumbprint `
+            -RootCertificatePath $verificationRootPath
         Assert-AuthenticodeArchiveEntry `
             -ArchivePath $fullPackagePath `
             -EntryPath 'lib/app/Scribe.exe' `
             -DestinationPath (Join-Path $verificationDir 'package-Scribe.exe') `
-            -Thumbprint $expectedThumbprint
+            -Thumbprint $expectedThumbprint `
+            -RootCertificatePath $verificationRootPath
         Assert-AuthenticodeArchiveEntry `
             -ArchivePath $fullPackagePath `
             -EntryPath 'lib/app/Overlay/Scribe.Overlay.exe' `
             -DestinationPath (Join-Path $verificationDir 'package-Scribe.Overlay.exe') `
-            -Thumbprint $expectedThumbprint
-        Assert-AuthenticodeFile -Path (Join-Path $releaseDir 'Scribe-win-x64-Setup.exe') -Thumbprint $expectedThumbprint
+            -Thumbprint $expectedThumbprint `
+            -RootCertificatePath $verificationRootPath
+        Assert-AuthenticodeFile `
+            -Path (Join-Path $releaseDir 'Scribe-win-x64-Setup.exe') `
+            -Thumbprint $expectedThumbprint `
+            -RootCertificatePath $verificationRootPath
     }
     finally {
         Remove-Item $verificationDir -Recurse -Force -ErrorAction SilentlyContinue

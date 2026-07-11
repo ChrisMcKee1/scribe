@@ -35,6 +35,28 @@ The script installs the public root into `CurrentUser\Root`, the signing leaf in
 
 Managed environments can deploy the same public root and leaf through Intune or Group Policy instead.
 
+## Microsoft Defender managed environments
+
+This private publisher certificate proves file integrity and publisher identity, but it does not
+create Microsoft cloud reputation. The Defender attack surface reduction rule **Block executable
+files from running unless they meet a prevalence, age, or trusted list criterion** can therefore
+audit or block a newly signed Scribe release until the organization allows the publisher.
+
+Microsoft Defender for Endpoint supports certificate allow indicators for this scenario, and this
+ASR rule honors certificate indicators. A Defender administrator should:
+
+1. Deploy `Scribe-Root-CA.cer` to **Local Machine > Trusted Root Certification Authorities** on
+  the scoped devices. Current-user trust alone does not meet the certificate-indicator requirement.
+2. In the Microsoft Defender portal, go to **Settings > Endpoints > Indicators > Certificates**.
+3. Add `Scribe-CodeSigning.cer` as an indicator with action **Allow** and scope it to the appropriate
+  machine group.
+4. Allow up to three hours for a new certificate indicator to propagate.
+
+Use the leaf certificate for the indicator, not the root. The stable leaf thumbprint is
+`E08AF872C3C1D7909C0AC99B69EAD0643312E26D`, so the allow applies across Scribe versions signed
+with this publisher identity. A per-file hash allow is less durable because every release changes
+the executable hashes.
+
 ## Verify a release file
 
 ```powershell

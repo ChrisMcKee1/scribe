@@ -193,8 +193,8 @@ self-contained into the payload under `Overlay\`, packs with Velopack, and (with
 `-Publish`) uploads to GitHub Releases. Production packaging is **signed by default**.
 Unsigned output requires the explicit `-AllowUnsigned` escape hatch.
 
-- The script default `-Version` is `0.1.0` — **always pass the real version**
-  (e.g. `-Version 0.1.5`) and keep it in sync with `Directory.Build.props`.
+- The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
+  value that does not match `<VersionPrefix>`.
 - `vpk` **refuses to pack an equal/greater version that already exists** in `releases\`.
   To repack the same version, delete that version's `*-full.nupkg`, `*-delta.nupkg`,
   `Scribe-win-x64-Setup.exe`, `Scribe-win-x64-Portable.zip`, and `releases.win-x64.json`
@@ -241,14 +241,14 @@ GitHub release signing is owned by `.github\workflows\release.yml`:
   `origin/main` and refuses to sign unless `HEAD` exactly equals current `origin/main`.
 - A pushed `v*` tag builds, signs, tests, and publishes. A manual dispatch builds a retained
   signed artifact without creating a GitHub Release.
-- The PFX/password are exposed only to the import step. The PFX and imported leaf/root trust are
-  removed in an `always()` cleanup step. Certificate cleanup uses `X509Store.Remove`, not
-  `Remove-Item Cert:\...`, because the certificate provider can open an invisible confirmation UI
-  and hang an unattended Windows runner.
-- Private-key import and public-chain trust are separate workflow steps. The private PFX is loaded
-  with .NET `X509Certificate2` into `CurrentUser\My`; public root/publisher CERs are installed with
-  non-interactive `certutil -user -f -addstore`, then validated with `X509Chain` and revocation set
-  to `NoCheck` because this private CA publishes no CRL endpoint.
+- The PFX/password are exposed only to the import step. The temporary PFX and imported certificate
+  store entry are removed in an `always()` cleanup step; the hosted runner VM teardown disposes the
+  persisted private-key container. This workflow is not approved for a persistent self-hosted runner.
+- The private PFX is loaded with .NET `X509Certificate2` into `CurrentUser\My`. The public chain is
+  validated with `X509ChainTrustMode.CustomRootTrust` against the checked-in root, without adding
+  the root or publisher to runner trust stores. Pack verification accepts the resulting untrusted-root
+  status only after checking Authenticode integrity, timestamp, exact signer thumbprint, and that
+  same pinned custom chain. Revocation is `NoCheck` because this private CA publishes no CRL endpoint.
 - The workflow uploads the root CER, leaf CER, trust script, and certificate README alongside
   the Velopack artifacts. Those are public verification material, not secrets.
 
