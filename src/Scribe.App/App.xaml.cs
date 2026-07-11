@@ -81,6 +81,7 @@ public partial class App : Application
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
         _tray.SettingsRequested += OpenSettings;
         _tray.LearnFromHistoryRequested += LearnFromHistory;
+        _tray.CopyLastDictationRequested += CopyLastDictation;
         _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
@@ -97,6 +98,7 @@ public partial class App : Application
             services.GetRequiredService<IDictionaryRepository>(),
             services.GetRequiredService<IDictionaryLibraryService>(),
             services.GetRequiredService<ICleanupFailureLog>(),
+            services.GetRequiredService<LastTranscriptStore>(),
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>());
 
@@ -345,6 +347,40 @@ public partial class App : Application
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
+    });
+
+    private void CopyLastDictation() => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var services = _host.Services;
+            var store = services.GetRequiredService<LastTranscriptStore>();
+            var text = store.Get();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                text = store.Get(services.GetRequiredService<IHistoryRepository>().GetRecent(10));
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _tray.ShowNotification("No dictation is available to copy.");
+                return;
+            }
+
+            Clipboard.SetText(text);
+            _tray.ShowNotification("Copied the last dictation.");
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Copying the last dictation failed.");
+            _tray.ShowNotification("Couldn't copy the last dictation.", isError: true);
+        }
     });
 
     private async void LearnFromHistory()

@@ -8,6 +8,7 @@ using Microsoft.Win32;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -49,6 +50,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _loadingProfile;
     private readonly ObservableCollection<HistoryRow> _historyRows = new();
     private readonly ObservableCollection<FailureRow> _failures = new();
+    private UsageAnalyzer.Snapshot? _usageSnapshot;
+    private bool _usageInsightRunning;
+    private int _usageLoadVersion;
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
@@ -95,6 +99,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
 
         InitializeComponent();
+
+        UsagePeriodBox.ItemsSource = UsagePeriodChoice.All;
+        UsagePeriodBox.DisplayMemberPath = nameof(UsagePeriodChoice.Label);
+        UsagePeriodBox.SelectedIndex = 1;
 
         // Type-to-filter behaviour for the model pickers (browse on click, search on type).
         AttachComboFilter(AiModelBox, UpdateAiModelHint);
@@ -218,7 +226,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     [
         SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
         SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionHistory,
-        SectionDiagnostics,
+        SectionUsage, SectionDiagnostics,
     ];
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -239,6 +247,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (panels[selected] == SectionHistory)
         {
             LoadHistory();
+        }
+        else if (panels[selected] == SectionUsage)
+        {
+            LoadUsage();
         }
     }
 
@@ -1468,7 +1480,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             : "Sign in to list your models, or enter one under Advanced.";
     }
 
-    private void OnCleanupStatusChanged() => Dispatcher.BeginInvoke(new Action(RefreshAiStatus));
+    private void OnCleanupStatusChanged() => Dispatcher.BeginInvoke(new Action(() =>
+    {
+        RefreshAiStatus();
+        RefreshUsageInsightAvailability();
+    }));
 
     private void RefreshAiStatus()
     {
@@ -2163,6 +2179,153 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateHistorySelection();
     }
 
+    // --- Usage ----------------------------------------------------------------------------
+
+    private void UsagePeriodBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded)
+        {
+            LoadUsage();
+        }
+    }
+
+    private void UsageRefreshButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
+
+    private async void LoadUsage()
+    {
+        const int historyLimit = 5000;
+        var loadVersion = Interlocked.Increment(ref _usageLoadVersion);
+        var period = UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1];
+        UsageCoverageText.Text = "Calculating from local history...";
+
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                var now = DateTimeOffset.UtcNow;
+                var recent = _history.GetRecent(historyLimit + 1);
+                var entries = recent.Take(historyLimit).ToList();
+                var since = period.Days is { } days
+                    ? now.AddDays(-(days - 1))
+                    : entries.Count == 0
+                        ? now
+                        : entries.Min(entry => entry.TimestampUtc);
+                var knownTerms = _dictionary.GetEnabled()
+                    .Concat(_libraries.GetEnabledLibraryEntries())
+                    .ToList();
+                var snapshot = UsageAnalyzer.Compute(entries, knownTerms, since, now);
+                var periodCapped = recent.Count > historyLimit &&
+                    (period.Days is null || recent[historyLimit].TimestampUtc >= since);
+                return (Snapshot: snapshot, PeriodCapped: periodCapped);
+            });
+
+            if (loadVersion != Volatile.Read(ref _usageLoadVersion))
+            {
+                return;
+            }
+
+            _usageSnapshot = result.Snapshot;
+            var snapshot = _usageSnapshot;
+
+            UsageCoverageText.Text = result.PeriodCapped
+                ? $"{period.Label}, based on the latest {historyLimit:N0} retained dictations."
+                : $"{period.Label}, {_usageSnapshot.Dictations:N0} retained dictation" +
+                  (_usageSnapshot.Dictations == 1 ? "." : "s.");
+            UsageDictationsText.Text = snapshot.Dictations.ToString("N0");
+            UsageWordsText.Text = snapshot.Words.ToString("N0");
+            UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
+            UsageSpeechText.Text = FormatDuration(snapshot.Speech);
+            UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
+            UsageAppsGrid.ItemsSource = snapshot.TopApps;
+
+            var weekly = snapshot.Trend.Count > 31;
+            UsageTrendGrid.ItemsSource = snapshot.Trend.Select(point => new UsageTrendRow(
+                weekly ? $"Week of {point.Start:MMM d}" : point.Start.ToString("MMM d"),
+                point.Dictations,
+                point.Words)).ToList();
+
+            var covered = snapshot.Terms.Where(term => term.Covered).ToList();
+            var novel = snapshot.Terms.Where(term => !term.Covered).ToList();
+            UsageKnownTerms.ItemsSource = covered.Count == 0
+                ? ["No recognized technologies in this period."]
+                : covered.Select(FormatUsageTerm).ToList();
+            UsageNovelTerms.ItemsSource = novel.Count == 0
+                ? ["No recurring uncovered jargon in this period."]
+                : novel.Select(FormatUsageTerm).ToList();
+
+            UsageInsightText.Text = snapshot.Dictations == 0
+                ? "Record a dictation to make usage insight available."
+                : "Generate a short summary from numeric totals and recurring term labels only.";
+            RefreshUsageInsightAvailability();
+        }
+        catch (Exception ex)
+        {
+            if (loadVersion != Volatile.Read(ref _usageLoadVersion))
+            {
+                return;
+            }
+
+            _usageSnapshot = null;
+            UsageCoverageText.Text = "Usage is temporarily unavailable.";
+            UsageInsightText.Text = ex.Message;
+            UsageInsightButton.IsEnabled = false;
+        }
+
+        static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
+            ? $"{duration.TotalHours:0.#} hr"
+            : $"{duration.TotalMinutes:0.#} min";
+
+        static string FormatUsageTerm(UsageAnalyzer.TermUsage term) =>
+            $"{term.Text} ({term.Dictations:N0} dictation{(term.Dictations == 1 ? string.Empty : "s")})";
+    }
+
+    private void RefreshUsageInsightAvailability()
+    {
+        if (UsageInsightButton is null)
+        {
+            return;
+        }
+
+        UsageInsightButton.IsEnabled = !_usageInsightRunning &&
+            _usageSnapshot is { Dictations: > 0 } &&
+            _cleanup.Status == CleanupStatus.Ready;
+    }
+
+    private async void UsageInsightButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_usageInsightRunning || _usageSnapshot is not { Dictations: > 0 } snapshot)
+        {
+            return;
+        }
+
+        if (_cleanup.Status != CleanupStatus.Ready)
+        {
+            UsageInsightText.Text = "Configure a ready AI cleanup model to generate an insight.";
+            return;
+        }
+
+        _usageInsightRunning = true;
+        RefreshUsageInsightAvailability();
+        UsageInsightText.Text = "Generating insight...";
+        try
+        {
+            var response = await _cleanup.CompleteAsync(
+                UsageInsight.SystemPrompt,
+                UsageInsight.BuildSummary(snapshot));
+            UsageInsightText.Text = UsageInsight.Parse(response)
+                ?? "The configured model did not return an insight.";
+        }
+        catch (Exception ex)
+        {
+            UsageInsightText.Text = $"Insight failed: {ex.Message}";
+        }
+        finally
+        {
+            _usageInsightRunning = false;
+            RefreshUsageInsightAvailability();
+        }
+    }
+
     private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
 
     private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -2209,6 +2372,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             await Task.Run(() => _history.Delete(row.Id));
             LoadHistory();
+            LoadUsage();
             ShowInfo("Deleted the selected history entry.");
         }
         catch (Exception ex)
@@ -2234,6 +2398,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             await Task.Run(_history.Clear);
             LoadHistory();
+            LoadUsage();
             ShowInfo("Cleared dictation history.");
         }
         catch (Exception ex)
@@ -2428,6 +2593,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private sealed record ProviderChoice(CleanupProvider Provider, string Label);
     private sealed record PromptStyleChoice(CleanupPromptStyle Style, string Label);
+    private sealed record UsagePeriodChoice(int? Days, string Label)
+    {
+        public static IReadOnlyList<UsagePeriodChoice> All { get; } =
+        [
+            new(7, "Last 7 days"),
+            new(30, "Last 30 days"),
+            new(90, "Last 90 days"),
+            new(null, "All retained history"),
+        ];
+    }
+
+    private sealed record UsageTrendRow(string Period, int Dictations, int Words);
 
     /// <summary>Editable dictionary row backing the grid. Parameterless ctor enables grid add-row.</summary>
     public sealed class DictionaryRow

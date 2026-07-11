@@ -26,6 +26,9 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "Learn from history" from the tray menu.</summary>
     public event Action? LearnFromHistoryRequested;
 
+    /// <summary>Raised when the user explicitly asks to copy the last finalized dictation.</summary>
+    public event Action? CopyLastDictationRequested;
+
     /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
     public event Action? WelcomeRequested;
 
@@ -58,6 +61,10 @@ internal sealed class TrayIconHost : IDisposable
         var learnFromHistory = new MenuItem { Header = "Learn from history" };
         learnFromHistory.Click += (_, _) => LearnFromHistoryRequested?.Invoke();
         menu.Items.Add(learnFromHistory);
+
+        var copyLastDictation = new MenuItem { Header = "Copy last dictation" };
+        copyLastDictation.Click += (_, _) => CopyLastDictationRequested?.Invoke();
+        menu.Items.Add(copyLastDictation);
 
         // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
         var welcome = new MenuItem { Header = "Show welcome" };

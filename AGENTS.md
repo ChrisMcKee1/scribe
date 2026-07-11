@@ -43,7 +43,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.1**.
+  in `Directory.Build.props`. Current version: **0.2.2**.
 
 ## Commands (run these — include the flags)
 
@@ -71,10 +71,10 @@ dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 
 # Build the signed Velopack installer locally (version must match Directory.Build.props)
-./build/pack.ps1 -Version 0.2.1
+./build/pack.ps1 -Version 0.2.2
 
 # Intentional unsigned test package only
-./build/pack.ps1 -Version 0.2.1 -AllowUnsigned
+./build/pack.ps1 -Version 0.2.2 -AllowUnsigned
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**

@@ -44,13 +44,18 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   message instead of firing Enter mid-thought. Built by someone who dictates into CLIs all day.
 - **📖 Your vocabulary, your snippets.** A dictionary locks in your jargon (`azure` → `Azure`,
   `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms
-  from your own dictation history**. Say a trigger phrase and a whole saved template types itself.
+  from your own dictation history**. Opt-in libraries include a curated Modern Developer Stack for
+  names such as Supabase, Cloudflare, Vercel, Next.js and Tailwind CSS. Say a trigger phrase and a
+  whole saved template types itself.
 - **🧹 AI polish on your terms.** Grammar and structure cleaned by an on-device model (fully
   offline), your Azure deployment, or **any OpenAI-compatible server you already run** (Ollama,
   LM Studio, OpenRouter…). Your models, your keys, your costs. Flip it on or off right from the
   tray.
 - **📊 Performance you can verify.** A built-in diagnostics panel computes latency percentiles
   from your own dictations, on your own disk. We don't ask you to take the speed claims on faith.
+- **📈 Usage without surveillance.** Track local dictation totals, speech time, active days, top
+  apps, trends and recurring terminology. AI insight is a separate explicit action and sends only
+  aggregate totals and term labels to the provider you configured.
 - **🪶 Stays out of the way.** A tray app with a small glass recording pill you can place on any
   corner or edge of your screen, and a Windows 11-style settings app when you want to tune it.
 
@@ -59,7 +64,7 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 ### A settings app that respects you
 Everything lives in a clean, Windows 11-style settings window: pick your microphone and
 push-to-talk key (hold or toggle), then browse focused sections for dictation behaviour, the
-overlay, AI cleanup, your dictionary, snippets, per-app profiles and diagnostics.
+overlay, AI cleanup, your dictionary, snippets, per-app profiles, history, usage and diagnostics.
 
 ![Scribe general settings: microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
 
@@ -114,6 +119,13 @@ factor around **0.03×**, which is ~30× faster than the audio itself.
 
 ![Scribe diagnostics: decode latency P50/P95 and real-time factor from local history](docs/screenshots/diagnostics.png)
 
+### See how dictation fits your work
+The Usage section summarizes retained history across 7, 30 or 90 days, or all retained history.
+Every metric uses the same selected period. It shows totals, active days, speech time, top apps,
+trends and recurring technical terms. Opening or refreshing Usage stays fully local. The optional
+AI insight button sends only aggregate totals and recurring term labels, never transcript text,
+audio, application names or timestamps.
+
 ## 🚀 Getting started
 
 **You'll need:** Windows 11 (x64). That's it. The speech model is bundled, so there's nothing else
@@ -132,7 +144,9 @@ to install.
 > SmartScreen reputation is separate and may still show a warning for a new download.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
-Right-click the tray icon for settings, one-click vocabulary learning from history, and to pause or quit. Review and manage dictation history from Settings.
+Right-click the tray icon for settings, one-click vocabulary learning, copying the last finalized
+dictation, and pausing or quitting. Copy last dictation also recovers text when insertion failed.
+Review history and local Usage from Settings.
 
 ## 🎛️ How it works
 
@@ -153,7 +167,9 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
   offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is
   sent to the server **you** configure, under **your** credentials.
-- **Even the stats are local.** The performance panel is computed from history already on your disk.
+- **Even the stats are local.** Performance and Usage are computed from history already on your disk.
+  Usage AI insight runs only when you click it and sends bounded aggregate data without transcripts,
+  audio, application names or timestamps.
 
 ## 🛠️ Building from source
 

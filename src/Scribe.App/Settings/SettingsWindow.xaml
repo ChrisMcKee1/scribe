@@ -173,6 +173,12 @@
                 <ListBoxItem>
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
+                        <TextBlock Text="Usage" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
                         <TextBlock Text="Diagnostics" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
@@ -1113,6 +1119,143 @@
                                            Click="HistoryDeleteButton_Click" IsEnabled="False"/>
                             </StackPanel>
                         </Grid>
+                    </Grid>
+
+                    <!-- ============================ Usage ============================ -->
+                    <Grid x:Name="SectionUsage" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0" Margin="2,8,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+                                <TextBlock Text="Usage" Style="{StaticResource PageTitle}"/>
+                                <TextBlock Style="{StaticResource PageSubtitle}"
+                                           Text="Your local dictation activity and recurring terminology. Nothing is uploaded when this page opens."/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                                <ComboBox x:Name="UsagePeriodBox" Width="150" Margin="0,0,8,0"
+                                          SelectionChanged="UsagePeriodBox_SelectionChanged"/>
+                                <ui:Button Content="Refresh" MinWidth="84" Click="UsageRefreshButton_Click"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="900" HorizontalAlignment="Stretch">
+                                <TextBlock x:Name="UsageCoverageText" Style="{StaticResource SettingHint}"
+                                           Margin="0,0,0,10"/>
+
+                                <ui:Card Padding="18,14" Margin="0,0,0,12">
+                                    <UniformGrid Columns="5">
+                                        <StackPanel>
+                                            <TextBlock x:Name="UsageDictationsText" FontSize="22" FontWeight="SemiBold"/>
+                                            <TextBlock Text="dictations" Style="{StaticResource SettingHint}"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock x:Name="UsageWordsText" FontSize="22" FontWeight="SemiBold"/>
+                                            <TextBlock Text="words" Style="{StaticResource SettingHint}"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock x:Name="UsageActiveDaysText" FontSize="22" FontWeight="SemiBold"/>
+                                            <TextBlock Text="active days" Style="{StaticResource SettingHint}"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock x:Name="UsageSpeechText" FontSize="22" FontWeight="SemiBold"/>
+                                            <TextBlock Text="speech" Style="{StaticResource SettingHint}"/>
+                                        </StackPanel>
+                                        <StackPanel>
+                                            <TextBlock x:Name="UsageAverageText" FontSize="22" FontWeight="SemiBold"/>
+                                            <TextBlock Text="words per dictation" Style="{StaticResource SettingHint}"/>
+                                        </StackPanel>
+                                    </UniformGrid>
+                                </ui:Card>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource FillCard}">
+                                        <StackPanel>
+                                            <TextBlock Text="Top apps" Style="{StaticResource SettingTitle}"/>
+                                            <DataGrid x:Name="UsageAppsGrid" Margin="0,10,0,0" MaxHeight="230"
+                                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                                      CanUserAddRows="False" CanUserDeleteRows="False"
+                                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                      Background="Transparent" BorderThickness="0">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="App" Binding="{Binding Name}" Width="*"/>
+                                                    <DataGridTextColumn Header="Dictations" Binding="{Binding Dictations}" Width="Auto"/>
+                                                    <DataGridTextColumn Header="Words" Binding="{Binding Words}" Width="Auto"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </StackPanel>
+                                    </ui:Card>
+                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
+                                        <StackPanel>
+                                            <TextBlock Text="Trend" Style="{StaticResource SettingTitle}"/>
+                                            <DataGrid x:Name="UsageTrendGrid" Margin="0,10,0,0" MaxHeight="230"
+                                                      AutoGenerateColumns="False" IsReadOnly="True"
+                                                      CanUserAddRows="False" CanUserDeleteRows="False"
+                                                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                                                      Background="Transparent" BorderThickness="0">
+                                                <DataGrid.Columns>
+                                                    <DataGridTextColumn Header="Period" Binding="{Binding Period}" Width="*"/>
+                                                    <DataGridTextColumn Header="Dictations" Binding="{Binding Dictations}" Width="Auto"/>
+                                                    <DataGridTextColumn Header="Words" Binding="{Binding Words}" Width="Auto"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                        </StackPanel>
+                                    </ui:Card>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ui:Card Grid.Column="0" Padding="18,14" Style="{StaticResource FillCard}">
+                                        <StackPanel>
+                                            <TextBlock Text="Recognized technologies" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Text="Terms already covered by your enabled dictionary and libraries."
+                                                       Style="{StaticResource SettingHint}"/>
+                                            <ItemsControl x:Name="UsageKnownTerms" Margin="0,10,0,0"/>
+                                        </StackPanel>
+                                    </ui:Card>
+                                    <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
+                                        <StackPanel>
+                                            <TextBlock Text="Recurring terminology" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Text="Conservative jargon candidates not yet covered by your dictionary."
+                                                       Style="{StaticResource SettingHint}"/>
+                                            <ItemsControl x:Name="UsageNovelTerms" Margin="0,10,0,0"/>
+                                        </StackPanel>
+                                    </ui:Card>
+                                </Grid>
+
+                                <ui:Card Padding="18,14">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="AI insight" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock x:Name="UsageInsightText" Style="{StaticResource SettingHint}"
+                                                       Text="Ask your configured cleanup model for a short summary of aggregate totals and recurring terms."/>
+                                        </StackPanel>
+                                        <ui:Button x:Name="UsageInsightButton" Grid.Column="1" Content="Generate insight"
+                                                   MinWidth="126" Margin="16,0,0,0" VerticalAlignment="Center"
+                                                   Click="UsageInsightButton_Click"/>
+                                    </Grid>
+                                </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Grid>
 
                     <!-- ============================ Diagnostics ============================ -->

@@ -53,6 +53,7 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ISnippetRepository, SnippetRepository>();
         services.AddSingleton<IHistoryRepository, HistoryRepository>();
         services.AddSingleton<ICleanupFailureLog, CleanupFailureLog>();
+        services.AddSingleton<LastTranscriptStore>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 

@@ -109,6 +109,7 @@ public sealed class DictionaryLibraryTests
         Assert.Contains(all, l => l.Id == "microsoft-azure");
         Assert.Contains(all, l => l.Id == "microsoft-365");
         Assert.Contains(all, l => l.Id == "software-development");
+        Assert.Contains(all, l => l.Id == "modern-developer-stack");
         Assert.Contains(all, l => l.Id == "data-and-ai");
 
         var azure = all.Single(l => l.Id == "microsoft-azure");
@@ -149,6 +150,23 @@ public sealed class DictionaryLibraryTests
                 Assert.False(isSelfMap && entry.Pattern.Contains(' '),
                     $"Library '{library.Id}' maps the phrase '{entry.Pattern}' to itself.");
             }
+        }
+    }
+
+    [Fact]
+    public void Modern_developer_stack_avoids_ambiguous_bare_english_patterns()
+    {
+        var library = BuiltInDictionaryLibraries.All.Single(l => l.Id == "modern-developer-stack");
+        var forbidden = new[]
+        {
+            "go", "react", "rust", "swift", "bun", "cursor", "warp", "render", "railway",
+            "postman", "playwright", "prettier",
+        };
+
+        foreach (var pattern in forbidden)
+        {
+            Assert.DoesNotContain(library.Entries, entry =>
+                string.Equals(entry.Pattern, pattern, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

@@ -35,6 +35,7 @@ internal sealed class DictationController : IDisposable
     private readonly IDictionaryRepository _dictionary;
     private readonly IDictionaryLibraryService _libraries;
     private readonly ICleanupFailureLog _failureLog;
+    private readonly LastTranscriptStore _lastTranscript;
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<DictationController> _log;
 
@@ -71,6 +72,7 @@ internal sealed class DictationController : IDisposable
         IDictionaryRepository dictionary,
         IDictionaryLibraryService libraries,
         ICleanupFailureLog failureLog,
+        LastTranscriptStore lastTranscript,
         ISettingsRepository settingsRepository,
         ILogger<DictationController> log)
     {
@@ -85,6 +87,7 @@ internal sealed class DictationController : IDisposable
         _dictionary = dictionary;
         _libraries = libraries;
         _failureLog = failureLog;
+        _lastTranscript = lastTranscript;
         _settingsRepository = settingsRepository;
         _log = log;
     }
@@ -506,6 +509,7 @@ internal sealed class DictationController : IDisposable
                 text = flattened;
             }
 
+            _lastTranscript.Set(text);
             cancellationToken.ThrowIfCancellationRequested();
             var injection = _injector.Inject(text, settings.InjectionMethod, session.TargetWindow);
             if (!injection.Succeeded)

@@ -46,7 +46,7 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
         var libraries = _service.GetLibraries();
 
         Assert.Contains(libraries, l => l.Id == "microsoft-azure" && l.BuiltIn);
-        Assert.True(libraries.Count >= 4);
+        Assert.True(libraries.Count >= 6);
     }
 
     [Fact]
@@ -146,5 +146,31 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
         var result = processor.Process("i pushed to get hub and used github copilot");
 
         Assert.Equal("i pushed to GitHub and used GitHub Copilot", result);
+    }
+
+    [Fact]
+    public void Enabled_modern_developer_stack_canonicalizes_products_without_rewriting_ordinary_prose()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add("modern-developer-stack");
+        _settings.Save(settings);
+
+        var dictionary = new DictionaryRepository(_db);
+        var processor = new TextPostProcessor(
+            dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: _service);
+
+        var technical = processor.Process(
+            "deploy supa base behind cloud flare on vercel with next js and tailwind css using cursor ide and warp terminal");
+        var ordinary = processor.Process(
+            "react quickly and go home because rust covered the swift car near a bun; the postman made it prettier " +
+            "while the playwright moved the cursor before the warp drive");
+
+        Assert.Equal(
+            "deploy Supabase behind Cloudflare on Vercel with Next.js and Tailwind CSS using Cursor IDE and Warp terminal",
+            technical);
+        Assert.Equal(
+            "react quickly and go home because rust covered the swift car near a bun; the postman made it prettier " +
+            "while the playwright moved the cursor before the warp drive",
+            ordinary);
     }
 }
