@@ -40,6 +40,17 @@ public class MonoDownmixSampleProviderTests
         Assert.Equal(samples, output);
     }
 
+    [Fact]
+    public void ReadAll_returns_every_sample_when_the_initial_buffer_must_grow()
+    {
+        float[] samples = Enumerable.Range(0, 40_000).Select(index => index / 40_000f).ToArray();
+        var source = new ArraySampleProvider(samples, sampleRate: 16_000, channels: 1);
+
+        var output = AudioCaptureService.ReadAll(source);
+
+        Assert.Equal(samples, output);
+    }
+
     private sealed class ArraySampleProvider(float[] data, int sampleRate, int channels) : ISampleProvider
     {
         private int _position;

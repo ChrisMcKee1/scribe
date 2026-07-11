@@ -120,11 +120,28 @@ jobs:
             throw 'Scribe root certificate is not constrained as a certificate authority.'
           }
 
-          Write-Host 'Installing public Scribe trust chain with certutil.'
-          & certutil.exe -user -f -addstore Root $rootPath | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Scribe root certificate.' }
-          & certutil.exe -user -f -addstore TrustedPublisher $leafPath | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to install Scribe publisher certificate.' }
+          function Add-CertificateToStore(
+            [string] $name,
+            [System.Security.Cryptography.X509Certificates.X509Certificate2] $certificate) {
+            $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+              $name,
+              [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+            try {
+              $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              if (-not @($store.Certificates | Where-Object { $_.Thumbprint -eq $certificate.Thumbprint })) {
+                $store.Add($certificate)
+              }
+            }
+            finally {
+              $store.Close()
+            }
+          }
+
+          # X509Store.Add is fully non-interactive. certutil can open an invisible root-trust
+          # confirmation window on hosted runners and leave the release job blocked until timeout.
+          Write-Host 'Installing public Scribe trust chain with X509Store.'
+          Add-CertificateToStore 'Root' $root
+          Add-CertificateToStore 'TrustedPublisher' $leaf
 
           $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
           $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck

@@ -91,7 +91,7 @@
                         <StackPanel>
                             <TextBlock Style="{StaticResource TipTitle}" Text="Good to know"/>
                             <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Scribe lives in your system tray. Right-click the microphone icon for settings and history."/>
+                                       Text="Scribe lives in your system tray. Right-click the microphone icon for settings and quick actions."/>
                             <TextBlock Style="{StaticResource TipBody}"
                                        Text="Turn on optional AI cleanup to polish grammar and punctuation as you dictate."/>
                         </StackPanel>

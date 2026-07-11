@@ -3,6 +3,13 @@ namespace Scribe.Evals.Benchmark;
 /// <summary>Per-dimension judge scores (0–100). Null when the model produced no gradable output.</summary>
 internal sealed record BenchDimensions(int Mechanics, int Fidelity, int Disfluency, int Instruction);
 
+/// <summary>Token usage for one timed cleanup request.</summary>
+internal sealed record BenchTokenUsage(
+    long? InputTokens,
+    long? OutputTokens,
+    long? ReasoningTokens,
+    long? TotalTokens);
+
 /// <summary>One case's outcome for a model (the aggregate lives on <see cref="BenchResult"/>).</summary>
 internal sealed record BenchCaseResult(
     string CaseId,
@@ -13,7 +20,8 @@ internal sealed record BenchCaseResult(
     string[] Flags,
     string? Rationale,
     bool Changed,
-    string? Output);
+    string? Output,
+    BenchTokenUsage?[]? Usage = null);
 
 /// <summary>
 /// A single model's benchmark outcome. Serialized to <c>results.json</c> after every model so a long

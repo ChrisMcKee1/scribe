@@ -155,10 +155,10 @@ public sealed class HistoryRepository : IHistoryRepository
         command.ExecuteNonQuery();
     }
 
-    private static byte[] ToBytes(float[] samples) =>
+    internal static byte[] ToBytes(float[] samples) =>
         MemoryMarshal.AsBytes(samples.AsSpan()).ToArray();
 
-    private static float[] ToFloats(byte[] bytes)
+    internal static float[] ToFloats(byte[] bytes)
     {
         var floats = new float[bytes.Length / sizeof(float)];
         Buffer.BlockCopy(bytes, 0, floats, 0, floats.Length * sizeof(float));

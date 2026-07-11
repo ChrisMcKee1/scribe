@@ -43,7 +43,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.0**.
+  in `Directory.Build.props`. Current version: **0.2.1**.
 
 ## Commands (run these — include the flags)
 
@@ -60,7 +60,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; currently 301)
+# Run the unit tests (must stay green; currently 315)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone (it is x64-only — Platform MUST be x64)
@@ -71,10 +71,10 @@ dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 
 # Build the signed Velopack installer locally (version must match Directory.Build.props)
-./build/pack.ps1 -Version 0.2.0
+./build/pack.ps1 -Version 0.2.1
 
 # Intentional unsigned test package only
-./build/pack.ps1 -Version 0.2.0 -AllowUnsigned
+./build/pack.ps1 -Version 0.2.1 -AllowUnsigned
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
@@ -95,7 +95,7 @@ Scribe.slnx                         solution (Core, App, Overlay[x64], tests, to
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
     Settings/                       the nav-rail settings window (adapters call Core builders)
     Onboarding/                     WelcomeWindow (one-time first-run intro)
-    Tray/ History/ Overlay/         tray menu + quick toggles; history viewer; OverlayProcessClient
+    Tray/ History/ Overlay/         tray menu + quick actions; history data/UI; OverlayProcessClient
     Infrastructure/                 FileLoggerProvider (shared daily log — see Logging mandate)
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
@@ -293,7 +293,7 @@ manual installer run.
 - Commit or upload a signing PFX/private key, make the root private key exportable, or disclose
   either `SCRIBE_SIGNING_PFX_*` secret.
 - Remove the SQLite pin: `SQLitePCLRaw.bundle_e_sqlite3 3.0.3` overrides a transitive build
-  affected by **CVE‑2025‑6965** (pulls patched `e_sqlite3` 3.50.3). Don't remove without an
+  affected by **CVE‑2025‑6965** (pulls patched `e_sqlite3` 3.50.4). Don't remove without an
   equivalent fix.
 - Reintroduce a WPF transparent/layered‑window pill, or revert the overlay to in‑process —
   that bug is solved by the out‑of‑process WinUI 3 design.

@@ -102,7 +102,7 @@ straight from the tray menu** with no settings trip required.
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
 AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **import a CSV** your team
-shares, grab the self-documenting **template**, or let **Suggest from history** spot the acronyms
+shares, grab the self-documenting **template**, or let **Learn from history** spot the acronyms
 and product names you keep saying and add them for you.
 
 ![Scribe dictionary editor: spoken-to-replacement rules](docs/screenshots/dictionary.png)
@@ -132,7 +132,7 @@ to install.
 > SmartScreen reputation is separate and may still show a warning for a new download.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
-Right-click the tray icon for settings, history, and to pause or quit.
+Right-click the tray icon for settings, one-click vocabulary learning from history, and to pause or quit. Review and manage dictation history from Settings.
 
 ## 🎛️ How it works
 

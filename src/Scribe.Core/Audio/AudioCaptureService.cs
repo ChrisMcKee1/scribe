@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAudio.CoreAudioApi;
@@ -268,17 +269,35 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return ReadAll(resampled);
     }
 
-    private static float[] ReadAll(ISampleProvider provider)
+    internal static float[] ReadAll(ISampleProvider provider)
     {
-        var result = new List<float>();
-        float[] buffer = new float[provider.WaveFormat.SampleRate];
-        int read;
-        while ((read = provider.Read(buffer, 0, buffer.Length)) > 0)
+        var samples = ArrayPool<float>.Shared.Rent(provider.WaveFormat.SampleRate);
+        var count = 0;
+        try
         {
-            result.AddRange(buffer.AsSpan(0, read));
-        }
+            while (true)
+            {
+                if (count == samples.Length)
+                {
+                    var expanded = ArrayPool<float>.Shared.Rent(checked(samples.Length * 2));
+                    samples.AsSpan(0, count).CopyTo(expanded);
+                    ArrayPool<float>.Shared.Return(samples);
+                    samples = expanded;
+                }
 
-        return [.. result];
+                var read = provider.Read(samples, count, samples.Length - count);
+                if (read <= 0)
+                {
+                    return samples.AsSpan(0, count).ToArray();
+                }
+
+                count += read;
+            }
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(samples);
+        }
     }
 
     private MMDevice ResolveDevice(string? deviceId)

@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Scribe.Benchmarks" />
     <InternalsVisibleTo Include="Scribe.Core.Tests" />
     <InternalsVisibleTo Include="Scribe.Evals" />
   </ItemGroup>

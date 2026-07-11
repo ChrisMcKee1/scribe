@@ -23,8 +23,8 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "Settings…" from the tray menu.</summary>
     public event Action? SettingsRequested;
 
-    /// <summary>Raised when the user picks "History…" from the tray menu.</summary>
-    public event Action? HistoryRequested;
+    /// <summary>Raised when the user picks "Learn from history" from the tray menu.</summary>
+    public event Action? LearnFromHistoryRequested;
 
     /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
     public event Action? WelcomeRequested;
@@ -55,9 +55,9 @@ internal sealed class TrayIconHost : IDisposable
         settings.Click += (_, _) => SettingsRequested?.Invoke();
         menu.Items.Add(settings);
 
-        var history = new MenuItem { Header = "History…" };
-        history.Click += (_, _) => HistoryRequested?.Invoke();
-        menu.Items.Add(history);
+        var learnFromHistory = new MenuItem { Header = "Learn from history" };
+        learnFromHistory.Click += (_, _) => LearnFromHistoryRequested?.Invoke();
+        menu.Items.Add(learnFromHistory);
 
         // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
         var welcome = new MenuItem { Header = "Show welcome" };
@@ -115,6 +115,14 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Surfaces a transient, non-error status (e.g. an update is ready) via the tooltip.</summary>
     public void ShowInfo(string message) => Dispatch(() =>
         _icon.ToolTipText = $"Scribe — {message}");
+
+    /// <summary>Shows a transient Windows notification for a completed user action.</summary>
+    public void ShowNotification(string message, bool isError = false) => Dispatch(() =>
+        _icon.ShowNotification(
+            "Scribe",
+            message,
+            isError ? NotificationIcon.Error : NotificationIcon.Info,
+            timeout: TimeSpan.FromSeconds(6)));
 
     private static void Dispatch(Action action)
     {

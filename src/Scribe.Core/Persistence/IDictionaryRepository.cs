@@ -14,6 +14,9 @@ public interface IDictionaryRepository
     /// <summary>Inserts a new entry and returns it with its assigned id.</summary>
     DictionaryEntry Add(DictionaryEntry entry);
 
+    /// <summary>Inserts entries atomically and returns them with their assigned ids.</summary>
+    IReadOnlyList<DictionaryEntry> AddRange(IReadOnlyList<DictionaryEntry> entries);
+
     /// <summary>Updates an existing entry by id.</summary>
     void Update(DictionaryEntry entry);
 

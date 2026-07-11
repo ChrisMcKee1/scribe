@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.RegularExpressions;
 using Azure.AI.OpenAI;
@@ -167,6 +168,13 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Test-only override for the whole multi-chunk operation. Production has one deadline across all
     // chunks; benchmark runs that override the per-call timeout remain intentionally uncapped.
     internal TimeSpan? CleanupTotalTimeoutOverride { get; set; }
+
+    // Benchmark-only generation controls and telemetry. The shipping app leaves these unset, so
+    // provider defaults remain unchanged until measured evidence supports a production setting.
+    internal ReasoningEffort? ReasoningEffortOverride { get; set; }
+    internal int? MaxOutputTokensOverride { get; set; }
+    internal bool DisableRetries { get; set; }
+    internal Action<UsageDetails>? UsageObserver { get; set; }
 
     public TextCleanupService(ILogger<TextCleanupService> log) => _log = log;
 
@@ -491,6 +499,11 @@ internal sealed class TextCleanupService : ITextCleanupService
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
 
+            if (result.Usage is { } usage)
+            {
+                UsageObserver?.Invoke(usage);
+            }
+
             if (string.IsNullOrWhiteSpace(result.Text))
             {
                 return (chunk, "AI cleanup returned no text.");
@@ -542,16 +555,16 @@ internal sealed class TextCleanupService : ITextCleanupService
             var remaining = text.Length - start;
             if (remaining <= targetChars)
             {
-                var tail = text[start..].Trim();
-                if (tail.Length > 0)
+                var tail = text.AsSpan(start).Trim();
+                if (!tail.IsEmpty)
                 {
-                    chunks.Add(tail);
+                    chunks.Add(tail.ToString());
                 }
 
                 break;
             }
 
-            var window = text.Substring(start, targetChars);
+            var window = text.AsSpan(start, targetChars);
             var minBreak = (int)(targetChars * 0.6);
 
             var breakAt = LastSentenceBreak(window, minBreak);
@@ -566,10 +579,10 @@ internal sealed class TextCleanupService : ITextCleanupService
                 breakAt = targetChars - 1;
             }
 
-            var piece = text.Substring(start, breakAt + 1).Trim();
-            if (piece.Length > 0)
+            var piece = text.AsSpan(start, breakAt + 1).Trim();
+            if (!piece.IsEmpty)
             {
-                chunks.Add(piece);
+                chunks.Add(piece.ToString());
             }
 
             start += breakAt + 1;
@@ -585,7 +598,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         return frontierPrompt ? [text.Trim()] : ChunkForCleanup(text, ChunkTargetChars);
     }
 
-    private static int LastSentenceBreak(string window, int minIndex)
+    private static int LastSentenceBreak(ReadOnlySpan<char> window, int minIndex)
     {
         for (var i = window.Length - 1; i >= minIndex; i--)
         {
@@ -1166,6 +1179,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                 clientOptions.NetworkTimeout = networkTimeout + TimeSpan.FromSeconds(5);
             }
 
+            if (DisableRetries)
+            {
+                clientOptions.RetryPolicy = new ClientRetryPolicy(maxRetries: 0);
+            }
+
             var azureClient = useKey
                 ? new AzureOpenAIClient(accountHost, new ApiKeyCredential(options.AzureApiKey!), clientOptions)
                 : new AzureOpenAIClient(accountHost, CreateAzureCredential(options.AzureTenantId), clientOptions);
@@ -1411,12 +1429,21 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     // Per-call generation options. The system prompt lives on the agent, so this only carries the
     // sampling/limit knobs that vary by provider.
-    private static ChatOptions BuildChatOptions(CleanupOptions options, string text)
+    private ChatOptions BuildChatOptions(CleanupOptions options, string text)
     {
         var chatOptions = new ChatOptions
         {
-            MaxOutputTokens = EstimateMaxTokens(text, options.Provider),
+            MaxOutputTokens = MaxOutputTokensOverride ?? EstimateMaxTokens(text, options.Provider),
         };
+
+        if (ReasoningEffortOverride is { } effort)
+        {
+            chatOptions.Reasoning = new ReasoningOptions
+            {
+                Effort = effort,
+                Output = ReasoningOutput.None,
+            };
+        }
 
         // A low temperature keeps Foundry Local instruct models deterministic for a faithful edit.
         // Azure cleanup commonly targets gpt-5-class reasoning models, which run at a fixed internal

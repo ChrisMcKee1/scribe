@@ -95,4 +95,30 @@ public sealed class DictionarySuggestionMinerTests
         Assert.Equal(5, suggestions[0].Dictations);
         Assert.Contains(suggestions, s => s.Term == "K8s" || s.Term == "ASR" || s.Term == "ReBAC");
     }
+
+    [Fact]
+    public void History_learner_builds_enabled_dictionary_entries_with_spoken_forms()
+    {
+        var history = new[] { H("use ReBAC"), H("check ReBAC"), H("ship ReBAC") };
+
+        var entries = DictionaryHistoryLearner.BuildEntries(history, []);
+
+        var entry = Assert.Single(entries);
+        Assert.Equal("rebac", entry.Pattern);
+        Assert.Equal("ReBAC", entry.Replacement);
+        Assert.True(entry.WholeWord);
+        Assert.True(entry.Enabled);
+    }
+
+    [Fact]
+    public void History_learner_returns_nothing_when_dictionary_already_covers_term()
+    {
+        var history = new[] { H("use ReBAC"), H("check ReBAC"), H("ship ReBAC") };
+
+        var entries = DictionaryHistoryLearner.BuildEntries(
+            history,
+            [DictionaryEntry.New("ree back", "ReBAC")]);
+
+        Assert.Empty(entries);
+    }
 }

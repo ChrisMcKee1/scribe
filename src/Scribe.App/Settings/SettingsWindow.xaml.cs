@@ -47,6 +47,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
     private bool _loadingProfile;
+    private readonly ObservableCollection<HistoryRow> _historyRows = new();
     private readonly ObservableCollection<FailureRow> _failures = new();
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
@@ -106,6 +107,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LoadLibraries();
         LoadSnippets();
         LoadProfiles();
+        HistoryGrid.ItemsSource = _historyRows;
+        LoadHistory();
         LoadFailures();
         LoadPerformanceStats();
 
@@ -148,6 +151,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiCleanupCheck.IsChecked = latest.EnableAiCleanup;
     }
 
+    public IReadOnlyList<DictionaryEntry> PersistLearnedDictionaryEntries(IReadOnlyList<DictionaryEntry> entries)
+    {
+        var wasDirty = DictionarySignature() != _dictionarySnapshot;
+        var candidates = entries
+            .Where(entry => !_rows.Any(row =>
+                string.Equals(row.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.Replacement.Trim(), entry.Replacement, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        var persisted = _dictionary.AddRange(candidates);
+        foreach (var entry in persisted)
+        {
+            _rows.Add(new DictionaryRow
+            {
+                Id = entry.Id,
+                Pattern = entry.Pattern,
+                Replacement = entry.Replacement,
+                WholeWord = entry.WholeWord,
+                Enabled = entry.Enabled,
+            });
+        }
+
+        if (!wasDirty)
+        {
+            _dictionarySnapshot = DictionarySignature();
+        }
+
+        return persisted;
+    }
+
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {
         if (_updates is null)
@@ -185,7 +217,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private Grid[] SectionPanels =>
     [
         SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
-        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionDiagnostics,
+        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionHistory,
+        SectionDiagnostics,
     ];
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -201,6 +234,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         for (var i = 0; i < panels.Length; i++)
         {
             panels[i].Visibility = i == selected ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (panels[selected] == SectionHistory)
+        {
+            LoadHistory();
         }
     }
 
@@ -2062,10 +2100,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void SuggestWithMiner(IReadOnlyList<DictionaryEntry> current, bool aiRanFirst = false)
     {
-        IReadOnlyList<DictionarySuggestionMiner.Suggestion> suggestions;
+        IReadOnlyList<DictionaryEntry> suggestions;
         try
         {
-            suggestions = DictionarySuggestionMiner.Mine(_history.GetRecent(1000), current);
+            suggestions = DictionaryHistoryLearner.BuildEntries(_history.GetRecent(1000), current);
         }
         catch (Exception ex)
         {
@@ -2086,8 +2124,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Lock the spelling: the lowercase spoken form maps to the surface form seen most often.
-        AddSuggestionRows(suggestions.Select(s => (s.Term.ToLowerInvariant(), s.Term)));
+        AddSuggestionRows(suggestions.Select(s => (s.Pattern, s.Replacement)));
         ShowInfo(
             $"Added {suggestions.Count} suggested {(suggestions.Count == 1 ? "entry" : "entries")} " +
             "from your recent dictations. Review them in the grid, delete any you don't want, then save.");
@@ -2107,6 +2144,102 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             DictionaryGrid.SelectedItem = first;
             DictionaryGrid.ScrollIntoView(first);
+        }
+    }
+
+    // --- History --------------------------------------------------------------------------
+
+    private void LoadHistory()
+    {
+        _historyRows.Clear();
+        foreach (var entry in _history.GetRecent(200))
+        {
+            _historyRows.Add(HistoryRow.From(entry));
+        }
+
+        var hasRows = _historyRows.Count > 0;
+        HistoryEmptyHint.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
+        HistoryClearButton.IsEnabled = hasRows;
+        UpdateHistorySelection();
+    }
+
+    private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
+
+    private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateHistorySelection();
+
+    private void UpdateHistorySelection()
+    {
+        var hasSelection = SelectedHistory is not null;
+        HistoryCopyButton.IsEnabled = hasSelection;
+        HistoryDeleteButton.IsEnabled = hasSelection;
+    }
+
+    private void HistoryGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => CopyHistoryText();
+
+    private void HistoryCopyButton_Click(object sender, RoutedEventArgs e) => CopyHistoryText();
+
+    private void CopyHistoryText()
+    {
+        if (SelectedHistory is not { } row)
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(row.Text);
+            ShowInfo("Copied the selected dictation.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfo($"Couldn't copy the dictation: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
+    }
+
+    private async void HistoryDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedHistory is not { } row)
+        {
+            return;
+        }
+
+        HistoryDeleteButton.IsEnabled = false;
+        try
+        {
+            await Task.Run(() => _history.Delete(row.Id));
+            LoadHistory();
+            ShowInfo("Deleted the selected history entry.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfo($"Couldn't delete the history entry: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            UpdateHistorySelection();
+        }
+    }
+
+    private async void HistoryClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_historyRows.Count == 0 ||
+            !await ConfirmAsync(
+                "Clear history",
+                "Delete all dictation history and stored audio? This cannot be undone.",
+                "Clear all"))
+        {
+            return;
+        }
+
+        HistoryClearButton.IsEnabled = false;
+        try
+        {
+            await Task.Run(_history.Clear);
+            LoadHistory();
+            ShowInfo("Cleared dictation history.");
+        }
+        catch (Exception ex)
+        {
+            ShowInfo($"Couldn't clear history: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+            HistoryClearButton.IsEnabled = _historyRows.Count > 0;
         }
     }
 
@@ -2304,6 +2437,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Replacement { get; set; } = string.Empty;
         public bool WholeWord { get; set; } = true;
         public bool Enabled { get; set; } = true;
+    }
+
+    private sealed record HistoryRow(long Id, string When, string Text, string App, string Audio, string Decode)
+    {
+        public static HistoryRow From(HistoryEntry entry) => new(
+            entry.Id,
+            entry.TimestampUtc.ToLocalTime().ToString("MMM d, h:mm tt"),
+            entry.Text,
+            string.IsNullOrWhiteSpace(entry.TargetApp) ? "—" : entry.TargetApp!,
+            $"{entry.AudioMilliseconds / 1000.0:0.0} s",
+            $"{entry.DecodeMilliseconds} ms");
     }
 
     /// <summary>Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable.</summary>

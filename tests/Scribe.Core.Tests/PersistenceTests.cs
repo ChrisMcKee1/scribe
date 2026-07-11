@@ -146,6 +146,39 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void Dictionary_add_range_assigns_ids_and_commits_every_entry()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        var added = repo.AddRange(
+        [
+            DictionaryEntry.New("rebac", "ReBAC"),
+            DictionaryEntry.New("k8s", "K8s"),
+        ]);
+
+        Assert.Equal(2, added.Count);
+        Assert.All(added, entry => Assert.True(entry.Id > 0));
+        Assert.Equal(2, added.Select(entry => entry.Id).Distinct().Count());
+        Assert.Equal(2, repo.GetAll().Count);
+    }
+
+    [Fact]
+    public void Dictionary_add_range_rolls_back_completely_on_a_duplicate_pattern()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        Assert.ThrowsAny<Microsoft.Data.Sqlite.SqliteException>(() => repo.AddRange(
+        [
+            DictionaryEntry.New("rebac", "ReBAC"),
+            DictionaryEntry.New("rebac", "REBAC"),
+        ]));
+
+        Assert.Empty(repo.GetAll());
+    }
+
+    [Fact]
     public void Dictionary_save_all_inserts_updates_and_deletes_in_one_pass()
     {
         using var db = ScribeDatabase.CreateInMemory();

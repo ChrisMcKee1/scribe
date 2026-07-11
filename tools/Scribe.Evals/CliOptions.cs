@@ -1,4 +1,5 @@
 using Scribe.Core.Cleanup;
+using Microsoft.Extensions.AI;
 
 namespace Scribe.Evals;
 
@@ -22,6 +23,7 @@ internal sealed class CliOptions
     public bool IncludeLocal { get; private set; } = true;
     public IReadOnlyList<string>? CloudOnly { get; private set; }
     public IReadOnlyList<string>? LocalOnly { get; private set; }
+    public IReadOnlyList<string>? CaseOnly { get; private set; }
     public int MaxCloud { get; private set; }
     public int MaxLocal { get; private set; }
     public string? JudgeEndpoint { get; private set; }
@@ -32,6 +34,10 @@ internal sealed class CliOptions
     public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
     public string? BenchWritingStyleFile { get; private set; }
     public string? BenchFrontierPromptFile { get; private set; }
+    public ReasoningEffort? BenchReasoningEffort { get; private set; }
+    public int? BenchMaxOutputTokens { get; private set; }
+    public bool BenchDisableRetries { get; private set; }
+    public bool BenchDirectResponses { get; private set; }
     public bool Force { get; private set; }
     public int LocalLoadTimeout { get; private set; } = 1800;
     public int CloudReadyTimeout { get; private set; } = 120;
@@ -51,6 +57,7 @@ internal sealed class CliOptions
             IncludeLocal = IncludeLocal,
             CloudOnly = CloudOnly,
             LocalOnly = LocalOnly,
+            CaseOnly = CaseOnly,
             MaxCloud = MaxCloud,
             MaxLocal = MaxLocal,
             CloudEndpoint = AzureEndpoint,
@@ -66,6 +73,10 @@ internal sealed class CliOptions
             PromptStyle = PromptStyle,
             WritingStyle = ReadPromptFile(BenchWritingStyleFile),
             FrontierPrompt = ReadPromptFile(BenchFrontierPromptFile),
+            ReasoningEffort = BenchReasoningEffort,
+            MaxOutputTokens = BenchMaxOutputTokens,
+            DisableRetries = BenchDisableRetries,
+            DirectResponses = BenchDirectResponses,
             CloudReadyTimeoutSeconds = CloudReadyTimeout,
             LocalReadyTimeoutSeconds = LocalLoadTimeout,
             CleanTimeoutSeconds = CleanTimeout,
@@ -168,6 +179,10 @@ internal sealed class CliOptions
                     o.LocalOnly = Next()
                         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     break;
+                case "--benchmark-cases":
+                    o.CaseOnly = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
                 case "--max-cloud":
                     if (int.TryParse(Next(), out var mc) && mc > 0)
                     {
@@ -208,6 +223,29 @@ internal sealed class CliOptions
                     break;
                 case "--frontier-prompt-file":
                     o.BenchFrontierPromptFile = Next();
+                    break;
+                case "--reasoning-effort":
+                    o.BenchReasoningEffort = Next().ToLowerInvariant() switch
+                    {
+                        "none" => ReasoningEffort.None,
+                        "low" => ReasoningEffort.Low,
+                        "medium" => ReasoningEffort.Medium,
+                        "high" => ReasoningEffort.High,
+                        "xhigh" or "extra-high" => ReasoningEffort.ExtraHigh,
+                        _ => null,
+                    };
+                    break;
+                case "--max-output-tokens":
+                    if (int.TryParse(Next(), out var maxOutputTokens) && maxOutputTokens > 0)
+                    {
+                        o.BenchMaxOutputTokens = maxOutputTokens;
+                    }
+                    break;
+                case "--no-retries":
+                    o.BenchDisableRetries = true;
+                    break;
+                case "--direct-responses":
+                    o.BenchDirectResponses = true;
                     break;
                 case "--force":
                     o.Force = true;
@@ -292,6 +330,7 @@ internal sealed class CliOptions
               --no-cloud / --no-local            Skip a whole group.
               --cloud-models <a,b> / --local-models <a,b>
                                                 Restrict to a subset (substring match for cloud).
+              --benchmark-cases <a,b>           Restrict to selected case IDs.
               --max-cloud <n> / --max-local <n>  Cap the number of models per group.
               --judge-endpoint <url>            Azure endpoint for the quality judge.
               --judge-model <name>              Judge deployment (default: gpt-4.1).
@@ -300,6 +339,10 @@ internal sealed class CliOptions
               --no-wav                          Use the authored transcript (skip TTS+ASR).
               --writing-style-file <path>       Benchmark-only writing-style override.
               --frontier-prompt-file <path>     Benchmark-only frontier-prompt override.
+              --reasoning-effort <level>        default, none, low, medium, high, or xhigh.
+              --max-output-tokens <n>           Benchmark-only output/reasoning token cap.
+              --no-retries                      Disable Azure SDK retries for latency diagnosis.
+              --direct-responses                Call Azure Responses directly, bypassing Agent Framework.
               --force                           Re-run models already present in results.json.
               --local-load-timeout <seconds>    Max wait for a local model to download+load (default: 1800).
               --clean-timeout <seconds>         Per-call cleanup timeout override (default: 180).

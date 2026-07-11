@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Scribe.App.Dictation;
-using Scribe.App.History;
 using Scribe.App.Infrastructure;
 using Scribe.App.Overlay;
 using Scribe.App.Settings;
@@ -13,6 +12,7 @@ using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
@@ -37,9 +37,9 @@ public partial class App : Application
     private DictationController? _controller;
     private IOverlayController? _overlay;
     private SettingsWindow? _settingsWindow;
-    private HistoryWindow? _historyWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private UpdateService? _updates;
+    private int _learningFromHistory;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -80,7 +80,7 @@ public partial class App : Application
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
         _tray.SettingsRequested += OpenSettings;
-        _tray.HistoryRequested += OpenHistory;
+        _tray.LearnFromHistoryRequested += LearnFromHistory;
         _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
@@ -347,24 +347,56 @@ public partial class App : Application
         _settingsWindow.Activate();
     });
 
-    /// <summary>
-    /// Opens the history viewer (or focuses it if already open). Reads the most recent dictations
-    /// from the local SQLite history; nothing leaves the machine.
-    /// </summary>
-    private void OpenHistory() => Dispatcher.Invoke(() =>
+    private async void LearnFromHistory()
     {
-        if (_historyWindow is not null)
+        if (_host is null || _tray is null)
         {
-            _historyWindow.Activate();
             return;
         }
 
-        var services = _host!.Services;
-        _historyWindow = new HistoryWindow(services.GetRequiredService<IHistoryRepository>());
-        _historyWindow.Closed += (_, _) => _historyWindow = null;
-        _historyWindow.Show();
-        _historyWindow.Activate();
-    });
+        if (Interlocked.Exchange(ref _learningFromHistory, 1) != 0)
+        {
+            _tray.ShowNotification("Already learning from recent dictations.");
+            return;
+        }
+
+        try
+        {
+            var services = _host.Services;
+            var candidates = await Task.Run(() =>
+            {
+                var history = services.GetRequiredService<IHistoryRepository>();
+                var dictionary = services.GetRequiredService<IDictionaryRepository>();
+                return DictionaryHistoryLearner.BuildEntries(
+                    history.GetRecent(1000),
+                    dictionary.GetAll());
+            });
+
+            // Persistence stays on the dispatcher so an open Settings window cannot reconcile a
+            // stale dictionary snapshot between the insert and its in-memory row merge.
+            var learned = _settingsWindow is { } settings
+                ? settings.PersistLearnedDictionaryEntries(candidates)
+                : services.GetRequiredService<IDictionaryRepository>().AddRange(candidates);
+            if (learned.Count > 0)
+            {
+                await Task.Run(() => services.GetRequiredService<ITextPostProcessor>().Reload());
+            }
+
+            _tray.ShowNotification(learned.Count == 0
+                ? "No new recurring terms were found."
+                : $"Learned {learned.Count} new {(learned.Count == 1 ? "term" : "terms")} from your dictation history.");
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogError(ex, "Failed to learn dictionary terms from history.");
+            _tray.ShowNotification("Couldn't learn from history. See the Scribe log for details.", isError: true);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _learningFromHistory, 0);
+        }
+    }
 
     /// <summary>
     /// Shows the first-run welcome (or focuses it if already open). Non-modal so the tray and

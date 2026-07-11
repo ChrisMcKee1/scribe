@@ -42,17 +42,38 @@ public sealed class DictionaryRepository : IDictionaryRepository
     {
         ArgumentNullException.ThrowIfNull(entry);
 
+        return AddRange([entry])[0];
+    }
+
+    public IReadOnlyList<DictionaryEntry> AddRange(IReadOnlyList<DictionaryEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count == 0)
+        {
+            return [];
+        }
+
         using var connection = _database.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            INSERT INTO dictionary (pattern, replacement, whole_word, enabled)
-            VALUES ($pattern, $replacement, $whole_word, $enabled);
-            SELECT last_insert_rowid();
-            """;
-        BindBody(command, entry);
-        var id = (long)(command.ExecuteScalar() ?? 0L);
-        return entry with { Id = id };
+        using var transaction = connection.BeginTransaction();
+        var persisted = new List<DictionaryEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            ArgumentNullException.ThrowIfNull(entry);
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT INTO dictionary (pattern, replacement, whole_word, enabled)
+                VALUES ($pattern, $replacement, $whole_word, $enabled);
+                SELECT last_insert_rowid();
+                """;
+            BindBody(command, entry);
+            var id = (long)(command.ExecuteScalar() ?? 0L);
+            persisted.Add(entry with { Id = id });
+        }
+
+        transaction.Commit();
+        return persisted;
     }
 
     public void Update(DictionaryEntry entry)

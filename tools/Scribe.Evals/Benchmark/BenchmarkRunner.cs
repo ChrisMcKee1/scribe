@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Cleanup;
 
@@ -13,6 +14,7 @@ internal sealed record BenchmarkConfig
     public bool IncludeLocal { get; init; } = true;
     public IReadOnlyList<string>? CloudOnly { get; init; }
     public IReadOnlyList<string>? LocalOnly { get; init; }
+    public IReadOnlyList<string>? CaseOnly { get; init; }
     public int MaxCloud { get; init; }
     public int MaxLocal { get; init; }
     public string? CloudEndpoint { get; init; }
@@ -27,6 +29,10 @@ internal sealed record BenchmarkConfig
     public CleanupPromptStyle PromptStyle { get; init; } = CleanupPromptStyle.Auto;
     public string? WritingStyle { get; init; }
     public string? FrontierPrompt { get; init; }
+    public ReasoningEffort? ReasoningEffort { get; init; }
+    public int? MaxOutputTokens { get; init; }
+    public bool DisableRetries { get; init; }
+    public bool DirectResponses { get; init; }
     public int CloudReadyTimeoutSeconds { get; init; } = 120;
     public int LocalReadyTimeoutSeconds { get; init; } = 1800;
     public int CleanTimeoutSeconds { get; init; } = 180;
@@ -77,6 +83,24 @@ internal sealed class BenchmarkRunner
             cases = await BenchmarkInput.PrepareCasesAsync(_cfg.OutDir, _cfg.ModelsDir, _cfg.Synthesize, _log, ct)
                 .ConfigureAwait(false);
             File.WriteAllText(inputCachePath, JsonSerializer.Serialize(cases, Json));
+        }
+
+        if (_cfg.CaseOnly is { Count: > 0 })
+        {
+            var requested = _cfg.CaseOnly.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            cases = cases.Where(c => requested.Contains(c.CaseId)).ToList();
+            var missing = requested.Where(id => !cases.Any(c =>
+                string.Equals(c.CaseId, id, StringComparison.OrdinalIgnoreCase))).ToArray();
+            if (missing.Length > 0)
+            {
+                _log.LogWarning("Requested benchmark cases were not found: {Missing}.", string.Join(", ", missing));
+            }
+
+            if (cases.Count == 0)
+            {
+                Console.WriteLine("No requested benchmark cases were found.");
+                return 2;
+            }
         }
 
         foreach (var c in cases)
@@ -153,6 +177,9 @@ internal sealed class BenchmarkRunner
         await using var svc = new TextCleanupService(new VerboseConsoleLogger<TextCleanupService>())
         {
             CleanupTimeoutOverride = TimeSpan.FromSeconds(_cfg.CleanTimeoutSeconds),
+            ReasoningEffortOverride = _cfg.ReasoningEffort,
+            MaxOutputTokensOverride = _cfg.MaxOutputTokens,
+            DisableRetries = _cfg.DisableRetries,
         };
 
         var index = 0;
@@ -222,18 +249,43 @@ internal sealed class BenchmarkRunner
         {
             Group = model.Group.ToString(),
             Id = model.Id,
-            Provider = model.Provider.ToString(),
+            Provider = _cfg.DirectResponses ? "AzureResponsesDirect" : model.Provider.ToString(),
             Endpoint = model.Endpoint,
             Target = model.Target,
             ModelName = model.ModelName,
-            Note = model.Note,
+            Note = _cfg.DirectResponses
+                ? string.Join("; ", new[] { model.Note, "direct Responses API" }.Where(note => !string.IsNullOrWhiteSpace(note)))
+                : model.Note,
             Status = "error",
             LoadedAtUtc = DateTime.UtcNow.ToString("u"),
         };
 
         var loadSw = Stopwatch.StartNew();
-        svc.Configure(options);
-        var ready = await WaitForReadyAsync(svc, loadTimeout, ct).ConfigureAwait(false);
+        DirectResponsesCleanupClient? directClient = null;
+        var ready = true;
+        if (_cfg.DirectResponses)
+        {
+            if (model.Provider != CleanupProvider.AzureFoundry || string.IsNullOrWhiteSpace(model.Endpoint))
+            {
+                loadSw.Stop();
+                return baseline with { Error = "Direct Responses diagnostics require a cloud model endpoint." };
+            }
+
+            directClient = new DirectResponsesCleanupClient(
+                model.Endpoint,
+                model.Target,
+                _cfg.TenantId,
+                TextCleanupService.BuildSystemPrompt(options),
+                _cfg.ReasoningEffort,
+                _cfg.MaxOutputTokens,
+                TimeSpan.FromSeconds(_cfg.CleanTimeoutSeconds),
+                _cfg.DisableRetries);
+        }
+        else
+        {
+            svc.Configure(options);
+            ready = await WaitForReadyAsync(svc, loadTimeout, ct).ConfigureAwait(false);
+        }
         loadSw.Stop();
 
         if (!ready)
@@ -253,7 +305,15 @@ internal sealed class BenchmarkRunner
         try
         {
             // One warmup call (discarded) so steady-state latency excludes any first-call cost.
-            _ = await svc.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
+            svc.UsageObserver = null;
+            if (directClient is null)
+            {
+                _ = await svc.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                _ = await directClient.CleanAsync(cases[0].Transcript, ct).ConfigureAwait(false);
+            }
 
             var caseResults = new List<BenchCaseResult>(cases.Count);
             var allTimes = new List<double>(cases.Count * _cfg.Runs);
@@ -261,14 +321,25 @@ internal sealed class BenchmarkRunner
             foreach (var c in cases)
             {
                 var times = new List<double>(_cfg.Runs);
+                var usages = new List<BenchTokenUsage?>(_cfg.Runs);
                 var output = c.Transcript;
                 for (var i = 0; i < _cfg.Runs; i++)
                 {
                     ct.ThrowIfCancellationRequested();
+                    BenchTokenUsage? usage = null;
                     var sw = Stopwatch.StartNew();
-                    output = (await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false)).Text;
+                    if (directClient is null)
+                    {
+                        svc.UsageObserver = details => usage = AddUsage(usage, details);
+                        output = (await svc.CleanAsync(c.Transcript, ct).ConfigureAwait(false)).Text;
+                    }
+                    else
+                    {
+                        (output, usage) = await directClient.CleanAsync(c.Transcript, ct).ConfigureAwait(false);
+                    }
                     sw.Stop();
                     times.Add(sw.Elapsed.TotalMilliseconds);
+                    usages.Add(usage);
                 }
 
                 allTimes.AddRange(times);
@@ -290,12 +361,21 @@ internal sealed class BenchmarkRunner
                 var sortedCase = times.OrderBy(t => t).ToList();
                 caseResults.Add(new BenchCaseResult(
                     c.CaseId, Median(sortedCase), times.ToArray(), verdict?.Overall,
-                    verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output));
+                    verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output, usages.ToArray()));
+
+                var reasoning = usages
+                    .Where(usage => usage?.ReasoningTokens is not null)
+                    .Select(usage => (double)usage!.ReasoningTokens!.Value)
+                    .OrderBy(tokens => tokens)
+                    .ToList();
 
                 Console.WriteLine(
                     $"        {c.CaseId,-22} {Median(sortedCase),6:F0} ms  " +
-                    $"q={verdict?.Overall.ToString() ?? "-"}  changed={caseChanged}");
+                    $"q={verdict?.Overall.ToString() ?? "-"}  changed={caseChanged}" +
+                    (reasoning.Count == 0 ? "" : $"  reasoning={Median(reasoning):F0} tok"));
             }
+
+            svc.UsageObserver = null;
 
             // Aggregate: latency pools every timed sample (same case mix for every model, so the
             // comparison is apples-to-apples); quality is the mean of the per-case judge scores;
@@ -397,6 +477,15 @@ internal sealed class BenchmarkRunner
         var mid = sorted.Count / 2;
         return sorted.Count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
     }
+
+    private static BenchTokenUsage AddUsage(BenchTokenUsage? current, UsageDetails usage) => new(
+        Add(current?.InputTokens, usage.InputTokenCount),
+        Add(current?.OutputTokens, usage.OutputTokenCount),
+        Add(current?.ReasoningTokens, usage.ReasoningTokenCount),
+        Add(current?.TotalTokens, usage.TotalTokenCount));
+
+    private static long? Add(long? left, long? right) =>
+        left is null && right is null ? null : (left ?? 0) + (right ?? 0);
 
     private static List<BenchResult> LoadExisting(string path)
     {
