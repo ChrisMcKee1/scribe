@@ -34,4 +34,59 @@ public sealed class UsageInsightTests
         Assert.Equal("12345", UsageInsight.Parse("123456789", maxChars: 5));
         Assert.Null(UsageInsight.Parse("   "));
     }
+
+    [Fact]
+    public void BuildSummary_excludes_uncovered_terms_mined_from_dictation_text()
+    {
+        var snapshot = new UsageAnalyzer.Snapshot(
+            Dictations: 3,
+            Words: 42,
+            ActiveDays: 2,
+            Speech: TimeSpan.FromSeconds(30),
+            AverageWords: 14,
+            TopApps: [],
+            Trend: [],
+            Terms:
+            [
+                new("Next.js", 2, 2, Covered: true),
+                // Uncovered terms are verbatim user words (codenames, surnames) and must
+                // never reach the AI payload.
+                new("ProjectBlackwood", 2, 3, Covered: false),
+            ]);
+
+        var summary = UsageInsight.BuildSummary(snapshot);
+
+        Assert.Contains("Next.js: 2 dictations", summary);
+        Assert.DoesNotContain("ProjectBlackwood", summary);
+    }
+
+    [Fact]
+    public void BuildSummary_truncation_never_splits_a_surrogate_pair()
+    {
+        var snapshot = new UsageAnalyzer.Snapshot(
+            Dictations: 1,
+            Words: 1,
+            ActiveDays: 1,
+            Speech: TimeSpan.Zero,
+            AverageWords: 1,
+            TopApps: [],
+            Trend: [],
+            Terms: [new("Rocket\U0001F680Lab", 1, 1, Covered: true)]);
+
+        var full = UsageInsight.BuildSummary(snapshot);
+        var highSurrogateIndex = full.IndexOf('\uD83D');
+        Assert.True(highSurrogateIndex >= 0);
+
+        // Force the cut to land between the emoji's two UTF-16 chars.
+        var truncated = UsageInsight.BuildSummary(snapshot, maxChars: highSurrogateIndex + 1);
+
+        Assert.Equal(full[..highSurrogateIndex].TrimEnd(), truncated);
+    }
+
+    [Fact]
+    public void Parse_truncation_never_splits_a_surrogate_pair()
+    {
+        Assert.Equal("abc", UsageInsight.Parse("abc\U0001F600def", maxChars: 4));
+        Assert.Equal("abc\U0001F600", UsageInsight.Parse("abc\U0001F600def", maxChars: 5));
+    }
 }

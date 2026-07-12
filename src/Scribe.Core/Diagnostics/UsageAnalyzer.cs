@@ -14,6 +14,17 @@ public static partial class UsageAnalyzer
 
     public sealed record TermUsage(string Text, int Dictations, int Occurrences, bool Covered);
 
+    /// <summary>Bucket size of the <see cref="Snapshot.Trend"/> points.</summary>
+    public enum TrendGranularity
+    {
+        Daily,
+        Weekly,
+    }
+
+    // Granularity defaults to Daily so existing Snapshot constructions stay source-compatible;
+    // Compute always overwrites it with the trend builder's actual bucket decision. Consumers
+    // must read it instead of guessing from Trend.Count (a 90-day period yields ~13 weekly
+    // points, which a count heuristic mislabels as days).
     public sealed record Snapshot(
         int Dictations,
         int Words,
@@ -22,7 +33,8 @@ public static partial class UsageAnalyzer
         double AverageWords,
         IReadOnlyList<AppUsage> TopApps,
         IReadOnlyList<TrendPoint> Trend,
-        IReadOnlyList<TermUsage> Terms);
+        IReadOnlyList<TermUsage> Terms,
+        TrendGranularity Granularity = TrendGranularity.Daily);
 
     /// <summary>
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
@@ -66,6 +78,7 @@ public static partial class UsageAnalyzer
             .Take(Math.Max(0, maxApps))
             .ToList();
 
+        var (trend, granularity) = BuildTrend(selected, wordCounts, sinceUtc, nowUtc, zone);
         return new Snapshot(
             Dictations: selected.Count,
             Words: words,
@@ -73,15 +86,16 @@ public static partial class UsageAnalyzer
             Speech: TimeSpan.FromMilliseconds(selected.Sum(entry => (long)Math.Max(0, entry.AudioMilliseconds))),
             AverageWords: selected.Count == 0 ? 0 : words / (double)selected.Count,
             TopApps: apps,
-            Trend: BuildTrend(selected, wordCounts, sinceUtc, nowUtc, zone),
-            Terms: ExtractTerms(selected, knownTerms, maxTerms));
+            Trend: trend,
+            Terms: ExtractTerms(selected, knownTerms, maxTerms),
+            Granularity: granularity);
     }
 
     /// <summary>Counts Unicode letter/number words without assuming a particular language.</summary>
     public static int CountWords(string? text) =>
         string.IsNullOrWhiteSpace(text) ? 0 : Word().Matches(text).Count;
 
-    private static IReadOnlyList<TrendPoint> BuildTrend(
+    private static (IReadOnlyList<TrendPoint> Points, TrendGranularity Granularity) BuildTrend(
         IReadOnlyList<HistoryEntry> entries,
         IReadOnlyDictionary<long, int> wordCounts,
         DateTimeOffset sinceUtc,
@@ -99,7 +113,8 @@ public static partial class UsageAnalyzer
             start = end;
         }
 
-        var useWeeks = end.DayNumber - start.DayNumber > 31;
+        var granularity = end.DayNumber - start.DayNumber > 31 ? TrendGranularity.Weekly : TrendGranularity.Daily;
+        var useWeeks = granularity == TrendGranularity.Weekly;
         if (useWeeks)
         {
             start = StartOfWeek(start);
@@ -122,7 +137,7 @@ public static partial class UsageAnalyzer
             points.Add(new TrendPoint(cursor, value.Dictations, value.Words));
         }
 
-        return points;
+        return (points, granularity);
     }
 
     private static IReadOnlyList<TermUsage> ExtractTerms(
@@ -140,46 +155,50 @@ public static partial class UsageAnalyzer
                     .SelectMany(entry => new[] { entry.Pattern.Trim(), entry.Replacement.Trim() })
                     .Where(form => form.Length >= 2)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderByDescending(form => form.Length)
-                    .Select(form => new PhraseMatcher(form, CreatePhraseRegex(form)))
                     .ToList(),
             })
+            // A 1-char pattern with a 1-char replacement leaves no usable forms; skipping the
+            // group keeps the max-over-forms below from throwing on an empty sequence.
+            .Where(term => term.Forms.Count > 0)
             .ToList();
 
-        var results = new List<TermUsage>();
-        var coveredForms = new HashSet<string>(
-            known.SelectMany(term => term.Forms).Select(form => form.Text),
-            StringComparer.OrdinalIgnoreCase);
-
-        foreach (var term in known)
+        // Forms represented by Token are counted through one tokenization pass and hash
+        // lookups. Only forms Token cannot represent, normally multi-token phrases, retain
+        // compiled regex matching.
+        var singleTokenForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var phraseMatchers = new List<PhraseMatcher>();
+        foreach (var form in known.SelectMany(term => term.Forms).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var dictations = 0;
-            var occurrences = 0;
-            foreach (var entry in entries)
+            if (IsSingleTokenForm(form))
             {
-                var count = term.Forms.Max(form => form.Pattern.Matches(entry.Text).Count);
-                if (count > 0)
-                {
-                    dictations++;
-                    occurrences += count;
-                }
+                singleTokenForms.Add(form);
             }
-
-            if (dictations > 0)
+            else
             {
-                results.Add(new TermUsage(term.Canonical, dictations, occurrences, Covered: true));
+                phraseMatchers.Add(new PhraseMatcher(form, CreatePhraseRegex(form)));
             }
         }
 
+        var coveredForms = new HashSet<string>(
+            known.SelectMany(term => term.Forms),
+            StringComparer.OrdinalIgnoreCase);
+        var termDictations = new int[known.Count];
+        var termOccurrences = new int[known.Count];
         var novelForms = new Dictionary<string, (string Surface, int Dictations, int Occurrences)>(
             StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var formCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var lastTokenMatchEnds = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var seenNovelForms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (Match match in Token().Matches(entry.Text))
             {
+                CountSingleTokenForms(match, singleTokenForms, formCounts, lastTokenMatchEnds);
+
                 var token = match.Value.TrimEnd('.', ',', ':', ';', '!', '?');
-                if (token.Length < 2 || coveredForms.Contains(token) || !DictionarySuggestionMiner.IsJargonShaped(token))
+                if (token.Length < 2 ||
+                    coveredForms.Contains(token) ||
+                    !DictionarySuggestionMiner.IsJargonShaped(token))
                 {
                     continue;
                 }
@@ -187,8 +206,43 @@ public static partial class UsageAnalyzer
                 var current = novelForms.GetValueOrDefault(token);
                 novelForms[token] = (
                     string.IsNullOrEmpty(current.Surface) ? token : current.Surface,
-                    current.Dictations + (seen.Add(token) ? 1 : 0),
+                    current.Dictations + (seenNovelForms.Add(token) ? 1 : 0),
                     current.Occurrences + 1);
+            }
+
+            foreach (var matcher in phraseMatchers)
+            {
+                var count = matcher.Pattern.Matches(entry.Text).Count;
+                if (count > 0)
+                {
+                    formCounts[matcher.Text] = count;
+                }
+            }
+
+            for (var i = 0; i < known.Count; i++)
+            {
+                // Max across forms, not the sum: pattern and replacement describe the same
+                // spoken term, so summing would double count one utterance.
+                var count = 0;
+                foreach (var form in known[i].Forms)
+                {
+                    count = Math.Max(count, formCounts.GetValueOrDefault(form));
+                }
+
+                if (count > 0)
+                {
+                    termDictations[i]++;
+                    termOccurrences[i] += count;
+                }
+            }
+        }
+
+        var results = new List<TermUsage>();
+        for (var i = 0; i < known.Count; i++)
+        {
+            if (termDictations[i] > 0)
+            {
+                results.Add(new TermUsage(known[i].Canonical, termDictations[i], termOccurrences[i], Covered: true));
             }
         }
 
@@ -204,9 +258,55 @@ public static partial class UsageAnalyzer
             .ToList();
     }
 
+    private static bool IsSingleTokenForm(string form)
+    {
+        var match = Token().Match(form);
+        return match.Success && match.Index == 0 && match.Length == form.Length;
+    }
+
+    private static void CountSingleTokenForms(
+        Match tokenMatch,
+        HashSet<string> singleTokenForms,
+        Dictionary<string, int> formCounts,
+        Dictionary<string, int> lastMatchEnds)
+    {
+        var token = tokenMatch.Value;
+        for (var start = 0; start < token.Length; start++)
+        {
+            if (start > 0 && char.IsLetterOrDigit(token[start - 1]))
+            {
+                continue;
+            }
+
+            for (var end = start + 2; end <= token.Length; end++)
+            {
+                if (end < token.Length && char.IsLetterOrDigit(token[end]))
+                {
+                    continue;
+                }
+
+                var candidate = token[start..end];
+                if (!singleTokenForms.TryGetValue(candidate, out var form))
+                {
+                    continue;
+                }
+
+                var absoluteStart = tokenMatch.Index + start;
+                if (lastMatchEnds.TryGetValue(form, out var lastEnd) && absoluteStart < lastEnd)
+                {
+                    continue;
+                }
+
+                formCounts[form] = formCounts.GetValueOrDefault(form) + 1;
+                lastMatchEnds[form] = tokenMatch.Index + end;
+            }
+        }
+    }
+
+    // Compiled because each surviving phrase regex still runs against every history entry.
     private static Regex CreatePhraseRegex(string phrase) => new(
         $@"(?<![\p{{L}}\p{{N}}]){Regex.Escape(phrase)}(?![\p{{L}}\p{{N}}])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static DateOnly LocalDate(DateTimeOffset timestamp, TimeZoneInfo zone) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(timestamp, zone).DateTime);
