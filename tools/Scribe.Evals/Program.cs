@@ -13,6 +13,11 @@ namespace Scribe.Evals;
 /// It proves three things the user asked for: (1) editing the prompt actually changes the output
 /// ("pirate" vs "Old English"), (2) format/translation instructions take effect, and (3) different
 /// models can be compared head-to-head. No judge model and no network are required.
+/// <para>
+/// <c>--suite auxiliary</c> covers the two non-cleanup prompts the app ships (usage insight and AI
+/// dictionary suggestions) through the same deterministic-evaluator pattern; see
+/// <see cref="AuxiliaryScenarios"/>.
+/// </para>
 /// </summary>
 internal static class Program
 {
@@ -27,11 +32,24 @@ internal static class Program
 
         if (opts.ListScenarios)
         {
-            Console.WriteLine("Eval scenarios:");
-            foreach (var s in EvalScenarios.All)
+            if (opts.Suite is EvalSuite.Style or EvalSuite.All)
             {
-                Console.WriteLine($"  - {s.Name}: needs >= {s.MinMarkersToPass} markers; changed-from-raw={s.RequireChanged}");
+                Console.WriteLine("Eval scenarios (style suite):");
+                foreach (var s in EvalScenarios.All)
+                {
+                    Console.WriteLine($"  - {s.Name}: needs >= {s.MinMarkersToPass} markers; changed-from-raw={s.RequireChanged}");
+                }
             }
+
+            if (opts.Suite is EvalSuite.Auxiliary or EvalSuite.All)
+            {
+                Console.WriteLine("Eval scenarios (auxiliary suite):");
+                foreach (var s in AuxiliaryScenarios.All)
+                {
+                    Console.WriteLine($"  - {s.Name}: {s.MetricName}");
+                }
+            }
+
             return 0;
         }
 
@@ -45,8 +63,11 @@ internal static class Program
             return await runner.RunAsync(cancel.Token);
         }
 
-        Console.WriteLine($"Scribe evals — provider={opts.Provider}, models=[{string.Join(", ", opts.Models)}]");
-        Console.WriteLine($"Raw transcript: \"{EvalScenarios.RawTranscript}\"");
+        Console.WriteLine($"Scribe evals: provider={opts.Provider}, suite={opts.Suite}, models=[{string.Join(", ", opts.Models)}]");
+        if (opts.Suite is EvalSuite.Style or EvalSuite.All)
+        {
+            Console.WriteLine($"Raw transcript: \"{EvalScenarios.RawTranscript}\"");
+        }
         Console.WriteLine();
 
         await using var svc = new TextCleanupService(opts.Verbose
@@ -57,13 +78,21 @@ internal static class Program
         var totalFailures = 0;
         foreach (var model in opts.Models)
         {
-            totalFailures += await RunModelAsync(svc, opts, model, cancel.Token);
+            if (opts.Suite is EvalSuite.Style or EvalSuite.All)
+            {
+                totalFailures += await RunModelAsync(svc, opts, model, cancel.Token);
+            }
+
+            if (opts.Suite is EvalSuite.Auxiliary or EvalSuite.All)
+            {
+                totalFailures += await RunAuxiliaryModelAsync(svc, opts, model, cancel.Token);
+            }
         }
 
         Console.WriteLine();
         Console.WriteLine(totalFailures == 0
-            ? "RESULT: PASS — every scenario followed its prompt."
-            : $"RESULT: FAIL — {totalFailures} scenario(s) did not meet the style threshold.");
+            ? "RESULT: PASS: every scenario followed its prompt."
+            : $"RESULT: FAIL: {totalFailures} scenario(s) did not meet the prompt requirements.");
 
         return totalFailures == 0 ? 0 : 1;
     }
@@ -117,6 +146,71 @@ internal static class Program
 
             Console.WriteLine($"   · {scenario.Name} -> {(failed ? "FAIL" : "PASS")}");
             Console.WriteLine($"     output: {Snippet(cleaned)}");
+        }
+
+        Console.WriteLine();
+        PrintTable(rows);
+        Console.WriteLine($"   {model}: {rows.Count - failures}/{rows.Count} passed.");
+        Console.WriteLine();
+        return failures;
+    }
+
+    /// <summary>
+    /// Runs the auxiliary-prompt suite: each scenario carries its own full system prompt (the shipped
+    /// UsageInsight / AiDictionarySuggester constants) and goes through
+    /// <see cref="ITextCleanupService.CompleteAsync"/>, the exact call path the app uses for these
+    /// helpers, then a deterministic evaluator scores the raw response. No judge model is required.
+    /// </summary>
+    private static async Task<int> RunAuxiliaryModelAsync(
+        TextCleanupService svc, CliOptions opts, string model, CancellationToken ct)
+    {
+        Console.WriteLine($"=== Model: {model} (auxiliary prompts) ===");
+
+        // The configured writing style is irrelevant here (CompleteAsync swaps in each scenario's own
+        // system prompt), but the service still needs a Ready model before it will answer.
+        svc.Configure(opts.BuildOptions(model, CleanupPrompt.DefaultWritingStyle));
+        var ready = await WaitForReadyAsync(svc, opts.ReadyTimeout, ct);
+
+        var failures = 0;
+        var rows = new List<(string Scenario, string Score, string Result, string Reason)>();
+
+        foreach (var scenario in AuxiliaryScenarios.All)
+        {
+            if (!ready)
+            {
+                failures++;
+                rows.Add((scenario.Name, "-", "ERROR", $"model not ready ({svc.Status}: {svc.StatusDetail})"));
+                continue;
+            }
+
+            var response = await svc.CompleteAsync(scenario.SystemPrompt, scenario.UserMessage, ct);
+            if (response is null)
+            {
+                // CompleteAsync's null contract covers both "not ready" and "call failed".
+                failures++;
+                rows.Add((scenario.Name, "-", "ERROR", "CompleteAsync returned null (call failed)"));
+                continue;
+            }
+
+            var request = new ChatMessage(ChatRole.User, scenario.UserMessage);
+            var chatResponse = new ChatResponse(new ChatMessage(ChatRole.Assistant, response));
+            var result = await scenario.Evaluator.EvaluateAsync([request], chatResponse, cancellationToken: ct);
+
+            var metric = result.Get<NumericMetric>(scenario.MetricName);
+            var failed = metric.Interpretation?.Failed ?? true;
+            if (failed)
+            {
+                failures++;
+            }
+
+            rows.Add((
+                scenario.Name,
+                (metric.Value ?? 0).ToString("0.00"),
+                failed ? "FAIL" : "PASS",
+                metric.Interpretation?.Reason ?? string.Empty));
+
+            Console.WriteLine($"   · {scenario.Name} -> {(failed ? "FAIL" : "PASS")}");
+            Console.WriteLine($"     output: {Snippet(response)}");
         }
 
         Console.WriteLine();

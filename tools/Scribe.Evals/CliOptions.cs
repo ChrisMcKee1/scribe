@@ -3,11 +3,23 @@ using Microsoft.Extensions.AI;
 
 namespace Scribe.Evals;
 
+/// <summary>
+/// Which scenario suite the eval run covers: the cleanup writing-style suite, the auxiliary-prompt
+/// suite (usage insight + AI dictionary suggestions), or both.
+/// </summary>
+internal enum EvalSuite
+{
+    Style,
+    Auxiliary,
+    All,
+}
+
 /// <summary>Parsed command-line options for the eval runner.</summary>
 internal sealed class CliOptions
 {
     public CleanupProvider Provider { get; private set; } = CleanupProvider.FoundryLocal;
     public IReadOnlyList<string> Models { get; private set; } = [CleanupModelCatalog.DefaultAlias];
+    public EvalSuite Suite { get; private set; } = EvalSuite.Style;
     public string? AzureEndpoint { get; private set; }
     public string? AzureTenantId { get; private set; }
     public TimeSpan ReadyTimeout { get; private set; } = TimeSpan.FromSeconds(240);
@@ -132,6 +144,14 @@ internal sealed class CliOptions
                     o.Provider = Next().ToLowerInvariant() is "azure" or "azurefoundry" or "cloud"
                         ? CleanupProvider.AzureFoundry
                         : CleanupProvider.FoundryLocal;
+                    break;
+                case "--suite":
+                    o.Suite = Next().ToLowerInvariant() switch
+                    {
+                        "auxiliary" or "aux" => EvalSuite.Auxiliary,
+                        "all" or "both" => EvalSuite.All,
+                        _ => EvalSuite.Style,
+                    };
                     break;
                 case "--model":
                     var m = Next();
@@ -304,13 +324,16 @@ internal sealed class CliOptions
     {
         Console.WriteLine(
             """
-            Scribe.Evals — offline style/format eval harness for Scribe AI cleanup.
+            Scribe.Evals: offline prompt eval harness for Scribe AI features.
 
             Usage:
               dotnet run --project tools/Scribe.Evals -- [options]
 
             Options:
               --provider <foundrylocal|azure>   Cleanup backend (default: foundrylocal).
+              --suite <style|auxiliary|all>     Scenario suite (default: style). "auxiliary" evals
+                                                the usage-insight and AI dictionary-suggestion
+                                                prompts; "all" runs both suites.
               --model <name>                    A model to test (Foundry alias, or Azure deployment).
                                                 Repeatable.
               --models <a,b,c>                  Comma-separated models to compare head-to-head.
@@ -318,7 +341,7 @@ internal sealed class CliOptions
                                                 or explicit benchmark deployment fallback).
               --tenant <id>                     Optional Azure tenant id override (azure provider).
               --ready-timeout <seconds>         Max wait for a model to load (default: 240).
-              --list                            List the eval scenarios and exit.
+              --list                            List scenarios in the selected suite and exit.
               -v, --verbose                     Print service init/cleanup diagnostics to stderr.
               -h, --help                        Show this help.
 
@@ -350,6 +373,7 @@ internal sealed class CliOptions
             Examples:
               dotnet run --project tools/Scribe.Evals
               dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
+              dotnet run --project tools/Scribe.Evals -- --suite auxiliary --model qwen3-1.7b
               dotnet run --project tools/Scribe.Evals -- --provider azure --endpoint https://x.openai.azure.com/ --model gpt-5.4-mini
 
             Exit code is 0 when every scenario follows its prompt, otherwise the number of failures.

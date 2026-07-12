@@ -128,23 +128,23 @@ public sealed class HistoryRepository : IHistoryRepository
     public void Delete(long id)
     {
         using var connection = _database.Open();
-                using var transaction = connection.BeginTransaction();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
-                command.Transaction = transaction;
-                command.CommandText =
-                        """
-                        DELETE FROM audio_blobs
-                        WHERE id = (SELECT audio_blob_id FROM history WHERE id = $id)
-                            AND NOT EXISTS (
-                                    SELECT 1 FROM history
-                                    WHERE audio_blob_id = (SELECT audio_blob_id FROM history WHERE id = $id)
-                                        AND id <> $id
-                            );
-                        DELETE FROM history WHERE id = $id;
-                        """;
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            DELETE FROM audio_blobs
+            WHERE id = (SELECT audio_blob_id FROM history WHERE id = $id)
+                AND NOT EXISTS (
+                    SELECT 1 FROM history
+                    WHERE audio_blob_id = (SELECT audio_blob_id FROM history WHERE id = $id)
+                        AND id <> $id
+                );
+            DELETE FROM history WHERE id = $id;
+            """;
         command.Parameters.AddWithValue("$id", id);
         command.ExecuteNonQuery();
-                transaction.Commit();
+        transaction.Commit();
     }
 
     public void Clear()
