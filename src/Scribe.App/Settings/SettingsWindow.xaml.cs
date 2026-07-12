@@ -36,6 +36,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ICleanupFailureLog _failureLog;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
+    private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
 
     private readonly AppSettings _settings;
@@ -77,6 +78,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ICleanupFailureLog failureLog,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
+        Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null)
     {
         _settingsRepository = settingsRepository;
@@ -90,6 +92,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _failureLog = failureLog;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
+        _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
 
         _settings = settingsRepository.Load();
@@ -756,7 +759,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _finalized = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
-        HotkeyBox.Text = "Press one or two keys…";
+
+        // Put the global hook into pass-through first: the current push-to-talk key must reach
+        // this capture box as an ordinary key instead of being suppressed or starting a recording.
+        _setHotkeyCaptureMode(true);
+        HotkeyBox.Text = "Press one or two keys… (dictation is paused)";
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -815,6 +822,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
+        _setHotkeyCaptureMode(false);
         HotkeyBox.Text = HotkeyCapture.Describe(binding);
         Keyboard.ClearFocus();
 
@@ -836,6 +844,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
+        _setHotkeyCaptureMode(false);
         HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
         Keyboard.ClearFocus();
     }
@@ -1507,6 +1516,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // Closing mid-capture must never leave the global hook in pass-through, or the
+        // push-to-talk key would stay dead until the app restarts.
+        if (_capturing)
+        {
+            _capturing = false;
+            _setHotkeyCaptureMode(false);
+        }
+
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
         if (_updates is not null)
         {

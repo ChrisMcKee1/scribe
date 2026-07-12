@@ -92,4 +92,94 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     internal static partial short GetAsyncKeyState(int vKey);
+
+    /// <summary>High bit of <see cref="GetAsyncKeyState"/>: the system's logical "key is down".</summary>
+    internal static bool IsKeyLogicallyDown(uint virtualKey) =>
+        (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
+
+    // --- Synthetic input (leak release + hook liveness probe) --------------------------------
+
+    internal const uint INPUT_KEYBOARD = 1;
+    internal const uint KEYEVENTF_KEYUP = 0x0002;
+    internal const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+
+    // AutoHotkey's long-standing "mask key": an unassigned virtual key whose key-up is inert in
+    // every mainstream app, safe to inject as a hook liveness probe.
+    internal const ushort VK_PROBE = 0xFF;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KEYBDINPUT
+    {
+        public ushort wVk;
+        public ushort wScan;
+        public uint dwFlags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    // Mirrors InjectionNativeMethods: sequential outer struct with an explicit union keeps the
+    // union at the OS's natural alignment on both x86 and x64 without hardcoded offsets.
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct INPUT
+    {
+        public uint type;
+        public InputUnion U;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    internal struct InputUnion
+    {
+        [FieldOffset(0)]
+        public MOUSEINPUT mi;
+
+        [FieldOffset(0)]
+        public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public nuint dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    // Right-hand modifiers and the nav/arrow cluster carry the extended-key flag; a synthetic
+    // key-up without it maps to the left-hand sibling and would fail to release the right key.
+    private static bool IsExtendedKey(uint virtualKey) => virtualKey is
+        0xA3 /* RCtrl */ or 0xA5 /* RAlt */ or 0x5B /* LWin */ or 0x5C /* RWin */ or
+        0x21 /* PgUp */ or 0x22 /* PgDn */ or 0x23 /* End */ or 0x24 /* Home */ or
+        0x25 or 0x26 or 0x27 or 0x28 /* arrows */ or
+        0x2D /* Insert */ or 0x2E /* Delete */ or 0x90 /* NumLock */ or 0x6F /* NumDivide */;
+
+    /// <summary>
+    /// Injects a synthetic key event tagged with <see cref="SyntheticInputMarker"/> so the hook
+    /// ignores it for chord state (the liveness probe still ticks the callback counter).
+    /// </summary>
+    internal static bool SendMarkedKeyEvent(ushort virtualKey, bool keyUp)
+    {
+        var flags = (keyUp ? KEYEVENTF_KEYUP : 0u) |
+            (IsExtendedKey(virtualKey) ? KEYEVENTF_EXTENDEDKEY : 0u);
+        var input = new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            U = new InputUnion
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = virtualKey,
+                    dwFlags = flags,
+                    dwExtraInfo = SyntheticInputMarker.Value,
+                },
+            },
+        };
+
+        return SendInput(1, [input], Marshal.SizeOf<INPUT>()) == 1;
+    }
 }

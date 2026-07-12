@@ -362,6 +362,7 @@ public partial class App : Application
                 _overlay?.SetPosition(settings.OverlayPosition);
                 _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
             },
+            capturing => _controller?.SetHotkeyCaptureMode(capturing),
             _updates);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();

@@ -166,6 +166,13 @@ internal sealed class DictationController : IDisposable
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
 
+    /// <summary>
+    /// Routes the settings window's binding-capture state to the hook. While capture is on, the
+    /// push-to-talk key types into the capture box instead of starting a dictation, and any
+    /// dictation already in flight is deactivated by the hook before capture begins.
+    /// </summary>
+    public void SetHotkeyCaptureMode(bool enabled) => _hotkeys.SetCaptureMode(enabled);
+
     /// <summary>Maps persisted AppSettings into the cleanup service's provider-agnostic options.</summary>
     private CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
         settings.EnableAiCleanup,

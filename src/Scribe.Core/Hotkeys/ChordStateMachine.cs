@@ -32,6 +32,7 @@ internal sealed class ChordStateMachine
     private HotkeyBinding _binding;
     private bool _satisfied;
     private bool _active;
+    private bool _captureMode;
 
     public ChordStateMachine(HotkeyBinding binding) => _binding = binding;
 
@@ -39,6 +40,14 @@ internal sealed class ChordStateMachine
     {
         lock (_gate)
         {
+            // Binding capture in Settings owns the keyboard: every event passes through untouched
+            // so the capture box can see the current push-to-talk key, and nothing can start a
+            // dictation while the user is choosing a new chord.
+            if (_captureMode)
+            {
+                return new ChordUpdate(HotkeyTransition.None, ShouldSuppress: false);
+            }
+
             var isBindingKey = IsBindingKey(_binding, virtualKey);
             var wasSatisfied = _satisfied;
             var repeated = isDown && _pressed.Contains(virtualKey);
@@ -122,6 +131,39 @@ internal sealed class ChordStateMachine
         lock (_gate)
         {
             _active = false;
+        }
+    }
+
+    /// <summary>
+    /// Enters or leaves binding-capture pass-through. Entering clears all key state and reports
+    /// whether an in-flight activation must be deactivated (so a recording in progress stops when
+    /// the user starts rebinding). Leaving also clears state: a key still held from the capture
+    /// gesture must not satisfy the (possibly brand new) chord until it is pressed fresh.
+    /// </summary>
+    public HotkeyTransition SetCaptureMode(bool enabled)
+    {
+        lock (_gate)
+        {
+            _captureMode = enabled;
+            var transition = enabled && _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
+            _pressed.Clear();
+            _suppressed.Clear();
+            _satisfied = false;
+            _active = false;
+            return transition;
+        }
+    }
+
+    /// <summary>
+    /// True when the hook has seen this key go down and not yet come back up. This is the hook's
+    /// view of the physical keyboard, which can legitimately differ from the system's logical
+    /// key state when this machine suppressed the events (see the leak reconciler).
+    /// </summary>
+    public bool IsPressed(uint virtualKey)
+    {
+        lock (_gate)
+        {
+            return _pressed.Contains(virtualKey);
         }
     }
 

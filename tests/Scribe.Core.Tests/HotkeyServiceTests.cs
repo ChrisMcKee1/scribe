@@ -133,6 +133,101 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Capture_mode_passes_the_bound_key_through_without_activating_or_suppressing()
+    {
+        var state = new ChordStateMachine(HotkeyBinding.Default); // Right Ctrl, suppressed
+
+        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(true));
+
+        var down = state.Process(0xA3, isDown: true);
+        var up = state.Process(0xA3, isDown: false);
+        Assert.Equal(HotkeyTransition.None, down.Transition);
+        Assert.False(down.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.None, up.Transition);
+        Assert.False(up.ShouldSuppress);
+    }
+
+    [Fact]
+    public void Entering_capture_mode_mid_hold_deactivates_the_recording()
+    {
+        var state = new ChordStateMachine(HotkeyBinding.Default);
+
+        Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
+        Assert.Equal(HotkeyTransition.Deactivated, state.SetCaptureMode(true));
+    }
+
+    [Fact]
+    public void Leaving_capture_mode_requires_a_fresh_press_to_activate()
+    {
+        var state = new ChordStateMachine(HotkeyBinding.Default);
+        state.SetCaptureMode(true);
+
+        // Key held across the capture-mode boundary must not satisfy the chord on exit.
+        state.Process(0xA3, isDown: true);
+        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(false));
+
+        Assert.Equal(HotkeyTransition.None, state.Process(0xA3, isDown: false).Transition);
+        Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
+    }
+
+    [Fact]
+    public void Reconciler_releases_only_keys_the_system_holds_but_the_hook_saw_released()
+    {
+        var leaked = new HashSet<uint> { 0xA3 };       // system: Right Ctrl still down
+        var physicallyHeld = new HashSet<uint>();      // hook: everything released
+        var released = new List<uint>();
+        var reconciler = new SuppressedKeyReconciler(
+            leaked.Contains, physicallyHeld.Contains, released.Add);
+
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+
+        Assert.Equal([0xA3u], result);
+        Assert.Equal([0xA3u], released);
+    }
+
+    [Fact]
+    public void Reconciler_never_releases_a_key_the_user_genuinely_holds()
+    {
+        var systemDown = new HashSet<uint> { 0xA3 };
+        var physicallyHeld = new HashSet<uint> { 0xA3 }; // hook agrees: user is holding it
+        var released = new List<uint>();
+        var reconciler = new SuppressedKeyReconciler(
+            systemDown.Contains, physicallyHeld.Contains, released.Add);
+
+        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Default));
+        Assert.Empty(released);
+    }
+
+    [Fact]
+    public void Reconciler_skips_unsuppressed_bindings_entirely()
+    {
+        var systemDown = new HashSet<uint> { 0x20 };
+        var released = new List<uint>();
+        var reconciler = new SuppressedKeyReconciler(
+            systemDown.Contains, _ => false, released.Add);
+
+        var binding = new HotkeyBinding(0x20, KeyModifiers.None, HotkeyMode.Hold, Suppress: false, "Space");
+        Assert.Empty(reconciler.ReleaseLeakedKeys(binding));
+        Assert.Empty(released);
+    }
+
+    [Fact]
+    public void Reconciler_covers_chord_members_and_both_variants_of_flag_modifiers()
+    {
+        var chord = new HotkeyBinding(
+            0x77, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F8+F9",
+            SecondaryVirtualKey: 0x78, SuppressChordMembers: true);
+        Assert.Equal(
+            new[] { 0x77u, 0x78u },
+            SuppressedKeyReconciler.CandidateKeys(chord).OrderBy(k => k));
+
+        var modified = new HotkeyBinding(0x20, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true, "Ctrl+Space");
+        Assert.Equal(
+            new[] { 0x20u, 0xA2u, 0xA3u },
+            SuppressedKeyReconciler.CandidateKeys(modified).OrderBy(k => k));
+    }
+
+    [Fact]
     public void Rebinding_an_active_chord_emits_deactivation_and_resets_pressed_state()
     {
         var state = new ChordStateMachine(
