@@ -11,16 +11,24 @@ namespace Scribe.App.Infrastructure;
 /// </summary>
 internal sealed class FileLoggerProvider : ILoggerProvider
 {
-    private readonly string _filePath;
+    private readonly string _logsDirectory;
     private readonly object _gate = new();
+    private string _filePath;
+    private int _fileDay;
 
     public FileLoggerProvider(string logsDirectory)
     {
         Directory.CreateDirectory(logsDirectory);
-        _filePath = Path.Combine(logsDirectory, $"scribe-{DateTime.Now:yyyyMMdd}.log");
+        _logsDirectory = logsDirectory;
+        var now = DateTime.Now;
+        _fileDay = now.DayOfYear;
+        _filePath = DailyPath(now);
     }
 
     public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, this);
+
+    private string DailyPath(DateTime now) =>
+        Path.Combine(_logsDirectory, $"scribe-{now:yyyyMMdd}.log");
 
     private void Append(string line)
     {
@@ -37,6 +45,16 @@ internal sealed class FileLoggerProvider : ILoggerProvider
             {
                 lock (_gate)
                 {
+                    // The tray app runs for days, so "daily" must rotate per write, not per launch:
+                    // a launch-day file pinned at construction diverges from the overlay's properly
+                    // rotated file at midnight and splits the shared timeline the logs exist for.
+                    var now = DateTime.Now;
+                    if (now.DayOfYear != _fileDay)
+                    {
+                        _fileDay = now.DayOfYear;
+                        _filePath = DailyPath(now);
+                    }
+
                     using var stream = new FileStream(
                         _filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
                     using var writer = new StreamWriter(stream);
