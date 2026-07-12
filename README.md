@@ -120,6 +120,12 @@ factor around **0.03×**, which is ~30× faster than the audio itself.
 
 ![Scribe diagnostics: decode latency P50/P95 and real-time factor from local history](docs/screenshots/diagnostics.png)
 
+### Everything you said, on your disk
+History keeps your recent dictations reviewable and copyable, with per-entry audio if you opt in.
+Delete one entry or clear everything; it never leaves your PC either way.
+
+![Scribe history: recent dictations with timing, target app and decode latency](docs/screenshots/history.png)
+
 ### See how dictation fits your work
 The Usage section summarizes retained history across 7, 30 or 90 days, or all retained history.
 Every metric uses the same selected period. It shows totals, active days, speech time, top apps,
@@ -128,6 +134,8 @@ yet gets an **Add** button that locks in its spelling on the spot. Opening or re
 stays fully local. The optional AI insight button sends only aggregate totals and term labels
 already in your dictionary. Terms mined from your dictations but not yet in your dictionary stay
 on your machine, and it never sends transcript text, audio, application names or timestamps.
+
+![Scribe usage insights: totals, trend chart, top apps and recurring terminology with one-click add](docs/screenshots/usage.png)
 
 ## 🚀 Getting started
 
