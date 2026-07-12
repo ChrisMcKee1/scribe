@@ -9,7 +9,12 @@ internal enum HotkeyTransition
     Deactivated,
 }
 
-internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool ShouldSuppress);
+/// <summary>
+/// One hook event's outcome. <paramref name="Generation"/> identifies the state epoch the
+/// transition was computed in: state-clearing operations (capture mode, binding update, reset)
+/// bump the generation, letting the dispatcher discard an Activated that raced one of them.
+/// </summary>
+internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool ShouldSuppress, long Generation);
 
 /// <summary>Pure key-set state machine shared by the global hook and deterministic unit tests.</summary>
 internal sealed class ChordStateMachine
@@ -33,8 +38,15 @@ internal sealed class ChordStateMachine
     private bool _satisfied;
     private bool _active;
     private bool _captureMode;
+    private long _generation;
 
     public ChordStateMachine(HotkeyBinding binding) => _binding = binding;
+
+    /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
+    public long Generation
+    {
+        get { lock (_gate) { return _generation; } }
+    }
 
     public ChordUpdate Process(uint virtualKey, bool isDown)
     {
@@ -45,7 +57,7 @@ internal sealed class ChordStateMachine
             // dictation while the user is choosing a new chord.
             if (_captureMode)
             {
-                return new ChordUpdate(HotkeyTransition.None, ShouldSuppress: false);
+                return new ChordUpdate(HotkeyTransition.None, ShouldSuppress: false, _generation);
             }
 
             var isBindingKey = IsBindingKey(_binding, virtualKey);
@@ -97,33 +109,45 @@ internal sealed class ChordStateMachine
                 shouldSuppress = true;
             }
 
-            return new ChordUpdate(transition, shouldSuppress);
+            return new ChordUpdate(transition, shouldSuppress, _generation);
         }
     }
 
-    public HotkeyTransition UpdateBinding(HotkeyBinding binding)
+    public (HotkeyTransition Transition, long Generation) UpdateBinding(HotkeyBinding binding)
     {
         lock (_gate)
         {
             var transition = _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
             _binding = binding;
-            _pressed.Clear();
-            _suppressed.Clear();
-            _satisfied = false;
-            _active = false;
-            return transition;
+            ClearStateLocked();
+            return (transition, _generation);
         }
     }
 
-    public void Reset()
+    /// <summary>
+    /// Clears all key state, reporting the deactivation the caller must dispatch when an
+    /// activation was in flight (e.g. a hook reinstall mid-recording must stop the recording,
+    /// because the held key's eventual release can no longer be matched to cleared state).
+    /// </summary>
+    public (HotkeyTransition Transition, long Generation) Reset()
     {
         lock (_gate)
         {
-            _pressed.Clear();
-            _suppressed.Clear();
-            _satisfied = false;
-            _active = false;
+            var transition = _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
+            ClearStateLocked();
+            return (transition, _generation);
         }
+    }
+
+    // Callers hold _gate. Every clear starts a new generation so transitions computed against
+    // the old state are identifiable as stale.
+    private void ClearStateLocked()
+    {
+        _pressed.Clear();
+        _suppressed.Clear();
+        _satisfied = false;
+        _active = false;
+        _generation++;
     }
 
     public void CancelToggle()
@@ -140,17 +164,14 @@ internal sealed class ChordStateMachine
     /// the user starts rebinding). Leaving also clears state: a key still held from the capture
     /// gesture must not satisfy the (possibly brand new) chord until it is pressed fresh.
     /// </summary>
-    public HotkeyTransition SetCaptureMode(bool enabled)
+    public (HotkeyTransition Transition, long Generation) SetCaptureMode(bool enabled)
     {
         lock (_gate)
         {
             _captureMode = enabled;
             var transition = enabled && _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
-            _pressed.Clear();
-            _suppressed.Clear();
-            _satisfied = false;
-            _active = false;
-            return transition;
+            ClearStateLocked();
+            return (transition, _generation);
         }
     }
 

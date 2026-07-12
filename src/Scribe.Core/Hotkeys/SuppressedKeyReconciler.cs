@@ -23,17 +23,23 @@ internal sealed class SuppressedKeyReconciler
     private const uint VkLeftWin = 0x5B;
     private const uint VkRightWin = 0x5C;
 
+    /// <summary>Keys whose synthetic release succeeded, and keys where SendInput was rejected.</summary>
+    public readonly record struct Result(IReadOnlyList<uint> Released, IReadOnlyList<uint> Failed);
+
     private readonly Func<uint, bool> _isLogicallyDown;
     private readonly Func<uint, bool> _isPhysicallyPressed;
-    private readonly Action<uint> _releaseKey;
+    private readonly Func<uint, bool> _releaseKey;
 
     /// <param name="isLogicallyDown">The system's view (GetAsyncKeyState high bit).</param>
     /// <param name="isPhysicallyPressed">The hook's view (ChordStateMachine.IsPressed).</param>
-    /// <param name="releaseKey">Injects a synthetic, marker-tagged key-up for the key.</param>
+    /// <param name="releaseKey">
+    /// Injects a synthetic, marker-tagged key-up; returns false when the injection was rejected
+    /// (e.g. UIPI or a desktop switch), so a failed release is never reported as healed.
+    /// </param>
     public SuppressedKeyReconciler(
         Func<uint, bool> isLogicallyDown,
         Func<uint, bool> isPhysicallyPressed,
-        Action<uint> releaseKey)
+        Func<uint, bool> releaseKey)
     {
         _isLogicallyDown = isLogicallyDown;
         _isPhysicallyPressed = isPhysicallyPressed;
@@ -44,26 +50,33 @@ internal sealed class SuppressedKeyReconciler
     /// Releases every candidate key of <paramref name="binding"/> that the system believes is
     /// still down although the hook saw it released. A key the user genuinely holds right now
     /// (hook agrees it is down) is never touched, so a real modifier held for a shortcut
-    /// survives reconciliation. Returns the keys that were released, for logging.
+    /// survives reconciliation.
     /// </summary>
-    public IReadOnlyList<uint> ReleaseLeakedKeys(HotkeyBinding binding)
+    public Result ReleaseLeakedKeys(HotkeyBinding binding)
     {
         if (!binding.Suppress)
         {
-            return [];
+            return new Result([], []);
         }
 
         List<uint>? released = null;
+        List<uint>? failed = null;
         foreach (var key in CandidateKeys(binding))
         {
             if (_isLogicallyDown(key) && !_isPhysicallyPressed(key))
             {
-                _releaseKey(key);
-                (released ??= []).Add(key);
+                if (_releaseKey(key))
+                {
+                    (released ??= []).Add(key);
+                }
+                else
+                {
+                    (failed ??= []).Add(key);
+                }
             }
         }
 
-        return released ?? (IReadOnlyList<uint>)[];
+        return new Result(released ?? (IReadOnlyList<uint>)[], failed ?? (IReadOnlyList<uint>)[]);
     }
 
     /// <summary>

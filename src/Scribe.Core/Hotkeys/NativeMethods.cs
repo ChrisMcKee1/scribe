@@ -97,6 +97,31 @@ internal static partial class NativeMethods
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
+    private const uint DESKTOP_READOBJECTS = 0x0001;
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial nint OpenInputDesktop(uint dwFlags, [MarshalAs(UnmanagedType.Bool)] bool fInherit, uint dwDesiredAccess);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseDesktop(nint hDesktop);
+
+    /// <summary>
+    /// True when the current input desktop is the interactive one this process can reach; false on
+    /// the lock screen / secure desktop, where synthetic input never arrives at this desktop's hooks.
+    /// </summary>
+    internal static bool CanAccessInputDesktop()
+    {
+        var desktop = OpenInputDesktop(0, false, DESKTOP_READOBJECTS);
+        if (desktop == 0)
+        {
+            return false;
+        }
+
+        CloseDesktop(desktop);
+        return true;
+    }
+
     // --- Synthetic input (leak release + hook liveness probe) --------------------------------
 
     internal const uint INPUT_KEYBOARD = 1;

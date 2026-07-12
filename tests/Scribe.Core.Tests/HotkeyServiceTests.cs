@@ -50,10 +50,11 @@ public class HotkeyServiceTests
     [Fact]
     public void Enqueue_during_shutdown_is_discarded_without_throwing()
     {
-        using var queue = new BlockingCollection<HotkeyTransition>();
+        using var queue = new BlockingCollection<HotkeyService.QueuedTransition>();
         queue.CompleteAdding();
 
-        var added = HotkeyService.TryEnqueue(queue, HotkeyTransition.Activated);
+        var added = HotkeyService.TryEnqueue(
+            queue, new HotkeyService.QueuedTransition(HotkeyTransition.Activated, 0, AllowReconcile: true));
 
         Assert.False(added);
     }
@@ -137,7 +138,7 @@ public class HotkeyServiceTests
     {
         var state = new ChordStateMachine(HotkeyBinding.Default); // Right Ctrl, suppressed
 
-        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(true));
+        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(true).Transition);
 
         var down = state.Process(0xA3, isDown: true);
         var up = state.Process(0xA3, isDown: false);
@@ -153,7 +154,7 @@ public class HotkeyServiceTests
         var state = new ChordStateMachine(HotkeyBinding.Default);
 
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
-        Assert.Equal(HotkeyTransition.Deactivated, state.SetCaptureMode(true));
+        Assert.Equal(HotkeyTransition.Deactivated, state.SetCaptureMode(true).Transition);
     }
 
     [Fact]
@@ -164,10 +165,37 @@ public class HotkeyServiceTests
 
         // Key held across the capture-mode boundary must not satisfy the chord on exit.
         state.Process(0xA3, isDown: true);
-        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(false));
+        Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(false).Transition);
 
         Assert.Equal(HotkeyTransition.None, state.Process(0xA3, isDown: false).Transition);
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
+    }
+
+    [Fact]
+    public void State_clearing_operations_start_a_new_generation_so_stale_activations_are_detectable()
+    {
+        var state = new ChordStateMachine(HotkeyBinding.Default);
+
+        // An Activated computed in the old epoch must be distinguishable after a clear: this is
+        // what stops a racing hook callback from starting a recording during binding capture.
+        var beforeClear = state.Process(0xA3, isDown: true);
+        var (_, afterClear) = state.SetCaptureMode(true);
+
+        Assert.Equal(HotkeyTransition.Activated, beforeClear.Transition);
+        Assert.NotEqual(beforeClear.Generation, afterClear);
+        Assert.Equal(afterClear, state.Generation);
+    }
+
+    [Fact]
+    public void Reset_reports_the_deactivation_of_an_interrupted_recording()
+    {
+        var state = new ChordStateMachine(HotkeyBinding.Default);
+
+        Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
+
+        // A hook reinstall mid-hold clears state; the caller must learn the recording died.
+        Assert.Equal(HotkeyTransition.Deactivated, state.Reset().Transition);
+        Assert.Equal(HotkeyTransition.None, state.Reset().Transition);
     }
 
     [Fact]
@@ -177,11 +205,12 @@ public class HotkeyServiceTests
         var physicallyHeld = new HashSet<uint>();      // hook: everything released
         var released = new List<uint>();
         var reconciler = new SuppressedKeyReconciler(
-            leaked.Contains, physicallyHeld.Contains, released.Add);
+            leaked.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
         var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
 
-        Assert.Equal([0xA3u], result);
+        Assert.Equal([0xA3u], result.Released);
+        Assert.Empty(result.Failed);
         Assert.Equal([0xA3u], released);
     }
 
@@ -192,9 +221,9 @@ public class HotkeyServiceTests
         var physicallyHeld = new HashSet<uint> { 0xA3 }; // hook agrees: user is holding it
         var released = new List<uint>();
         var reconciler = new SuppressedKeyReconciler(
-            systemDown.Contains, physicallyHeld.Contains, released.Add);
+            systemDown.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
-        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Default));
+        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Default).Released);
         Assert.Empty(released);
     }
 
@@ -204,11 +233,24 @@ public class HotkeyServiceTests
         var systemDown = new HashSet<uint> { 0x20 };
         var released = new List<uint>();
         var reconciler = new SuppressedKeyReconciler(
-            systemDown.Contains, _ => false, released.Add);
+            systemDown.Contains, _ => false, key => { released.Add(key); return true; });
 
         var binding = new HotkeyBinding(0x20, KeyModifiers.None, HotkeyMode.Hold, Suppress: false, "Space");
-        Assert.Empty(reconciler.ReleaseLeakedKeys(binding));
+        Assert.Empty(reconciler.ReleaseLeakedKeys(binding).Released);
         Assert.Empty(released);
+    }
+
+    [Fact]
+    public void Reconciler_reports_a_rejected_injection_as_failed_not_released()
+    {
+        var leaked = new HashSet<uint> { 0xA3 };
+        var reconciler = new SuppressedKeyReconciler(
+            leaked.Contains, _ => false, _ => false); // SendInput rejected (e.g. UIPI)
+
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+
+        Assert.Empty(result.Released);
+        Assert.Equal([0xA3u], result.Failed);
     }
 
     [Fact]
@@ -237,7 +279,7 @@ public class HotkeyServiceTests
         var transition = state.UpdateBinding(
             new HotkeyBinding(0x78, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F9"));
 
-        Assert.Equal(HotkeyTransition.Deactivated, transition);
+        Assert.Equal(HotkeyTransition.Deactivated, transition.Transition);
         Assert.Equal(HotkeyTransition.None, state.Process(0x77, isDown: false).Transition);
         Assert.Equal(HotkeyTransition.Activated, state.Process(0x78, isDown: true).Transition);
     }
