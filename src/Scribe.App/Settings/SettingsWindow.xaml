@@ -172,7 +172,7 @@
                 </ListBoxItem>
                 <ListBoxItem>
                     <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
+                        <ui:SymbolIcon Symbol="DataTrending24" FontSize="18"/>
                         <TextBlock Text="Usage" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
@@ -1199,6 +1199,37 @@
                                     <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
                                         <StackPanel>
                                             <TextBlock Text="Trend" Style="{StaticResource SettingTitle}"/>
+                                            <ItemsControl x:Name="UsageTrendChart" Height="72" Margin="0,10,0,2">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Rows="1"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                        <Setter Property="VerticalAlignment" Value="Stretch"/>
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Height="72" Margin="1,0" Background="Transparent"
+                                                              ToolTip="{Binding ToolTip}">
+                                                            <Border Height="64" MaxWidth="18"
+                                                                    HorizontalAlignment="Stretch"
+                                                                    VerticalAlignment="Bottom"
+                                                                    Background="{DynamicResource AccentFillColorDefaultBrush}"
+                                                                    CornerRadius="2,2,0,0"
+                                                                    RenderTransformOrigin="0.5,1"
+                                                                    SnapsToDevicePixels="True">
+                                                                <Border.RenderTransform>
+                                                                    <ScaleTransform ScaleY="{Binding RelativeHeight}"/>
+                                                                </Border.RenderTransform>
+                                                            </Border>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                             <DataGrid x:Name="UsageTrendGrid" Margin="0,10,0,0" MaxHeight="230"
                                                       AutoGenerateColumns="False" IsReadOnly="True"
                                                       CanUserAddRows="False" CanUserDeleteRows="False"
@@ -1233,7 +1264,36 @@
                                             <TextBlock Text="Recurring terminology" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Text="Conservative jargon candidates not yet covered by your dictionary."
                                                        Style="{StaticResource SettingHint}"/>
-                                            <ItemsControl x:Name="UsageNovelTerms" Margin="0,10,0,0"/>
+                                            <TextBlock x:Name="UsageNovelEmptyHint"
+                                                       Text="No recurring uncovered jargon in this period."
+                                                       Style="{StaticResource SettingHint}" Margin="0,10,0,0"/>
+                                            <ItemsControl x:Name="UsageNovelTerms" Margin="0,7,0,0"
+                                                          Visibility="Collapsed">
+                                                <ItemsControl.ItemContainerStyle>
+                                                    <Style TargetType="ContentPresenter">
+                                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                    </Style>
+                                                </ItemsControl.ItemContainerStyle>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,3,0,0">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Text}" VerticalAlignment="Center"/>
+                                                                <TextBlock Text="{Binding DictationLabel}"
+                                                                           Style="{StaticResource SettingHint}"
+                                                                           Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                                            </StackPanel>
+                                                            <ui:Button Grid.Column="1" Content="Add" MinWidth="52" Height="28"
+                                                                       Margin="12,0,0,0" Padding="10,0"
+                                                                       Click="UsageNovelTermAddButton_Click"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                         </StackPanel>
                                     </ui:Card>
                                 </Grid>
@@ -1247,7 +1307,7 @@
                                         <StackPanel>
                                             <TextBlock Text="AI insight" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock x:Name="UsageInsightText" Style="{StaticResource SettingHint}"
-                                                       Text="Ask your configured cleanup model for a short summary of aggregate totals and recurring terms."/>
+                                                       Text="Ask your configured cleanup model for a short summary. Only totals and dictionary term labels are sent."/>
                                         </StackPanel>
                                         <ui:Button x:Name="UsageInsightButton" Grid.Column="1" Content="Generate insight"
                                                    MinWidth="126" Margin="16,0,0,0" VerticalAlignment="Center"
