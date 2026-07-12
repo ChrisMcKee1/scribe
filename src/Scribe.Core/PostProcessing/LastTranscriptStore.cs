@@ -89,8 +89,19 @@ public sealed class LastTranscriptStore
         // Split on any whitespace and rejoin: collapses CRLF, tabs and double spaces in one pass
         // so multi-paragraph dictations render as a single readable menu row.
         var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return collapsed.Length <= maxLength
-            ? collapsed
-            : collapsed[..(maxLength - 1)] + '…';
+        if (collapsed.Length <= maxLength)
+        {
+            return collapsed;
+        }
+
+        // Never cut between the halves of a surrogate pair (emoji in a dictation): a trailing lone
+        // high surrogate is invalid UTF-16 and renders as a broken glyph in the menu header.
+        var cut = maxLength - 1;
+        if (char.IsHighSurrogate(collapsed[cut - 1]))
+        {
+            cut--;
+        }
+
+        return collapsed[..cut] + '…';
     }
 }

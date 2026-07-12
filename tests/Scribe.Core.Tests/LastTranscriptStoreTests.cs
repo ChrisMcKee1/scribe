@@ -145,6 +145,21 @@ public sealed class LastTranscriptStoreTests
     }
 
     [Fact]
+    public void FormatPreview_never_splits_a_surrogate_pair_at_the_cut()
+    {
+        // 25 emoji (2 UTF-16 units each, 50 total) put a pair boundary exactly astride the
+        // default 42-char budget: a naive cut at 41 would leave a lone high surrogate.
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F9D1", 25));
+
+        var preview = LastTranscriptStore.FormatPreview(emoji);
+
+        Assert.EndsWith("…", preview);
+        Assert.False(char.IsHighSurrogate(preview[^2]), "preview ends with a lone high surrogate");
+        Assert.Equal(20, preview.Count(char.IsHighSurrogate));
+        Assert.Equal(LastTranscriptStore.PreviewLength - 1, preview.Length);
+    }
+
+    [Fact]
     public void FormatPreview_renders_null_or_whitespace_as_empty()
     {
         Assert.Equal(string.Empty, LastTranscriptStore.FormatPreview(null));

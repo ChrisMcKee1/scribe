@@ -54,8 +54,9 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 - **📊 Performance you can verify.** A built-in diagnostics panel computes latency percentiles
   from your own dictations, on your own disk. We don't ask you to take the speed claims on faith.
 - **📈 Usage without surveillance.** Track local dictation totals, speech time, active days, top
-  apps, trends and recurring terminology. AI insight is a separate explicit action and sends only
-  aggregate totals and term labels to the provider you configured.
+  apps, a trend chart and recurring terminology, and add uncovered terms to your dictionary with
+  one click. AI insight is a separate explicit action and sends only aggregate totals and
+  dictionary term labels to the provider you configured.
 - **🪶 Stays out of the way.** A tray app with a small glass recording pill you can place on any
   corner or edge of your screen, and a Windows 11-style settings app when you want to tune it.
 
@@ -122,9 +123,11 @@ factor around **0.03×**, which is ~30× faster than the audio itself.
 ### See how dictation fits your work
 The Usage section summarizes retained history across 7, 30 or 90 days, or all retained history.
 Every metric uses the same selected period. It shows totals, active days, speech time, top apps,
-trends and recurring technical terms. Opening or refreshing Usage stays fully local. The optional
-AI insight button sends only aggregate totals and recurring term labels, never transcript text,
-audio, application names or timestamps.
+a trend chart and recurring technical terms, and any recurring term your dictionary doesn't cover
+yet gets an **Add** button that locks in its spelling on the spot. Opening or refreshing Usage
+stays fully local. The optional AI insight button sends only aggregate totals and term labels
+already in your dictionary. Terms mined from your dictations but not yet in your dictionary stay
+on your machine, and it never sends transcript text, audio, application names or timestamps.
 
 ## 🚀 Getting started
 
@@ -144,9 +147,9 @@ to install.
 > SmartScreen reputation is separate and may still show a warning for a new download.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
-Right-click the tray icon for settings, one-click vocabulary learning, copying the last finalized
-dictation, and pausing or quitting. Copy last dictation also recovers text when insertion failed.
-Review history and local Usage from Settings.
+Right-click the tray icon for settings, one-click vocabulary learning, copying any of your last
+five dictations, and pausing or quitting. If a dictation ever fails to insert, Scribe notifies you
+and keeps the text ready to copy from the tray. Review history and local Usage from Settings.
 
 ## 🎛️ How it works
 
