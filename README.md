@@ -163,6 +163,68 @@ Everything is configurable from the tray: microphone, hotkey (hold or toggle), s
 the pill and where it appears, voice-activity detection, line-break handling, per-app profiles,
 snippets, post-processing, start-with-Windows, and how text is inserted.
 
+## 📚 The full feature catalog
+
+**Dictation core**
+
+| Feature | What it does |
+|---|---|
+| Push-to-talk | Hold or toggle, on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
+| Silence auto-stop | Toggle-mode dictation ends itself when you go quiet |
+| On-device speech recognition | NVIDIA Parakeet TDT 0.6b v3 on your CPU, handles ~25 European languages automatically, no language picker needed |
+| Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
+| Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
+| Hotkey self-healing | Detects and repairs stuck modifiers and silently removed keyboard hooks, so push-to-talk keeps working across long sessions |
+
+**Text quality**
+
+| Feature | What it does |
+|---|---|
+| Personal dictionary | Spoken-form to replacement rules with whole-word matching, CSV import/export, and history-mined suggestions |
+| Dictionary libraries | Six curated opt-in libraries (Azure, Microsoft 365, GitHub, data and AI, software development, modern developer stack) plus your own custom CSV libraries |
+| Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
+| Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
+| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login), or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
+
+**Insight and recovery**
+
+| Feature | What it does |
+|---|---|
+| History | Retained dictations with optional audio, replayable and deletable, all local |
+| Usage insights | Totals, speech time, active days, top apps, a trend chart, and recurring terminology with one-click add to dictionary |
+| Dictation recovery | Your last five dictations stay copyable from the tray, and a failed insertion notifies you instead of losing text |
+| Diagnostics | P50/P95 decode latency and real-time factor computed from your own history |
+| AI usage insight | Opt-in, explicit, and aggregate-only: sends totals and dictionary term labels, never transcripts, audio, app names, or timestamps |
+
+**App and trust**
+
+| Feature | What it does |
+|---|---|
+| Tray quick actions | Pause, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
+| Auto-updates | Velopack keeps installs current with small delta packages |
+| Signed releases | Authenticode plus RFC 3161 timestamps on every executable, with published certificate fingerprints and a one-script publisher trust install |
+| Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
+
+## 📏 Performance, measured
+
+Numbers below come from the checked-in benchmark reports, reproducible with the commands in each
+document. Speech decode runs on CPU; your Diagnostics page shows the same percentiles for your
+own hardware.
+
+| Path | Measurement |
+|---|---|
+| Speech decode (typical desktop CPU) | **~223 ms** typical, real-time factor **~0.03×** (about 30× faster than the audio itself) |
+| 10-second audio aggregation | 69 µs and 625 KB allocated (was 164 µs and 2.6 MB before the 0.2.1 hot-path work) |
+| 48k-character cleanup chunking | 30 µs and 191 KB allocated (down 21% time, 49% allocation) |
+| AI cleanup, fully offline (`phi-4` via Foundry Local) | ~1.6 s median added latency, best on-device quality grade |
+| AI cleanup, cloud default (`gpt-5.4`) | ~1.8 s median added latency, grade B+ across the 46-model golden suite |
+
+Details and methodology: the [model leaderboard](docs/model-leaderboard.md) (52 models against
+Scribe's real cleanup pipeline with a golden-reference judge), the
+[GPT-5.6 phonetic benchmark](docs/gpt56-phonetic-benchmark.md) (sound-alike transcript challenges
+and prompt A/B results), and the [local performance benchmark](docs/local-performance-benchmark.md)
+(BenchmarkDotNet, production code paths).
+
 ## 🔐 Your privacy, precisely
 
 - **Audio never leaves your machine. Ever.** It is captured, transcribed in memory, and dropped.
