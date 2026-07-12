@@ -43,4 +43,111 @@ public sealed class LastTranscriptStoreTests
         store.Set("failed injection text");
         Assert.Equal("failed injection text", store.Get(history));
     }
+
+    [Fact]
+    public void GetRecent_returns_most_recent_first()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("first");
+        store.Set("second");
+        store.Set("third");
+
+        Assert.Equal(new[] { "third", "second", "first" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void GetRecent_evicts_oldest_beyond_capacity()
+    {
+        var store = new LastTranscriptStore();
+        for (var i = 1; i <= LastTranscriptStore.Capacity + 2; i++)
+        {
+            store.Set($"dictation {i}");
+        }
+
+        var recent = store.GetRecent();
+        Assert.Equal(LastTranscriptStore.Capacity, recent.Count);
+        Assert.Equal("dictation 7", recent[0]);
+        Assert.Equal("dictation 3", recent[^1]);
+    }
+
+    [Fact]
+    public void Consecutive_duplicate_text_occupies_a_single_slot()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("repeat me");
+        store.Set("repeat me");
+
+        Assert.Equal(new[] { "repeat me" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void Nonadjacent_duplicate_text_is_kept_as_a_distinct_entry()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("alpha");
+        store.Set("beta");
+        store.Set("alpha");
+
+        Assert.Equal(new[] { "alpha", "beta", "alpha" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void GetRecent_snapshot_is_unaffected_by_later_writes()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("original");
+
+        var snapshot = store.GetRecent();
+        store.Set("newer");
+
+        Assert.Equal(new[] { "original" }, snapshot);
+        Assert.Equal(new[] { "newer", "original" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void GetRecent_is_empty_before_any_dictation()
+    {
+        Assert.Empty(new LastTranscriptStore().GetRecent());
+    }
+
+    [Fact]
+    public void FormatPreview_returns_short_text_unchanged()
+    {
+        Assert.Equal("Hello there.", LastTranscriptStore.FormatPreview("Hello there."));
+    }
+
+    [Fact]
+    public void FormatPreview_keeps_text_exactly_at_the_cap()
+    {
+        var exact = new string('a', LastTranscriptStore.PreviewLength);
+
+        Assert.Equal(exact, LastTranscriptStore.FormatPreview(exact));
+    }
+
+    [Fact]
+    public void FormatPreview_truncates_over_cap_text_with_an_ellipsis_inside_the_budget()
+    {
+        var over = new string('a', LastTranscriptStore.PreviewLength + 1);
+
+        var preview = LastTranscriptStore.FormatPreview(over);
+
+        Assert.Equal(LastTranscriptStore.PreviewLength, preview.Length);
+        Assert.EndsWith("…", preview);
+        Assert.Equal(new string('a', LastTranscriptStore.PreviewLength - 1), preview[..^1]);
+    }
+
+    [Fact]
+    public void FormatPreview_collapses_multiline_and_repeated_whitespace()
+    {
+        Assert.Equal(
+            "First line second line.",
+            LastTranscriptStore.FormatPreview("  First line\r\n\r\n\tsecond   line. "));
+    }
+
+    [Fact]
+    public void FormatPreview_renders_null_or_whitespace_as_empty()
+    {
+        Assert.Equal(string.Empty, LastTranscriptStore.FormatPreview(null));
+        Assert.Equal(string.Empty, LastTranscriptStore.FormatPreview("  \r\n "));
+    }
 }
