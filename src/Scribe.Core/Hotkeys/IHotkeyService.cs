@@ -33,6 +33,14 @@ public interface IHotkeyService : IDisposable
     /// </summary>
     void CancelToggle();
 
+    /// <summary>
+    /// While enabled, the hook passes every key event through untouched: nothing is suppressed and
+    /// no dictation transition fires. The settings window turns this on while its binding-capture
+    /// box is armed so the current push-to-talk key can be typed into a new chord (and cannot
+    /// start a recording). Entering capture deactivates any dictation already in flight.
+    /// </summary>
+    void SetCaptureMode(bool enabled);
+
     /// <summary>Raised when dictation should begin (hold key down, or toggle on).</summary>
     event EventHandler? Activated;
 

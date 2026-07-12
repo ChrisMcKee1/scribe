@@ -82,6 +82,10 @@ public partial class App : Application
         _tray.SettingsRequested += OpenSettings;
         _tray.LearnFromHistoryRequested += LearnFromHistory;
         _tray.CopyLastDictationRequested += CopyLastDictation;
+        _tray.CopyRecentDictationRequested += CopyRecentDictation;
+        _tray.RecentDictationsProvider = () => _host is null
+            ? []
+            : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent();
         _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
@@ -115,6 +119,21 @@ public partial class App : Application
             OnCleanupFailed(message);
         };
         _controller.CleanupFailed += OnCleanupFailed;
+        _controller.InjectionFailed += () =>
+        {
+            // The failed dictation survives in LastTranscriptStore; a balloon closes the loop so
+            // the user knows the tray menu can recover it. Best-effort: a notification failure
+            // must never throw back into the dictation processing path.
+            try
+            {
+                _tray?.ShowNotification(
+                    "Dictation could not be inserted. Use the tray menu to copy it.", isError: true);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Failed to show the injection recovery notification.");
+            }
+        };
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
         // dictation is fast and does not stall on model initialization.
@@ -343,6 +362,7 @@ public partial class App : Application
                 _overlay?.SetPosition(settings.OverlayPosition);
                 _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
             },
+            capturing => _controller?.SetHotkeyCaptureMode(capturing),
             _updates);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
@@ -380,6 +400,33 @@ public partial class App : Application
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning(ex, "Copying the last dictation failed.");
             _tray.ShowNotification("Couldn't copy the last dictation.", isError: true);
+        }
+    });
+
+    /// <summary>
+    /// Copies one specific transcript picked from the "Copy recent dictation" submenu. The text
+    /// arrives with the event (a ring snapshot taken when the menu opened), so no store lookup is
+    /// needed and the copy matches exactly what the user clicked.
+    /// </summary>
+    private void CopyRecentDictation(string text) => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Clipboard.SetText can throw under clipboard contention (another app holding the
+            // clipboard open), so mirror CopyLastDictation: log and notify, never crash the tray.
+            Clipboard.SetText(text);
+            _tray.ShowNotification("Copied the dictation.");
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Copying a recent dictation failed.");
+            _tray.ShowNotification("Couldn't copy the dictation.", isError: true);
         }
     });
 

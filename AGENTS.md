@@ -19,8 +19,12 @@ suggestions); **voice snippets** (spoken trigger → saved template); **per‑ap
 (writing style + newline mode by focused process); **AI cleanup** across three providers
 (Foundry Local on‑device, Microsoft Foundry via `az login`, or any OpenAI‑compatible
 endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
-**diagnostics** panel (P50/P95 decode latency + RTF from local history); tray quick toggles
-(AI cleanup on/off, pause) and a first‑run **welcome**. The default writing style ships
+**diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
+(local totals/trend chart/top apps/recurring terms with one‑click dictionary add; opt‑in AI
+insight sends aggregate totals + dictionary‑covered term labels ONLY — novel mined terms never
+leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu, injection
+failure raises a recovery notification); tray quick toggles (AI cleanup on/off, pause) and a
+first‑run **welcome**. The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
 benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
 
@@ -43,7 +47,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.2**.
+  in `Directory.Build.props`. Current version: **0.2.3**.
 
 ## Commands (run these — include the flags)
 
@@ -60,7 +64,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; currently 315)
+# Run the unit tests (must stay green; count grows with every change, ~350+)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone (it is x64-only — Platform MUST be x64)
@@ -70,11 +74,14 @@ dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c Debug -p:Platform=x64
 dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 
+# Auxiliary prompt evals (UsageInsight + AiDictionarySuggester, deterministic checks)
+dotnet run --project tools/Scribe.Evals -- --suite auxiliary
+
 # Build the signed Velopack installer locally (version must match Directory.Build.props)
-./build/pack.ps1 -Version 0.2.2
+./build/pack.ps1 -Version 0.2.3
 
 # Intentional unsigned test package only
-./build/pack.ps1 -Version 0.2.2 -AllowUnsigned
+./build/pack.ps1 -Version 0.2.3 -AllowUnsigned
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
@@ -101,7 +108,7 @@ Scribe.slnx                         solution (Core, App, Overlay[x64], tests, to
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core (currently 197)
+  tests/Scribe.Core.Tests/          xUnit tests for Core
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   scripts/Download-Models.ps1       fetches ASR + VAD models

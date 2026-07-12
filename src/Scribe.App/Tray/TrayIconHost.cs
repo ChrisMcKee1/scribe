@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.App.Tray;
 
@@ -28,6 +29,18 @@ internal sealed class TrayIconHost : IDisposable
 
     /// <summary>Raised when the user explicitly asks to copy the last finalized dictation.</summary>
     public event Action? CopyLastDictationRequested;
+
+    /// <summary>
+    /// Raised when the user picks a specific entry from the "Copy recent dictation" submenu.
+    /// Carries the full transcript to copy, not the truncated preview shown in the menu.
+    /// </summary>
+    public event Action<string>? CopyRecentDictationRequested;
+
+    /// <summary>
+    /// Supplies the current recoverable transcripts, most recent first, each time the tray menu
+    /// opens. Injected by the app shell so this class stays free of Core persistence wiring.
+    /// </summary>
+    public Func<IReadOnlyList<string>>? RecentDictationsProvider { get; set; }
 
     /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
     public event Action? WelcomeRequested;
@@ -65,6 +78,12 @@ internal sealed class TrayIconHost : IDisposable
         var copyLastDictation = new MenuItem { Header = "Copy last dictation" };
         copyLastDictation.Click += (_, _) => CopyLastDictationRequested?.Invoke();
         menu.Items.Add(copyLastDictation);
+
+        // Rebuilt on every menu open (not once at startup) so the submenu always mirrors the
+        // transcripts that are actually recoverable right now.
+        var copyRecentDictation = new MenuItem { Header = "Copy recent dictation" };
+        menu.Items.Add(copyRecentDictation);
+        menu.Opened += (_, _) => PopulateRecentDictations(copyRecentDictation);
 
         // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
         var welcome = new MenuItem { Header = "Show welcome" };
@@ -130,6 +149,47 @@ internal sealed class TrayIconHost : IDisposable
             message,
             isError ? NotificationIcon.Error : NotificationIcon.Info,
             timeout: TimeSpan.FromSeconds(6)));
+
+    /// <summary>
+    /// Fills the "Copy recent dictation" submenu from the current ring snapshot. Runs on the UI
+    /// thread (the menu's Opened event), so no dispatching is needed here.
+    /// </summary>
+    private void PopulateRecentDictations(MenuItem parent)
+    {
+        parent.Items.Clear();
+
+        IReadOnlyList<string> recent;
+        try
+        {
+            recent = RecentDictationsProvider?.Invoke() ?? [];
+        }
+        catch
+        {
+            // The submenu is a convenience view; a provider hiccup must never break opening the
+            // tray menu, so degrade to the empty placeholder instead.
+            recent = [];
+        }
+
+        if (recent.Count == 0)
+        {
+            parent.Items.Add(new MenuItem { Header = "No recent dictations", IsEnabled = false });
+            return;
+        }
+
+        foreach (var transcript in recent)
+        {
+            // WPF treats "_" in a header as an access-key marker, so double it to render
+            // dictated underscores literally. The click carries the full transcript; the
+            // header is only the truncated single-line preview.
+            var item = new MenuItem
+            {
+                Header = LastTranscriptStore.FormatPreview(transcript).Replace("_", "__"),
+            };
+            var fullText = transcript;
+            item.Click += (_, _) => CopyRecentDictationRequested?.Invoke(fullText);
+            parent.Items.Add(item);
+        }
+    }
 
     private static void Dispatch(Action action)
     {

@@ -11,6 +11,11 @@ public static class UsageInsight
         "sentiment, productivity, intent, or time saved. Do not judge the user. Do not invent " +
         "terms or facts that are not present. Return plain text only.";
 
+    /// <summary>
+    /// Builds the payload sent to the user's configured AI endpoint. Guarantee: only terms with
+    /// <c>Covered == true</c> (dictionary-canonical labels) are ever included; novel mined
+    /// tokens are verbatim words from the user's dictations and never enter the payload.
+    /// </summary>
     public static string BuildSummary(UsageAnalyzer.Snapshot snapshot, int maxChars = 4000)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -26,11 +31,17 @@ public static class UsageInsight
         builder.AppendLine("Recurring terms:");
         foreach (var term in snapshot.Terms)
         {
+            // Uncovered terms are raw tokens mined from dictation text (surnames, project
+            // codenames); only dictionary-canonical labels may leave the machine.
+            if (!term.Covered)
+            {
+                continue;
+            }
+
             builder.AppendLine($"- {term.Text}: {term.Dictations} dictations");
         }
 
-        var value = builder.ToString().Trim();
-        return value.Length <= maxChars ? value : value[..maxChars].TrimEnd();
+        return Truncate(builder.ToString().Trim(), maxChars);
     }
 
     public static string? Parse(string? response, int maxChars = 1200)
@@ -51,6 +62,24 @@ public static class UsageInsight
             }
         }
 
-        return value.Length <= maxChars ? value : value[..maxChars].TrimEnd();
+        return Truncate(value, maxChars);
+    }
+
+    private static string Truncate(string value, int maxChars)
+    {
+        if (value.Length <= maxChars)
+        {
+            return value;
+        }
+
+        // Never cut between the halves of a surrogate pair: a trailing lone high surrogate is
+        // invalid UTF-16 and can break downstream encoding of the request or the UI text.
+        var cut = maxChars;
+        if (char.IsHighSurrogate(value[cut - 1]) && char.IsLowSurrogate(value[cut]))
+        {
+            cut--;
+        }
+
+        return value[..cut].TrimEnd();
     }
 }

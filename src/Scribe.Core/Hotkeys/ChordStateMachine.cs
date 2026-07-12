@@ -9,7 +9,12 @@ internal enum HotkeyTransition
     Deactivated,
 }
 
-internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool ShouldSuppress);
+/// <summary>
+/// One hook event's outcome. <paramref name="Generation"/> identifies the state epoch the
+/// transition was computed in: state-clearing operations (capture mode, binding update, reset)
+/// bump the generation, letting the dispatcher discard an Activated that raced one of them.
+/// </summary>
+internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool ShouldSuppress, long Generation);
 
 /// <summary>Pure key-set state machine shared by the global hook and deterministic unit tests.</summary>
 internal sealed class ChordStateMachine
@@ -32,13 +37,29 @@ internal sealed class ChordStateMachine
     private HotkeyBinding _binding;
     private bool _satisfied;
     private bool _active;
+    private bool _captureMode;
+    private long _generation;
 
     public ChordStateMachine(HotkeyBinding binding) => _binding = binding;
+
+    /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
+    public long Generation
+    {
+        get { lock (_gate) { return _generation; } }
+    }
 
     public ChordUpdate Process(uint virtualKey, bool isDown)
     {
         lock (_gate)
         {
+            // Binding capture in Settings owns the keyboard: every event passes through untouched
+            // so the capture box can see the current push-to-talk key, and nothing can start a
+            // dictation while the user is choosing a new chord.
+            if (_captureMode)
+            {
+                return new ChordUpdate(HotkeyTransition.None, ShouldSuppress: false, _generation);
+            }
+
             var isBindingKey = IsBindingKey(_binding, virtualKey);
             var wasSatisfied = _satisfied;
             var repeated = isDown && _pressed.Contains(virtualKey);
@@ -88,33 +109,45 @@ internal sealed class ChordStateMachine
                 shouldSuppress = true;
             }
 
-            return new ChordUpdate(transition, shouldSuppress);
+            return new ChordUpdate(transition, shouldSuppress, _generation);
         }
     }
 
-    public HotkeyTransition UpdateBinding(HotkeyBinding binding)
+    public (HotkeyTransition Transition, long Generation) UpdateBinding(HotkeyBinding binding)
     {
         lock (_gate)
         {
             var transition = _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
             _binding = binding;
-            _pressed.Clear();
-            _suppressed.Clear();
-            _satisfied = false;
-            _active = false;
-            return transition;
+            ClearStateLocked();
+            return (transition, _generation);
         }
     }
 
-    public void Reset()
+    /// <summary>
+    /// Clears all key state, reporting the deactivation the caller must dispatch when an
+    /// activation was in flight (e.g. a hook reinstall mid-recording must stop the recording,
+    /// because the held key's eventual release can no longer be matched to cleared state).
+    /// </summary>
+    public (HotkeyTransition Transition, long Generation) Reset()
     {
         lock (_gate)
         {
-            _pressed.Clear();
-            _suppressed.Clear();
-            _satisfied = false;
-            _active = false;
+            var transition = _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
+            ClearStateLocked();
+            return (transition, _generation);
         }
+    }
+
+    // Callers hold _gate. Every clear starts a new generation so transitions computed against
+    // the old state are identifiable as stale.
+    private void ClearStateLocked()
+    {
+        _pressed.Clear();
+        _suppressed.Clear();
+        _satisfied = false;
+        _active = false;
+        _generation++;
     }
 
     public void CancelToggle()
@@ -122,6 +155,36 @@ internal sealed class ChordStateMachine
         lock (_gate)
         {
             _active = false;
+        }
+    }
+
+    /// <summary>
+    /// Enters or leaves binding-capture pass-through. Entering clears all key state and reports
+    /// whether an in-flight activation must be deactivated (so a recording in progress stops when
+    /// the user starts rebinding). Leaving also clears state: a key still held from the capture
+    /// gesture must not satisfy the (possibly brand new) chord until it is pressed fresh.
+    /// </summary>
+    public (HotkeyTransition Transition, long Generation) SetCaptureMode(bool enabled)
+    {
+        lock (_gate)
+        {
+            _captureMode = enabled;
+            var transition = enabled && _active ? HotkeyTransition.Deactivated : HotkeyTransition.None;
+            ClearStateLocked();
+            return (transition, _generation);
+        }
+    }
+
+    /// <summary>
+    /// True when the hook has seen this key go down and not yet come back up. This is the hook's
+    /// view of the physical keyboard, which can legitimately differ from the system's logical
+    /// key state when this machine suppressed the events (see the leak reconciler).
+    /// </summary>
+    public bool IsPressed(uint virtualKey)
+    {
+        lock (_gate)
+        {
+            return _pressed.Contains(virtualKey);
         }
     }
 

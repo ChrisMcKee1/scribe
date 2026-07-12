@@ -107,6 +107,13 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public event Action<string>? CleanupFailed;
 
+    /// <summary>
+    /// Raised (on a background thread) when text injection failed but the finalized transcript was
+    /// preserved in <see cref="LastTranscriptStore"/>, so the shell can point the user at the tray
+    /// recovery path instead of leaving the preserved text undiscoverable.
+    /// </summary>
+    public event Action? InjectionFailed;
+
     /// <summary>True while dictation is suspended (the hotkey is ignored).</summary>
     public bool IsPaused
     {
@@ -158,6 +165,13 @@ internal sealed class DictationController : IDisposable
         _cleanup.Configure(BuildCleanupOptions(settings));
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
+
+    /// <summary>
+    /// Routes the settings window's binding-capture state to the hook. While capture is on, the
+    /// push-to-talk key types into the capture box instead of starting a dictation, and any
+    /// dictation already in flight is deactivated by the hook before capture begins.
+    /// </summary>
+    public void SetHotkeyCaptureMode(bool enabled) => _hotkeys.SetCaptureMode(enabled);
 
     /// <summary>Maps persisted AppSettings into the cleanup service's provider-agnostic options.</summary>
     private CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
@@ -521,6 +535,10 @@ internal sealed class DictationController : IDisposable
                 Error?.Invoke(injection.Error == "The focused window changed while processing."
                     ? "focus changed — dictation was not inserted"
                     : "text could not be inserted completely");
+
+                // The transcript was stored just above, so close the loop: without a hint the
+                // preserved text looks lost, because the overlay flash is the only other signal.
+                RaiseInjectionFailed();
                 return;
             }
 
@@ -620,6 +638,20 @@ internal sealed class DictationController : IDisposable
     }
 
     private void PruneOldFailures() => PruneFailureLog();
+
+    // Guarded raise: the recovery hint is best-effort UI sugar, so a throwing handler must never
+    // propagate into the dictation processing path.
+    private void RaiseInjectionFailed()
+    {
+        try
+        {
+            InjectionFailed?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "An InjectionFailed handler threw.");
+        }
+    }
 
     private void RaiseCleanupFailed(string reason)
     {

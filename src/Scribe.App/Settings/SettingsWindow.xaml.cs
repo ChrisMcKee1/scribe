@@ -36,6 +36,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ICleanupFailureLog _failureLog;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
+    private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
 
     private readonly AppSettings _settings;
@@ -77,6 +78,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ICleanupFailureLog failureLog,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
+        Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null)
     {
         _settingsRepository = settingsRepository;
@@ -90,6 +92,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _failureLog = failureLog;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
+        _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
 
         _settings = settingsRepository.Load();
@@ -756,7 +759,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _finalized = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
-        HotkeyBox.Text = "Press one or two keys…";
+
+        // Put the global hook into pass-through first: the current push-to-talk key must reach
+        // this capture box as an ordinary key instead of being suppressed or starting a recording.
+        _setHotkeyCaptureMode(true);
+        HotkeyBox.Text = "Press one or two keys… (dictation is paused)";
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -815,6 +822,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
+        _setHotkeyCaptureMode(false);
         HotkeyBox.Text = HotkeyCapture.Describe(binding);
         Keyboard.ClearFocus();
 
@@ -836,6 +844,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturing = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
+        _setHotkeyCaptureMode(false);
         HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
         Keyboard.ClearFocus();
     }
@@ -1507,6 +1516,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // Closing mid-capture must never leave the global hook in pass-through, or the
+        // push-to-talk key would stay dead until the app restarts.
+        if (_capturing)
+        {
+            _capturing = false;
+            _setHotkeyCaptureMode(false);
+        }
+
         _cleanup.StatusChanged -= OnCleanupStatusChanged;
         if (_updates is not null)
         {
@@ -2238,24 +2255,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
             UsageAppsGrid.ItemsSource = snapshot.TopApps;
 
-            var weekly = snapshot.Trend.Count > 31;
-            UsageTrendGrid.ItemsSource = snapshot.Trend.Select(point => new UsageTrendRow(
-                weekly ? $"Week of {point.Start:MMM d}" : point.Start.ToString("MMM d"),
-                point.Dictations,
-                point.Words)).ToList();
+            var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
+            var trendRows = UsageTrendNormalizer.Normalize(snapshot.Trend)
+                .Select(point => new UsageTrendRow(
+                    weekly ? $"Week of {point.Trend.Start:MMM d}" : point.Trend.Start.ToString("MMM d"),
+                    point.Trend.Dictations,
+                    point.Trend.Words,
+                    point.RelativeHeight))
+                .ToList();
+            UsageTrendChart.ItemsSource = trendRows;
+            UsageTrendGrid.ItemsSource = trendRows;
 
             var covered = snapshot.Terms.Where(term => term.Covered).ToList();
             var novel = snapshot.Terms.Where(term => !term.Covered).ToList();
             UsageKnownTerms.ItemsSource = covered.Count == 0
                 ? ["No recognized technologies in this period."]
                 : covered.Select(FormatUsageTerm).ToList();
-            UsageNovelTerms.ItemsSource = novel.Count == 0
-                ? ["No recurring uncovered jargon in this period."]
-                : novel.Select(FormatUsageTerm).ToList();
+            UsageNovelEmptyHint.Visibility = novel.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            UsageNovelTerms.Visibility = novel.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+            UsageNovelTerms.ItemsSource = novel
+                .Select(term => new UsageTermRow(term.Text, term.Dictations))
+                .ToList();
 
             UsageInsightText.Text = snapshot.Dictations == 0
                 ? "Record a dictation to make usage insight available."
-                : "Generate a short summary from numeric totals and recurring term labels only.";
+                : "Generate a short summary. Only totals and dictionary term labels are sent.";
             RefreshUsageInsightAvailability();
         }
         catch (Exception ex)
@@ -2277,6 +2301,42 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         static string FormatUsageTerm(UsageAnalyzer.TermUsage term) =>
             $"{term.Text} ({term.Dictations:N0} dictation{(term.Dictations == 1 ? string.Empty : "s")})";
+    }
+
+    private async void UsageNovelTermAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Wpf.Ui.Controls.Button button || button.DataContext is not UsageTermRow term)
+        {
+            return;
+        }
+
+        button.IsEnabled = false;
+        await Task.Yield();
+
+        try
+        {
+            var entry = DictionaryEntry.New(term.Text.ToLowerInvariant(), term.Text);
+            var persisted = PersistLearnedDictionaryEntries([entry]);
+            if (persisted.Count == 0)
+            {
+                ShowInfo(
+                    $"\"{term.Text}\" is already in the dictionary grid.",
+                    Wpf.Ui.Controls.InfoBarSeverity.Informational);
+                return;
+            }
+
+            // ApplySettings owns the live post-processor reload used by the normal Save path.
+            _applySettings(_settings);
+            ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+            LoadUsage();
+        }
+        catch (Exception ex)
+        {
+            button.IsEnabled = true;
+            ShowInfo(
+                $"Couldn't add \"{term.Text}\" to your dictionary: {ex.Message}",
+                Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
     }
 
     private void RefreshUsageInsightAvailability()
@@ -2372,7 +2432,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             await Task.Run(() => _history.Delete(row.Id));
             LoadHistory();
-            LoadUsage();
             ShowInfo("Deleted the selected history entry.");
         }
         catch (Exception ex)
@@ -2398,7 +2457,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             await Task.Run(_history.Clear);
             LoadHistory();
-            LoadUsage();
             ShowInfo("Cleared dictation history.");
         }
         catch (Exception ex)
@@ -2604,7 +2662,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ];
     }
 
-    private sealed record UsageTrendRow(string Period, int Dictations, int Words);
+    private sealed record UsageTrendRow(
+        string Period,
+        int Dictations,
+        int Words,
+        double RelativeHeight)
+    {
+        public string ToolTip =>
+            $"{Period}: {Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")}, " +
+            $"{Words:N0} word{(Words == 1 ? string.Empty : "s")}";
+    }
+
+    private sealed record UsageTermRow(string Text, int Dictations)
+    {
+        public string DictationLabel =>
+            $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
+    }
 
     /// <summary>Editable dictionary row backing the grid. Parameterless ctor enables grid add-row.</summary>
     public sealed class DictionaryRow
