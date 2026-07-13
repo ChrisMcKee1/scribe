@@ -636,5 +636,6 @@ internal sealed class HotkeyTriggerArbiter
 
     public void Reset() => Interlocked.Exchange(ref _activeCode, 0);
 
+    // Reserve zero for no active trigger so compare-exchange can arbitrate without a lock.
     private static int Code(HotkeyTrigger trigger) => (int)trigger + 1;
 }

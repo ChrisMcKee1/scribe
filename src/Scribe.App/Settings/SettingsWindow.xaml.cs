@@ -887,9 +887,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
         _setHotkeyCaptureMode(false);
-        ActiveHotkeyBox.Text = _capturingDictationOnly
-            ? _pendingDictationOnlyBinding is null ? string.Empty : HotkeyCapture.Describe(_pendingDictationOnlyBinding)
-            : HotkeyCapture.Describe(_pendingBinding);
+        ActiveHotkeyBox.Text = CurrentHotkeyDescription();
         Keyboard.ClearFocus();
     }
 
@@ -913,6 +911,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private Wpf.Ui.Controls.TextBox ActiveHotkeyBox => _capturingDictationOnly
         ? DictationOnlyHotkeyBox
         : HotkeyBox;
+
+    private string CurrentHotkeyDescription()
+    {
+        if (!_capturingDictationOnly)
+        {
+            return HotkeyCapture.Describe(_pendingBinding);
+        }
+
+        return _pendingDictationOnlyBinding is null
+            ? string.Empty
+            : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
+    }
 
     private static bool SamePhysicalBinding(HotkeyBinding left, HotkeyBinding right) =>
         left.VirtualKey == right.VirtualKey &&
