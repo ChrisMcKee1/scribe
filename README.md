@@ -66,7 +66,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 ### A settings app that respects you
 Everything lives in a clean, Windows 11-style settings window: pick your microphone, speech model,
 and push-to-talk keys (hold or toggle), then browse focused sections for dictation behaviour, the
-overlay, AI cleanup, your dictionary, snippets, per-app profiles, history, usage and diagnostics.
+overlay, AI cleanup, your dictionary, snippets, per-app profiles, the playground, history, usage
+and diagnostics.
 
 ![Scribe general settings: microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
 
@@ -194,6 +195,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
 | Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
 | AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login), or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
+| Playground | Captures normal push-to-talk dictation, then shows raw recognition, final highlighted dictionary, library, and snippet replacements, and per-step timing |
 
 **Insight and recovery**
 

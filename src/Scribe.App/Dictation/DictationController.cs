@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
@@ -50,6 +51,7 @@ internal sealed class DictationController : IDisposable
     private AppSettings? _captureSettings;
     private nint _captureTargetWindow;
     private string? _captureTargetApp;
+    private long _captureStartedTimestamp;
     private Task? _processingTask;
     private bool _paused;
     private bool _started;
@@ -100,6 +102,12 @@ internal sealed class DictationController : IDisposable
 
     /// <summary>Raised after a capture is dictated, with the final injected text.</summary>
     public event Action<string>? Dictated;
+
+    /// <summary>
+    /// Raised after the real dictation pipeline completes or fails, so the Playground can show
+    /// raw recognition, final text, replacements, and per-stage timings for its focused text box.
+    /// </summary>
+    public event Action<DictationPipelineReport>? PipelineReported;
 
     /// <summary>
     /// Raised (on a background thread) when AI cleanup was enabled but failed at runtime, so the
@@ -267,6 +275,7 @@ internal sealed class DictationController : IDisposable
             _captureSettings = settings;
             _captureTargetWindow = GetForegroundWindow();
             _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
+            _captureStartedTimestamp = Stopwatch.GetTimestamp();
         }
 
         try
@@ -339,7 +348,8 @@ internal sealed class DictationController : IDisposable
             session = new DictationSession(
                 _captureSettings ?? _settings.Clone(),
                 _captureTargetWindow,
-                _captureTargetApp);
+                _captureTargetApp,
+                _captureStartedTimestamp);
             completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _processingTask = completion.Task;
         }
@@ -375,10 +385,18 @@ internal sealed class DictationController : IDisposable
     {
         using var activity = ScribeTelemetry.Source.StartActivity(ScribeTelemetry.DictationActivity);
         var settings = session.Settings;
+        var report = new DictationPipelineReport(
+            session.TargetWindow,
+            settings.UseVoiceActivityDetection,
+            settings.EnableAiCleanup,
+            settings.ApplyPostProcessing,
+            session.StartedTimestamp);
+        var currentStage = "Audio capture";
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var captured = _audio.Stop();
+            report.CaptureDuration = captured.Duration;
             activity?.SetTag(ScribeTelemetry.TagCaptureSeconds, Math.Round(captured.Duration.TotalSeconds, 2));
             _log.LogInformation("Captured {Seconds:F2}s of audio.", captured.Duration.TotalSeconds);
 
@@ -392,6 +410,8 @@ internal sealed class DictationController : IDisposable
                 // This must be loud: a silent return here looks to the user like dictation died.
                 var device = _audio.LastDeviceName;
                 _log.LogWarning("Capture from '{Device}' produced no audio.", device ?? "default device");
+                report.Fail("Audio capture", "The microphone produced no audio.");
+                RaisePipelineReport(report);
                 Error?.Invoke(device is null
                     ? "no audio captured — check your microphone in Settings"
                     : $"no audio from '{device}' — pick a different microphone in Settings");
@@ -402,18 +422,26 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagVadEnabled, settings.UseVoiceActivityDetection);
             if (settings.UseVoiceActivityDetection)
             {
+                currentStage = "Voice activity detection";
+                var vadTimer = Stopwatch.StartNew();
                 var trimmed = _vad.Trim(captured);
+                vadTimer.Stop();
+                report.VadDuration = vadTimer.Elapsed;
+                report.VadAvailable = _vad.IsAvailable;
                 if (trimmed.IsEmpty)
                 {
                     activity?.SetTag(ScribeTelemetry.TagVadKept, false);
                     activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.VadNoSpeech);
                     _log.LogInformation("VAD detected no speech; discarding capture.");
+                    report.Fail("Voice activity detection", "No speech was detected.");
+                    RaisePipelineReport(report);
                     return;
                 }
 
                 activity?.SetTag(ScribeTelemetry.TagVadKept, true);
                 audio = trimmed;
             }
+            report.SpeechDuration = audio.Duration;
 
             // The recognizer warm-loads at startup, but a very fast first dictation can arrive
             // before that finishes. Rather than throwing the capture away, let Transcribe load the
@@ -435,11 +463,17 @@ internal sealed class DictationController : IDisposable
                 _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
             }
 
+            currentStage = "Speech recognition";
             var result = _transcription.Transcribe(audio);
+            report.DecodeDuration = result.DecodeDuration;
+            report.RealTimeFactor = result.RealTimeFactor;
+            report.RawText = result.Text;
             if (result.IsEmpty)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.NoSpeech);
                 _log.LogInformation("No speech recognized.");
+                report.Fail("Speech recognition", "No speech was recognized.");
+                RaisePipelineReport(report);
                 return;
             }
 
@@ -451,12 +485,17 @@ internal sealed class DictationController : IDisposable
             // CleanAsync never throws for a content failure: it classifies the outcome so we can fall
             // back to raw text and visibly flag a runtime failure without ever disabling cleanup.
             var recognized = result.Text;
+            var cleanup = CleanupResult.Skip(recognized);
             activity?.SetTag(ScribeTelemetry.TagAiCleanup, settings.EnableAiCleanup);
             if (settings.EnableAiCleanup)
             {
-                var cleanup = await _cleanup
+                currentStage = "AI cleanup";
+                var cleanupTimer = Stopwatch.StartNew();
+                cleanup = await _cleanup
                     .CleanAsync(recognized, cancellationToken, cleanupWritingStyle)
                     .ConfigureAwait(false);
+                cleanupTimer.Stop();
+                report.CleanupDuration = cleanupTimer.Elapsed;
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
 
@@ -500,12 +539,24 @@ internal sealed class DictationController : IDisposable
                     }
                 }
             }
+            report.Cleanup = cleanup;
+            report.CleanedText = recognized;
 
-            var text = settings.ApplyPostProcessing ? _postProcessor.Process(recognized) : recognized;
+            currentStage = "Dictionary and snippets";
+            var postTimer = Stopwatch.StartNew();
+            var postProcessing = settings.ApplyPostProcessing
+                ? _postProcessor.ProcessDetailed(recognized, result.Text)
+                : new TextPostProcessingResult(recognized, []);
+            postTimer.Stop();
+            report.PostProcessingDuration = postTimer.Elapsed;
+            report.PostProcessing = postProcessing;
+            var text = postProcessing.Text;
             if (string.IsNullOrWhiteSpace(text))
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyAfterPostProcess);
                 _log.LogInformation("Post-processing produced empty text; nothing to inject.");
+                report.Fail("Dictionary and snippets", "Post-processing produced empty text.");
+                RaisePipelineReport(report);
                 return;
             }
 
@@ -527,10 +578,16 @@ internal sealed class DictationController : IDisposable
                     newlineMode, targetApp ?? "unknown");
                 text = flattened;
             }
+            report.FinalText = text;
 
             _lastTranscript.Set(text);
             cancellationToken.ThrowIfCancellationRequested();
+            currentStage = "Text insertion";
+            var injectionTimer = Stopwatch.StartNew();
             var injection = _injector.Inject(text, settings.InjectionMethod, session.TargetWindow);
+            injectionTimer.Stop();
+            report.InjectionDuration = injectionTimer.Elapsed;
+            report.Injection = injection;
             if (!injection.Succeeded)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
@@ -544,6 +601,8 @@ internal sealed class DictationController : IDisposable
                 // The transcript was stored just above, so close the loop: without a hint the
                 // preserved text looks lost, because the overlay flash is the only other signal.
                 RaiseInjectionFailed();
+                report.Fail("Text insertion", injection.Error ?? "Text could not be inserted.");
+                RaisePipelineReport(report);
                 return;
             }
 
@@ -551,6 +610,7 @@ internal sealed class DictationController : IDisposable
 
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
             RecordHistory(settings, audio, result, text, targetApp);
+            RaisePipelineReport(report);
             Dictated?.Invoke(text);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -558,11 +618,22 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
             _log.LogInformation("Dictation processing canceled during shutdown.");
         }
+        catch (FileNotFoundException ex)
+        {
+            activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            _log.LogInformation(ex, "Dictation skipped because no speech model is installed.");
+            report.Fail(currentStage, ex.Message);
+            RaisePipelineReport(report);
+            Error?.Invoke("choose a speech model in Settings");
+        }
         catch (Exception ex)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             _log.LogError(ex, "Dictation processing failed.");
+            report.Fail(currentStage, ex.Message);
+            RaisePipelineReport(report);
             Error?.Invoke("transcription failed");
         }
         finally
@@ -601,6 +672,7 @@ internal sealed class DictationController : IDisposable
             _captureSettings = null;
             _captureTargetWindow = 0;
             _captureTargetApp = null;
+            _captureStartedTimestamp = 0;
             _processingTask = null;
             paused = _paused; // a pause requested mid-capture takes effect once processing finishes
         }
@@ -655,6 +727,19 @@ internal sealed class DictationController : IDisposable
         catch (Exception ex)
         {
             _log.LogWarning(ex, "An InjectionFailed handler threw.");
+        }
+    }
+
+    private void RaisePipelineReport(DictationPipelineReport report)
+    {
+        report.TotalDuration = Stopwatch.GetElapsedTime(report.StartedTimestamp);
+        try
+        {
+            PipelineReported?.Invoke(report);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "A pipeline report handler threw.");
         }
     }
 
@@ -737,11 +822,53 @@ internal sealed class DictationController : IDisposable
         _lifetimeCts.Dispose();
     }
 
-    private sealed record DictationSession(AppSettings Settings, nint TargetWindow, string? TargetApp);
+    private sealed record DictationSession(
+        AppSettings Settings,
+        nint TargetWindow,
+        string? TargetApp,
+        long StartedTimestamp);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+}
+
+internal sealed class DictationPipelineReport(
+    nint targetWindow,
+    bool vadEnabled,
+    bool cleanupEnabled,
+    bool postProcessingEnabled,
+    long startedTimestamp)
+{
+    public nint TargetWindow { get; } = targetWindow;
+    public bool VadEnabled { get; } = vadEnabled;
+    public bool VadAvailable { get; set; }
+    public bool CleanupEnabled { get; } = cleanupEnabled;
+    public bool PostProcessingEnabled { get; } = postProcessingEnabled;
+    public TimeSpan CaptureDuration { get; set; }
+    public TimeSpan SpeechDuration { get; set; }
+    public TimeSpan VadDuration { get; set; }
+    public TimeSpan DecodeDuration { get; set; }
+    public TimeSpan CleanupDuration { get; set; }
+    public TimeSpan PostProcessingDuration { get; set; }
+    public TimeSpan InjectionDuration { get; set; }
+    public TimeSpan TotalDuration { get; set; }
+    public double RealTimeFactor { get; set; }
+    public string? RawText { get; set; }
+    public string? CleanedText { get; set; }
+    public CleanupResult? Cleanup { get; set; }
+    public TextPostProcessingResult? PostProcessing { get; set; }
+    public string? FinalText { get; set; }
+    public InjectionResult? Injection { get; set; }
+    public string? FailureStage { get; private set; }
+    public string? FailureReason { get; private set; }
+    internal long StartedTimestamp { get; } = startedTimestamp;
+
+    public void Fail(string stage, string reason)
+    {
+        FailureStage = stage;
+        FailureReason = reason;
+    }
 }

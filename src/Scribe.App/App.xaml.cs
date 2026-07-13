@@ -1,3 +1,4 @@
+using System.IO;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
@@ -111,6 +112,8 @@ public partial class App : Application
             services.GetRequiredService<ILogger<OverlayProcessClient>>());
 
         _controller.StateChanged += OnStateChanged;
+        _controller.PipelineReported += report =>
+            Dispatcher.BeginInvoke(() => _settingsWindow?.ShowPlaygroundPipeline(report));
         _controller.Error += message =>
         {
             _tray!.ShowError(message);
@@ -146,6 +149,11 @@ public partial class App : Application
                 vad.Initialize();
                 transcription.Initialize();
                 log.LogInformation("Transcription engine warm-loaded.");
+            }
+            catch (FileNotFoundException ex)
+            {
+                log.LogInformation(ex, "No transcription model is installed; waiting for a Settings selection.");
+                _tray!.ShowInfo("No speech model is installed. Choose one in Settings.");
             }
             catch (Exception ex)
             {
