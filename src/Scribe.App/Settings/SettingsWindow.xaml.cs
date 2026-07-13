@@ -87,7 +87,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IHistoryRepository history,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
-        ILoggerFactory loggerFactory,
+        AzureCliInstaller azureCliInstaller,
+        ILogger<SettingsWindow> log,
         ICleanupFailureLog failureLog,
         ITranscriptionModelInstaller transcriptionModelInstaller,
         Action<OverlayPosition> previewOverlay,
@@ -103,14 +104,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _history = history;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
-        _azureCliInstaller = new AzureCliInstaller(loggerFactory.CreateLogger<AzureCliInstaller>());
+        _azureCliInstaller = azureCliInstaller;
         _failureLog = failureLog;
         _transcriptionModelInstaller = transcriptionModelInstaller;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
-        _log = loggerFactory.CreateLogger<SettingsWindow>();
+        _log = log;
 
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
@@ -1072,7 +1073,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Keyboard.ClearFocus();
     }
 
-    private void SettingsWindow_Deactivated(object? sender, EventArgs e)
+    private void SettingsWindow_Deactivated_StopHotkeyCapture(object? sender, EventArgs e)
     {
         if (_capturing)
         {
@@ -1487,7 +1488,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (!status.IsSignedIn)
             {
-                if (!_azureCliInstaller.IsInstalled())
+                if (!await _azureCliInstaller.IsInstalledAsync())
                 {
                     AzureStatusText.Text =
                         "Azure CLI is not installed. Install it below, then choose Sign in & find models again.";

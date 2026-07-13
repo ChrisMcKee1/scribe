@@ -22,12 +22,16 @@ public sealed class AzureCliInstaller
     public AzureCliInstaller(ILogger<AzureCliInstaller> log) => _log = log;
 
     /// <summary>True if the <c>az</c> command resolves on the current PATH.</summary>
-    public bool IsInstalled()
+    public async Task<bool> IsInstalledAsync(CancellationToken ct = default)
     {
         try
         {
-            var (exit, _, _) = RunAsync("where", ["az"], CancellationToken.None).GetAwaiter().GetResult();
+            var (exit, _, _) = await RunAsync("where", ["az"], ct).ConfigureAwait(false);
             return exit == 0;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -42,7 +46,7 @@ public sealed class AzureCliInstaller
     /// </summary>
     public async Task<(bool Ok, string Message)> InstallOrUpdateAsync(CancellationToken ct = default)
     {
-        var alreadyInstalled = IsInstalled();
+        var alreadyInstalled = await IsInstalledAsync(ct).ConfigureAwait(false);
         var verb = alreadyInstalled ? "upgrade" : "install";
         string[] args =
         [
@@ -137,6 +141,8 @@ public sealed class AzureCliInstaller
             var subscriptionId = subscriptionOutput.Trim();
             if (string.IsNullOrWhiteSpace(subscriptionId))
             {
+                // Azure permits identities with tenant access but no subscriptions. Discovery will
+                // report an empty deployment list, but the browser sign-in itself still succeeded.
                 return (true, "Signed in to Azure.");
             }
 

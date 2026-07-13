@@ -10,7 +10,7 @@
         WindowCornerPreference="Round"
         PreviewKeyDown="HotkeyBox_PreviewKeyDown"
         PreviewKeyUp="HotkeyBox_PreviewKeyUp"
-        Deactivated="SettingsWindow_Deactivated">
+        Deactivated="SettingsWindow_Deactivated_StopHotkeyCapture">
     <ui:FluentWindow.Resources>
         <!-- Page header shown at the top of every section, Windows Settings style. -->
         <Style TargetType="TextBlock" x:Key="PageTitle">
