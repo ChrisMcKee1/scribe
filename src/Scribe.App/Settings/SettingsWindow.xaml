@@ -7,7 +7,10 @@
         WindowStartupLocation="CenterScreen"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
-        WindowCornerPreference="Round">
+        WindowCornerPreference="Round"
+        PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+        PreviewKeyUp="HotkeyBox_PreviewKeyUp"
+        Deactivated="SettingsWindow_Deactivated">
     <ui:FluentWindow.Resources>
         <!-- Page header shown at the top of every section, Windows Settings style. -->
         <Style TargetType="TextBlock" x:Key="PageTitle">
@@ -239,10 +242,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ui:TextBox x:Name="HotkeyBox" Grid.Column="0" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="Press Set… then a key"
-                                                        PreviewKeyDown="HotkeyBox_PreviewKeyDown"
-                                                        PreviewKeyUp="HotkeyBox_PreviewKeyUp"
-                                                        LostFocus="HotkeyBox_LostFocus"/>
+                                                        PlaceholderText="Press Set… then a key"/>
                                             <ui:Button x:Name="CaptureButton" Grid.Column="1" Content="Set…"
                                                        Margin="8,0,0,0" MinWidth="72"
                                                        Click="CaptureButton_Click"/>
@@ -261,10 +261,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" IsReadOnly="True"
                                                         VerticalContentAlignment="Center"
-                                                        PlaceholderText="Not set"
-                                                        PreviewKeyDown="HotkeyBox_PreviewKeyDown"
-                                                        PreviewKeyUp="HotkeyBox_PreviewKeyUp"
-                                                        LostFocus="HotkeyBox_LostFocus"/>
+                                                        PlaceholderText="Not set"/>
                                             <ui:Button Grid.Column="1" Content="Set…" Margin="8,0,0,0" MinWidth="72"
                                                        Click="DictationOnlyCaptureButton_Click"/>
                                             <ui:Button Grid.Column="2" Content="Clear" Margin="8,0,0,0" MinWidth="72"
@@ -661,7 +658,7 @@
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="Reuses your 'az login' session — no key needed. Sign in to list the models you've deployed."/>
+                                                                   Text="Uses Azure CLI sign-in, no key needed. Scribe opens the browser when sign-in is required."/>
                                                     </StackPanel>
                                                     <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; find models"
                                                                MinWidth="76" VerticalAlignment="Center"
@@ -680,7 +677,7 @@
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="The 'az login' path needs the Azure CLI. Install or update it here (uses winget)."/>
+                                                                   Text="Azure sign-in needs the Azure CLI. Install or update it here (uses winget)."/>
                                                     </StackPanel>
                                                     <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install / update"
                                                                MinWidth="76" VerticalAlignment="Center"

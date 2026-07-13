@@ -76,18 +76,108 @@ public sealed class AzureCliInstaller
         return (false, $"Couldn't {verb} the Azure CLI ({Truncate(detail, 160)}). Try {ManualUrl}.");
     }
 
+    /// <summary>
+    /// Opens Azure CLI's browser sign-in and selects the first subscription returned for the chosen
+    /// account. The CLI's terminal subscription selector is disabled so sign-in needs no console.
+    /// </summary>
+    public async Task<(bool Ok, string Message)> LoginAsync(
+        string? tenantId = null, CancellationToken ct = default)
+    {
+        try
+        {
+            var loginArguments = new List<string> { "login", "--output", "none" };
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                loginArguments.Add("--tenant");
+                loginArguments.Add(tenantId.Trim());
+            }
+
+            var (exit, stdout, stderr) = await RunAsync(
+                "az",
+                loginArguments,
+                ct,
+                disableLoginSubscriptionSelector: true).ConfigureAwait(false);
+
+            if (exit != 0)
+            {
+                var detail = !string.IsNullOrWhiteSpace(stderr) ? stderr.Trim()
+                    : !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim()
+                    : $"Azure CLI exited with code {exit}";
+                return (false, $"Azure sign-in did not complete ({Truncate(detail, 160)}). Please try again.");
+            }
+
+            var (listExit, subscriptionOutput, listError) = await RunAsync(
+                "az",
+                ["account", "list", "--query", "[0].id", "--output", "tsv"],
+                ct).ConfigureAwait(false);
+            if (listExit != 0)
+            {
+                var detail = string.IsNullOrWhiteSpace(listError)
+                    ? $"Azure CLI exited with code {listExit}"
+                    : listError.Trim();
+                return (false, $"Signed in, but couldn't list subscriptions ({Truncate(detail, 160)}).");
+            }
+
+            var subscriptionId = subscriptionOutput.Trim();
+            if (string.IsNullOrWhiteSpace(subscriptionId))
+            {
+                return (true, "Signed in to Azure.");
+            }
+
+            var (setExit, _, setError) = await RunAsync(
+                "az",
+                ["account", "set", "--subscription", subscriptionId],
+                ct).ConfigureAwait(false);
+            if (setExit != 0)
+            {
+                var detail = string.IsNullOrWhiteSpace(setError)
+                    ? $"Azure CLI exited with code {setExit}"
+                    : setError.Trim();
+                return (false, $"Signed in, but couldn't select a subscription ({Truncate(detail, 160)}).");
+            }
+
+            return (true, "Signed in to Azure and selected the first available subscription.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return (false, "Couldn't start Azure sign-in. Make sure Azure CLI is installed, then try again.");
+        }
+    }
+
     private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
         string fileName, string arguments, CancellationToken ct)
+    {
+        var splitArguments = arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return await RunAsync(fileName, splitArguments, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        CancellationToken ct,
+        bool disableLoginSubscriptionSelector = false)
     {
         var psi = new ProcessStartInfo
         {
             FileName = fileName,
-            Arguments = arguments,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        foreach (var argument in arguments)
+        {
+            psi.ArgumentList.Add(argument);
+        }
+
+        if (disableLoginSubscriptionSelector)
+        {
+            psi.Environment["AZURE_CORE_LOGIN_EXPERIENCE_V2"] = "off";
+        }
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stdout = new StringBuilder();
