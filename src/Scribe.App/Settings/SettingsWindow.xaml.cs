@@ -7,6 +7,7 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
@@ -38,12 +39,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly IHistoryRepository _history;
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
+    private readonly AzureCliInstaller _azureCliInstaller;
     private readonly ICleanupFailureLog _failureLog;
     private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
+    private readonly ILogger<SettingsWindow> _log;
 
     private readonly AppSettings _settings;
     private readonly ObservableCollection<DictionaryRow> _rows = new();
@@ -84,6 +87,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         IHistoryRepository history,
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
+        ILoggerFactory loggerFactory,
         ICleanupFailureLog failureLog,
         ITranscriptionModelInstaller transcriptionModelInstaller,
         Action<OverlayPosition> previewOverlay,
@@ -99,12 +103,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _history = history;
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
+        _azureCliInstaller = new AzureCliInstaller(loggerFactory.CreateLogger<AzureCliInstaller>());
         _failureLog = failureLog;
         _transcriptionModelInstaller = transcriptionModelInstaller;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
+        _log = loggerFactory.CreateLogger<SettingsWindow>();
 
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
@@ -1481,8 +1487,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (!status.IsSignedIn)
             {
-                var installer = new AzureCliInstaller();
-                if (!installer.IsInstalled())
+                if (!_azureCliInstaller.IsInstalled())
                 {
                     AzureStatusText.Text =
                         "Azure CLI is not installed. Install it below, then choose Sign in & find models again.";
@@ -1491,14 +1496,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
                 AzureStatusText.Text = "Opening Azure sign-in in your browser…";
                 using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                var (ok, message) = await installer.LoginAsync(tenantId, loginCts.Token);
+                var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
                 if (!ok)
                 {
                     AzureStatusText.Text = message;
                     return;
                 }
 
-                AzureStatusText.Text = message + " Listing your deployments…";
+                AzureStatusText.Text = "Signed in to Azure. Listing your deployments…";
                 AzureRefreshButton.Content = "Refresh models";
             }
         }
@@ -1507,8 +1512,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AzureStatusText.Text = "Azure sign-in timed out. Please try again.";
             return;
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Could not start Azure sign-in.");
             AzureStatusText.Text = "Couldn't start Azure sign-in. Please try again.";
             return;
         }
@@ -1605,8 +1611,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-            var installer = new AzureCliInstaller();
-            var (_, message) = await installer.InstallOrUpdateAsync(cts.Token);
+            var (_, message) = await _azureCliInstaller.InstallOrUpdateAsync(cts.Token);
             AzureCliStatusText.Text = message;
         }
         catch (OperationCanceledException)
@@ -1622,6 +1627,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         finally
         {
             AzureCliButton.IsEnabled = true;
+        }
+    }
+
+    private void TryLog(Exception ex, string message)
+    {
+        try
+        {
+            _log.LogWarning(ex, message);
+        }
+        catch
+        {
+            // Diagnostics must never disrupt the settings window.
         }
     }
 

@@ -362,6 +362,7 @@ public partial class App : Application
             services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
+            services.GetRequiredService<ILoggerFactory>(),
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ITranscriptionModelInstaller>(),
             position => _overlay?.Preview(position),

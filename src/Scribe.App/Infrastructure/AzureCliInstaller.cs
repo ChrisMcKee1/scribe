@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace Scribe.App.Infrastructure;
 
@@ -16,17 +17,21 @@ public sealed class AzureCliInstaller
 {
     private const string PackageId = "Microsoft.AzureCLI";
     private const string ManualUrl = "https://aka.ms/installazurecliwindows";
+    private readonly ILogger<AzureCliInstaller> _log;
+
+    public AzureCliInstaller(ILogger<AzureCliInstaller> log) => _log = log;
 
     /// <summary>True if the <c>az</c> command resolves on the current PATH.</summary>
     public bool IsInstalled()
     {
         try
         {
-            var (exit, _, _) = RunAsync("where", "az", CancellationToken.None).GetAwaiter().GetResult();
+            var (exit, _, _) = RunAsync("where", ["az"], CancellationToken.None).GetAwaiter().GetResult();
             return exit == 0;
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Could not determine whether Azure CLI is installed.");
             return false;
         }
     }
@@ -39,8 +44,16 @@ public sealed class AzureCliInstaller
     {
         var alreadyInstalled = IsInstalled();
         var verb = alreadyInstalled ? "upgrade" : "install";
-        var args =
-            $"{verb} --exact --id {PackageId} --silent --accept-package-agreements --accept-source-agreements";
+        string[] args =
+        [
+            verb,
+            "--exact",
+            "--id",
+            PackageId,
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ];
 
         int exit;
         string stdout;
@@ -53,8 +66,9 @@ public sealed class AzureCliInstaller
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Could not start winget for Azure CLI installation or update.");
             return (false, $"winget isn't available. Install the Azure CLI manually from {ManualUrl}.");
         }
 
@@ -62,7 +76,9 @@ public sealed class AzureCliInstaller
         const int NoApplicableUpgrade = unchecked((int)0x8A15002B);
         if (exit == 0)
         {
-            return (true, alreadyInstalled ? "Azure CLI updated." : "Azure CLI installed. Run 'az login' to sign in.");
+            return (true, alreadyInstalled
+                ? "Azure CLI updated."
+                : "Azure CLI installed. Choose Sign in & find models to continue.");
         }
 
         if (exit == NoApplicableUpgrade)
@@ -142,17 +158,11 @@ public sealed class AzureCliInstaller
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Azure CLI sign-in failed.");
             return (false, "Couldn't start Azure sign-in. Make sure Azure CLI is installed, then try again.");
         }
-    }
-
-    private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
-        string fileName, string arguments, CancellationToken ct)
-    {
-        var splitArguments = arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return await RunAsync(fileName, splitArguments, ct).ConfigureAwait(false);
     }
 
     private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
@@ -219,4 +229,16 @@ public sealed class AzureCliInstaller
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…";
+
+    private void TryLog(Exception ex, string message)
+    {
+        try
+        {
+            _log.LogWarning(ex, message);
+        }
+        catch
+        {
+            // Diagnostics must never disrupt Azure CLI setup or sign-in.
+        }
+    }
 }
