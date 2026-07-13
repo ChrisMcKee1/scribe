@@ -28,6 +28,7 @@ public static class CoreServiceCollectionExtensions
         });
 
         services.AddSingleton<ModelLocator>();
+        services.AddSingleton<ITranscriptionModelInstaller, TranscriptionModelInstaller>();
 
         // Decode thread count is user-configurable; pull it from persisted settings when the
         // recognizer first resolves its options (0 keeps the service's auto heuristic).
@@ -35,6 +36,7 @@ public static class CoreServiceCollectionExtensions
             .Configure<ISettingsRepository>((options, settings) =>
             {
                 var loaded = settings.Load();
+                options.ModelId = loaded.TranscriptionModelId;
                 options.NumThreads = loaded.DecodeThreads;
                 options.DecodingMethod = loaded.UseHighAccuracyDecoding
                     ? "modified_beam_search"

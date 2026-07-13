@@ -355,6 +355,7 @@ public partial class App : Application
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
             services.GetRequiredService<ICleanupFailureLog>(),
+            services.GetRequiredService<ITranscriptionModelInstaller>(),
             position => _overlay?.Preview(position),
             settings =>
             {

@@ -54,9 +54,35 @@ public class HotkeyServiceTests
         queue.CompleteAdding();
 
         var added = HotkeyService.TryEnqueue(
-            queue, new HotkeyService.QueuedTransition(HotkeyTransition.Activated, 0, AllowReconcile: true));
+            queue, new HotkeyService.QueuedTransition(
+                HotkeyTransition.Activated, HotkeyTrigger.Standard, 0, AllowReconcile: true));
 
         Assert.False(added);
+    }
+
+    [Fact]
+    public void UpdateBindings_preserves_both_trigger_roles()
+    {
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        var standard = new HotkeyBinding(0x77, KeyModifiers.None, HotkeyMode.Hold, true, "F8");
+        var dictationOnly = new HotkeyBinding(0x78, KeyModifiers.None, HotkeyMode.Toggle, true, "F9");
+
+        service.UpdateBindings(standard, dictationOnly);
+
+        Assert.Equal(standard, service.Binding);
+        Assert.Equal(dictationOnly, service.DictationOnlyBinding);
+    }
+
+    [Fact]
+    public void Trigger_arbiter_ignores_a_second_binding_until_the_active_binding_releases()
+    {
+        var arbiter = new HotkeyTriggerArbiter();
+
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard));
+        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.False(arbiter.TryDeactivate(HotkeyTrigger.DictationOnly));
+        Assert.True(arbiter.TryDeactivate(HotkeyTrigger.Standard));
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
     }
 
     [Fact]

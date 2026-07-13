@@ -1,5 +1,7 @@
 namespace Scribe.Core.Infrastructure;
 
+using Scribe.Core.Transcription;
+
 /// <summary>
 /// Locates the model directory across the layouts Scribe supports, in priority order:
 /// <list type="number">
@@ -70,5 +72,37 @@ public sealed class ModelLocator(AppPaths paths)
         }
 
         return set;
+    }
+
+    public ModelSet Resolve(TranscriptionModel model)
+    {
+        if (model.IsBundled)
+        {
+            foreach (var candidate in CandidateDirectories())
+            {
+                var set = ModelSet.ForDirectory(candidate, model.RequiredFiles);
+                if (set.AsrComplete)
+                {
+                    return set;
+                }
+            }
+        }
+
+        return ModelSet.ForDirectory(
+            Path.Combine(paths.ModelsDir, model.Id),
+            model.RequiredFiles);
+    }
+
+    public ModelSet ResolveOrDefault(TranscriptionModel model, out bool usedFallback)
+    {
+        var selected = Resolve(model);
+        if (selected.AsrComplete)
+        {
+            usedFallback = false;
+            return selected;
+        }
+
+        usedFallback = !model.IsBundled;
+        return usedFallback ? Resolve() : selected;
     }
 }

@@ -17,6 +17,9 @@ public interface IHotkeyService : IDisposable
     /// <summary>The binding currently driving the hook.</summary>
     HotkeyBinding Binding { get; }
 
+    /// <summary>The optional binding that records without AI cleanup.</summary>
+    HotkeyBinding? DictationOnlyBinding { get; }
+
     /// <summary>Installs the keyboard hook on a dedicated message-pump thread.</summary>
     void Start();
 
@@ -25,6 +28,9 @@ public interface IHotkeyService : IDisposable
 
     /// <summary>Replaces the active binding; takes effect immediately without restarting the hook.</summary>
     void UpdateBinding(HotkeyBinding binding);
+
+    /// <summary>Replaces both active bindings; takes effect without restarting the hook.</summary>
+    void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding);
 
     /// <summary>
     /// Resets toggle mode's internal on/off state without raising events. Called when the app ends
@@ -42,8 +48,19 @@ public interface IHotkeyService : IDisposable
     void SetCaptureMode(bool enabled);
 
     /// <summary>Raised when dictation should begin (hold key down, or toggle on).</summary>
-    event EventHandler? Activated;
+    event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
     /// <summary>Raised when dictation should end and transcription should run (hold key up, or toggle off).</summary>
-    event EventHandler? Deactivated;
+    event EventHandler<HotkeyTriggerEventArgs>? Deactivated;
+}
+
+public enum HotkeyTrigger
+{
+    Standard,
+    DictationOnly,
+}
+
+public sealed class HotkeyTriggerEventArgs(HotkeyTrigger trigger) : EventArgs
+{
+    public HotkeyTrigger Trigger { get; } = trigger;
 }
