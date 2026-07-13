@@ -29,8 +29,9 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 
 - **🔒 Private by architecture, not by promise.** Audio is captured, transcribed in memory, and
   discarded on your machine. There is no server to trust, because there is no server.
-- **⚡ One key, zero friction.** Hold **Right Ctrl** (or any key), talk, release. That's the whole
-  gesture. Prefer hands-free? Toggle mode ends the dictation by itself when you stop talking.
+- **⚡ Two keys, your choice.** Hold **Right Ctrl** (or any key), talk, release. Add an optional
+  second hotkey when you want dictation that always skips AI cleanup. Prefer hands-free? Toggle
+  mode ends the dictation by itself when you stop talking.
 - **🌍 Speaks your language.** The bundled model transcribes about 25 European languages out of the
   box, no setup: dictate in English, German, Spanish, French, Italian and more, and it just works.
 - **🧠 It understands how people actually talk.** Say *"send it Wednesday… I mean Thursday"* and,
@@ -63,8 +64,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 ## 📸 A quick look
 
 ### A settings app that respects you
-Everything lives in a clean, Windows 11-style settings window: pick your microphone and
-push-to-talk key (hold or toggle), then browse focused sections for dictation behaviour, the
+Everything lives in a clean, Windows 11-style settings window: pick your microphone, speech model,
+and push-to-talk keys (hold or toggle), then browse focused sections for dictation behaviour, the
 overlay, AI cleanup, your dictionary, snippets, per-app profiles, history, usage and diagnostics.
 
 ![Scribe general settings: microphone, hotkey and startup, with the navigation rail](docs/screenshots/settings-general.png)
@@ -177,9 +178,9 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 
 | Feature | What it does |
 |---|---|
-| Push-to-talk | Hold or toggle, on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
+| Push-to-talk | Separate AI-capable and optional dictation-only hotkeys, each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet |
-| On-device speech recognition | NVIDIA Parakeet TDT 0.6b v3 on your CPU, handles ~25 European languages automatically, no language picker needed |
+| On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
 | Hotkey self-healing | Detects and repairs stuck modifiers and silently removed keyboard hooks, so push-to-talk keeps working across long sessions |
@@ -271,6 +272,7 @@ Scribe is released under the **[MIT License](LICENSE)**.
 It stands on the shoulders of excellent open work:
 
 - **Parakeet TDT 0.6b v3**: © NVIDIA, [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)
+- **Moonshine**: © Useful Sensors, MIT
 - **sherpa-onnx**: Apache-2.0 (Next-gen Kaldi / k2-fsa)
 - **Silero VAD**: MIT
 

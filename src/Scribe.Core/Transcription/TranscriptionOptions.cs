@@ -3,6 +3,8 @@ namespace Scribe.Core.Transcription;
 /// <summary>Tuning knobs for the offline recognizer.</summary>
 public sealed class TranscriptionOptions
 {
+    public string ModelId { get; set; } = TranscriptionModelCatalog.DefaultId;
+
     /// <summary>
     /// Decode threads for sherpa-onnx. 0 means auto: roughly half the logical processors,
     /// capped at 8, which keeps decode fast while leaving headroom for the UI and capture.

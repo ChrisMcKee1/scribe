@@ -153,6 +153,7 @@ public sealed class SettingsRepository : ISettingsRepository
         settings.AiCleanupWritingStyle ??= string.Empty;
         settings.AiCleanupFrontierPrompt ??= string.Empty;
         settings.AiCleanupLocalPrompt ??= string.Empty;
+        settings.TranscriptionModelId ??= Transcription.TranscriptionModelCatalog.DefaultId;
         settings.DecodeThreads = Math.Clamp(settings.DecodeThreads, 0, 16);
         return settings;
     }

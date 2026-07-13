@@ -37,9 +37,12 @@ public sealed class HotkeyService : IHotkeyService
     /// a genuinely held key from a leaked one and could release a key the user is holding.
     /// </summary>
     internal readonly record struct QueuedTransition(
-        HotkeyTransition Transition, long Generation, bool AllowReconcile);
+        HotkeyTransition Transition, HotkeyTrigger Trigger, long Generation, bool AllowReconcile);
 
     private volatile HotkeyBinding _binding = HotkeyBinding.Default;
+    private volatile HotkeyBinding? _dictationOnlyBinding;
+    private ChordStateMachine? _dictationOnlyState;
+    private readonly HotkeyTriggerArbiter _triggerArbiter = new();
     private BlockingCollection<QueuedTransition>? _queue;
     private Thread? _hookThread;
     private Thread? _consumerThread;
@@ -56,7 +59,7 @@ public sealed class HotkeyService : IHotkeyService
         _state = new ChordStateMachine(_binding);
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,
-            _state.IsPressed,
+            key => _state.IsPressed(key) || _dictationOnlyState?.IsPressed(key) == true,
             key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
     }
 
@@ -71,9 +74,11 @@ public sealed class HotkeyService : IHotkeyService
 
     public HotkeyBinding Binding => _binding;
 
-    public event EventHandler? Activated;
+    public HotkeyBinding? DictationOnlyBinding => _dictationOnlyBinding;
 
-    public event EventHandler? Deactivated;
+    public event EventHandler<HotkeyTriggerEventArgs>? Activated;
+
+    public event EventHandler<HotkeyTriggerEventArgs>? Deactivated;
 
     public void Start()
     {
@@ -86,6 +91,8 @@ public sealed class HotkeyService : IHotkeyService
 
             _queue = new BlockingCollection<QueuedTransition>(new ConcurrentQueue<QueuedTransition>());
             _ = _state.Reset(); // fresh start: no consumer exists yet, so the transition is moot
+            _ = _dictationOnlyState?.Reset();
+            _triggerArbiter.Reset();
 
             using var installed = new ManualResetEventSlim(false);
             Exception? installError = null;
@@ -166,40 +173,88 @@ public sealed class HotkeyService : IHotkeyService
             _hookThreadId = 0;
             _hookId = 0;
             _ = _state.Reset();
+            _ = _dictationOnlyState?.Reset();
+            _triggerArbiter.Reset();
         }
 
         _logger.LogInformation("Hotkey hook removed.");
     }
 
-    public void CancelToggle() => _state.CancelToggle();
+    public void CancelToggle()
+    {
+        _state.CancelToggle();
+        _dictationOnlyState?.CancelToggle();
+        _triggerArbiter.Reset();
+    }
 
     public void SetCaptureMode(bool enabled)
     {
         var (transition, generation) = _state.SetCaptureMode(enabled);
+        var secondary = _dictationOnlyState?.SetCaptureMode(enabled);
         if (transition != HotkeyTransition.None)
         {
-            TryEnqueue(_queue, new QueuedTransition(transition, generation, AllowReconcile: false));
+            TryEnqueue(_queue, new QueuedTransition(
+                transition, _triggerArbiter.Take(HotkeyTrigger.Standard), generation, AllowReconcile: false));
+        }
+        else if (secondary is { Transition: not HotkeyTransition.None } secondaryTransition)
+        {
+            TryEnqueue(_queue, new QueuedTransition(
+                secondaryTransition.Transition, _triggerArbiter.Take(HotkeyTrigger.DictationOnly),
+                secondaryTransition.Generation, AllowReconcile: false));
         }
 
         _logger.LogInformation("Hotkey binding capture mode {State}.", enabled ? "enabled" : "disabled");
     }
 
-    public void UpdateBinding(HotkeyBinding binding)
+    public void UpdateBinding(HotkeyBinding binding) => UpdateBindings(binding, _dictationOnlyBinding);
+
+    public void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
     {
         ArgumentNullException.ThrowIfNull(binding);
-        if (_binding == binding)
+        if (_binding == binding && _dictationOnlyBinding == dictationOnlyBinding)
         {
             return;
         }
 
+        var activeTrigger = _triggerArbiter.Take(HotkeyTrigger.Standard);
         _binding = binding;
         var (transition, generation) = _state.UpdateBinding(binding);
-        if (transition != HotkeyTransition.None)
+        _dictationOnlyBinding = dictationOnlyBinding;
+        var secondaryTransition = HotkeyTransition.None;
+        var secondaryGeneration = generation;
+        if (dictationOnlyBinding is null)
         {
-            TryEnqueue(_queue, new QueuedTransition(transition, generation, AllowReconcile: false));
+            if (_dictationOnlyState is not null)
+            {
+                (secondaryTransition, secondaryGeneration) = _dictationOnlyState.Reset();
+            }
+            _dictationOnlyState = null;
+        }
+        else if (_dictationOnlyState is null)
+        {
+            _dictationOnlyState = new ChordStateMachine(dictationOnlyBinding);
+        }
+        else
+        {
+            (secondaryTransition, secondaryGeneration) = _dictationOnlyState.UpdateBinding(dictationOnlyBinding);
         }
 
-        _logger.LogInformation("Hotkey binding updated to {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
+        if (transition != HotkeyTransition.None)
+        {
+            TryEnqueue(_queue, new QueuedTransition(
+                transition, activeTrigger, generation, AllowReconcile: false));
+        }
+        else if (secondaryTransition != HotkeyTransition.None)
+        {
+            TryEnqueue(_queue, new QueuedTransition(
+                secondaryTransition, activeTrigger,
+                secondaryGeneration, AllowReconcile: false));
+        }
+
+        _logger.LogInformation(
+            "Hotkey bindings updated: standard={Binding} ({Mode}), dictation-only={DictationOnly}.",
+            DescribeBinding(binding), binding.Mode,
+            dictationOnlyBinding is null ? "disabled" : DescribeBinding(dictationOnlyBinding));
     }
 
     private void RunHookThread(ManualResetEventSlim installed, ref Exception? installError)
@@ -281,21 +336,49 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         var vkCode = (uint)Marshal.ReadInt32(lParam, VkCodeOffset);
-        var update = _state.Process(vkCode, isDown);
-        if (update.Transition != HotkeyTransition.None)
+        var primaryUpdate = _state.Process(vkCode, isDown);
+        var secondaryUpdate = _dictationOnlyState?.Process(vkCode, isDown);
+        EnqueueTriggerUpdate(primaryUpdate, HotkeyTrigger.Standard);
+        if (secondaryUpdate is { } update)
         {
-            TryEnqueue(_queue, new QueuedTransition(update.Transition, update.Generation, AllowReconcile: true));
+            EnqueueTriggerUpdate(update, HotkeyTrigger.DictationOnly);
         }
 
         // Toggle mode deactivates on key DOWN, so the deactivation-time reconcile still sees the
         // key physically held and correctly skips it. The suppressed key UP is therefore the one
         // moment that covers every mode: check for a leaked logical "down" right after it.
-        if (isUp && update.ShouldSuppress)
+        var shouldSuppress = primaryUpdate.ShouldSuppress || secondaryUpdate?.ShouldSuppress == true;
+        if (isUp && shouldSuppress)
         {
             ScheduleReconcile();
         }
 
-        return update.ShouldSuppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        return shouldSuppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+    }
+
+    private void EnqueueTriggerUpdate(ChordUpdate update, HotkeyTrigger trigger)
+    {
+        if (update.Transition == HotkeyTransition.Activated)
+        {
+            if (!_triggerArbiter.TryActivate(trigger))
+            {
+                return;
+            }
+        }
+        else if (update.Transition == HotkeyTransition.Deactivated)
+        {
+            if (!_triggerArbiter.TryDeactivate(trigger))
+            {
+                return;
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        TryEnqueue(_queue, new QueuedTransition(
+            update.Transition, trigger, update.Generation, AllowReconcile: true));
     }
 
     // A final keyboard message can already be in the hook thread's native queue when Stop marks the
@@ -350,17 +433,20 @@ public sealed class HotkeyService : IHotkeyService
                 // An Activated computed against state that was since cleared (capture mode,
                 // binding update, reinstall) must not start a recording; the clear's own
                 // Deactivated may already sit behind it in this queue.
-                if (item.Generation != _state.Generation)
+                var generation = item.Trigger == HotkeyTrigger.Standard
+                    ? _state.Generation
+                    : _dictationOnlyState?.Generation;
+                if (item.Generation != generation)
                 {
                     _logger.LogInformation("Discarded a stale hotkey activation from a superseded state epoch.");
                     return;
                 }
 
-                Activated?.Invoke(this, EventArgs.Empty);
+                Activated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
-                Deactivated?.Invoke(this, EventArgs.Empty);
+                Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
 
                 // Every release is a cheap moment to verify no suppressed key leaked into the
                 // system's logical "down" state (a hook deadline miss lets single events through).
@@ -385,6 +471,13 @@ public sealed class HotkeyService : IHotkeyService
         {
             await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
             var result = _reconciler.ReleaseLeakedKeys(_binding);
+            if (_dictationOnlyBinding is { } dictationOnly)
+            {
+                var secondaryResult = _reconciler.ReleaseLeakedKeys(dictationOnly);
+                result = new SuppressedKeyReconciler.Result(
+                    result.Released.Concat(secondaryResult.Released).Distinct().ToList(),
+                    result.Failed.Concat(secondaryResult.Failed).Distinct().ToList());
+            }
             foreach (var key in result.Released)
             {
                 _logger.LogWarning(
@@ -473,9 +566,17 @@ public sealed class HotkeyService : IHotkeyService
         // no longer match the cleared state, so the recording must be stopped explicitly or the
         // microphone stays live until the next press.
         var (transition, generation) = _state.Reset();
+        var secondaryTransition = _dictationOnlyState?.Reset();
         if (transition != HotkeyTransition.None)
         {
-            TryEnqueue(_queue, new QueuedTransition(transition, generation, AllowReconcile: false));
+            TryEnqueue(_queue, new QueuedTransition(
+                transition, _triggerArbiter.Take(HotkeyTrigger.Standard), generation, AllowReconcile: false));
+        }
+        else if (secondaryTransition is { Transition: not HotkeyTransition.None } secondary)
+        {
+            TryEnqueue(_queue, new QueuedTransition(
+                secondary.Transition, _triggerArbiter.Take(HotkeyTrigger.DictationOnly),
+                secondary.Generation, AllowReconcile: false));
         }
 
         using var installed = new ManualResetEventSlim(false);
@@ -512,4 +613,29 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     public void Dispose() => Stop();
+}
+
+internal sealed class HotkeyTriggerArbiter
+{
+    private int _activeCode;
+
+    public bool TryActivate(HotkeyTrigger trigger) =>
+        Interlocked.CompareExchange(ref _activeCode, Code(trigger), 0) == 0;
+
+    public bool TryDeactivate(HotkeyTrigger trigger)
+    {
+        var code = Code(trigger);
+        return Interlocked.CompareExchange(ref _activeCode, 0, code) == code;
+    }
+
+    public HotkeyTrigger Take(HotkeyTrigger fallback)
+    {
+        var code = Interlocked.Exchange(ref _activeCode, 0);
+        return code == 0 ? fallback : (HotkeyTrigger)(code - 1);
+    }
+
+    public void Reset() => Interlocked.Exchange(ref _activeCode, 0);
+
+    // Reserve zero for no active trigger so compare-exchange can arbitrate without a lock.
+    private static int Code(HotkeyTrigger trigger) => (int)trigger + 1;
 }

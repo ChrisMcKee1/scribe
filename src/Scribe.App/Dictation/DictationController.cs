@@ -135,7 +135,7 @@ internal sealed class DictationController : IDisposable
         _postProcessor.Reload();
         _cleanup.Configure(BuildCleanupOptions(_settings));
 
-        _hotkeys.UpdateBinding(_settings.Hotkey);
+        _hotkeys.UpdateBindings(_settings.Hotkey, _settings.DictationOnlyHotkey);
         _hotkeys.Activated += OnActivated;
         _hotkeys.Deactivated += OnDeactivated;
         _hotkeys.Start();
@@ -157,9 +157,10 @@ internal sealed class DictationController : IDisposable
             _settings = settings.Clone();
         }
 
-        if (_hotkeys.Binding != settings.Hotkey)
+        if (_hotkeys.Binding != settings.Hotkey ||
+            _hotkeys.DictationOnlyBinding != settings.DictationOnlyHotkey)
         {
-            _hotkeys.UpdateBinding(settings.Hotkey);
+            _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
         _postProcessor.Reload();
         _cleanup.Configure(BuildCleanupOptions(settings));
@@ -240,7 +241,7 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void OnActivated(object? sender, EventArgs e)
+    private void OnActivated(object? sender, HotkeyTriggerEventArgs e)
     {
         AppSettings settings;
         lock (_gate)
@@ -259,6 +260,10 @@ internal sealed class DictationController : IDisposable
 
             _state = DictationState.Recording;
             settings = _settings.Clone();
+            if (e.Trigger == HotkeyTrigger.DictationOnly)
+            {
+                settings.EnableAiCleanup = false;
+            }
             _captureSettings = settings;
             _captureTargetWindow = GetForegroundWindow();
             _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
@@ -268,7 +273,7 @@ internal sealed class DictationController : IDisposable
         {
             _audio.CaptureFaulted += OnCaptureFaulted;
             _audio.Start(settings.InputDeviceId);
-            _log.LogInformation("Recording started.");
+            _log.LogInformation("Recording started ({Trigger}).", e.Trigger);
             Raise(DictationState.Recording);
 
             if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)
@@ -290,7 +295,7 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void OnDeactivated(object? sender, EventArgs e) => StopAndProcess();
+    private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) => StopAndProcess();
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {

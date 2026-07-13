@@ -17,6 +17,12 @@ public sealed class AppSettings
 
     public HotkeyBinding Hotkey { get; set; } = HotkeyBinding.Default;
 
+    /// <summary>
+    /// Optional second trigger that always bypasses AI cleanup. Null keeps the legacy single-hotkey
+    /// behavior and lets existing settings continue unchanged.
+    /// </summary>
+    public HotkeyBinding? DictationOnlyHotkey { get; set; }
+
     /// <summary>Show the always-on-top recording overlay while capturing.</summary>
     public bool ShowOverlay { get; set; } = true;
 
@@ -28,6 +34,9 @@ public sealed class AppSettings
 
     /// <summary>Decode thread count for sherpa-onnx; 0 lets the app pick a sensible default.</summary>
     public int DecodeThreads { get; set; }
+
+    /// <summary>Id of the offline speech-recognition model to load after the next restart.</summary>
+    public string TranscriptionModelId { get; set; } = Transcription.TranscriptionModelCatalog.DefaultId;
 
     /// <summary>
     /// Use beam-search decoding (<c>modified_beam_search</c>) instead of greedy. Slightly more

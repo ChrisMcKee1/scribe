@@ -9,9 +9,11 @@ public sealed class ModelSet
     public const string TokensFile = "tokens.txt";
     public const string SileroVadFile = "silero_vad_v5.onnx";
 
-    private ModelSet(string directory)
+    private ModelSet(string directory, IReadOnlyList<string>? requiredAsrFiles = null)
     {
         Directory = directory;
+        RequiredAsrFiles = requiredAsrFiles ??
+            [EncoderFile, DecoderFile, JoinerFile, TokensFile];
         EncoderPath = Path.Combine(directory, EncoderFile);
         DecoderPath = Path.Combine(directory, DecoderFile);
         JoinerPath = Path.Combine(directory, JoinerFile);
@@ -25,13 +27,10 @@ public sealed class ModelSet
     public string JoinerPath { get; }
     public string TokensPath { get; }
     public string SileroVadPath { get; }
+    public IReadOnlyList<string> RequiredAsrFiles { get; }
 
     /// <summary>True when every ASR file required to construct the recognizer is present.</summary>
-    public bool AsrComplete =>
-        File.Exists(EncoderPath) &&
-        File.Exists(DecoderPath) &&
-        File.Exists(JoinerPath) &&
-        File.Exists(TokensPath);
+    public bool AsrComplete => RequiredAsrFiles.All(file => File.Exists(Path.Combine(Directory, file)));
 
     /// <summary>True when the Silero VAD model is available.</summary>
     public bool VadAvailable => File.Exists(SileroVadPath);
@@ -39,13 +38,13 @@ public sealed class ModelSet
     /// <summary>Names of any missing ASR files (for diagnostics / error messages).</summary>
     public IReadOnlyList<string> MissingAsrFiles()
     {
-        var missing = new List<string>(4);
-        if (!File.Exists(EncoderPath)) missing.Add(EncoderFile);
-        if (!File.Exists(DecoderPath)) missing.Add(DecoderFile);
-        if (!File.Exists(JoinerPath)) missing.Add(JoinerFile);
-        if (!File.Exists(TokensPath)) missing.Add(TokensFile);
-        return missing;
+        return RequiredAsrFiles
+            .Where(file => !File.Exists(Path.Combine(Directory, file)))
+            .ToList();
     }
 
     public static ModelSet ForDirectory(string directory) => new(directory);
+
+    public static ModelSet ForDirectory(string directory, IReadOnlyList<string> requiredAsrFiles) =>
+        new(directory, requiredAsrFiles);
 }

@@ -43,18 +43,31 @@ public sealed class TranscriptionService : ITranscriptionService
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_recognizer is not null) return;
 
-            var models = _locator.ResolveOrThrow();
+            var model = TranscriptionModelCatalog.Resolve(_options.ModelId);
+            var models = _locator.ResolveOrDefault(model, out var usedFallback);
+            if (!models.AsrComplete)
+            {
+                var missing = string.Join(", ", models.MissingAsrFiles());
+                throw new FileNotFoundException(
+                    $"Speech model files were not found. Missing: {missing}. " +
+                    "Run scripts/Download-Models.ps1 or install the selected model in Settings.");
+            }
+            if (usedFallback)
+            {
+                _logger.LogWarning(
+                    "Selected speech model {Model} is unavailable; using bundled Parakeet.", model.Id);
+                model = TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId);
+            }
             var threads = ResolveThreadCount(_options.NumThreads);
 
             var config = new OfflineRecognizerConfig();
             config.ModelConfig.Tokens = models.TokensPath;
-            config.ModelConfig.Transducer.Encoder = models.EncoderPath;
-            config.ModelConfig.Transducer.Decoder = models.DecoderPath;
-            config.ModelConfig.Transducer.Joiner = models.JoinerPath;
-            config.ModelConfig.ModelType = ModelType;
+            ConfigureModel(config, model, models);
             config.ModelConfig.NumThreads = threads;
             config.ModelConfig.Provider = "cpu";
-            config.DecodingMethod = ResolveDecodingMethod(_options.DecodingMethod);
+            config.DecodingMethod = model.Architecture == TranscriptionModelArchitecture.NemoTransducer
+                ? ResolveDecodingMethod(_options.DecodingMethod)
+                : "greedy_search";
             config.MaxActivePaths = Math.Max(1, _options.MaxActivePaths);
             // Other defaults from the ctor are already correct: FeatConfig.SampleRate = 16000,
             // FeatConfig.FeatureDim = 80.
@@ -64,11 +77,33 @@ public sealed class TranscriptionService : ITranscriptionService
             sw.Stop();
 
             _logger.LogInformation(
-                "Loaded Parakeet recognizer ({Threads} threads, {Method}) from {Directory} in {ElapsedMs} ms",
-                threads, config.DecodingMethod, models.Directory, sw.ElapsedMilliseconds);
+                "Loaded {Model} recognizer ({Threads} threads, {Method}) from {Directory} in {ElapsedMs} ms",
+                model.DisplayName, threads, config.DecodingMethod, models.Directory, sw.ElapsedMilliseconds);
 
             WarmUp(_recognizer);
         }
+    }
+
+    private static void ConfigureModel(
+        OfflineRecognizerConfig config,
+        TranscriptionModel model,
+        ModelSet models)
+    {
+        if (model.Architecture == TranscriptionModelArchitecture.Moonshine)
+        {
+            config.ModelConfig.Moonshine.Preprocessor = Path.Combine(models.Directory, "preprocess.onnx");
+            config.ModelConfig.Moonshine.Encoder = Path.Combine(models.Directory, "encode.int8.onnx");
+            config.ModelConfig.Moonshine.UncachedDecoder =
+                Path.Combine(models.Directory, "uncached_decode.int8.onnx");
+            config.ModelConfig.Moonshine.CachedDecoder =
+                Path.Combine(models.Directory, "cached_decode.int8.onnx");
+            return;
+        }
+
+        config.ModelConfig.Transducer.Encoder = models.EncoderPath;
+        config.ModelConfig.Transducer.Decoder = models.DecoderPath;
+        config.ModelConfig.Transducer.Joiner = models.JoinerPath;
+        config.ModelConfig.ModelType = ModelType;
     }
 
     /// <summary>

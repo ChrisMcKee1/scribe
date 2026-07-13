@@ -224,7 +224,7 @@
 
                                 <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
-                                        <TextBlock Text="Dictation hotkey" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Text="Dictation with AI cleanup" Style="{StaticResource SettingTitle}"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -244,7 +244,30 @@
                                                       VerticalContentAlignment="Center"/>
                                         </Grid>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Hold: keep the full one- or two-key chord down while speaking. Toggle: press once to start, again to stop. Two-key chords reserve both selected keys while Scribe runs, including Windows shortcuts."/>
+                                                   Text="Uses your current AI cleanup setting. Hold: keep the full one- or two-key chord down while speaking. Toggle: press once to start, again to stop."/>
+                                        <TextBlock Text="Dictation only" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="DictationOnlyHotkeyBox" Grid.Column="0" IsReadOnly="True"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="Not set"
+                                                        PreviewKeyDown="HotkeyBox_PreviewKeyDown"
+                                                        PreviewKeyUp="HotkeyBox_PreviewKeyUp"
+                                                        LostFocus="HotkeyBox_LostFocus"/>
+                                            <ui:Button Grid.Column="1" Content="Set…" Margin="8,0,0,0" MinWidth="72"
+                                                       Click="DictationOnlyCaptureButton_Click"/>
+                                            <ui:Button Grid.Column="2" Content="Clear" Margin="8,0,0,0" MinWidth="72"
+                                                       Click="DictationOnlyClearButton_Click"/>
+                                            <ComboBox x:Name="DictationOnlyModeCombo" Grid.Column="3" Width="104" Margin="8,0,0,0"
+                                                      VerticalContentAlignment="Center"/>
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Optional second hotkey that always skips AI cleanup. The dictionary, snippets, profiles, and other local processing still apply."/>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -276,6 +299,29 @@
                                         </StackPanel>
                                         <ui:ToggleSwitch x:Name="StoreAudioCheck" Grid.Column="1" VerticalAlignment="Center"/>
                                     </Grid>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Speech recognition model" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Parakeet is bundled and recommended for multilingual dictation. Optional Moonshine models are English-only and download after you choose Install."/>
+                                        <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
+                                                  HorizontalAlignment="Stretch"
+                                                  DisplayMemberPath="DisplayName"
+                                                  SelectionChanged="TranscriptionModelCombo_SelectionChanged"/>
+                                        <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource SettingHint}"
+                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                            <ui:Button x:Name="TranscriptionModelInstallButton" Content="Install"
+                                                       MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>
+                                            <ProgressBar x:Name="TranscriptionModelProgress" Width="220" Height="8"
+                                                         Margin="12,0,0,0" VerticalAlignment="Center"
+                                                         Minimum="0" Maximum="100" Visibility="Collapsed"/>
+                                        </StackPanel>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Changing the speech model takes effect after restarting Scribe. If an optional model is unavailable, Scribe safely falls back to bundled Parakeet."/>
+                                    </StackPanel>
                                 </ui:Card>
 
                                 <ui:CardExpander x:Name="AdvancedDecodingExpander" Margin="0,10,0,8" IsExpanded="False">

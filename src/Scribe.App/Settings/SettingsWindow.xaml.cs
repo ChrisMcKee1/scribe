@@ -13,6 +13,7 @@ using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.Transcription;
 
 namespace Scribe.App.Settings;
 
@@ -34,6 +35,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ITextCleanupService _cleanup;
     private readonly IAzureFoundryDiscovery _azureDiscovery;
     private readonly ICleanupFailureLog _failureLog;
+    private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action<bool> _setHotkeyCaptureMode;
@@ -58,8 +60,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     private bool _foundryModelOp;
     private bool _azureAutoListed;
+    private bool _transcriptionModelOp;
 
     private HotkeyBinding _pendingBinding;
+    private HotkeyBinding? _pendingDictationOnlyBinding;
+    private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
     private bool _capturing;
@@ -76,6 +81,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ITextCleanupService cleanup,
         IAzureFoundryDiscovery azureDiscovery,
         ICleanupFailureLog failureLog,
+        ITranscriptionModelInstaller transcriptionModelInstaller,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action<bool>? setHotkeyCaptureMode = null,
@@ -90,6 +96,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _cleanup = cleanup;
         _azureDiscovery = azureDiscovery;
         _failureLog = failureLog;
+        _transcriptionModelInstaller = transcriptionModelInstaller;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
@@ -97,6 +104,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
+        _pendingDictationOnlyBinding = _settings.DictationOnlyHotkey;
 
         // Match the system light/dark theme + accent colour and enable the Mica backdrop.
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
@@ -300,6 +308,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void PopulateChoices()
     {
         ModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
+        DictationOnlyModeCombo.ItemsSource = new[] { "Hold", "Toggle" };
+        TranscriptionModelCombo.ItemsSource = TranscriptionModelCatalog.Curated;
 
         InjectionCombo.DisplayMemberPath = nameof(InjectionChoice.Label);
         InjectionCombo.ItemsSource = new[]
@@ -324,6 +334,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
             ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
+            DictationOnlyHotkeyBox.Text = _pendingDictationOnlyBinding is null
+                ? string.Empty
+                : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
+            DictationOnlyModeCombo.SelectedIndex =
+                _pendingDictationOnlyBinding?.Mode == HotkeyMode.Toggle ? 1 : 0;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -344,6 +359,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             ThreadsSlider.Value = Math.Clamp(_settings.DecodeThreads, 0, 16);
             UpdateThreadsLabel();
+            TranscriptionModelCombo.SelectedItem =
+                TranscriptionModelCatalog.Resolve(_settings.TranscriptionModelId);
+            UpdateTranscriptionModelUi();
 
             LoadAiSettings();
         }
@@ -749,12 +767,29 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void CaptureButton_Click(object sender, RoutedEventArgs e)
     {
-        BeginCapture();
+        BeginCapture(dictationOnly: false);
         HotkeyBox.Focus();
     }
 
-    private void BeginCapture()
+    private void DictationOnlyCaptureButton_Click(object sender, RoutedEventArgs e)
     {
+        BeginCapture(dictationOnly: true);
+        DictationOnlyHotkeyBox.Focus();
+    }
+
+    private void DictationOnlyClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_capturing)
+        {
+            CancelCapture();
+        }
+        _pendingDictationOnlyBinding = null;
+        DictationOnlyHotkeyBox.Text = string.Empty;
+    }
+
+    private void BeginCapture(bool dictationOnly)
+    {
+        _capturingDictationOnly = dictationOnly;
         _capturing = true;
         _finalized = false;
         _capturedKeys.Clear();
@@ -763,7 +798,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Put the global hook into pass-through first: the current push-to-talk key must reach
         // this capture box as an ordinary key instead of being suppressed or starting a recording.
         _setHotkeyCaptureMode(true);
-        HotkeyBox.Text = "Press one or two keys… (dictation is paused)";
+        ActiveHotkeyBox.Text = "Press one or two keys… (dictation is paused)";
     }
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -791,7 +826,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             else
             {
                 _capturedKeys.Add(key);
-                HotkeyBox.Text = string.Join("+", _capturedKeys.Select(k => k.ToString())) +
+                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(k => k.ToString())) +
                     (_capturedKeys.Count == 1 ? "  (add another key or release)" : "  (release to set)");
             }
         }
@@ -812,18 +847,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        Finalize(HotkeyCapture.FromKeys(_capturedKeys, SelectedMode));
+        Finalize(HotkeyCapture.FromKeys(_capturedKeys, ActiveSelectedMode));
     }
 
     private void Finalize(HotkeyBinding binding)
     {
-        _pendingBinding = binding;
+        if (_capturingDictationOnly)
+        {
+            _pendingDictationOnlyBinding = binding;
+        }
+        else
+        {
+            _pendingBinding = binding;
+        }
         _finalized = true;
         _capturing = false;
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
         _setHotkeyCaptureMode(false);
-        HotkeyBox.Text = HotkeyCapture.Describe(binding);
+        ActiveHotkeyBox.Text = HotkeyCapture.Describe(binding);
         Keyboard.ClearFocus();
 
         var risk = HotkeyCapture.AccessibilityRisk(binding);
@@ -845,7 +887,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
         _setHotkeyCaptureMode(false);
-        HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
+        ActiveHotkeyBox.Text = CurrentHotkeyDescription();
         Keyboard.ClearFocus();
     }
 
@@ -859,10 +901,94 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private HotkeyMode SelectedMode => ModeCombo.SelectedIndex == 1 ? HotkeyMode.Toggle : HotkeyMode.Hold;
 
+    private HotkeyMode DictationOnlySelectedMode =>
+        DictationOnlyModeCombo.SelectedIndex == 1 ? HotkeyMode.Toggle : HotkeyMode.Hold;
+
+    private HotkeyMode ActiveSelectedMode => _capturingDictationOnly
+        ? DictationOnlySelectedMode
+        : SelectedMode;
+
+    private Wpf.Ui.Controls.TextBox ActiveHotkeyBox => _capturingDictationOnly
+        ? DictationOnlyHotkeyBox
+        : HotkeyBox;
+
+    private string CurrentHotkeyDescription()
+    {
+        if (!_capturingDictationOnly)
+        {
+            return HotkeyCapture.Describe(_pendingBinding);
+        }
+
+        return _pendingDictationOnlyBinding is null
+            ? string.Empty
+            : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
+    }
+
+    private static bool SamePhysicalBinding(HotkeyBinding left, HotkeyBinding right) =>
+        left.VirtualKey == right.VirtualKey &&
+        left.SecondaryVirtualKey == right.SecondaryVirtualKey &&
+        left.Modifiers == right.Modifiers;
+
     // --- Threads -------------------------------------------------------------------------
 
     private void ThreadsSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) =>
         UpdateThreadsLabel();
+
+    private void TranscriptionModelCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingUi)
+        {
+            UpdateTranscriptionModelUi();
+        }
+    }
+
+    private void UpdateTranscriptionModelUi()
+    {
+        if (TranscriptionModelCombo.SelectedItem is not TranscriptionModel model)
+        {
+            return;
+        }
+
+        var installed = _transcriptionModelInstaller.IsInstalled(model);
+        var size = model.IsBundled ? "Bundled" : $"{model.DownloadSize / 1_000_000} MB download";
+        TranscriptionModelHint.Text =
+            $"{model.Description} Languages: {model.Languages}. {size}. " +
+            (installed ? "Ready." : "Not installed.");
+        TranscriptionModelInstallButton.Visibility = model.IsBundled ? Visibility.Collapsed : Visibility.Visible;
+        TranscriptionModelInstallButton.IsEnabled = !installed && !_transcriptionModelOp;
+        TranscriptionModelInstallButton.Content = installed ? "Installed" : "Install";
+    }
+
+    private async void TranscriptionModelInstallButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_transcriptionModelOp ||
+            TranscriptionModelCombo.SelectedItem is not TranscriptionModel model ||
+            model.IsBundled)
+        {
+            return;
+        }
+
+        _transcriptionModelOp = true;
+        TranscriptionModelInstallButton.IsEnabled = false;
+        TranscriptionModelProgress.Value = 0;
+        TranscriptionModelProgress.Visibility = Visibility.Visible;
+        var progress = new Progress<double>(value => TranscriptionModelProgress.Value = value * 100);
+        try
+        {
+            await _transcriptionModelInstaller.InstallAsync(model, progress);
+            ShowInfo($"{model.DisplayName} is installed. Restart Scribe after saving to use it.");
+        }
+        catch (Exception ex)
+        {
+            ShowThemedMessage("Model installation failed", ex.Message);
+        }
+        finally
+        {
+            _transcriptionModelOp = false;
+            TranscriptionModelProgress.Visibility = Visibility.Collapsed;
+            UpdateTranscriptionModelUi();
+        }
+    }
 
     private void UpdateThreadsLabel()
     {
@@ -1678,6 +1804,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        var standardBinding = _pendingBinding with { Mode = SelectedMode };
+        var dictationOnlyBinding = _pendingDictationOnlyBinding is null
+            ? null
+            : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
+        if (dictationOnlyBinding is not null && SamePhysicalBinding(standardBinding, dictationOnlyBinding))
+        {
+            ShowSection(SectionGeneral);
+            ShowThemedMessage(
+                "Hotkey conflict",
+                "The AI-cleanup and dictation-only hotkeys must use different keys.");
+            return false;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -1686,7 +1825,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? null
                 : device.PersistedName ?? StripDefaultSuffix(device.Name);
 
-            _settings.Hotkey = _pendingBinding with { Mode = SelectedMode };
+            _settings.Hotkey = standardBinding;
+            _settings.DictationOnlyHotkey = dictationOnlyBinding;
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
             _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
@@ -1702,6 +1842,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.Profiles = BuildProfiles();
             _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
+            _settings.TranscriptionModelId =
+                ((TranscriptionModel?)TranscriptionModelCombo.SelectedItem)?.Id ??
+                TranscriptionModelCatalog.DefaultId;
 
             _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
             _settings.AiCleanupProvider = SelectedProvider;

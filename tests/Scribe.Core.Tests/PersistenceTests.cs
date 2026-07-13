@@ -35,6 +35,8 @@ public class PersistenceTests
         settings.DecodeThreads = 6;
         settings.InjectionMethod = InjectionMethod.UnicodeType;
         settings.Hotkey = new HotkeyBinding(0x20, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Toggle, Suppress: false, "Ctrl+Shift+Space");
+        settings.DictationOnlyHotkey = new HotkeyBinding(0x77, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F8");
+        settings.TranscriptionModelId = "moonshine-tiny-en-int8";
         settings.AiCleanupPromptStyle = Scribe.Core.Cleanup.CleanupPromptStyle.Local;
         settings.AiCleanupFrontierPrompt = "my custom frontier prompt";
         settings.AiCleanupLocalPrompt = "my custom local prompt";
@@ -49,6 +51,8 @@ public class PersistenceTests
         Assert.Equal(6, loaded.DecodeThreads);
         Assert.Equal(InjectionMethod.UnicodeType, loaded.InjectionMethod);
         Assert.Equal(settings.Hotkey, loaded.Hotkey);
+        Assert.Equal(settings.DictationOnlyHotkey, loaded.DictationOnlyHotkey);
+        Assert.Equal("moonshine-tiny-en-int8", loaded.TranscriptionModelId);
         Assert.Equal(Scribe.Core.Cleanup.CleanupPromptStyle.Local, loaded.AiCleanupPromptStyle);
         Assert.Equal("my custom frontier prompt", loaded.AiCleanupFrontierPrompt);
         Assert.Equal("my custom local prompt", loaded.AiCleanupLocalPrompt);
@@ -418,4 +422,3 @@ public class PersistenceTests
         Assert.Equal("fresh", recent[0].Reason);
     }
 }
-
