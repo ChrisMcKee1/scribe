@@ -166,6 +166,12 @@
                 </ListBoxItem>
                 <ListBoxItem>
                     <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
+                        <TextBlock Text="Playground" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ListBoxItem>
+                <ListBoxItem>
+                    <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="History24" FontSize="18"/>
                         <TextBlock Text="History" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
@@ -305,7 +311,7 @@
                                     <StackPanel>
                                         <TextBlock Text="Speech recognition model" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Parakeet is bundled and recommended for multilingual dictation. Optional Moonshine models are English-only and download after you choose Install."/>
+                                                   Text="Parakeet is recommended for multilingual dictation. Moonshine models are smaller English-only options. Choose Install for any model that is not already available."/>
                                         <ComboBox x:Name="TranscriptionModelCombo" Margin="0,10,0,0"
                                                   HorizontalAlignment="Stretch"
                                                   DisplayMemberPath="DisplayName"
@@ -320,7 +326,7 @@
                                                          Minimum="0" Maximum="100" Visibility="Collapsed"/>
                                         </StackPanel>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                   Text="Changing the speech model takes effect after restarting Scribe. If an optional model is unavailable, Scribe safely falls back to bundled Parakeet."/>
+                                                   Text="Changing the speech model takes effect after restarting Scribe. If the selected model is unavailable, Scribe falls back to Parakeet when it is installed."/>
                                     </StackPanel>
                                 </ui:Card>
 
@@ -1108,6 +1114,133 @@
                                 </Grid>
                             </ui:Card>
                         </Grid>
+                    </Grid>
+
+                    <!-- ============================ Playground ============================ -->
+                    <Grid x:Name="SectionPlayground" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
+                            <TextBlock Text="Playground" Style="{StaticResource PageTitle}"/>
+                            <TextBlock Style="{StaticResource PageSubtitle}"
+                                       Text="Focus the text box and use your dictation shortcut to run the full audio pipeline without leaving Scribe."/>
+                        </StackPanel>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
+                            <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Dictation playground" Style="{StaticResource SettingTitle}"/>
+                                        <ui:TextBox x:Name="PlaygroundInput" Margin="0,8,0,0"
+                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                    TextWrapping="Wrap" MinHeight="150" MaxHeight="280"
+                                                    VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
+                                                    SpellCheck.IsEnabled="True"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Final text is inserted here automatically. Save settings changes before testing them."/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Recognized by the speech model" Style="{StaticResource SettingTitle}"/>
+                                        <ui:TextBox x:Name="PlaygroundRecognizedText" Margin="0,8,0,14"
+                                                    HorizontalAlignment="Stretch" AcceptsReturn="True"
+                                                    TextWrapping="Wrap" MinHeight="70" MaxHeight="150"
+                                                    IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
+                                        <TextBlock Text="Final text" Style="{StaticResource SettingTitle}"/>
+                                        <RichTextBox x:Name="PlaygroundOutput" Margin="0,8,0,0"
+                                                     MinHeight="150" MaxHeight="280"
+                                                     IsReadOnly="True" IsDocumentEnabled="True"
+                                                     VerticalScrollBarVisibility="Auto"
+                                                     Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                                     Padding="10" SpellCheck.IsEnabled="False"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="Underlined highlights came from a dictionary, library, or snippet. Hover one to see what matched."/>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="180"/>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="Pipeline timing"
+                                                   Style="{StaticResource SettingTitle}" Margin="0,0,0,8"/>
+
+                                        <TextBlock Grid.Row="1" Text="Audio capture" Style="{StaticResource SettingHint}"/>
+                                        <TextBlock x:Name="PlaygroundCaptureDuration" Grid.Row="1" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="PlaygroundCaptureDetail" Grid.Row="1" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"/>
+
+                                        <TextBlock Grid.Row="2" Text="Voice activity detection"
+                                                   Style="{StaticResource SettingHint}" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundVadDuration" Grid.Row="2" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundVadDetail" Grid.Row="2" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+
+                                        <TextBlock Grid.Row="3" Text="Speech recognition" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundDecodeDuration" Grid.Row="3" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundDecodeDetail" Grid.Row="3" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+
+                                        <TextBlock Grid.Row="4" Text="AI cleanup" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundAiDuration" Grid.Row="4" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundAiDetail" Grid.Row="4" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+
+                                        <TextBlock Grid.Row="5" Text="Dictionary and snippets"
+                                                   Style="{StaticResource SettingHint}" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundPostDuration" Grid.Row="5" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundPostDetail" Grid.Row="5" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+
+                                        <TextBlock Grid.Row="6" Text="Text insertion" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundInjectionDuration" Grid.Row="6" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundInjectionDetail" Grid.Row="6" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+
+                                        <TextBlock Grid.Row="7" Text="Total" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundTotalDuration" Grid.Row="7" Grid.Column="1"
+                                                   Text="Not run" FontWeight="SemiBold" Margin="0,8,0,0"/>
+                                        <TextBlock x:Name="PlaygroundTotalDetail" Grid.Row="7" Grid.Column="2"
+                                                   Text="Waiting for input" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"/>
+                                    </Grid>
+                                </ui:Card>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Grid>
 
                     <!-- ============================ History ============================ -->

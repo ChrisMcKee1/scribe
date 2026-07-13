@@ -56,6 +56,21 @@ public sealed class SnippetTests
     }
 
     [Fact]
+    public void Process_detailed_reports_the_expanded_snippet()
+    {
+        var (processor, _, db) = Create(Snippet.New("insert my signature", "Regards,\nChris"));
+        using (db)
+        {
+            var result = processor.ProcessDetailed("insert my signature");
+            var replacement = Assert.Single(result.Replacements);
+
+            Assert.Equal(TextReplacementKind.Snippet, replacement.Kind);
+            Assert.Equal("insert my signature", replacement.Pattern);
+            Assert.Equal(result.Text, result.Text.Substring(replacement.Start, replacement.Length));
+        }
+    }
+
+    [Fact]
     public void Template_preserves_tabs_indentation_and_repeated_spaces()
     {
         const string template = "Header:\n\tfirst  column\n    indented";

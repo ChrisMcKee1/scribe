@@ -62,7 +62,7 @@ public sealed class TranscriptionService : ITranscriptionService
 
             var config = new OfflineRecognizerConfig();
             config.ModelConfig.Tokens = models.TokensPath;
-            ConfigureModel(config, model, models);
+            ConfigureModel(ref config, model, models);
             config.ModelConfig.NumThreads = threads;
             config.ModelConfig.Provider = "cpu";
             config.DecodingMethod = model.Architecture == TranscriptionModelArchitecture.NemoTransducer
@@ -84,8 +84,8 @@ public sealed class TranscriptionService : ITranscriptionService
         }
     }
 
-    private static void ConfigureModel(
-        OfflineRecognizerConfig config,
+    internal static void ConfigureModel(
+        ref OfflineRecognizerConfig config,
         TranscriptionModel model,
         ModelSet models)
     {

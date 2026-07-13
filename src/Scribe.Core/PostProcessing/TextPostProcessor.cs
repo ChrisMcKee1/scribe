@@ -30,9 +30,14 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         _logger = logger;
     }
 
-    public string Process(string text)
+    public string Process(string text) => ProcessDetailed(text).Text;
+
+    public TextPostProcessingResult ProcessDetailed(string text, string? sourceText = null)
     {
-        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return new TextPostProcessingResult(string.Empty, []);
+        }
 
         EnsureLoaded();
 
@@ -44,12 +49,45 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         // Each phase matches its original input once; generated text is never fed back through later
         // rules in the same phase.
         var snippetRules = Volatile.Read(ref _snippetRules);
-        text = ApplySinglePass(text, snippetRules.SelectMany((rule, order) => rule.Find(text, order)));
+        var snippetApplications = new List<TextReplacement>();
+        text = ApplySinglePass(
+            text,
+            snippetRules.SelectMany((rule, order) => rule.Find(text, order)),
+            snippetApplications,
+            TextReplacementKind.Snippet);
 
         var rules = Volatile.Read(ref _rules);
-        text = ApplySinglePass(text, rules.SelectMany((rule, order) => rule.Find(text, order)));
+        var replacements = new List<TextReplacement>();
+        text = ApplySinglePass(
+            text,
+            rules.SelectMany((rule, order) => rule.Find(text, order)),
+            replacements);
 
-        return text;
+        var canonicalSnippets = snippetApplications.Select(application =>
+        {
+            var canonical = ApplySinglePass(
+                application.Replacement,
+                rules.SelectMany((rule, order) => rule.Find(application.Replacement, order)));
+            return application with { Length = canonical.Length, Replacement = canonical };
+        });
+        AddLocatedReplacements(text, canonicalSnippets, replacements, replaceOverlaps: true);
+
+        if (!string.IsNullOrWhiteSpace(sourceText))
+        {
+            var source = NormalizeWhitespace(sourceText);
+            var glossaryApplications = new List<TextReplacement>();
+            _ = ApplySinglePass(
+                source,
+                rules.SelectMany((rule, order) => rule.Find(source, order)),
+                glossaryApplications);
+            // ponytail: ordered text search covers cleanup canonicalization; add token alignment only
+            // if models start reordering repeated glossary terms enough to make this misleading.
+            AddLocatedReplacements(text, glossaryApplications, replacements, replaceOverlaps: false);
+        }
+
+        return new TextPostProcessingResult(
+            text,
+            replacements.OrderBy(replacement => replacement.Start).ToList());
     }
 
     public void Reload()
@@ -169,7 +207,11 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     [GeneratedRegex(@"[ \t]+([,.!?;:])")]
     private static partial Regex SpaceBeforePunctuation();
 
-    private static string ApplySinglePass(string text, IEnumerable<ReplacementCandidate> candidates)
+    private static string ApplySinglePass(
+        string text,
+        IEnumerable<ReplacementCandidate> candidates,
+        List<TextReplacement>? replacements = null,
+        TextReplacementKind kind = TextReplacementKind.Dictionary)
     {
         var selected = candidates
             .OrderBy(candidate => candidate.Index)
@@ -200,7 +242,18 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             }
 
             builder.Append(text, position, prefixLength);
+            var replacementStart = builder.Length;
             builder.Append(candidate.Replacement);
+            if (replacements is not null &&
+                !string.Equals(candidate.Original, candidate.Replacement, StringComparison.Ordinal))
+            {
+                replacements.Add(new TextReplacement(
+                    replacementStart,
+                    candidate.Replacement.Length,
+                    candidate.Pattern,
+                    candidate.Replacement,
+                    kind));
+            }
             position = candidate.Index + candidate.Length;
         }
 
@@ -208,10 +261,57 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         return builder.ToString();
     }
 
+    private static void AddLocatedReplacements(
+        string text,
+        IEnumerable<TextReplacement> traces,
+        List<TextReplacement> replacements,
+        bool replaceOverlaps)
+    {
+        var searchStart = 0;
+        foreach (var trace in traces)
+        {
+            if (trace.Replacement.Length == 0)
+            {
+                continue;
+            }
+
+            var index = text.IndexOf(trace.Replacement, searchStart, StringComparison.OrdinalIgnoreCase);
+            if (index < 0)
+            {
+                index = text.IndexOf(trace.Replacement, StringComparison.OrdinalIgnoreCase);
+            }
+            if (index < 0)
+            {
+                continue;
+            }
+
+            var end = index + trace.Replacement.Length;
+            var overlaps = replacements
+                .Where(existing => existing.Start < end && index < existing.Start + existing.Length)
+                .ToList();
+            if (overlaps.Count > 0)
+            {
+                if (!replaceOverlaps)
+                {
+                    continue;
+                }
+                replacements.RemoveAll(overlaps.Contains);
+            }
+
+            replacements.Add(trace with { Start = index, Length = trace.Replacement.Length });
+            searchStart = end;
+        }
+    }
+
     private static bool IsTightPunctuation(char value) => value is ',' or '.' or '!' or '?' or ';' or ':';
 
     private sealed record ReplacementCandidate(
-        int Index, int Length, string Replacement, int RuleOrder);
+        int Index,
+        int Length,
+        string Replacement,
+        int RuleOrder,
+        string Pattern,
+        string Original);
 
     /// <summary>
     /// A voice-snippet expansion: the spoken trigger phrase — matched whole, case-insensitively,
@@ -222,10 +322,12 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     private sealed class SnippetRule
     {
         private readonly Regex _regex;
+        private readonly string _phrase;
         private readonly string _template;
 
         public SnippetRule(Snippet snippet)
         {
+            _phrase = snippet.Phrase;
             _template = snippet.Template;
             var escaped = Regex.Escape(snippet.Phrase.Trim());
             _regex = new Regex($@"(?<!\w){escaped}(?!\w)[.!?,;:]?",
@@ -234,18 +336,20 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
         public IEnumerable<ReplacementCandidate> Find(string text, int order) =>
             _regex.Matches(text).Select(match =>
-                new ReplacementCandidate(match.Index, match.Length, _template, order));
+                new ReplacementCandidate(match.Index, match.Length, _template, order, _phrase, match.Value));
     }
 
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
     private sealed class CompiledRule
     {
         private readonly Regex _regex;
+        private readonly string _pattern;
         private readonly string _replacement;
         private readonly bool _replacementContainsPattern;
 
         public CompiledRule(DictionaryEntry entry)
         {
+            _pattern = entry.Pattern;
             _replacement = entry.Replacement;
             var escaped = Regex.Escape(entry.Pattern);
             var pattern = entry.WholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
@@ -275,7 +379,13 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     IsInsideAnyReplacement(canonicalStarts, match.Index, match.Length)
                     ? match.Value
                     : _replacement;
-                yield return new ReplacementCandidate(match.Index, match.Length, replacement, order);
+                yield return new ReplacementCandidate(
+                    match.Index,
+                    match.Length,
+                    replacement,
+                    order,
+                    _pattern,
+                    match.Value);
             }
         }
 

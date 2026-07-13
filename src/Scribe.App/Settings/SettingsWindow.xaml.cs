@@ -3,8 +3,12 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 using Microsoft.Win32;
+using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
@@ -230,13 +234,184 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    // --- Playground ------------------------------------------------------------------------
+
+    internal void ShowPlaygroundPipeline(DictationPipelineReport report)
+    {
+        if (!IsVisible ||
+            SectionPlayground.Visibility != Visibility.Visible ||
+            new WindowInteropHelper(this).Handle != report.TargetWindow)
+        {
+            return;
+        }
+
+        PlaygroundRecognizedText.Text = report.RawText ?? string.Empty;
+        var displayedText = report.FinalText ?? report.PostProcessing?.Text ??
+            report.CleanedText ?? report.RawText ?? string.Empty;
+        var displayedResult = report.PostProcessing is { } postProcessing &&
+            string.Equals(postProcessing.Text, displayedText, StringComparison.Ordinal)
+                ? postProcessing
+                : new TextPostProcessingResult(displayedText, []);
+        RenderPlaygroundResult(displayedResult);
+
+        PlaygroundCaptureDuration.Text = FormatDuration(report.CaptureDuration);
+        PlaygroundCaptureDetail.Text = DetailOrFailure(report, "Audio capture", "Audio recorded");
+
+        PlaygroundVadDuration.Text = report.VadEnabled ? FormatDuration(report.VadDuration) : "Skipped";
+        PlaygroundVadDetail.Text = report.VadEnabled
+            ? report.VadAvailable
+                ? DetailOrFailure(
+                    report,
+                    "Voice activity detection",
+                    $"Kept {report.SpeechDuration.TotalSeconds:N1} seconds of speech")
+                : "VAD model unavailable, audio passed through"
+            : "Off in settings";
+
+        PlaygroundDecodeDuration.Text = report.DecodeDuration > TimeSpan.Zero
+            ? FormatDuration(report.DecodeDuration)
+            : "Not run";
+        PlaygroundDecodeDetail.Text = report.RawText is not null
+            ? $"{report.RawText.Length} characters, RTF {report.RealTimeFactor:N2}"
+            : DetailOrFailure(report, "Speech recognition", "Not reached");
+
+        PlaygroundAiDuration.Text = report.CleanupEnabled
+            ? FormatDuration(report.CleanupDuration)
+            : "Skipped";
+        PlaygroundAiDetail.Text = report.Cleanup is { } cleanup
+            ? DescribeCleanup(cleanup, report.CleanupEnabled)
+            : DetailOrFailure(report, "AI cleanup", "Not reached");
+
+        PlaygroundPostDuration.Text = report.PostProcessingEnabled
+            ? FormatDuration(report.PostProcessingDuration)
+            : "Skipped";
+        PlaygroundPostDetail.Text = report.PostProcessing is { } processed
+            ? $"{processed.Replacements.Count} dictionary, library, or snippet replacement(s)"
+            : DetailOrFailure(report, "Dictionary and snippets", "Not reached");
+
+        PlaygroundInjectionDuration.Text = report.Injection is not null
+            ? FormatDuration(report.InjectionDuration)
+            : "Not run";
+        PlaygroundInjectionDetail.Text = report.Injection is { } injection
+            ? injection.Succeeded
+                ? $"Inserted using {injection.Method}"
+                : $"Failed: {injection.Error}"
+            : DetailOrFailure(report, "Text insertion", "Not reached");
+
+        PlaygroundTotalDuration.Text = FormatDuration(report.TotalDuration);
+        PlaygroundTotalDetail.Text = report.FailureStage is null
+            ? "Full audio pipeline"
+            : $"Stopped at {report.FailureStage}: {report.FailureReason}";
+    }
+
+    private static string DetailOrFailure(
+        DictationPipelineReport report,
+        string stage,
+        string detail) =>
+        string.Equals(report.FailureStage, stage, StringComparison.Ordinal)
+            ? $"Failed: {report.FailureReason}"
+            : detail;
+
+    private static string DescribeCleanup(CleanupResult cleanup, bool enabled)
+    {
+        if (!enabled)
+        {
+            return "Skipped, AI cleanup is off";
+        }
+
+        return cleanup.Outcome switch
+        {
+            CleanupOutcome.Cleaned when cleanup.FailureReason is not null =>
+                $"Cleaned with a partial fallback: {cleanup.FailureReason}",
+            CleanupOutcome.Cleaned => "Cleaned",
+            CleanupOutcome.Unchanged => "Ran, no changes needed",
+            CleanupOutcome.Failed => $"Failed, raw text kept: {cleanup.FailureReason}",
+            _ => "Skipped, cleanup model is not ready",
+        };
+    }
+
+    private void RenderPlaygroundResult(TextPostProcessingResult result)
+    {
+        var paragraph = new Paragraph { Margin = new Thickness(0) };
+        var position = 0;
+        foreach (var replacement in result.Replacements)
+        {
+            AppendPlaygroundText(paragraph, result.Text[position..replacement.Start]);
+            var source = replacement.Kind == TextReplacementKind.Snippet
+                ? "Snippet"
+                : "Dictionary or library";
+            AppendPlaygroundText(
+                paragraph,
+                result.Text.Substring(replacement.Start, replacement.Length),
+                $"{source} matched '{replacement.Pattern}'");
+            position = replacement.Start + replacement.Length;
+        }
+
+        AppendPlaygroundText(paragraph, result.Text[position..]);
+        var document = new FlowDocument(paragraph)
+        {
+            PagePadding = new Thickness(0),
+            FontFamily = PlaygroundOutput.FontFamily,
+            FontSize = PlaygroundOutput.FontSize,
+            Foreground = PlaygroundOutput.Foreground,
+        };
+        PlaygroundOutput.Document = document;
+    }
+
+    private static void AppendPlaygroundText(
+        Paragraph paragraph,
+        string text,
+        string? highlightTooltip = null)
+    {
+        var start = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] is not ('\r' or '\n'))
+            {
+                continue;
+            }
+
+            AppendRun(paragraph, text[start..index], highlightTooltip);
+            paragraph.Inlines.Add(new LineBreak());
+            if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
+            {
+                index++;
+            }
+
+            start = index + 1;
+        }
+
+        AppendRun(paragraph, text[start..], highlightTooltip);
+    }
+
+    private static void AppendRun(Paragraph paragraph, string text, string? highlightTooltip)
+    {
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        var run = new Run(text);
+        if (highlightTooltip is not null)
+        {
+            run.Background = new SolidColorBrush(Color.FromArgb(64, 0, 120, 212));
+            run.FontWeight = FontWeights.SemiBold;
+            run.TextDecorations = TextDecorations.Underline;
+            run.ToolTip = highlightTooltip;
+        }
+
+        paragraph.Inlines.Add(run);
+    }
+
+    private static string FormatDuration(TimeSpan elapsed) =>
+        elapsed.TotalMilliseconds < 1 ? "<1 ms" : $"{elapsed.TotalMilliseconds:N0} ms";
+
     // --- Navigation rail -------------------------------------------------------------------
 
     // Nav order must match the ListBoxItem order in XAML.
     private Grid[] SectionPanels =>
     [
         SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
-        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionHistory,
+        SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionPlayground, SectionHistory,
         SectionUsage, SectionDiagnostics,
     ];
 

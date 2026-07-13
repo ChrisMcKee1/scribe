@@ -56,6 +56,14 @@ public sealed class ModelLocator(AppPaths paths)
                 return set;
         }
 
+        var installedDefault = ModelSet.ForDirectory(
+            Path.Combine(paths.ModelsDir, TranscriptionModelCatalog.DefaultId),
+            TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId).RequiredFiles);
+        if (installedDefault.AsrComplete)
+        {
+            return installedDefault;
+        }
+
         return ModelSet.ForDirectory(paths.ModelsDir);
     }
 
@@ -76,7 +84,7 @@ public sealed class ModelLocator(AppPaths paths)
 
     public ModelSet Resolve(TranscriptionModel model)
     {
-        if (model.IsBundled)
+        if (model.IsBundled || model.Id == TranscriptionModelCatalog.DefaultId)
         {
             foreach (var candidate in CandidateDirectories())
             {

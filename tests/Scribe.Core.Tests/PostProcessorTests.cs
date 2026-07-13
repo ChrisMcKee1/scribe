@@ -47,6 +47,53 @@ public sealed class PostProcessorTests
     }
 
     [Fact]
+    public void Process_detailed_reports_exact_changed_dictionary_and_library_spans()
+    {
+        var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+        repo.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
+        var libraries = new StubLibraries(DictionaryEntry.New("a p i m", "APIM"));
+        var processor = new TextPostProcessor(
+            repo, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: libraries);
+
+        using (db)
+        {
+            var result = processor.ProcessDetailed("deploy a p i m to azure and API");
+
+            Assert.Equal("deploy APIM to Azure and API", result.Text);
+            Assert.Collection(
+                result.Replacements,
+                replacement =>
+                {
+                    Assert.Equal("a p i m", replacement.Pattern);
+                    Assert.Equal(TextReplacementKind.Dictionary, replacement.Kind);
+                    Assert.Equal("APIM", result.Text.Substring(replacement.Start, replacement.Length));
+                },
+                replacement =>
+                {
+                    Assert.Equal("azure", replacement.Pattern);
+                    Assert.Equal(TextReplacementKind.Dictionary, replacement.Kind);
+                    Assert.Equal("Azure", result.Text.Substring(replacement.Start, replacement.Length));
+                });
+        }
+    }
+
+    [Fact]
+    public void Process_detailed_reports_glossary_terms_changed_by_ai_cleanup()
+    {
+        var (processor, _, db) = Create(DictionaryEntry.New("c sharp", "C#"));
+        using (db)
+        {
+            var result = processor.ProcessDetailed("Use C# for this.", "use c sharp for this");
+            var replacement = Assert.Single(result.Replacements);
+
+            Assert.Equal(TextReplacementKind.Dictionary, replacement.Kind);
+            Assert.Equal("c sharp", replacement.Pattern);
+            Assert.Equal("C#", result.Text.Substring(replacement.Start, replacement.Length));
+        }
+    }
+
+    [Fact]
     public void Process_applies_whole_word_casing_case_insensitively()
     {
         var (processor, _, db) = Create(

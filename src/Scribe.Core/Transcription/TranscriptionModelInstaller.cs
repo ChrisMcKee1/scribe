@@ -26,11 +26,13 @@ public sealed class TranscriptionModelInstaller(AppPaths paths, ModelLocator loc
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
-        if (model.IsBundled || model.DownloadUri is null ||
-            string.IsNullOrWhiteSpace(model.ArchiveSha256) ||
-            string.IsNullOrWhiteSpace(model.ArchiveDirectory))
+        var hasDirectFiles = model.DownloadFiles is { Count: > 0 };
+        var hasArchive = model.DownloadUri is not null &&
+            !string.IsNullOrWhiteSpace(model.ArchiveSha256) &&
+            !string.IsNullOrWhiteSpace(model.ArchiveDirectory);
+        if (model.IsBundled || (!hasDirectFiles && !hasArchive))
         {
-            throw new InvalidOperationException("This speech model is bundled and does not need to be downloaded.");
+            throw new InvalidOperationException("This speech model does not have a downloadable package.");
         }
 
         await _installGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -38,12 +40,34 @@ public sealed class TranscriptionModelInstaller(AppPaths paths, ModelLocator loc
         try
         {
             Directory.CreateDirectory(stagingRoot);
-            var archivePath = Path.Combine(stagingRoot, "model.tar.bz2");
-            await DownloadAsync(model, archivePath, progress, cancellationToken).ConfigureAwait(false);
-            await VerifyHashAsync(archivePath, model.ArchiveSha256, cancellationToken).ConfigureAwait(false);
-            await ExtractAsync(archivePath, stagingRoot, cancellationToken).ConfigureAwait(false);
+            string extracted;
+            if (hasDirectFiles)
+            {
+                extracted = Path.Combine(stagingRoot, "model");
+                Directory.CreateDirectory(extracted);
+                await DownloadFilesAsync(
+                    model.DownloadFiles!,
+                    extracted,
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var archivePath = Path.Combine(stagingRoot, "model.tar.bz2");
+                await DownloadAsync(
+                    model.DownloadUri!,
+                    archivePath,
+                    expectedSize: null,
+                    value => progress?.Report(value),
+                    cancellationToken).ConfigureAwait(false);
+                await VerifyHashAsync(
+                    archivePath,
+                    model.ArchiveSha256!,
+                    cancellationToken).ConfigureAwait(false);
+                await ExtractAsync(archivePath, stagingRoot, cancellationToken).ConfigureAwait(false);
+                extracted = Path.Combine(stagingRoot, model.ArchiveDirectory!);
+            }
 
-            var extracted = Path.Combine(stagingRoot, model.ArchiveDirectory);
             var extractedSet = ModelSet.ForDirectory(extracted, model.RequiredFiles);
             if (!extractedSet.AsrComplete)
             {
@@ -76,20 +100,43 @@ public sealed class TranscriptionModelInstaller(AppPaths paths, ModelLocator loc
         }
     }
 
-    private static async Task DownloadAsync(
-        TranscriptionModel model,
+    private static async Task DownloadFilesAsync(
+        IReadOnlyList<TranscriptionModelFile> files,
         string destination,
         IProgress<double>? progress,
         CancellationToken cancellationToken)
     {
+        var totalSize = files.Sum(file => file.Size);
+        long completed = 0;
+        foreach (var file in files)
+        {
+            var path = Path.Combine(destination, file.FileName);
+            await DownloadAsync(
+                file.DownloadUri,
+                path,
+                file.Size,
+                value => progress?.Report((completed + (value * file.Size)) / totalSize),
+                cancellationToken).ConfigureAwait(false);
+            await VerifyHashAsync(path, file.Sha256, cancellationToken).ConfigureAwait(false);
+            completed += file.Size;
+        }
+    }
+
+    private static async Task DownloadAsync(
+        Uri downloadUri,
+        string destination,
+        long? expectedSize,
+        Action<double>? progress,
+        CancellationToken cancellationToken)
+    {
         using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         using var response = await client.GetAsync(
-            model.DownloadUri,
+            downloadUri,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        var expectedLength = response.Content.Headers.ContentLength;
+        var expectedLength = expectedSize ?? response.Content.Headers.ContentLength;
         await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         await using var output = new FileStream(
             destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 128, useAsync: true);
@@ -102,7 +149,7 @@ public sealed class TranscriptionModelInstaller(AppPaths paths, ModelLocator loc
             total += read;
             if (expectedLength > 0)
             {
-                progress?.Report(Math.Min(0.9, total / (double)expectedLength.Value * 0.9));
+                progress?.Invoke(Math.Min(0.9, total / (double)expectedLength.Value * 0.9));
             }
         }
 

@@ -19,6 +19,8 @@ suggestions); **voice snippets** (spoken trigger → saved template); **per‑ap
 (writing style + newline mode by focused process); **AI cleanup** across three providers
 (Foundry Local on‑device, Microsoft Foundry via `az login`, or any OpenAI‑compatible
 endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
+**playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet
+replacement highlights, and per-step timings across the full pipeline;
 **diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
 (local totals/trend chart/top apps/recurring terms with one‑click dictionary add; opt‑in AI
 insight sends aggregate totals + dictionary‑covered term labels ONLY — novel mined terms never
