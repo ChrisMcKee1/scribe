@@ -62,6 +62,7 @@ public partial class App : Application
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddScribeCore();
+        builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new FileLoggerProvider(paths.LogsDir));
@@ -362,6 +363,8 @@ public partial class App : Application
             services.GetRequiredService<IHistoryRepository>(),
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<IAzureFoundryDiscovery>(),
+            services.GetRequiredService<AzureCliInstaller>(),
+            services.GetRequiredService<ILogger<SettingsWindow>>(),
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ITranscriptionModelInstaller>(),
             position => _overlay?.Preview(position),
