@@ -685,6 +685,15 @@
                                                 </Grid>
                                             </Border>
 
+                                            <!-- Subscription filter: discovery spans every subscription the sign-in can
+                                                 see, which surprises users whose account also has shared/foreign projects.
+                                                 Picking one here narrows the Model list (and speeds discovery up). -->
+                                            <TextBlock Text="Subscription" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ComboBox x:Name="AzureSubscriptionBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      SelectionChanged="AzureSubscriptionBox_SelectionChanged"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Models below are listed from this subscription only. Choose All subscriptions to browse everything your sign-in can access."/>
+
                                             <!-- Model picker: a dropdown of the deployments discovered from your sign-in.
                                                  Click to browse them all, or type to quick-filter the list. -->
                                             <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>

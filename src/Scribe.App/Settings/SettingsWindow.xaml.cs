@@ -65,6 +65,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private int _usageLoadVersion;
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
+    // Subscription filter for Azure model discovery. The sentinel "All subscriptions" row is not in
+    // the map, so a missing lookup means "no filter" by construction.
+    private const string AllAzureSubscriptionsLabel = "All subscriptions";
+    private readonly Dictionary<string, AzureSubscription> _azureSubscriptionMap = new(StringComparer.OrdinalIgnoreCase);
+    private bool _updatingAzureSubscriptions;
     private bool _foundryModelOp;
     private bool _azureAutoListed;
     private bool _transcriptionModelOp;
@@ -603,6 +608,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
+
+        // Same idea for the subscription filter: show the saved choice as a stand-in until sign-in
+        // discovery replaces the list with everything the account can see.
+        SeedAzureSubscriptionsFromSettings();
 
         // Show the effective writing style: the user's saved guidance, or the default when blank so
         // they can see and edit exactly what gets sent to the model.
@@ -1569,7 +1578,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // Shared by the manual Refresh button and the auto-list-on-sign-in path.
+    // Shared by the manual Refresh button, the auto-list-on-sign-in path, and the subscription
+    // filter. Deployments are listed from the selected subscription only (or all of them when the
+    // filter is on the "All subscriptions" sentinel).
     private async Task ListAzureDeploymentsAsync()
     {
         AzureRefreshButton.IsEnabled = false;
@@ -1577,8 +1588,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var tenantId = NullIfBlank(AzureTenantBox.Text);
-            var deployments = await Task.Run(() => _azureDiscovery.DiscoverAsync(tenantId, cts.Token), cts.Token);
+            var selectedSubscription = SelectedAzureSubscription;
+
+            // Kick discovery and the subscription refresh off in parallel; the dropdown refresh is
+            // cosmetic, so its failure must never take down the deployment listing.
+            var deploymentsTask = Task.Run(
+                () => _azureDiscovery.DiscoverAsync(tenantId, selectedSubscription?.Id, cts.Token), cts.Token);
+            IReadOnlyList<AzureSubscription> subscriptions = Array.Empty<AzureSubscription>();
+            try
+            {
+                subscriptions = await Task.Run(
+                    () => _azureDiscovery.ListSubscriptionsAsync(tenantId, cts.Token), cts.Token);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                TryLog(ex, "Could not list Azure subscriptions for the filter dropdown.");
+            }
+
+            var deployments = await deploymentsTask;
             _azureAutoListed = true;
+            PopulateAzureSubscriptions(subscriptions);
 
             _azureModelMap.TryGetValue(AzureModelBox.Text?.Trim() ?? string.Empty, out var previous);
             SetAzureDeployments(
@@ -1586,9 +1615,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 preferEndpoint: NullIfBlank(AzureEndpointBox.Text) ?? previous?.Endpoint,
                 preferDeployment: NullIfBlank(AzureDeploymentBox.Text) ?? previous?.DeploymentName);
 
+            var scope = selectedSubscription is null ? string.Empty : $" in {selectedSubscription.DisplayName}";
             AzureStatusText.Text = deployments.Count == 0
-                ? "No text-capable deployments found. Realtime/audio/embedding models can't do cleanup — deploy a chat model (e.g. gpt-4.1-mini) on your Azure resource."
-                : $"Found {deployments.Count} compatible deployment(s). Choose one to use for cleanup.";
+                ? $"No text-capable deployments found{scope}. Realtime/audio/embedding models can't do cleanup — deploy a chat model (e.g. gpt-4.1-mini) on your Azure resource."
+                : $"Found {deployments.Count} compatible deployment(s){scope}. Choose one to use for cleanup.";
         }
         catch (OperationCanceledException)
         {
@@ -1603,6 +1633,104 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             AzureRefreshButton.IsEnabled = true;
         }
+    }
+
+    /// <summary>The subscription the filter dropdown points at, or null for "All subscriptions".</summary>
+    private AzureSubscription? SelectedAzureSubscription =>
+        AzureSubscriptionBox.SelectedItem is string label &&
+        _azureSubscriptionMap.TryGetValue(label, out var subscription)
+            ? subscription
+            : null;
+
+    // Rebuilds the subscription dropdown from a fresh listing, keeping the current choice selected
+    // by id. An empty listing (transient failure) keeps the seeded stand-in so a saved filter is
+    // never silently dropped.
+    private void PopulateAzureSubscriptions(IReadOnlyList<AzureSubscription> subscriptions)
+    {
+        if (subscriptions.Count == 0)
+        {
+            return;
+        }
+
+        var currentId = SelectedAzureSubscription?.Id;
+        _updatingAzureSubscriptions = true;
+        try
+        {
+            _azureSubscriptionMap.Clear();
+            var items = new List<string>(subscriptions.Count + 1) { AllAzureSubscriptionsLabel };
+            string? reselect = null;
+            foreach (var subscription in subscriptions)
+            {
+                var label = subscription.DisplayName;
+                // Two subscriptions can share a display name; the id makes the row unambiguous.
+                if (label == AllAzureSubscriptionsLabel || _azureSubscriptionMap.ContainsKey(label))
+                {
+                    label = $"{subscription.DisplayName} ({subscription.Id})";
+                }
+
+                _azureSubscriptionMap[label] = subscription;
+                items.Add(label);
+                if (currentId is not null &&
+                    string.Equals(subscription.Id, currentId, StringComparison.OrdinalIgnoreCase))
+                {
+                    reselect = label;
+                }
+            }
+
+            AzureSubscriptionBox.ItemsSource = items;
+            AzureSubscriptionBox.SelectedItem = reselect ?? AllAzureSubscriptionsLabel;
+        }
+        finally
+        {
+            _updatingAzureSubscriptions = false;
+        }
+    }
+
+    // Shows the saved subscription filter before any sign-in discovery runs, mirroring
+    // SeedAzureModelFromSettings: a stand-in row that the first real listing replaces.
+    private void SeedAzureSubscriptionsFromSettings()
+    {
+        _updatingAzureSubscriptions = true;
+        try
+        {
+            _azureSubscriptionMap.Clear();
+            var items = new List<string> { AllAzureSubscriptionsLabel };
+            var selected = AllAzureSubscriptionsLabel;
+
+            var savedId = _settings.AiCleanupAzureSubscriptionId?.Trim();
+            if (!string.IsNullOrEmpty(savedId))
+            {
+                var standIn = new AzureSubscription(savedId, _settings.AiCleanupAzureSubscriptionName ?? savedId);
+                _azureSubscriptionMap[standIn.DisplayName] = standIn;
+                items.Add(standIn.DisplayName);
+                selected = standIn.DisplayName;
+            }
+
+            AzureSubscriptionBox.ItemsSource = items;
+            AzureSubscriptionBox.SelectedItem = selected;
+        }
+        finally
+        {
+            _updatingAzureSubscriptions = false;
+        }
+    }
+
+    private async void AzureSubscriptionBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Programmatic updates (seeding, post-listing rebuilds) must not re-trigger discovery.
+        if (_updatingAzureSubscriptions)
+        {
+            return;
+        }
+
+        // Before the first listing there is nothing to filter; the choice is picked up when the
+        // user signs in and the initial listing runs.
+        if (!_azureAutoListed)
+        {
+            return;
+        }
+
+        await ListAzureDeploymentsAsync();
     }
 
     private async void AzureCliButton_Click(object sender, RoutedEventArgs e)
@@ -2094,6 +2222,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
             _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
+            var azureSubscription = SelectedAzureSubscription;
+            _settings.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
+            _settings.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
             _settings.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
             _settings.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
             _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);

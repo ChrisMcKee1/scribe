@@ -38,6 +38,17 @@ public sealed record AzureFoundryDeployment(
 }
 
 /// <summary>
+/// An Azure subscription the signed-in user can see, for the Settings subscription filter.
+/// <see cref="Id"/> is the subscription GUID; <see cref="Name"/> is the display name (falls back
+/// to the id when ARM returns no name).
+/// </summary>
+public sealed record AzureSubscription(string Id, string Name)
+{
+    /// <summary>Label for the settings dropdown; never blank.</summary>
+    public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Id : Name;
+}
+
+/// <summary>
 /// Result of a cheap "is the user already signed in?" probe. <see cref="IsSignedIn"/> is true when
 /// <see cref="DefaultAzureCredential"/> can mint an ARM token without an interactive prompt (i.e. a
 /// valid <c>az login</c> / VS / environment / managed-identity session exists). <see cref="Account"/>
@@ -57,8 +68,18 @@ public interface IAzureFoundryDiscovery
     /// user to run <c>az login</c>; per-account errors are swallowed so one bad resource never hides
     /// the rest. <paramref name="tenantId"/> optionally pins discovery to a specific Entra tenant
     /// instead of the Azure CLI's active tenant (useful when the user juggles corp and demo tenants).
+    /// <paramref name="subscriptionId"/> optionally restricts discovery to a single subscription;
+    /// null spans every subscription the sign-in can see.
     /// </summary>
     Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
+        string? tenantId = null, string? subscriptionId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists the subscriptions the signed-in user can see, for the Settings subscription filter.
+    /// Throws on auth failure (same contract as <see cref="DiscoverAsync"/>) so the UI can prompt
+    /// for <c>az login</c>; other failures degrade to an empty list.
+    /// </summary>
+    Task<IReadOnlyList<AzureSubscription>> ListSubscriptionsAsync(
         string? tenantId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -113,15 +134,16 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     public AzureFoundryDiscovery(ILogger<AzureFoundryDiscovery> log) => _log = log;
 
     public async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
-        string? tenantId = null, CancellationToken cancellationToken = default)
+        string? tenantId = null, string? subscriptionId = null, CancellationToken cancellationToken = default)
     {
         var credential = CreateCredential(tenantId);
+        var subscriptionFilter = NormalizeSubscriptionId(subscriptionId);
 
         var arm = new ArmClient(credential);
 
         try
         {
-            return await DiscoverViaResourceGraphAsync(arm, cancellationToken).ConfigureAwait(false);
+            return await DiscoverViaResourceGraphAsync(arm, subscriptionFilter, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException && !IsAuthFailure(ex))
         {
@@ -130,9 +152,61 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             // per-subscription crawl rather than failing outright. Auth failures still bubble up so
             // the UI can prompt for az login.
             _log.LogWarning(ex, "Resource Graph account discovery failed; falling back to per-subscription enumeration.");
-            return await DiscoverViaEnumerationAsync(arm, cancellationToken).ConfigureAwait(false);
+            return await DiscoverViaEnumerationAsync(arm, subscriptionFilter, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    public async Task<IReadOnlyList<AzureSubscription>> ListSubscriptionsAsync(
+        string? tenantId = null, CancellationToken cancellationToken = default)
+    {
+        var credential = CreateCredential(tenantId);
+        var arm = new ArmClient(credential);
+
+        try
+        {
+            TenantResource? tenant = null;
+            await foreach (var t in arm.GetTenants().GetAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                tenant = t;
+                break;
+            }
+
+            if (tenant is not null)
+            {
+                var names = await QuerySubscriptionNamesAsync(tenant, cancellationToken).ConfigureAwait(false);
+                if (names.Count > 0)
+                {
+                    return SortSubscriptions(names.Select(pair => new AzureSubscription(pair.Key, pair.Value)));
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && !IsAuthFailure(ex))
+        {
+            _log.LogDebug(ex, "Resource Graph subscription listing failed; falling back to ARM enumeration.");
+        }
+
+        // Same fallback rationale as deployment discovery: Resource Graph can be unavailable while
+        // plain ARM subscription enumeration still works.
+        var results = new List<AzureSubscription>();
+        await foreach (var subscription in arm.GetSubscriptions().GetAllAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var id = subscription.Data?.SubscriptionId;
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                results.Add(new AzureSubscription(id, subscription.Data?.DisplayName ?? id));
+            }
+        }
+
+        return SortSubscriptions(results);
+    }
+
+    // Subscription ids are GUIDs; anything else (stale settings, hand-edited json) is ignored so a
+    // bad filter degrades to "all subscriptions" instead of an empty or malformed ARG scope.
+    internal static string? NormalizeSubscriptionId(string? subscriptionId) =>
+        Guid.TryParse(subscriptionId?.Trim(), out var parsed) ? parsed.ToString("D") : null;
+
+    private static IReadOnlyList<AzureSubscription> SortSubscriptions(IEnumerable<AzureSubscription> subscriptions) =>
+        subscriptions.OrderBy(s => s.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
 
     public async Task<AzureSignInStatus> GetSignInStatusAsync(
         string? tenantId = null, CancellationToken cancellationToken = default)
@@ -227,7 +301,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     // ---- Fast path: ARG finds accounts; management API lists their deployments -----------------
 
     private async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverViaResourceGraphAsync(
-        ArmClient arm, CancellationToken cancellationToken)
+        ArmClient arm, string? subscriptionFilter, CancellationToken cancellationToken)
     {
         TenantResource? tenant = null;
         await foreach (var t in arm.GetTenants().GetAllAsync(cancellationToken).ConfigureAwait(false))
@@ -244,7 +318,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         var subscriptionNames = await QuerySubscriptionNamesAsync(tenant, cancellationToken).ConfigureAwait(false);
 
         var accounts = new List<AzureAccount>();
-        await foreach (var row in QueryRowsAsync(tenant, AccountsQuery, cancellationToken).ConfigureAwait(false))
+        await foreach (var row in QueryRowsAsync(tenant, AccountsQuery, subscriptionFilter, cancellationToken).ConfigureAwait(false))
         {
             var id = GetString(row, "id");
             var endpoint = GetString(row, "endpoint");
@@ -337,7 +411,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         TenantResource tenant, CancellationToken cancellationToken)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        await foreach (var row in QueryRowsAsync(tenant, SubscriptionsQuery, cancellationToken).ConfigureAwait(false))
+        await foreach (var row in QueryRowsAsync(tenant, SubscriptionsQuery, subscriptionFilter: null, cancellationToken).ConfigureAwait(false))
         {
             var id = GetString(row, "subscriptionId");
             if (!string.IsNullOrWhiteSpace(id))
@@ -352,6 +426,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     private static async IAsyncEnumerable<JsonElement> QueryRowsAsync(
         TenantResource tenant,
         string query,
+        string? subscriptionFilter,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         string? skipToken = null;
@@ -365,6 +440,13 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                     SkipToken = skipToken,
                 },
             };
+
+            // Scoping via the request (not string-built KQL) keeps the query injection-proof and
+            // lets Resource Graph prune the search server-side.
+            if (subscriptionFilter is not null)
+            {
+                content.Subscriptions.Add(subscriptionFilter);
+            }
 
             var response = await tenant.GetResourcesAsync(content, cancellationToken).ConfigureAwait(false);
             var result = response.Value;
@@ -394,13 +476,20 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     // ---- Fallback: per-subscription ARM enumeration -------------------------------------------
 
     private async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverViaEnumerationAsync(
-        ArmClient arm, CancellationToken cancellationToken)
+        ArmClient arm, string? subscriptionFilter, CancellationToken cancellationToken)
     {
         var results = new List<AzureFoundryDeployment>();
 
         await foreach (var subscription in arm.GetSubscriptions().GetAllAsync(cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            if (subscriptionFilter is not null &&
+                !string.Equals(subscription.Data?.SubscriptionId, subscriptionFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             var subName = subscription.Data?.DisplayName ?? subscription.Data?.SubscriptionId ?? "subscription";
 
             try

@@ -90,6 +90,17 @@ public sealed class AppSettings
     public string? AiCleanupAzureDeployment { get; set; }
 
     /// <summary>
+    /// Azure subscription id (GUID) that model discovery is filtered to in Settings. Null lists
+    /// deployments from every subscription the sign-in can see, which surprises users whose
+    /// account spans shared or foreign projects. Discovery-time only; cleanup calls the saved
+    /// endpoint directly and never consults this.
+    /// </summary>
+    public string? AiCleanupAzureSubscriptionId { get; set; }
+
+    /// <summary>Friendly name of the filtered subscription (for display only).</summary>
+    public string? AiCleanupAzureSubscriptionName { get; set; }
+
+    /// <summary>
     /// User-editable writing-style guidance appended to the AI cleanup prompt. Describes the tone,
     /// punctuation and structure the model should apply when polishing a transcript. Blank means use
     /// <see cref="Cleanup.CleanupPrompt.DefaultWritingStyle"/>, so improvements to the default flow
