@@ -17,6 +17,11 @@ public sealed class AudioCaptureService : IAudioCaptureService
 {
     private const int TargetSampleRate = 16000;
 
+    // Peak below this over a whole capture means the endpoint delivered digital silence. A live
+    // microphone always has an analog noise floor well above -60 dBFS; a muted endpoint (Teams
+    // hardware-mute sync, the Win11 taskbar mic mute, a headset mute switch) streams exact zeros.
+    internal const float SilentCapturePeak = 0.001f;
+
     private readonly ILogger<AudioCaptureService> _logger;
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly object _sync = new();
@@ -29,11 +34,19 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private Exception? _captureError;
     private bool _stopRequested;
 
+    // Running peak across the whole capture. Written on the audio callback thread, read after the
+    // stop handshake; float writes are atomic so no extra locking is needed.
+    private float _capturePeak;
+
     public AudioCaptureService(ILogger<AudioCaptureService> logger) => _logger = logger;
 
     public bool IsCapturing { get; private set; }
 
     public string? LastDeviceName { get; private set; }
+
+    public bool LastDeviceMuted { get; private set; }
+
+    public bool LastCaptureWasSilent => _capturePeak < SilentCapturePeak;
 
     public event EventHandler<float>? LevelChanged;
 
@@ -82,6 +95,17 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 _capture.DataAvailable += OnDataAvailable;
                 _capture.RecordingStopped += OnRecordingStopped;
                 LastDeviceName = _device.FriendlyName;
+
+                // An unmeterable format leaves the peak blind; seed it above the silence threshold
+                // so LastCaptureWasSilent can never false-positive a "muted" error for it.
+                _capturePeak = IsMeterableFormat(_captureFormat) ? 0f : 1f;
+                LastDeviceMuted = ProbeEndpointMuted(_device);
+                if (LastDeviceMuted)
+                {
+                    _logger.LogWarning(
+                        "Capture device '{Device}' is muted at the endpoint; the capture will contain silence.",
+                        _device.FriendlyName);
+                }
 
                 _logger.LogInformation(
                     "Starting capture on '{Device}' at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",
@@ -196,7 +220,16 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
 
         raw.Write(e.Buffer, 0, e.BytesRecorded);
-        RaiseLevel(e.Buffer, e.BytesRecorded, format);
+
+        // Peak is computed unconditionally (not just for the level meter): the running maximum is
+        // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".
+        float peak = ComputePeak(e.Buffer, e.BytesRecorded, format);
+        if (peak > _capturePeak)
+        {
+            _capturePeak = peak;
+        }
+
+        LevelChanged?.Invoke(this, peak);
     }
 
     private void OnRecordingStopped(object? sender, StoppedEventArgs e)
@@ -209,19 +242,25 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    private void RaiseLevel(byte[] buffer, int bytes, WaveFormat format)
+    // Endpoint-level mute (or a volume slider at zero) means WASAPI happily records zeros: the
+    // classic "muted in a Teams meeting" case. Probed once per capture so the controller can warn
+    // the user the moment recording starts instead of silently discarding the capture afterwards.
+    private bool ProbeEndpointMuted(MMDevice device)
     {
-        EventHandler<float>? handler = LevelChanged;
-        if (handler is null)
+        try
         {
-            return;
+            var volume = device.AudioEndpointVolume;
+            return volume.Mute || volume.MasterVolumeLevelScalar <= 0.0001f;
         }
-
-        float peak = ComputePeak(buffer, bytes, format);
-        handler(this, peak);
+        catch (Exception ex)
+        {
+            // Some drivers expose no endpoint-volume interface; treat as not muted.
+            _logger.LogDebug(ex, "Could not read the endpoint mute state.");
+            return false;
+        }
     }
 
-    private static float ComputePeak(byte[] buffer, int bytes, WaveFormat format)
+    internal static float ComputePeak(byte[] buffer, int bytes, WaveFormat format)
     {
         float peak = 0f;
 
@@ -249,9 +288,41 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 }
             }
         }
+        else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 32)
+        {
+            ReadOnlySpan<int> samples = MemoryMarshal.Cast<byte, int>(buffer.AsSpan(0, bytes));
+            foreach (int sample in samples)
+            {
+                float abs = Math.Abs(sample / 2147483648f);
+                if (abs > peak)
+                {
+                    peak = abs;
+                }
+            }
+        }
+        else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 24)
+        {
+            ReadOnlySpan<byte> raw = buffer.AsSpan(0, bytes - (bytes % 3));
+            for (var i = 0; i + 2 < raw.Length; i += 3)
+            {
+                // Little-endian 24-bit sample, sign-extended via a shifted 32-bit build-up.
+                int sample = (raw[i] << 8) | (raw[i + 1] << 16) | (raw[i + 2] << 24);
+                float abs = Math.Abs(sample / 2147483648f);
+                if (abs > peak)
+                {
+                    peak = abs;
+                }
+            }
+        }
 
         return Math.Clamp(peak, 0f, 1f);
     }
+
+    // Formats the peak meter can measure. Anything else leaves the level (and therefore the
+    // silent-capture heuristic) blind, so callers must not report "muted" for those captures.
+    internal static bool IsMeterableFormat(WaveFormat format) =>
+        (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
+        || (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample is 16 or 24 or 32);
 
     private static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format)
     {

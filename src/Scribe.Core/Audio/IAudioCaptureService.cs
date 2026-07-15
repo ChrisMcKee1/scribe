@@ -18,6 +18,21 @@ public interface IAudioCaptureService : IDisposable
     /// </summary>
     string? LastDeviceName { get; }
 
+    /// <summary>
+    /// True when the most recent capture started on an endpoint that was muted (or had its volume
+    /// at zero) at the system level, e.g. a headset hardware mute or the Windows 11 taskbar mic
+    /// mute while in a meeting. WASAPI still records in that state, it just records silence, so
+    /// callers should warn the user instead of waiting for an empty transcription.
+    /// </summary>
+    bool LastDeviceMuted { get; }
+
+    /// <summary>
+    /// True when the most recent capture never rose above the digital-silence threshold, meaning
+    /// the endpoint delivered audio buffers but they contained no signal (muted mic, disconnected
+    /// boom, driver-level mute). Valid after <see cref="Stop"/>; survives until the next Start.
+    /// </summary>
+    bool LastCaptureWasSilent { get; }
+
     /// <summary>Enumerates active input devices, flagging the system default.</summary>
     IReadOnlyList<AudioDevice> GetInputDevices();
 

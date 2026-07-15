@@ -285,6 +285,15 @@ internal sealed class DictationController : IDisposable
             _log.LogInformation("Recording started ({Trigger}).", e.Trigger);
             Raise(DictationState.Recording);
 
+            // Muted endpoints (headset mute, Win11 taskbar mic mute during a meeting) still record,
+            // they just record silence. Warn immediately so the user can unmute mid-dictation
+            // instead of speaking into a dead capture; recording continues in case they do.
+            if (_audio.LastDeviceMuted)
+            {
+                _log.LogWarning("Recording started on a muted microphone.");
+                Error?.Invoke("microphone is muted, unmute it to dictate");
+            }
+
             if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)
             {
                 _silenceTracker = new SilenceAutoStopTracker(Environment.TickCount64);
@@ -432,6 +441,11 @@ internal sealed class DictationController : IDisposable
                 {
                     activity?.SetTag(ScribeTelemetry.TagVadKept, false);
                     activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.VadNoSpeech);
+                    if (RaiseSilentCaptureError(report, "Voice activity detection"))
+                    {
+                        return;
+                    }
+
                     _log.LogInformation("VAD detected no speech; discarding capture.");
                     report.Fail("Voice activity detection", "No speech was detected.");
                     RaisePipelineReport(report);
@@ -471,6 +485,11 @@ internal sealed class DictationController : IDisposable
             if (result.IsEmpty)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.NoSpeech);
+                if (RaiseSilentCaptureError(report, "Speech recognition"))
+                {
+                    return;
+                }
+
                 _log.LogInformation("No speech recognized.");
                 report.Fail("Speech recognition", "No speech was recognized.");
                 RaisePipelineReport(report);
@@ -640,6 +659,29 @@ internal sealed class DictationController : IDisposable
         {
             ResetToIdle();
         }
+    }
+
+    // A "no speech" outcome from a capture that never rose above digital silence is not a quiet
+    // room, it is a mic that recorded nothing: muted in a meeting, hardware mute switch, taskbar
+    // mic mute. Historically this fell through the silent VAD/no-speech discard paths and looked
+    // like Scribe simply did nothing. Returns true when the silent-capture error was raised so the
+    // caller can skip its own quiet discard.
+    private bool RaiseSilentCaptureError(DictationPipelineReport report, string stage)
+    {
+        if (!_audio.LastCaptureWasSilent)
+        {
+            return false;
+        }
+
+        var device = _audio.LastDeviceName;
+        _log.LogWarning("Capture from '{Device}' contained only silence; the microphone is likely muted.",
+            device ?? "default device");
+        report.Fail(stage, "The capture contained only silence. The microphone is likely muted.");
+        RaisePipelineReport(report);
+        Error?.Invoke(device is null
+            ? "no sound was captured, your microphone may be muted"
+            : $"no sound from '{device}', it may be muted");
+        return true;
     }
 
     private void RecordHistory(
