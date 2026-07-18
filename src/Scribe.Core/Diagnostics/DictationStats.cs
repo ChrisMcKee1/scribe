@@ -3,19 +3,27 @@ using Scribe.Core.Models;
 namespace Scribe.Core.Diagnostics;
 
 /// <summary>
-/// Latency/volume statistics computed from stored dictation history — the numbers behind the
-/// Diagnostics performance panel. Decode time and real-time factor come straight from the
-/// per-dictation columns history already records, so no new telemetry is collected. Decode-only:
-/// AI-cleanup and injection time are not stored in history (they live in the trace log).
+/// Latency/volume statistics computed from stored dictation history: the numbers behind the
+/// Diagnostics performance panel. Decode time, AI cleanup time, and real-time factor come from
+/// per-dictation history, so no separate telemetry is collected.
 /// </summary>
 public static class DictationStats
 {
+    public sealed record MetricSummary(
+        double Average,
+        double Min,
+        double Max,
+        double P50,
+        double P95);
+
     /// <summary>Aggregated view of the dictations inside the window. Null when there were none.</summary>
     public sealed record Snapshot(
         int Count,
         TimeSpan TotalAudio,
-        double DecodeP50Ms,
-        double DecodeP95Ms,
+        MetricSummary DecodeMs,
+        int CleanupCount,
+        MetricSummary? CleanupMs,
+        double FastestRtf,
         double RtfP50,
         double RtfP95,
         double LongestAudioSeconds);
@@ -31,6 +39,7 @@ public static class DictationStats
 
         var decodeMs = new List<double>();
         var rtf = new List<double>();
+        var cleanupMs = new List<double>();
         long totalAudioMs = 0;
         double longestAudioMs = 0;
 
@@ -43,6 +52,11 @@ public static class DictationStats
 
             decodeMs.Add(entry.DecodeMilliseconds);
             rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+            if (entry.CleanupMilliseconds is > 0)
+            {
+                cleanupMs.Add(entry.CleanupMilliseconds.Value);
+            }
+
             totalAudioMs += entry.AudioMilliseconds;
             longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
         }
@@ -54,15 +68,29 @@ public static class DictationStats
 
         decodeMs.Sort();
         rtf.Sort();
+        cleanupMs.Sort();
 
         return new Snapshot(
             Count: decodeMs.Count,
             TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
-            DecodeP50Ms: Percentile(decodeMs, 0.50),
-            DecodeP95Ms: Percentile(decodeMs, 0.95),
+            DecodeMs: Summarize(decodeMs),
+            CleanupCount: cleanupMs.Count,
+            CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
+            FastestRtf: rtf.FirstOrDefault(value => value > 0),
             RtfP50: Percentile(rtf, 0.50),
             RtfP95: Percentile(rtf, 0.95),
             LongestAudioSeconds: longestAudioMs / 1000.0);
+    }
+
+    private static MetricSummary Summarize(IReadOnlyList<double> sortedAscending)
+    {
+        var average = sortedAscending.Average();
+        return new MetricSummary(
+            Average: average,
+            Min: sortedAscending[0],
+            Max: sortedAscending[^1],
+            P50: Percentile(sortedAscending, 0.50),
+            P95: Percentile(sortedAscending, 0.95));
     }
 
     /// <summary>

@@ -6,8 +6,8 @@ namespace Scribe.Core.Tests;
 
 public sealed class DictationStatsTests
 {
-    private static HistoryEntry Entry(int audioMs, int decodeMs, double ageHours = 1) =>
-        new(0, DateTimeOffset.UtcNow.AddHours(-ageHours), "text", audioMs, decodeMs);
+    private static HistoryEntry Entry(int audioMs, int decodeMs, int? cleanupMs = null, double ageHours = 1) =>
+        new(0, DateTimeOffset.UtcNow.AddHours(-ageHours), "text", audioMs, decodeMs, cleanupMs);
 
     [Fact]
     public void Percentile_interpolates_between_samples()
@@ -31,9 +31,9 @@ public sealed class DictationStatsTests
     {
         var entries = new[]
         {
-            Entry(audioMs: 10_000, decodeMs: 1_000),  // RTF 0.10
-            Entry(audioMs: 20_000, decodeMs: 3_000),  // RTF 0.15
-            Entry(audioMs: 5_000, decodeMs: 1_000),   // RTF 0.20
+            Entry(audioMs: 10_000, decodeMs: 1_000, cleanupMs: 400),  // RTF 0.10
+            Entry(audioMs: 20_000, decodeMs: 3_000, cleanupMs: 700),  // RTF 0.15
+            Entry(audioMs: 5_000, decodeMs: 1_000),                    // RTF 0.20
         };
 
         var stats = DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
@@ -41,9 +41,18 @@ public sealed class DictationStatsTests
         Assert.NotNull(stats);
         Assert.Equal(3, stats!.Count);
         Assert.Equal(TimeSpan.FromMilliseconds(35_000), stats.TotalAudio);
-        Assert.Equal(1_000, stats.DecodeP50Ms);
+        Assert.Equal(5.0 / 3.0 * 1000.0, stats.DecodeMs.Average, precision: 6);
+        Assert.Equal(1_000, stats.DecodeMs.Min);
+        Assert.Equal(3_000, stats.DecodeMs.Max);
+        Assert.Equal(1_000, stats.DecodeMs.P50);
+        Assert.Equal(0.10, stats.FastestRtf, precision: 6);
         Assert.Equal(0.15, stats.RtfP50, precision: 6);
         Assert.Equal(20, stats.LongestAudioSeconds);
+        Assert.Equal(2, stats.CleanupCount);
+        Assert.NotNull(stats.CleanupMs);
+        Assert.Equal(550, stats.CleanupMs!.Average, precision: 6);
+        Assert.Equal(400, stats.CleanupMs.Min);
+        Assert.Equal(700, stats.CleanupMs.Max);
     }
 
     [Fact]
@@ -60,7 +69,8 @@ public sealed class DictationStatsTests
 
         Assert.NotNull(stats);
         Assert.Equal(1, stats!.Count);
-        Assert.Equal(1_000, stats.DecodeP95Ms);
+        Assert.Equal(1_000, stats.DecodeMs.P95);
+        Assert.Null(stats.CleanupMs);
     }
 
     [Fact]

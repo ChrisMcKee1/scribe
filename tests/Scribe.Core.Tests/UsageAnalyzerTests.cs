@@ -233,5 +233,5 @@ public sealed class UsageAnalyzerTests
         string text,
         int audioMilliseconds,
         string? targetApp) =>
-        new(id, timestamp, text, audioMilliseconds, 100, targetApp);
+        new(id, timestamp, text, audioMilliseconds, 100, CleanupMilliseconds: null, TargetApp: targetApp);
 }

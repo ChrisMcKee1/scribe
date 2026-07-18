@@ -18,7 +18,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.50.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 4;
+    private const int SchemaVersion = 5;
 
     // Tables copied out of a damaged database during salvage, ordered so foreign-key targets
     // (audio_blobs) are restored before the rows that reference them (history).
@@ -411,9 +411,42 @@ public sealed class ScribeDatabase : IDisposable
             Execute(connection, SchemaV4, transaction);
         }
 
+        if (current < 5 && HistoryNeedsCleanupColumn(connection, transaction))
+        {
+            Execute(connection, SchemaV5, transaction);
+        }
+
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
         Execute(connection, $"PRAGMA user_version={SchemaVersion};", transaction);
         transaction.Commit();
+    }
+
+    private static bool HistoryNeedsCleanupColumn(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        using var tableCommand = connection.CreateCommand();
+        tableCommand.Transaction = transaction;
+        tableCommand.CommandText =
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'history';";
+        if (tableCommand.ExecuteScalar() is null)
+        {
+            return false;
+        }
+
+        using var columnCommand = connection.CreateCommand();
+        columnCommand.Transaction = transaction;
+        columnCommand.CommandText = "PRAGMA table_info(history);";
+        using var reader = columnCommand.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), "cleanup_ms", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void Execute(SqliteConnection connection, string sql, SqliteTransaction? transaction = null)
@@ -528,4 +561,10 @@ public sealed class ScribeDatabase : IDisposable
         WHERE length(phrase) = 33
           AND phrase GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]';
         """;
+
+        // v5: persist optional AI cleanup duration (milliseconds) alongside decode duration so
+        // diagnostics can report cleanup latency distributions without parsing trace logs.
+        private const string SchemaV5 = """
+                ALTER TABLE history ADD COLUMN cleanup_ms INTEGER NULL;
+                """;
 }

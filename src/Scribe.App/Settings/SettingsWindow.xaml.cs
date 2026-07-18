@@ -904,13 +904,44 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             StatsSummaryText.Text =
-                $"{stats.Count} dictation{(stats.Count == 1 ? string.Empty : "s")}, " +
-                $"{stats.TotalAudio.TotalMinutes:0.#} min of speech. Decode only — lower is faster; " +
-                "RTF is decode time relative to audio length.";
-            StatDecodeP50.Text = FormatSeconds(stats.DecodeP50Ms);
-            StatDecodeP95.Text = FormatSeconds(stats.DecodeP95Ms);
-            StatRtfP50.Text = $"{stats.RtfP50:0.00}×";
-            StatRtfP95.Text = $"{stats.RtfP95:0.00}×";
+                "A local snapshot of your current rhythm. Lower latency is faster; " +
+                "pace shows how quickly Scribe processes speech compared with its duration.";
+
+            StatWeekDictations.Text = stats.Count.ToString("N0");
+            StatWeekSpeech.Text = FormatElapsed(stats.TotalAudio.TotalSeconds);
+            StatLongestDictation.Text = FormatElapsed(stats.LongestAudioSeconds);
+            StatBestPace.Text = stats.FastestRtf > 0
+                ? $"{1.0 / stats.FastestRtf:0.0}x"
+                : "n/a";
+
+            DecodeSummaryHint.Text =
+                $"ASR stage over {stats.Count} run{(stats.Count == 1 ? string.Empty : "s")}. " +
+                $"Typical pace {FormatPace(stats.RtfP50)} realtime; slower runs {FormatPace(stats.RtfP95)}.";
+            StatDecodeAverage.Text = FormatLatency(stats.DecodeMs.Average);
+            StatDecodeMin.Text = FormatLatency(stats.DecodeMs.Min);
+            StatDecodeMax.Text = FormatLatency(stats.DecodeMs.Max);
+            StatDecodeP50.Text = FormatLatency(stats.DecodeMs.P50);
+            StatDecodeP95.Text = FormatLatency(stats.DecodeMs.P95);
+
+            if (stats.CleanupMs is { } cleanup)
+            {
+                CleanupSummaryHint.Text =
+                    $"AI cleanup stage over {stats.CleanupCount} run{(stats.CleanupCount == 1 ? string.Empty : "s")}.";
+                StatCleanupAverage.Text = FormatLatency(cleanup.Average);
+                StatCleanupMin.Text = FormatLatency(cleanup.Min);
+                StatCleanupMax.Text = FormatLatency(cleanup.Max);
+                StatCleanupP50.Text = FormatLatency(cleanup.P50);
+                StatCleanupP95.Text = FormatLatency(cleanup.P95);
+                CleanupMetricsGrid.Visibility = Visibility.Visible;
+                CleanupNoDataText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
+                CleanupMetricsGrid.Visibility = Visibility.Collapsed;
+                CleanupNoDataText.Visibility = Visibility.Visible;
+            }
+
             StatsGrid.Visibility = Visibility.Visible;
         }
         catch (Exception ex)
@@ -919,8 +950,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             System.Diagnostics.Debug.WriteLine($"Performance stats unavailable: {ex.Message}");
         }
 
-        static string FormatSeconds(double ms) =>
+        static string FormatLatency(double ms) =>
             ms < 1000 ? $"{ms:0} ms" : $"{ms / 1000.0:0.0} s";
+
+        static string FormatElapsed(double seconds) => seconds switch
+        {
+            < 60 => $"{seconds:0} sec",
+            < 3600 => $"{seconds / 60.0:0.#} min",
+            _ => $"{seconds / 3600.0:0.#} hr",
+        };
+
+        static string FormatPace(double rtf) =>
+            rtf > 0 ? $"{1.0 / rtf:0.0}x" : "n/a";
     }
 
     private void LoadFailures()

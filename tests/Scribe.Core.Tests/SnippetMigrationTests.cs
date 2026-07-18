@@ -49,7 +49,7 @@ public sealed class SnippetMigrationTests
             using var migrated = db.Open();
             using var version = migrated.CreateCommand();
             version.CommandText = "PRAGMA user_version;";
-            Assert.Equal(4L, (long)(version.ExecuteScalar() ?? 0L));
+            Assert.Equal(5L, (long)(version.ExecuteScalar() ?? 0L));
         }
         finally
         {

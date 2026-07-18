@@ -7,5 +7,6 @@ public sealed record HistoryEntry(
     string Text,
     int AudioMilliseconds,
     int DecodeMilliseconds,
+    int? CleanupMilliseconds = null,
     string? TargetApp = null,
     long? AudioBlobId = null);

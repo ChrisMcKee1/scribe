@@ -65,7 +65,7 @@ public sealed class DatabaseSalvageTests : IDisposable
             var history = new HistoryRepository(db);
             for (var i = 0; i < 50; i++)
             {
-                history.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, new string('x', 4000), 1000, 50, null));
+                history.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, new string('x', 4000), 1000, 50, TargetApp: null));
             }
         }
 

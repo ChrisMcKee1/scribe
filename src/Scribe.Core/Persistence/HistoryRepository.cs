@@ -41,9 +41,17 @@ public sealed class HistoryRepository : IHistoryRepository
             blobId = (long)(audioCommand.ExecuteScalar() ?? 0L);
         }
 
+        var hasCleanupColumn = HasCleanupColumn(connection);
         using var historyCommand = connection.CreateCommand();
         historyCommand.Transaction = transaction;
-        historyCommand.CommandText =
+        historyCommand.CommandText = hasCleanupColumn
+            ?
+            """
+            INSERT INTO history (timestamp_utc, text, audio_ms, decode_ms, cleanup_ms, target_app, audio_blob_id)
+            VALUES ($ts, $text, $audio_ms, $decode_ms, $cleanup_ms, $target_app, $blob_id);
+            SELECT last_insert_rowid();
+            """
+            :
             """
             INSERT INTO history (timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id)
             VALUES ($ts, $text, $audio_ms, $decode_ms, $target_app, $blob_id);
@@ -53,6 +61,11 @@ public sealed class HistoryRepository : IHistoryRepository
         historyCommand.Parameters.AddWithValue("$text", entry.Text);
         historyCommand.Parameters.AddWithValue("$audio_ms", entry.AudioMilliseconds);
         historyCommand.Parameters.AddWithValue("$decode_ms", entry.DecodeMilliseconds);
+        if (hasCleanupColumn)
+        {
+            historyCommand.Parameters.AddWithValue("$cleanup_ms", (object?)entry.CleanupMilliseconds ?? DBNull.Value);
+        }
+
         historyCommand.Parameters.AddWithValue("$target_app", (object?)entry.TargetApp ?? DBNull.Value);
         historyCommand.Parameters.AddWithValue("$blob_id", (object?)blobId ?? DBNull.Value);
 
@@ -83,8 +96,17 @@ public sealed class HistoryRepository : IHistoryRepository
     public IReadOnlyList<HistoryEntry> GetRecent(int limit = 100)
     {
         using var connection = _database.Open();
+        var hasCleanupColumn = HasCleanupColumn(connection);
         using var command = connection.CreateCommand();
-        command.CommandText =
+        command.CommandText = hasCleanupColumn
+            ?
+            """
+            SELECT id, timestamp_utc, text, audio_ms, decode_ms, cleanup_ms, target_app, audio_blob_id
+            FROM history
+            ORDER BY timestamp_utc DESC
+            LIMIT $limit;
+            """
+            :
             """
             SELECT id, timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id
             FROM history
@@ -97,14 +119,25 @@ public sealed class HistoryRepository : IHistoryRepository
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            results.Add(new HistoryEntry(
-                reader.GetInt64(0),
-                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-                reader.GetString(2),
-                reader.GetInt32(3),
-                reader.GetInt32(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetInt64(6)));
+            results.Add(hasCleanupColumn
+                ? new HistoryEntry(
+                    reader.GetInt64(0),
+                    DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetInt64(7))
+                : new HistoryEntry(
+                    reader.GetInt64(0),
+                    DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    reader.GetString(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    null,
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt64(6)));
         }
 
         return results;
@@ -163,5 +196,44 @@ public sealed class HistoryRepository : IHistoryRepository
         var floats = new float[bytes.Length / sizeof(float)];
         Buffer.BlockCopy(bytes, 0, floats, 0, floats.Length * sizeof(float));
         return floats;
+    }
+
+    private static bool HasCleanupColumn(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        if (HasCleanupColumnCore(connection))
+        {
+            return true;
+        }
+
+        // Upgrade older databases lazily the first time history is read/written in a newer build.
+        // If this fails, history still works without cleanup timings.
+        try
+        {
+            using var alter = connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE history ADD COLUMN cleanup_ms INTEGER NULL;";
+            alter.ExecuteNonQuery();
+        }
+        catch
+        {
+            return false;
+        }
+
+        return HasCleanupColumnCore(connection);
+    }
+
+    private static bool HasCleanupColumnCore(Microsoft.Data.Sqlite.SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(history);";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), "cleanup_ms", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

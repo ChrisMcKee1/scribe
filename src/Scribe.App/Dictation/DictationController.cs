@@ -631,7 +631,7 @@ internal sealed class DictationController : IDisposable
             _log.LogInformation("Text injected into {App} using {Method}.", targetApp ?? "the focused app", injection.Method);
 
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
-            RecordHistory(settings, audio, result, text, targetApp);
+            RecordHistory(settings, audio, result, text, targetApp, cleanup, report.CleanupDuration);
             RaisePipelineReport(report);
             Dictated?.Invoke(text);
         }
@@ -688,16 +688,26 @@ internal sealed class DictationController : IDisposable
     }
 
     private void RecordHistory(
-        AppSettings settings, CapturedAudio audio, TranscriptionResult result, string text, string? targetApp)
+        AppSettings settings,
+        CapturedAudio audio,
+        TranscriptionResult result,
+        string text,
+        string? targetApp,
+        CleanupResult cleanup,
+        TimeSpan cleanupDuration)
     {
         try
         {
+            var cleanupMs = settings.EnableAiCleanup && cleanup.Outcome != CleanupOutcome.Skipped
+                ? (int?)Math.Max(0, (int)cleanupDuration.TotalMilliseconds)
+                : null;
             _history.Add(new HistoryEntry(
                 Id: 0,
                 TimestampUtc: DateTimeOffset.UtcNow,
                 Text: text,
                 AudioMilliseconds: (int)result.AudioDuration.TotalMilliseconds,
                 DecodeMilliseconds: (int)result.DecodeDuration.TotalMilliseconds,
+                CleanupMilliseconds: cleanupMs,
                 TargetApp: targetApp),
                 settings.StoreAudioHistory ? audio : null);
         }
