@@ -1,9 +1,9 @@
 using System.Text.Json;
-using Azure.AI.OpenAI;
 using Azure.Identity;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using OpenAI.Responses;
+using Scribe.Core.Cleanup;
 
 namespace Scribe.Evals.Benchmark;
 
@@ -12,8 +12,8 @@ internal sealed record JudgeVerdict(int Overall, BenchDimensions Dims, string[] 
 /// <summary>
 /// LLM-as-judge for cleanup quality. A fixed strong Azure model (default gpt-4.1, temperature 0,
 /// JSON-only output) grades each cleaned transcript against the editor's contract so the leaderboard
-/// has a consistent quality axis. It is created exactly like the app's Azure cleanup agent — classic
-/// Azure OpenAI account endpoint → Responses API → AsAIAgent — so it exercises the same proven path.
+/// has a consistent quality axis. It uses the same Azure OpenAI v1 Responses path as the app so it
+/// exercises the production client configuration.
 /// </summary>
 internal sealed class QualityJudge
 {
@@ -76,9 +76,11 @@ internal sealed class QualityJudge
             options.TenantId = tenantId.Trim();
         }
 
-        var client = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential(options));
 #pragma warning disable OPENAI001
-        _agent = client.GetResponsesClient().AsAIAgent(model: deployment, instructions: Instructions, name: "ScribeJudge");
+        var responses = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
+            new Uri(endpoint),
+            new DefaultAzureCredential(options));
+        _agent = responses.AsAIAgent(model: deployment, instructions: Instructions, name: "ScribeJudge");
 #pragma warning restore OPENAI001
     }
 

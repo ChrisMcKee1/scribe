@@ -43,13 +43,13 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   self‑contained `x64` process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`). See
   [Overlay architecture](#overlay-architecture-read-before-touching-the-pill) — it is not
   a normal window.
-- **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.3**
+- **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.4**
   (Apache‑2.0) on CPU. **VAD:** Silero (MIT).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`) — one code path for on‑device
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.4**.
+  in `Directory.Build.props`. Current version: **0.2.5**.
 
 ## Commands (run these — include the flags)
 
@@ -79,11 +79,8 @@ dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 # Auxiliary prompt evals (UsageInsight + AiDictionarySuggester, deterministic checks)
 dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 
-# Build the signed Velopack installer locally (version must match Directory.Build.props)
-./build/pack.ps1 -Version 0.2.4
-
-# Intentional unsigned test package only
-./build/pack.ps1 -Version 0.2.4 -AllowUnsigned
+# Build the Velopack installer locally (version must match Directory.Build.props)
+./build/pack.ps1 -Version 0.2.5
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
@@ -199,8 +196,9 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 
 `build/pack.ps1` publishes a self-contained `win-x64` app, bundles the overlay
 self-contained into the payload under `Overlay\`, packs with Velopack, and (with
-`-Publish`) uploads to GitHub Releases. Production packaging is **signed by default**.
-Unsigned output requires the explicit `-AllowUnsigned` escape hatch.
+`-Publish`) uploads to GitHub Releases.
+Production artifacts are intentionally unsigned. Packaging must not access a certificate
+store, GitHub signing secrets, or a publisher trust bundle.
 
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
@@ -210,62 +208,22 @@ Unsigned output requires the explicit `-AllowUnsigned` escape hatch.
   — but **keep the older `*-full.nupkg`s** so the delta can build.
 - Channel is `win-x64`. The full nupkg is large (~640 MB, the overlay adds ~90 MB
   self‑contained); the delta is small (~86 MB).
+- The release workflow downloads the latest prior stable full nupkg before packing so a clean
+  hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
+  full package is present.
 - To publish without a rebuild, set `$env:GITHUB_TOKEN = gh auth token` and run
   `vpk upload github -o releases --channel win-x64 --repoUrl https://github.com/ChrisMcKee1/scribe --publish --releaseName "Scribe <ver>" --tag v<ver> --targetCommitish main --merge`.
-- Local signing resolves the certificate thumbprint from the checked-in public leaf at
-  `signing\Scribe-CodeSigning.cer`, then requires exactly one matching private key in
-  `Cert:\CurrentUser\My`. `-SigningCertificateThumbprint` can select it explicitly.
-- Signing uses SHA-256 plus the DigiCert RFC 3161 timestamp service. Post-pack validation
-  extracts and verifies `Scribe.exe` and `Scribe.Overlay.exe` from both the portable ZIP and
-  full nupkg, then verifies Setup.exe with `Get-AuthenticodeSignature` and
-  `signtool verify /pa /all /tw`. Do not replace these checks with verification of the
-  unsigned `publish\win-x64` staging inputs; Velopack signs its packaged copies.
 
-## Private release PKI and GitHub automation
+## GitHub release automation
 
-Scribe 0.2.0 introduced a constrained two-tier private publisher chain. Only public `.cer`
-files belong in git or release assets. Never publish either private key or a PFX.
+`.github\workflows\release.yml` validates that the source version matches the tag and that
+the release commit is current `origin/main`. A pushed `v*` tag tests, packages, and publishes;
+a manual dispatch retains the generated artifacts without creating a GitHub Release.
 
-- Root: `CN=Scribe Release Root CA 2026, O=Scribe`
-  - Thumbprint: `73734FC58C946BD98BD73E1F0B9125BBDFAD7175`
-  - Public CER SHA-256: `CCAA75EC5E96A3DDA61249702A910AFB9A04CC261FFBDF24E19F7F70D8365F29`
-  - RSA 4096, CA=true/pathlength=0, CertSign + CRLSign only, non-exportable private key.
-- Signing leaf: `CN=Chris McKee, O=Scribe`
-  - Thumbprint: `E08AF872C3C1D7909C0AC99B69EAD0643312E26D`
-  - Public CER SHA-256: `E3EDE447018FC3CDC025384A838500290518339AE638E7389DE567B59690853F`
-  - RSA 3072, Digital Signature, Code Signing EKU, exportable only because CI needs an
-    encrypted PFX. The root remains non-exportable.
-- Public trust assets live under `signing\`. Recipients should verify the pinned fingerprints,
-  then run `Trust-ScribePublisher.ps1`; it installs the root in `CurrentUser\Root`, the leaf
-  in `CurrentUser\TrustedPublisher`, and validates that the chain terminates at the pinned root.
-- `scripts\New-ScribeCodeSigningCertificate.ps1` creates or intentionally rotates the chain.
-  `scripts\Set-ScribeGitHubSigningSecrets.ps1` exports the leaf to a random-password temporary
-  PFX, writes the encrypted values to GitHub, and deletes the temporary file in `finally`.
-
-GitHub release signing is owned by `.github\workflows\release.yml`:
-
-- Environment: `release-signing`.
-- Environment secrets: `SCRIBE_SIGNING_PFX_BASE64` and `SCRIBE_SIGNING_PFX_PASSWORD`.
-- Deployment policy allows only the `main` branch and `v*` tags. The workflow also fetches
-  `origin/main` and refuses to sign unless `HEAD` exactly equals current `origin/main`.
-- A pushed `v*` tag builds, signs, tests, and publishes. A manual dispatch builds a retained
-  signed artifact without creating a GitHub Release.
-- The PFX/password are exposed only to the import step. The temporary PFX and imported certificate
-  store entry are removed in an `always()` cleanup step; the hosted runner VM teardown disposes the
-  persisted private-key container. This workflow is not approved for a persistent self-hosted runner.
-- The private PFX is loaded with .NET `X509Certificate2` into `CurrentUser\My`. The public chain is
-  validated with `X509ChainTrustMode.CustomRootTrust` against the checked-in root, without adding
-  the root or publisher to runner trust stores. Pack verification accepts the resulting untrusted-root
-  status only after checking Authenticode integrity, timestamp, exact signer thumbprint, and that
-  same pinned custom chain. Revocation is `NoCheck` because this private CA publishes no CRL endpoint.
-- The workflow uploads the root CER, leaf CER, trust script, and certificate README alongside
-  the Velopack artifacts. Those are public verification material, not secrets.
-
-For a same-version replacement such as the corrected signed `0.2.0`, remove the old release/tag
-only after the replacement commit and signed local artifacts are ready. Recreate the annotated tag
-at current `main`, let the protected workflow publish it, then verify every remote asset before
-reinstalling. Existing installations at that same version will **not** auto-update; they need a
-manual installer run.
+For a same-version replacement, remove the old release and tag only after the replacement
+commit and local artifacts are ready. Recreate the annotated tag at current `main`, let the
+workflow publish it, then verify every remote asset before reinstalling. Existing installations
+at that same version will **not** auto-update; they need a manual installer run.
 
 ## Git workflow
 
@@ -289,18 +247,15 @@ manual installer run.
 - Build the overlay with `-p:Platform=x64`; verify the pill via logs after overlay changes.
 
 **Ask first:**
-- Bumping the version, cutting a release, or changing the signing posture (signed vs unsigned).
-- Rotating either Scribe signing certificate, replacing GitHub signing secrets, or changing the
-  `release-signing` environment/ref policy.
+- Bumping the version, cutting a release, or changing the signing posture.
 - Adding/upgrading NuGet dependencies, or anything touching `Directory.Packages.props`.
 - Adding a new third‑party component (must be license‑compatible with MIT and credited in
   the README attribution section).
 - Schema/migration changes to the SQLite store.
 
 **Never:**
-- Commit secrets, API keys, or the downloaded models (`src/Scribe.App/models`).
-- Commit or upload a signing PFX/private key, make the root private key exportable, or disclose
-  either `SCRIBE_SIGNING_PFX_*` secret.
+- Commit secrets, API keys, private keys, certificate bundles, or the downloaded models
+  (`src/Scribe.App/models`).
 - Remove the SQLite pin: `SQLitePCLRaw.bundle_e_sqlite3 3.0.3` overrides a transitive build
   affected by **CVE‑2025‑6965** (pulls patched `e_sqlite3` 3.50.4). Don't remove without an
   equivalent fix.

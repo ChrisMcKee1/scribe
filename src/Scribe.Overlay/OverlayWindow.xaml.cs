@@ -27,6 +27,7 @@ public sealed partial class OverlayWindow : Window
     // then hides itself. A Hide that arrives during the hold (the Idle-state hide right after
     // processing) is ignored until the hold elapses — ported from the WPF overlay's behaviour.
     private static readonly TimeSpan FailedHold = TimeSpan.FromMilliseconds(1300);
+    private static readonly TimeSpan RecordingWarningHold = TimeSpan.FromMilliseconds(1800);
 
     private readonly IntPtr _hwnd;
     private readonly WindowId _windowId;
@@ -37,6 +38,7 @@ public sealed partial class OverlayWindow : Window
     private bool _activatedOnce;
 
     private DispatcherQueueTimer? _failedTimer;
+    private DispatcherQueueTimer? _recordingWarningTimer;
     private DateTime _failedHoldUntil = DateTime.MinValue;
 
     public OverlayWindow()
@@ -246,9 +248,23 @@ public sealed partial class OverlayWindow : Window
     public void ShowRecording() => RunOnUi(() =>
     {
         ClearFailedHold();
+        _recordingWarningTimer?.Stop();
         StatusText.Text = "Listening…";
         MeterFill.Width = 0;
         ShowState(OverlayState.Listening);
+    });
+
+    /// <summary>Brief warning text that preserves the active recording state and live meter.</summary>
+    public void ShowRecordingWarning(string? reason) => RunOnUi(() =>
+    {
+        ClearFailedHold();
+        StatusText.Text = string.IsNullOrWhiteSpace(reason) ? "Microphone muted" : reason.Trim();
+        ShowState(OverlayState.Listening);
+
+        _recordingWarningTimer ??= CreateRecordingWarningTimer();
+        _recordingWarningTimer.Stop();
+        _recordingWarningTimer.Start();
+        OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reason='{reason}'");
     });
 
     /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
@@ -332,6 +348,22 @@ public sealed partial class OverlayWindow : Window
             if (_state == OverlayState.Failed)
             {
                 ShowState(OverlayState.Hidden);
+            }
+        };
+        return timer;
+    }
+
+    private DispatcherQueueTimer CreateRecordingWarningTimer()
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = RecordingWarningHold;
+        timer.IsRepeating = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (_state == OverlayState.Listening)
+            {
+                StatusText.Text = "Listening…";
             }
         };
         return timer;

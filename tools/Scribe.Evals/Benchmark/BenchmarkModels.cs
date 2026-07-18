@@ -51,7 +51,9 @@ internal static class BenchmarkModels
         CancellationToken ct)
     {
         var discovery = new AzureFoundryDiscovery(new VerboseConsoleLogger<AzureFoundryDiscovery>());
-        var deployments = await discovery.DiscoverAsync(tenantId, ct).ConfigureAwait(false);
+        var deployments = await discovery.DiscoverAsync(
+            tenantId,
+            cancellationToken: ct).ConfigureAwait(false);
         log.LogInformation("Azure discovery returned {Count} text-capable deployments.", deployments.Count);
 
         IReadOnlyList<AzureFoundryDeployment> selected;

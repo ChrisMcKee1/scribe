@@ -143,19 +143,12 @@ open an issue first so we can agree on the approach.
 ## Releases & updates (maintainers)
 
 `build/pack.ps1` publishes a self-contained `win-x64` build, packs it with Velopack
-(installer + delta updates), signs every Windows executable plus the installer, verifies
-the timestamped signatures, and can upload the result to GitHub Releases. Local packaging
-uses the code-signing certificate in `Cert:\CurrentUser\My` matching
-`signing/Scribe-CodeSigning.cer`; GitHub Actions imports the encrypted leaf PFX from the
-protected `release-signing` environment. The root private key never leaves the maintainer's
-machine. Unsigned local artifacts require the explicit `-AllowUnsigned` switch. Versioning
-is semantic and lives in `Directory.Build.props`.
-
-Run `scripts/New-ScribeCodeSigningCertificate.ps1 -ExportableForGitHubActions` only when
-creating or intentionally rotating the private Scribe PKI. Configure the GitHub environment
-with `scripts/Set-ScribeGitHubSigningSecrets.ps1`, and publish from a version tag through
-`.github/workflows/release.yml`. Public certificate fingerprints and recipient trust steps
-are documented in `signing/README.md`.
+(installer + delta updates), verifies the expected release artifacts, and can upload the
+result to GitHub Releases. Versioning is semantic and lives in `Directory.Build.props`.
+Release artifacts are intentionally unsigned, so packaging must not depend on a local
+certificate store, GitHub signing secrets, or a publisher trust bundle.
+Publish from a version tag through `.github/workflows/release.yml`; manual workflow runs
+retain the generated artifacts without creating a GitHub Release.
 
 ---
 

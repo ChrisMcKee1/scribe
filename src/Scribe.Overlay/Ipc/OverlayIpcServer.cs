@@ -101,6 +101,9 @@ internal sealed class OverlayIpcServer : IDisposable
             case "RECORDING":
                 _window.ShowRecording();
                 break;
+            case "WARNING":
+                _window.ShowRecordingWarning(arg);
+                break;
             case "PROCESSING":
                 _window.ShowProcessing(arg.Trim() == "1");
                 break;

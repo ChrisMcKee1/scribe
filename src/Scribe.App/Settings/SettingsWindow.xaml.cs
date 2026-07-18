@@ -63,6 +63,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private UsageAnalyzer.Snapshot? _usageSnapshot;
     private bool _usageInsightRunning;
     private int _usageLoadVersion;
+    private int _azureDeploymentLoadVersion;
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     // Subscription filter for Azure model discovery. The sentinel "All subscriptions" row is not in
@@ -1583,6 +1584,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // filter is on the "All subscriptions" sentinel).
     private async Task ListAzureDeploymentsAsync()
     {
+        var loadVersion = ++_azureDeploymentLoadVersion;
         AzureRefreshButton.IsEnabled = false;
         try
         {
@@ -1606,8 +1608,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             var deployments = await deploymentsTask;
+            if (loadVersion != _azureDeploymentLoadVersion)
+            {
+                return;
+            }
+
             _azureAutoListed = true;
             PopulateAzureSubscriptions(subscriptions);
+
+            var effectiveSubscription = SelectedAzureSubscription;
+            if (!string.Equals(
+                    selectedSubscription?.Id,
+                    effectiveSubscription?.Id,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                await ListAzureDeploymentsAsync();
+                return;
+            }
 
             _azureModelMap.TryGetValue(AzureModelBox.Text?.Trim() ?? string.Empty, out var previous);
             SetAzureDeployments(
@@ -1622,16 +1639,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            AzureStatusText.Text = "Listing Azure deployments timed out. Please try again.";
+            if (loadVersion == _azureDeploymentLoadVersion)
+            {
+                AzureStatusText.Text = "Listing Azure deployments timed out. Please try again.";
+            }
         }
         catch
         {
-            AzureStatusText.Text =
-                "Couldn't list deployments. Sign in again and make sure you have access to a deployment.";
+            if (loadVersion == _azureDeploymentLoadVersion)
+            {
+                AzureStatusText.Text =
+                    "Couldn't list deployments. Sign in again and make sure you have access to a deployment.";
+            }
         }
         finally
         {
-            AzureRefreshButton.IsEnabled = true;
+            if (loadVersion == _azureDeploymentLoadVersion)
+            {
+                AzureRefreshButton.IsEnabled = true;
+            }
         }
     }
 

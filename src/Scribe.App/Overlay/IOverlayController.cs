@@ -17,6 +17,9 @@ public interface IOverlayController
     /// <summary>Listening: pulsing record dot + live input-level meter.</summary>
     void ShowRecording();
 
+    /// <summary>Brief warning text while the recording indicator and live meter remain active.</summary>
+    void ShowRecordingWarning(string? reason);
+
     /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
     void ShowProcessing(bool polishing);
 

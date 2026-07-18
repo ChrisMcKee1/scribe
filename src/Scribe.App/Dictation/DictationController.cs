@@ -100,6 +100,9 @@ internal sealed class DictationController : IDisposable
     /// <summary>Raised when a capture or transcription step fails.</summary>
     public event Action<string>? Error;
 
+    /// <summary>Raised for a recoverable capture warning while recording continues.</summary>
+    public event Action<string>? Warning;
+
     /// <summary>Raised after a capture is dictated, with the final injected text.</summary>
     public event Action<string>? Dictated;
 
@@ -291,7 +294,7 @@ internal sealed class DictationController : IDisposable
             if (_audio.LastDeviceMuted)
             {
                 _log.LogWarning("Recording started on a muted microphone.");
-                Error?.Invoke("microphone is muted, unmute it to dictate");
+                Warning?.Invoke("microphone is muted, unmute it to dictate");
             }
 
             if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)

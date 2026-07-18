@@ -1,9 +1,7 @@
-using Azure.AI.OpenAI;
 using Azure.Identity;
 using Microsoft.Extensions.AI;
 using OpenAI.Responses;
 using Scribe.Core.Cleanup;
-using System.ClientModel.Primitives;
 
 #pragma warning disable OPENAI001
 
@@ -37,26 +35,11 @@ internal sealed class DirectResponsesCleanupClient
             credentialOptions.TenantId = tenantId.Trim();
         }
 
-        var endpointUri = new Uri(endpoint);
-        var accountHost = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase)
-            ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
-            : endpointUri;
-
-        var clientOptions = new AzureOpenAIClientOptions
-        {
-            NetworkTimeout = networkTimeout + TimeSpan.FromSeconds(5),
-        };
-        if (disableRetries)
-        {
-            clientOptions.RetryPolicy = new ClientRetryPolicy(maxRetries: 0);
-        }
-
-        var azureClient = new AzureOpenAIClient(
-            accountHost,
+        _client = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
+            new Uri(endpoint),
             new DefaultAzureCredential(credentialOptions),
-            clientOptions);
-
-        _client = azureClient.GetResponsesClient();
+            networkTimeout + TimeSpan.FromSeconds(5),
+            disableRetries);
         _deployment = deployment;
         _instructions = instructions;
         _reasoningEffort = reasoningEffort;

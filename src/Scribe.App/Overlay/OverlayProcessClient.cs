@@ -80,6 +80,15 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue("RECORDING", ensureAlive: true);
     }
 
+    public void ShowRecordingWarning(string? reason)
+    {
+        CancelPreview();
+        Subscribe();
+        var clean = (reason ?? string.Empty).Replace('\r', ' ').Replace('\n', ' ').Trim();
+        _desiredState = "RECORDING";
+        Enqueue($"WARNING {clean}", ensureAlive: true);
+    }
+
     public void ShowProcessing(bool polishing)
     {
         CancelPreview();

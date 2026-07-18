@@ -34,7 +34,7 @@ releases/
 packages/
 .nuget/
 
-# Signing private keys and certificate bundles. Public .cer files are safe to commit.
+# Private keys and certificate bundles must never be committed, even though Scribe releases are unsigned.
 *.pfx
 *.p12
 *.pvk

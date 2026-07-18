@@ -1,8 +1,6 @@
 using System.ClientModel;
-using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.RegularExpressions;
-using Azure.AI.OpenAI;
 using Azure.AI.Projects;
 using Azure.Identity;
 using Microsoft.AI.Foundry.Local;
@@ -30,7 +28,7 @@ namespace Scribe.Core.Cleanup;
 /// <item><b>Microsoft Foundry</b> — a model the user has already deployed in Azure. A Microsoft
 /// Foundry <i>project</i> endpoint (<c>…/api/projects/…</c>) is turned into an agent directly with
 /// the framework's native <c>AIProjectClient.AsAIAgent</c>; a classic Azure OpenAI account endpoint
-/// is reached through <see cref="AzureOpenAIClient"/> and wrapped with <see cref="ChatClientAgent"/>.
+/// uses the unified OpenAI v1 endpoint and is wrapped with <see cref="ChatClientAgent"/>.
 /// Authentication reuses the user's Azure CLI sign-in (AAD token, optional tenant override) or an
 /// optional API key.</item>
 /// </list>
@@ -1171,34 +1169,29 @@ internal sealed class TextCleanupService : ITextCleanupService
             // existing az / Visual Studio / environment / managed-identity sign-in (optionally pinned
             // to a specific tenant). Interactive browser is excluded so credential resolution never
             // blocks on a popup in the background.
-            var clientOptions = new AzureOpenAIClientOptions();
-            if (CleanupTimeoutOverride is { } networkTimeout)
-            {
-                // Benchmark runs may intentionally measure models beyond the SDK's 100-second default.
-                // The app never sets this override, so its normal transport and cleanup budgets stay put.
-                clientOptions.NetworkTimeout = networkTimeout + TimeSpan.FromSeconds(5);
-            }
-
-            if (DisableRetries)
-            {
-                clientOptions.RetryPolicy = new ClientRetryPolicy(maxRetries: 0);
-            }
-
-            var azureClient = useKey
-                ? new AzureOpenAIClient(accountHost, new ApiKeyCredential(options.AzureApiKey!), clientOptions)
-                : new AzureOpenAIClient(accountHost, CreateAzureCredential(options.AzureTenantId), clientOptions);
+            // Benchmark runs may intentionally measure models beyond the SDK's 100-second default.
+            // The app never sets this override, so its normal transport and cleanup budgets stay put.
+            var networkTimeout = CleanupTimeoutOverride is { } timeout
+                ? timeout + TimeSpan.FromSeconds(5)
+                : (TimeSpan?)null;
 
             // Route cleanup through the Azure OpenAI **Responses API** rather than Chat Completions.
             // Responses is the forward-looking surface and is the only one that serves the newest
             // reasoning models (e.g. gpt-5.x "pro"/o-series) — Chat Completions returns HTTP 400
-            // "operation unsupported" for those. This is the Agent Framework's canonical one-liner
-            // (AzureOpenAIClient → GetResponsesClient → AsAIAgent(model), matching the
-            // Agent_With_AzureOpenAIResponses sample): the deployment is supplied as the agent's
-            // default model id, and the per-call ChatOptions leaves ModelId unset so every request
-            // uses it. GetResponsesClient is [Experimental("OPENAI001")] in the current SDK, so opt
-            // in explicitly at the call site.
+            // "operation unsupported" for those. The unified v1 endpoint lets the current OpenAI
+            // client handle Azure directly while preserving API-key and Microsoft Entra auth.
 #pragma warning disable OPENAI001
-            var responses = azureClient.GetResponsesClient();
+            var responses = useKey
+                ? AzureOpenAIResponsesClientFactory.CreateWithApiKey(
+                    accountHost,
+                    options.AzureApiKey!,
+                    networkTimeout,
+                    DisableRetries)
+                : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
+                    accountHost,
+                    CreateAzureCredential(options.AzureTenantId),
+                    networkTimeout,
+                    DisableRetries);
             _pendingFactory = i => responses.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
 #pragma warning restore OPENAI001
             agent = _pendingFactory(instructions);

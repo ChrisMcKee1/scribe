@@ -122,6 +122,11 @@ public partial class App : Application
             // pill mid-dictation, not the tray, when the microphone produces nothing.
             OnCleanupFailed(message);
         };
+        _controller.Warning += message =>
+        {
+            _tray!.ShowNotification(message, isError: true);
+            OnRecordingWarning("Microphone muted");
+        };
         _controller.CleanupFailed += OnCleanupFailed;
         _controller.InjectionFailed += () =>
         {
@@ -305,6 +310,17 @@ public partial class App : Application
         }
 
         Dispatcher.BeginInvoke(() => _overlay?.ShowFailed(reason));
+    }
+
+    private void OnRecordingWarning(string reason)
+    {
+        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
+        if (!overlayEnabled)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => _overlay?.ShowRecordingWarning(reason));
     }
 
     /// <summary>

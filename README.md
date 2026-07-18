@@ -150,11 +150,9 @@ to install.
    any folder instead.
 3. Run the installer and launch Scribe. It appears in your **system tray**.
 
-> **Publisher verification:** release executables are Authenticode-signed by **Chris McKee / Scribe**
-> and timestamped. Because Scribe uses a private self-signed publisher chain, Windows trusts that
-> identity only after you install the public certificates. See the release's
-> **[certificate trust guide](signing/README.md)** and verify its published fingerprints first.
-> SmartScreen reputation is separate and may still show a warning for a new download.
+> **Windows security prompt:** Scribe releases are intentionally unsigned and do not require a
+> publisher certificate. Windows may show an "Unknown publisher" or SmartScreen warning. Verify
+> that the download came from this repository's Releases page before running it.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
 Right-click the tray icon for settings, one-click vocabulary learning, copying any of your last
@@ -207,13 +205,12 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Diagnostics | P50/P95 decode latency and real-time factor computed from your own history |
 | AI usage insight | Opt-in, explicit, and aggregate-only: sends totals and dictionary term labels, never transcripts, audio, app names, or timestamps |
 
-**App and trust**
+**App**
 
 | Feature | What it does |
 |---|---|
 | Tray quick actions | Pause, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
 | Auto-updates | Velopack keeps installs current with small delta packages |
-| Signed releases | Authenticode plus RFC 3161 timestamps on every executable, with published certificate fingerprints and a one-script publisher trust install |
 | Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
 
 ## 📏 Performance, measured

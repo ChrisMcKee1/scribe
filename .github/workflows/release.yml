@@ -14,17 +14,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-sign-publish:
+  build-publish:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
-    environment: release-signing
     timeout-minutes: 90
     env:
       GITHUB_TOKEN: ${{ github.token }}
 
     steps:
       - name: Check out release source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -42,97 +41,6 @@ jobs:
           if ($head -ne $main) { throw "Release commit $head is not current origin/main $main." }
           "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Import signing certificate
-        id: certificate
-        shell: pwsh
-        env:
-          SIGNING_PFX_BASE64: ${{ secrets.SCRIBE_SIGNING_PFX_BASE64 }}
-          SIGNING_PFX_PASSWORD: ${{ secrets.SCRIBE_SIGNING_PFX_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64) -or
-              [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) {
-              throw 'The release-signing environment secrets are not configured.'
-          }
-          Write-Output "::add-mask::$env:SIGNING_PFX_BASE64"
-          Write-Output "::add-mask::$env:SIGNING_PFX_PASSWORD"
-          $pfxPath = Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx'
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          Write-Host 'Loading signing PFX into CurrentUser\My.'
-          $pfxBytes = [IO.File]::ReadAllBytes($pfxPath)
-          $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet -bor
-            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet
-          try {
-            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-              $pfxBytes,
-              $env:SIGNING_PFX_PASSWORD,
-              $keyFlags)
-          }
-          finally {
-            [Array]::Clear($pfxBytes, 0, $pfxBytes.Length)
-          }
-          if (-not $certificate.HasPrivateKey) { throw 'Imported signing certificate has no private key.' }
-          $now = Get-Date
-          if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
-            throw "Signing certificate is not currently valid: $($certificate.NotBefore.ToString('u')) to $($certificate.NotAfter.ToString('u'))."
-          }
-          $personalStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            'My',
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-          try {
-            $personalStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $personalStore.Add($certificate)
-          }
-          finally {
-            $personalStore.Close()
-          }
-          Write-Host "Loaded signing certificate $($certificate.Thumbprint)."
-
-          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
-          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
-          if ($leaf.Thumbprint -ne $certificate.Thumbprint) {
-            throw "Public certificate does not match imported PFX: $($leaf.Thumbprint) != $($certificate.Thumbprint)"
-          }
-          Write-Host 'Validated and imported signing PFX.'
-          "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Validate public signing chain
-        shell: pwsh
-        run: |
-          $rootPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-Root-CA.cer'
-          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
-          $root = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($rootPath)
-          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
-          if ($leaf.Issuer -ne $root.Subject) { throw 'Signing certificate issuer does not match Scribe root.' }
-
-          $codeSigningOid = '1.3.6.1.5.5.7.3.3'
-          $eku = $leaf.Extensions |
-            Where-Object { $_.Oid.Value -eq '2.5.29.37' } |
-            Select-Object -First 1
-          if (-not $eku -or
-              @($eku.EnhancedKeyUsages | Where-Object { $_.Value -eq $codeSigningOid }).Count -ne 1) {
-            throw 'Signing certificate does not include the Code Signing EKU.'
-          }
-
-          $rootConstraints = $root.Extensions |
-            Where-Object { $_.Oid.Value -eq '2.5.29.19' } |
-            Select-Object -First 1
-          if (-not $rootConstraints -or -not $rootConstraints.CertificateAuthority) {
-            throw 'Scribe root certificate is not constrained as a certificate authority.'
-          }
-
-          $chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
-          $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
-          $chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust
-          $chain.ChainPolicy.CustomTrustStore.Add($root)
-          if (-not $chain.Build($leaf)) {
-            $status = ($chain.ChainStatus | ForEach-Object { $_.StatusInformation.Trim() }) -join '; '
-            throw "Windows did not validate the Scribe signing chain: $status"
-          }
-          if ($chain.ChainElements[$chain.ChainElements.Count - 1].Certificate.Thumbprint -ne $root.Thumbprint) {
-            throw 'Validated signing chain did not terminate at the checked-in Scribe root.'
-          }
-          Write-Host 'Validated public Scribe signing chain without modifying runner trust stores.'
-
       - name: Download offline speech models
         shell: pwsh
         run: ./scripts/Download-Models.ps1
@@ -141,9 +49,37 @@ jobs:
         shell: pwsh
         run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release
 
-      - name: Build signed release artifacts
+      - name: Seed previous release for delta packaging
         shell: pwsh
-        run: ./build/pack.ps1 -SigningCertificateThumbprint '${{ steps.certificate.outputs.thumbprint }}'
+        run: |
+          $releases = gh release list `
+              --repo "${{ github.repository }}" `
+              --limit 20 `
+              --json tagName,isDraft,isPrerelease | ConvertFrom-Json
+          $previous = $releases |
+              Where-Object {
+                  -not $_.isDraft -and
+                  -not $_.isPrerelease -and
+                  $_.tagName -ne "v$env:VERSION"
+              } |
+              Select-Object -First 1
+          if ($null -eq $previous) {
+              Write-Host 'No previous stable release is available; a delta package is not expected.'
+          }
+          else {
+              New-Item -ItemType Directory -Path releases -Force | Out-Null
+              gh release download $previous.tagName `
+                  --repo "${{ github.repository }}" `
+                  --pattern 'Scribe-*-win-x64-full.nupkg' `
+                  --dir releases
+              if ($LASTEXITCODE -ne 0) {
+                  throw "Could not download the previous full package from $($previous.tagName)."
+              }
+          }
+
+      - name: Build release artifacts
+        shell: pwsh
+        run: ./build/pack.ps1
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -160,53 +96,16 @@ jobs:
               --outputDir releases `
               --channel win-x64
 
-      - name: Upload public trust bundle to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: pwsh
-        run: |
-          $certificateGuide = Join-Path $env:RUNNER_TEMP 'Scribe-Certificate-README.md'
-          Copy-Item signing/README.md $certificateGuide
-          gh release upload "v$env:VERSION" `
-              signing/Scribe-Root-CA.cer `
-              signing/Scribe-CodeSigning.cer `
-              signing/Trust-ScribePublisher.ps1 `
-              $certificateGuide `
-              --clobber
-
-      - name: Upload signed artifacts for manual run
+      - name: Upload release artifacts for manual run
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: scribe-${{ env.VERSION }}-signed
+          name: scribe-${{ env.VERSION }}
           path: |
             releases/releases.win-x64.json
             releases/Scribe-${{ env.VERSION }}-win-x64-full.nupkg
             releases/Scribe-${{ env.VERSION }}-win-x64-delta.nupkg
             releases/Scribe-win-x64-Portable.zip
             releases/Scribe-win-x64-Setup.exe
-            signing/Scribe-Root-CA.cer
-            signing/Scribe-CodeSigning.cer
-            signing/Trust-ScribePublisher.ps1
-            signing/README.md
           if-no-files-found: error
           retention-days: 7
-
-      - name: Remove signing material
-        if: always()
-        shell: pwsh
-        run: |
-          Remove-Item (Join-Path $env:RUNNER_TEMP 'scribe-signing.pfx') -Force -ErrorAction SilentlyContinue
-          $leafPath = Join-Path $env:GITHUB_WORKSPACE 'signing\Scribe-CodeSigning.cer'
-          if (-not (Test-Path $leafPath)) { return }
-          $leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($leafPath)
-          $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-            'My',
-            [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-          try {
-            $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            @($store.Certificates | Where-Object { $_.Thumbprint -eq $leaf.Thumbprint }) |
-              ForEach-Object { $store.Remove($_) }
-          }
-          finally {
-            $store.Close()
-          }

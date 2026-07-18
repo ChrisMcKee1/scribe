@@ -13,8 +13,8 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
 
     <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime, win-x64 native -->
-    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.3" />
-    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.3" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.4" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.4" />
 
     <!-- Audio capture -->
     <PackageVersion Include="NAudio" Version="2.3.0" />
@@ -22,14 +22,14 @@
     <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 3.0.3 is pinned directly to pull the
          patched native e_sqlite3 3.50.4 and override Microsoft.Data.Sqlite's transitive
          2.1.11 bundle, which is flagged by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
 
     <!-- Hosting / DI / logging / options -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.9" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
 
     <!-- Tray UI -->
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
@@ -40,23 +40,13 @@
     <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
          client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
     <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.3" />
-    <!-- OpenAI 2.10.0 is the Agent-Framework-validated build (see agent-framework's own
-         Directory.Packages.props). It keeps AzureOpenAIClient.GetResponsesClient() binary-compatible
-         with Azure.AI.OpenAI 2.9.0-beta.1, which calls the ResponsesClient(ClientPipeline,
-         OpenAIClientOptions) constructor that OpenAI 2.11.0 changed — pinning 2.11.0 throws
-         MissingMethodException on the Responses path. Microsoft.Agents.AI.OpenAI 1.11.0,
-         Microsoft.Extensions.AI(.OpenAI) 10.6.0 and Azure.AI.OpenAI 2.9.0-beta.1 all reference this
-         same OpenAI build, so GetResponsesClient().AsAIAgent stays in sync. Foundry Local does not
-         depend on this package. -->
-    <PackageVersion Include="OpenAI" Version="2.10.0" />
-    <!-- Provider-neutral chat abstraction (Microsoft.Extensions.AI IChatClient). Pinned to 10.6.0 to
-         match the Agent Framework's validated set; 10.7.0 floors OpenAI to 2.11.0, which breaks
-         GetResponsesClient() (see the OpenAI note above). -->
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
+    <PackageVersion Include="OpenAI" Version="2.12.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.0" />
     <!-- Microsoft.Extensions.AI.Evaluation powers the offline evals harness (tools/Scribe.Evals)
          only; referenced with PrivateAssets=all so it never ships with the WPF app. -->
-    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.6.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.8.0" />
 
     <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive.
          Microsoft.Agents.AI.OpenAI supplies the .AsAIAgent(model, instructions, name) extension on the
@@ -65,21 +55,19 @@
          GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
          into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
          Azure.AI.Projects' AIProjectClient — the framework's native Foundry path, no server-side agent. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.11.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.11.0" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.13.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.13.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
-         user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored).
-         2.9.0-beta.1 is the only release with a native net10.0 target. -->
-    <PackageVersion Include="Azure.AI.OpenAI" Version="2.9.0-beta.1" />
+         user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored). -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.5.2" />
     <!-- Azure Resource Graph powers a single tenant-wide KQL query to enumerate every chat
          deployment across all subscriptions at once, instead of an N×M per-subscription crawl
          (which times out on large corp tenants). CognitiveServices is kept as a fallback. -->
-    <PackageVersion Include="Azure.ResourceManager.ResourceGraph" Version="1.1.0" />
+    <PackageVersion Include="Azure.ResourceManager.ResourceGraph" Version="1.1.1" />
 
     <!-- Installer + delta auto-update. -->
     <PackageVersion Include="Velopack" Version="1.2.0" />
@@ -87,19 +75,19 @@
     <!-- Observability: OpenTelemetry tracing of the dictation lifecycle (capture → VAD → decode →
          AI cleanup → inject). Always-on locally via a log-bridge processor; OTLP export is opt-in
          when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire dashboard / Jaeger / any collector). -->
-    <PackageVersion Include="OpenTelemetry" Version="1.16.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
+    <PackageVersion Include="OpenTelemetry" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.17.0" />
 
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
 
     <!-- Test -->
-     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
 </Project>
