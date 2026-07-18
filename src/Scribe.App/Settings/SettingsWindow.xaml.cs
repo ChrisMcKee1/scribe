@@ -914,14 +914,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? $"{1.0 / stats.FastestRtf:0.0}x"
                 : "n/a";
 
-            DecodeSummaryHint.Text =
-                $"ASR stage over {stats.Count} run{(stats.Count == 1 ? string.Empty : "s")}. " +
-                $"Typical pace {FormatPace(stats.RtfP50)} realtime; slower runs {FormatPace(stats.RtfP95)}.";
-            StatDecodeAverage.Text = FormatLatency(stats.DecodeMs.Average);
-            StatDecodeMin.Text = FormatLatency(stats.DecodeMs.Min);
-            StatDecodeMax.Text = FormatLatency(stats.DecodeMs.Max);
-            StatDecodeP50.Text = FormatLatency(stats.DecodeMs.P50);
-            StatDecodeP95.Text = FormatLatency(stats.DecodeMs.P95);
+            if (stats.ParakeetDecodeMs is { } decode)
+            {
+                DecodeSummaryHint.Text =
+                    $"Only time inside Parakeet over {stats.ParakeetDecodeCount} " +
+                    $"run{(stats.ParakeetDecodeCount == 1 ? string.Empty : "s")}. " +
+                    $"Typical pace {FormatPace(stats.RtfP50)} realtime; slower runs {FormatPace(stats.RtfP95)}.";
+                StatDecodeAverage.Text = FormatLatency(decode.Average);
+                StatDecodeMin.Text = FormatLatency(decode.Min);
+                StatDecodeMax.Text = FormatLatency(decode.Max);
+                StatDecodeP50.Text = FormatLatency(decode.P50);
+                StatDecodeP95.Text = FormatLatency(decode.P95);
+                DecodeMetricsGrid.Visibility = Visibility.Visible;
+                DecodeNoDataText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                DecodeSummaryHint.Text = "Waiting for a model-verified Parakeet run.";
+                DecodeMetricsGrid.Visibility = Visibility.Collapsed;
+                DecodeNoDataText.Visibility = Visibility.Visible;
+            }
 
             if (stats.CleanupMs is { } cleanup)
             {
@@ -940,6 +952,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
                 CleanupMetricsGrid.Visibility = Visibility.Collapsed;
                 CleanupNoDataText.Visibility = Visibility.Visible;
+            }
+
+            if (stats.CombinedMs is { } combined)
+            {
+                CombinedSummaryHint.Text =
+                    $"Recognition through cleanup over {stats.CombinedCount} " +
+                    $"run{(stats.CombinedCount == 1 ? string.Empty : "s")}.";
+                StatCombinedAverage.Text = FormatLatency(combined.Average);
+                StatCombinedMin.Text = FormatLatency(combined.Min);
+                StatCombinedMax.Text = FormatLatency(combined.Max);
+                StatCombinedP50.Text = FormatLatency(combined.P50);
+                StatCombinedP95.Text = FormatLatency(combined.P95);
+                CombinedMetricsGrid.Visibility = Visibility.Visible;
+                CombinedNoDataText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                CombinedSummaryHint.Text = "No cleanup-enabled runs in this period yet.";
+                CombinedMetricsGrid.Visibility = Visibility.Collapsed;
+                CombinedNoDataText.Visibility = Visibility.Visible;
             }
 
             StatsGrid.Visibility = Visibility.Visible;

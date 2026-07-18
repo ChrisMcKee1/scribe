@@ -708,7 +708,8 @@ internal sealed class DictationController : IDisposable
                 AudioMilliseconds: (int)result.AudioDuration.TotalMilliseconds,
                 DecodeMilliseconds: (int)result.DecodeDuration.TotalMilliseconds,
                 CleanupMilliseconds: cleanupMs,
-                TargetApp: targetApp),
+                TargetApp: targetApp,
+                TranscriptionModelId: result.ModelId),
                 settings.StoreAudioHistory ? audio : null);
         }
         catch (Exception ex)

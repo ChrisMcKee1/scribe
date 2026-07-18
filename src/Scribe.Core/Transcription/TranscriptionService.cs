@@ -20,6 +20,7 @@ public sealed class TranscriptionService : ITranscriptionService
     private readonly object _gate = new();
 
     private OfflineRecognizer? _recognizer;
+    private string? _activeModelId;
     private bool _disposed;
 
     public TranscriptionService(
@@ -74,6 +75,7 @@ public sealed class TranscriptionService : ITranscriptionService
 
             var sw = Stopwatch.StartNew();
             _recognizer = new OfflineRecognizer(config);
+            _activeModelId = model.Id;
             sw.Stop();
 
             _logger.LogInformation(
@@ -155,7 +157,7 @@ public sealed class TranscriptionService : ITranscriptionService
 
             sw.Stop();
             var text = stream.Result.Text?.Trim() ?? string.Empty;
-            var result = new TranscriptionResult(text, audio.Duration, sw.Elapsed);
+            var result = new TranscriptionResult(text, audio.Duration, sw.Elapsed, _activeModelId);
 
             _logger.LogDebug(
                 "Decoded {AudioMs} ms of audio in {DecodeMs} ms (RTF {Rtf:F2}): \"{Text}\"",
@@ -187,6 +189,7 @@ public sealed class TranscriptionService : ITranscriptionService
             _disposed = true;
             _recognizer?.Dispose();
             _recognizer = null;
+            _activeModelId = null;
         }
     }
 }

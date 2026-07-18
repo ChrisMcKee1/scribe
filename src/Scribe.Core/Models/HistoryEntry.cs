@@ -9,4 +9,5 @@ public sealed record HistoryEntry(
     int DecodeMilliseconds,
     int? CleanupMilliseconds = null,
     string? TargetApp = null,
-    long? AudioBlobId = null);
+    long? AudioBlobId = null,
+    string? TranscriptionModelId = null);

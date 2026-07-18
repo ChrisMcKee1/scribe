@@ -18,7 +18,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.50.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 5;
+    private const int SchemaVersion = 6;
 
     // Tables copied out of a damaged database during salvage, ordered so foreign-key targets
     // (audio_blobs) are restored before the rows that reference them (history).
@@ -416,6 +416,11 @@ public sealed class ScribeDatabase : IDisposable
             Execute(connection, SchemaV5, transaction);
         }
 
+        if (current < 6 && HistoryNeedsColumn(connection, transaction, "transcription_model_id"))
+        {
+            Execute(connection, SchemaV6, transaction);
+        }
+
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
         Execute(connection, $"PRAGMA user_version={SchemaVersion};", transaction);
         transaction.Commit();
@@ -423,7 +428,13 @@ public sealed class ScribeDatabase : IDisposable
 
     private static bool HistoryNeedsCleanupColumn(
         SqliteConnection connection,
-        SqliteTransaction transaction)
+        SqliteTransaction transaction) =>
+        HistoryNeedsColumn(connection, transaction, "cleanup_ms");
+
+    private static bool HistoryNeedsColumn(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string columnName)
     {
         using var tableCommand = connection.CreateCommand();
         tableCommand.Transaction = transaction;
@@ -440,7 +451,7 @@ public sealed class ScribeDatabase : IDisposable
         using var reader = columnCommand.ExecuteReader();
         while (reader.Read())
         {
-            if (string.Equals(reader.GetString(1), "cleanup_ms", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -562,9 +573,15 @@ public sealed class ScribeDatabase : IDisposable
           AND phrase GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9][0-9][+-][0-9][0-9]:[0-9][0-9]';
         """;
 
-        // v5: persist optional AI cleanup duration (milliseconds) alongside decode duration so
-        // diagnostics can report cleanup latency distributions without parsing trace logs.
-        private const string SchemaV5 = """
-                ALTER TABLE history ADD COLUMN cleanup_ms INTEGER NULL;
-                """;
+    // v5: persist optional AI cleanup duration (milliseconds) alongside decode duration so
+    // diagnostics can report cleanup latency distributions without parsing trace logs.
+    private const string SchemaV5 = """
+        ALTER TABLE history ADD COLUMN cleanup_ms INTEGER NULL;
+        """;
+
+    // v6: identify the recognizer that produced each decode so model-specific performance
+    // statistics never mix Parakeet with Moonshine or unknown historical rows.
+    private const string SchemaV6 = """
+        ALTER TABLE history ADD COLUMN transcription_model_id TEXT NULL;
+        """;
 }

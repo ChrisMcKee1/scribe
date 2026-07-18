@@ -10,6 +10,51 @@ namespace Scribe.Core.Tests;
 public sealed class SnippetMigrationTests
 {
     [Fact]
+    public void V6_migration_adds_transcription_model_id_to_v5_history()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scribe-v5-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "scribe.db");
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp_utc TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        audio_ms INTEGER NOT NULL,
+                        decode_ms INTEGER NOT NULL,
+                        target_app TEXT NULL,
+                        audio_blob_id INTEGER NULL,
+                        cleanup_ms INTEGER NULL
+                    );
+                    PRAGMA user_version=5;
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            using var db = new ScribeDatabase(new AppPaths(root), NullLogger<ScribeDatabase>.Instance);
+            using var migrated = db.Open();
+            using var columns = migrated.CreateCommand();
+            columns.CommandText = "SELECT name FROM pragma_table_info('history') WHERE name = 'transcription_model_id';";
+
+            Assert.Equal("transcription_model_id", columns.ExecuteScalar());
+            using var version = migrated.CreateCommand();
+            version.CommandText = "PRAGMA user_version;";
+            Assert.Equal(6L, (long)(version.ExecuteScalar() ?? 0L));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void V4_migration_reopens_v3_purges_exact_junk_and_advances_schema()
     {
         var root = Path.Combine(Path.GetTempPath(), "scribe-v3-" + Guid.NewGuid().ToString("N"));
@@ -49,7 +94,7 @@ public sealed class SnippetMigrationTests
             using var migrated = db.Open();
             using var version = migrated.CreateCommand();
             version.CommandText = "PRAGMA user_version;";
-            Assert.Equal(5L, (long)(version.ExecuteScalar() ?? 0L));
+            Assert.Equal(6L, (long)(version.ExecuteScalar() ?? 0L));
         }
         finally
         {

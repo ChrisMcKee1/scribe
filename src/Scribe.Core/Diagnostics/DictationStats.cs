@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.Transcription;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -20,9 +21,12 @@ public static class DictationStats
     public sealed record Snapshot(
         int Count,
         TimeSpan TotalAudio,
-        MetricSummary DecodeMs,
+        int ParakeetDecodeCount,
+        MetricSummary? ParakeetDecodeMs,
         int CleanupCount,
         MetricSummary? CleanupMs,
+        int CombinedCount,
+        MetricSummary? CombinedMs,
         double FastestRtf,
         double RtfP50,
         double RtfP95,
@@ -40,6 +44,8 @@ public static class DictationStats
         var decodeMs = new List<double>();
         var rtf = new List<double>();
         var cleanupMs = new List<double>();
+        var combinedMs = new List<double>();
+        var count = 0;
         long totalAudioMs = 0;
         double longestAudioMs = 0;
 
@@ -50,18 +56,27 @@ public static class DictationStats
                 continue;
             }
 
-            decodeMs.Add(entry.DecodeMilliseconds);
-            rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+            count++;
+            if (string.Equals(
+                    entry.TranscriptionModelId,
+                    TranscriptionModelCatalog.DefaultId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                decodeMs.Add(entry.DecodeMilliseconds);
+                rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+            }
+
             if (entry.CleanupMilliseconds is > 0)
             {
                 cleanupMs.Add(entry.CleanupMilliseconds.Value);
+                combinedMs.Add(entry.DecodeMilliseconds + entry.CleanupMilliseconds.Value);
             }
 
             totalAudioMs += entry.AudioMilliseconds;
             longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
         }
 
-        if (decodeMs.Count == 0)
+        if (totalAudioMs == 0)
         {
             return null;
         }
@@ -69,16 +84,20 @@ public static class DictationStats
         decodeMs.Sort();
         rtf.Sort();
         cleanupMs.Sort();
+        combinedMs.Sort();
 
         return new Snapshot(
-            Count: decodeMs.Count,
+            Count: count,
             TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
-            DecodeMs: Summarize(decodeMs),
+            ParakeetDecodeCount: decodeMs.Count,
+            ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
             CleanupCount: cleanupMs.Count,
             CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
+            CombinedCount: combinedMs.Count,
+            CombinedMs: combinedMs.Count > 0 ? Summarize(combinedMs) : null,
             FastestRtf: rtf.FirstOrDefault(value => value > 0),
-            RtfP50: Percentile(rtf, 0.50),
-            RtfP95: Percentile(rtf, 0.95),
+            RtfP50: rtf.Count > 0 ? Percentile(rtf, 0.50) : 0,
+            RtfP95: rtf.Count > 0 ? Percentile(rtf, 0.95) : 0,
             LongestAudioSeconds: longestAudioMs / 1000.0);
     }
 

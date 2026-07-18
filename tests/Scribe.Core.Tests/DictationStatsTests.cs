@@ -1,13 +1,26 @@
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
+using Scribe.Core.Transcription;
 using Xunit;
 
 namespace Scribe.Core.Tests;
 
 public sealed class DictationStatsTests
 {
-    private static HistoryEntry Entry(int audioMs, int decodeMs, int? cleanupMs = null, double ageHours = 1) =>
-        new(0, DateTimeOffset.UtcNow.AddHours(-ageHours), "text", audioMs, decodeMs, cleanupMs);
+    private static HistoryEntry Entry(
+        int audioMs,
+        int decodeMs,
+        int? cleanupMs = null,
+        double ageHours = 1,
+        string? modelId = TranscriptionModelCatalog.DefaultId) =>
+        new(
+            0,
+            DateTimeOffset.UtcNow.AddHours(-ageHours),
+            "text",
+            audioMs,
+            decodeMs,
+            cleanupMs,
+            TranscriptionModelId: modelId);
 
     [Fact]
     public void Percentile_interpolates_between_samples()
@@ -41,10 +54,11 @@ public sealed class DictationStatsTests
         Assert.NotNull(stats);
         Assert.Equal(3, stats!.Count);
         Assert.Equal(TimeSpan.FromMilliseconds(35_000), stats.TotalAudio);
-        Assert.Equal(5.0 / 3.0 * 1000.0, stats.DecodeMs.Average, precision: 6);
-        Assert.Equal(1_000, stats.DecodeMs.Min);
-        Assert.Equal(3_000, stats.DecodeMs.Max);
-        Assert.Equal(1_000, stats.DecodeMs.P50);
+        Assert.Equal(3, stats.ParakeetDecodeCount);
+        Assert.Equal(5.0 / 3.0 * 1000.0, stats.ParakeetDecodeMs!.Average, precision: 6);
+        Assert.Equal(1_000, stats.ParakeetDecodeMs.Min);
+        Assert.Equal(3_000, stats.ParakeetDecodeMs.Max);
+        Assert.Equal(1_000, stats.ParakeetDecodeMs.P50);
         Assert.Equal(0.10, stats.FastestRtf, precision: 6);
         Assert.Equal(0.15, stats.RtfP50, precision: 6);
         Assert.Equal(20, stats.LongestAudioSeconds);
@@ -53,6 +67,10 @@ public sealed class DictationStatsTests
         Assert.Equal(550, stats.CleanupMs!.Average, precision: 6);
         Assert.Equal(400, stats.CleanupMs.Min);
         Assert.Equal(700, stats.CleanupMs.Max);
+        Assert.Equal(2, stats.CombinedCount);
+        Assert.Equal(2_550, stats.CombinedMs!.Average, precision: 6);
+        Assert.Equal(1_400, stats.CombinedMs.Min);
+        Assert.Equal(3_700, stats.CombinedMs.Max);
     }
 
     [Fact]
@@ -69,8 +87,9 @@ public sealed class DictationStatsTests
 
         Assert.NotNull(stats);
         Assert.Equal(1, stats!.Count);
-        Assert.Equal(1_000, stats.DecodeMs.P95);
+        Assert.Equal(1_000, stats.ParakeetDecodeMs!.P95);
         Assert.Null(stats.CleanupMs);
+        Assert.Null(stats.CombinedMs);
     }
 
     [Fact]
@@ -79,5 +98,24 @@ public sealed class DictationStatsTests
         Assert.Null(DictationStats.Compute([], DateTimeOffset.UtcNow.AddDays(-7)));
         Assert.Null(DictationStats.Compute(
             [Entry(audioMs: 0, decodeMs: 10)], DateTimeOffset.UtcNow.AddDays(-7)));
+    }
+
+    [Fact]
+    public void Compute_parakeet_metrics_exclude_other_and_unstamped_models()
+    {
+        var entries = new[]
+        {
+            Entry(audioMs: 10_000, decodeMs: 1_000),
+            Entry(audioMs: 10_000, decodeMs: 8_000, modelId: "moonshine-base-en-int8"),
+            Entry(audioMs: 10_000, decodeMs: 9_000, modelId: null),
+        };
+
+        var stats = DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
+
+        Assert.NotNull(stats);
+        Assert.Equal(3, stats!.Count);
+        Assert.Equal(1, stats.ParakeetDecodeCount);
+        Assert.Equal(1_000, stats.ParakeetDecodeMs!.Average);
+        Assert.Equal(0.10, stats.RtfP50, precision: 6);
     }
 }

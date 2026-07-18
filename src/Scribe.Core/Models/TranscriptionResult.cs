@@ -4,7 +4,8 @@ namespace Scribe.Core.Models;
 public sealed record TranscriptionResult(
     string Text,
     TimeSpan AudioDuration,
-    TimeSpan DecodeDuration)
+    TimeSpan DecodeDuration,
+    string? ModelId = null)
 {
     public static TranscriptionResult Empty { get; } =
         new(string.Empty, TimeSpan.Zero, TimeSpan.Zero);

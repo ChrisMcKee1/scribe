@@ -294,7 +294,16 @@ public class PersistenceTests
         var blobId = repo.AddAudioBlob(new CapturedAudio(samples, 16000));
 
         var older = repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow.AddMinutes(-5), "first", 1000, 80, CleanupMilliseconds: null, TargetApp: "Code.exe"));
-        var newer = repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "second", 2000, 120, CleanupMilliseconds: 330, TargetApp: "chrome.exe", AudioBlobId: blobId));
+        var newer = repo.Add(new HistoryEntry(
+            0,
+            DateTimeOffset.UtcNow,
+            "second",
+            2000,
+            120,
+            CleanupMilliseconds: 330,
+            TargetApp: "chrome.exe",
+            AudioBlobId: blobId,
+            TranscriptionModelId: "parakeet-tdt-0.6b-v3-int8"));
 
         Assert.True(older.Id > 0 && newer.Id > older.Id);
 
@@ -304,7 +313,9 @@ public class PersistenceTests
         Assert.Equal("first", recent[1].Text);
         Assert.Equal(blobId, recent[0].AudioBlobId);
         Assert.Equal(330, recent[0].CleanupMilliseconds);
+        Assert.Equal("parakeet-tdt-0.6b-v3-int8", recent[0].TranscriptionModelId);
         Assert.Null(recent[1].CleanupMilliseconds);
+        Assert.Null(recent[1].TranscriptionModelId);
 
         var audio = repo.GetAudio(blobId);
         Assert.NotNull(audio);

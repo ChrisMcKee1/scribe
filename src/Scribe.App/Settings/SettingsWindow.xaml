@@ -1561,41 +1561,45 @@
                                     <ui:CardExpander x:Name="DecodeSpeedExpander" IsExpanded="True" Margin="0,0,0,8">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
-                                                <TextBlock Text="Decoding speed" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="Parakeet decoding" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
                                                 <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                           Text="ASR model latency from the speech recognition stage."/>
+                                                           Text="Only time spent inside the Parakeet recognizer."/>
                                             </StackPanel>
                                         </ui:CardExpander.Header>
-                                        <UniformGrid Columns="5" Margin="0,8,0,0">
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatDecodeAverage" FontSize="22" FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="average" Style="{StaticResource SettingHint}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatDecodeMin" FontSize="22" FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="minimum" Style="{StaticResource SettingHint}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatDecodeMax" FontSize="22" FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="maximum" Style="{StaticResource SettingHint}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatDecodeP50" FontSize="22" FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="typical (P50)" Style="{StaticResource SettingHint}"/>
-                                            </StackPanel>
-                                            <StackPanel>
-                                                <TextBlock x:Name="StatDecodeP95" FontSize="22" FontWeight="SemiBold"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                <TextBlock Text="slow runs (P95)" Style="{StaticResource SettingHint}"/>
-                                            </StackPanel>
-                                        </UniformGrid>
+                                        <StackPanel Margin="0,8,0,0">
+                                            <UniformGrid x:Name="DecodeMetricsGrid" Columns="5" Visibility="Collapsed">
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatDecodeAverage" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="average" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatDecodeMin" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="fastest" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatDecodeMax" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="slowest" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatDecodeP50" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="typical (P50)" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatDecodeP95" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="slow runs (P95)" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                            </UniformGrid>
+                                            <TextBlock x:Name="DecodeNoDataText" Style="{StaticResource SettingHint}"
+                                                       Text="No model-verified Parakeet runs have been captured yet."/>
+                                        </StackPanel>
                                     </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="False">
+                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="False" Margin="0,0,0,8">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
                                                 <TextBlock Text="AI cleanup speed" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
@@ -1613,12 +1617,12 @@
                                                 <StackPanel>
                                                     <TextBlock x:Name="StatCleanupMin" FontSize="22" FontWeight="SemiBold"
                                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                    <TextBlock Text="minimum" Style="{StaticResource SettingHint}"/>
+                                                    <TextBlock Text="fastest" Style="{StaticResource SettingHint}"/>
                                                 </StackPanel>
                                                 <StackPanel>
                                                     <TextBlock x:Name="StatCleanupMax" FontSize="22" FontWeight="SemiBold"
                                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                    <TextBlock Text="maximum" Style="{StaticResource SettingHint}"/>
+                                                    <TextBlock Text="slowest" Style="{StaticResource SettingHint}"/>
                                                 </StackPanel>
                                                 <StackPanel>
                                                     <TextBlock x:Name="StatCleanupP50" FontSize="22" FontWeight="SemiBold"
@@ -1633,6 +1637,47 @@
                                             </UniformGrid>
                                             <TextBlock x:Name="CleanupNoDataText" Style="{StaticResource SettingHint}"
                                                        Text="No AI cleanup runs were captured in this period yet."/>
+                                        </StackPanel>
+                                    </ui:CardExpander>
+
+                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="False">
+                                        <ui:CardExpander.Header>
+                                            <StackPanel>
+                                                <TextBlock Text="Decode + AI cleanup" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                                <TextBlock x:Name="CombinedSummaryHint" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                           Text="Time from recognition start through AI cleanup, only when cleanup ran."/>
+                                            </StackPanel>
+                                        </ui:CardExpander.Header>
+                                        <StackPanel Margin="0,8,0,0">
+                                            <UniformGrid x:Name="CombinedMetricsGrid" Columns="5" Visibility="Collapsed">
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatCombinedAverage" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="average" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatCombinedMin" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="fastest" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatCombinedMax" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="slowest" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatCombinedP50" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="typical (P50)" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock x:Name="StatCombinedP95" FontSize="22" FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock Text="slow runs (P95)" Style="{StaticResource SettingHint}"/>
+                                                </StackPanel>
+                                            </UniformGrid>
+                                            <TextBlock x:Name="CombinedNoDataText" Style="{StaticResource SettingHint}"
+                                                       Text="No cleanup-enabled runs were captured in this period yet."/>
                                         </StackPanel>
                                     </ui:CardExpander>
                             </StackPanel>
