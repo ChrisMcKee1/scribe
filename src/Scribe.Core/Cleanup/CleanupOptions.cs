@@ -49,7 +49,8 @@ public sealed record CleanupOptions(
     string? CustomApiKey = null,
     CleanupPromptStyle PromptStyle = CleanupPromptStyle.Auto,
     string? FrontierPrompt = null,
-    string? LocalPrompt = null)
+    string? LocalPrompt = null,
+    string? AzureSubscriptionId = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

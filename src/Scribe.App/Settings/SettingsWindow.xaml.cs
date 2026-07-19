@@ -1563,6 +1563,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureRefreshButton.IsEnabled = false;
         try
         {
+            if (!await _azureCliInstaller.IsInstalledAsync())
+            {
+                AzureStatusText.Text =
+                    "Azure CLI couldn't be found. Install it below, then choose Sign in & find models again.";
+                return;
+            }
+
             using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
             var tenantId = NullIfBlank(AzureTenantBox.Text);
             var status = await Task.Run(
@@ -1571,13 +1578,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (!status.IsSignedIn)
             {
-                if (!await _azureCliInstaller.IsInstalledAsync())
-                {
-                    AzureStatusText.Text =
-                        "Azure CLI is not installed. Install it below, then choose Sign in & find models again.";
-                    return;
-                }
-
                 AzureStatusText.Text = "Opening Azure sign-in in your browser…";
                 using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
                 var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
@@ -1610,13 +1610,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         await ListAzureDeploymentsAsync();
     }
 
-    // Probes whether the user is already signed in to Azure (reusing az login / DefaultAzureCredential)
+    // Probes whether the user is already signed in to Azure through the CLI
     // and reflects it in the UI: if signed in we show the identity, relabel the button to "Refresh
     // models", and list deployments automatically so the search box just works — no forced sign-in click.
     // Best-effort and non-blocking; runs when the Azure panel is shown.
     private async Task ProbeAzureSignInAsync()
     {
         AzureStatusText.Text = "Checking your Azure sign-in…";
+        if (!await _azureCliInstaller.IsInstalledAsync())
+        {
+            AzureRefreshButton.Content = "Sign in & find models";
+            AzureStatusText.Text = "Azure CLI couldn't be found. Install it below to use your Azure sign-in.";
+            return;
+        }
+
         AzureSignInStatus status;
         try
         {
@@ -1662,25 +1669,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            var tenantId = NullIfBlank(AzureTenantBox.Text);
-            var selectedSubscription = SelectedAzureSubscription;
-
-            // Kick discovery and the subscription refresh off in parallel; the dropdown refresh is
-            // cosmetic, so its failure must never take down the deployment listing.
-            var deploymentsTask = Task.Run(
-                () => _azureDiscovery.DiscoverAsync(tenantId, selectedSubscription?.Id, cts.Token), cts.Token);
-            IReadOnlyList<AzureSubscription> subscriptions = Array.Empty<AzureSubscription>();
-            try
+            var tenantOverride = NullIfBlank(AzureTenantBox.Text);
+            var (subscriptionsOk, subscriptions, subscriptionsMessage) =
+                await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
+            if (!subscriptionsOk)
             {
-                subscriptions = await Task.Run(
-                    () => _azureDiscovery.ListSubscriptionsAsync(tenantId, cts.Token), cts.Token);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                TryLog(ex, "Could not list Azure subscriptions for the filter dropdown.");
+                AzureStatusText.Text = subscriptionsMessage;
+                return;
             }
 
-            var deployments = await deploymentsTask;
             if (loadVersion != _azureDeploymentLoadVersion)
             {
                 return;
@@ -1688,16 +1685,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _azureAutoListed = true;
             PopulateAzureSubscriptions(subscriptions);
-
-            var effectiveSubscription = SelectedAzureSubscription;
-            if (!string.Equals(
-                    selectedSubscription?.Id,
-                    effectiveSubscription?.Id,
-                    StringComparison.OrdinalIgnoreCase))
+            var selectedSubscription = SelectedAzureSubscription;
+            var discovery = await DiscoverAzureDeploymentsAsync(
+                subscriptions, selectedSubscription, tenantOverride, cts.Token);
+            if (loadVersion != _azureDeploymentLoadVersion)
             {
-                await ListAzureDeploymentsAsync();
                 return;
             }
+
+            var deployments = discovery.Deployments;
 
             _azureModelMap.TryGetValue(AzureModelBox.Text?.Trim() ?? string.Empty, out var previous);
             SetAzureDeployments(
@@ -1706,9 +1702,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 preferDeployment: NullIfBlank(AzureDeploymentBox.Text) ?? previous?.DeploymentName);
 
             var scope = selectedSubscription is null ? string.Empty : $" in {selectedSubscription.DisplayName}";
-            AzureStatusText.Text = deployments.Count == 0
-                ? $"No text-capable deployments found{scope}. Realtime/audio/embedding models can't do cleanup — deploy a chat model (e.g. gpt-4.1-mini) on your Azure resource."
-                : $"Found {deployments.Count} compatible deployment(s){scope}. Choose one to use for cleanup.";
+            AzureStatusText.Text = discovery.FailedTenantCount > 0
+                ? deployments.Count == 0
+                    ? "No deployments could be listed. Check your access to the selected Azure tenant subscriptions."
+                    : $"Found {deployments.Count} compatible deployment(s){scope}. Some Azure tenants couldn't be checked."
+                : deployments.Count == 0
+                    ? $"No compatible deployments were returned{scope}. Check that the subscription contains a Responses-capable text model and that your Azure account can list its deployments."
+                    : $"Found {deployments.Count} compatible deployment(s){scope}. Choose one to use for cleanup.";
         }
         catch (OperationCanceledException)
         {
@@ -1717,8 +1717,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 AzureStatusText.Text = "Listing Azure deployments timed out. Please try again.";
             }
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Could not list Azure deployments.");
             if (loadVersion == _azureDeploymentLoadVersion)
             {
                 AzureStatusText.Text =
@@ -1732,6 +1733,72 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 AzureRefreshButton.IsEnabled = true;
             }
         }
+    }
+
+    private async Task<(IReadOnlyList<AzureFoundryDeployment> Deployments, int FailedTenantCount)>
+        DiscoverAzureDeploymentsAsync(
+            IReadOnlyList<AzureSubscription> subscriptions,
+            AzureSubscription? selectedSubscription,
+            string? tenantOverride,
+            CancellationToken cancellationToken)
+    {
+        if (selectedSubscription is not null)
+        {
+            var tenantId = string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
+                ? tenantOverride
+                : selectedSubscription.TenantId;
+            var selectedDeployments = await Task.Run(
+                () => _azureDiscovery.DiscoverAsync(tenantId, selectedSubscription.Id, cancellationToken),
+                cancellationToken);
+            return (selectedDeployments, 0);
+        }
+
+        var accountGroups = subscriptions
+            .Where(subscription => !string.IsNullOrWhiteSpace(subscription.TenantId))
+            .Where(subscription => tenantOverride is null ||
+                                   string.Equals(
+                                       subscription.TenantId,
+                                       tenantOverride,
+                                       StringComparison.OrdinalIgnoreCase))
+            .GroupBy(
+                subscription => $"{subscription.TenantId}\0{subscription.AccountName}",
+                StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var tasks = accountGroups.Select(async accountGroup =>
+        {
+            var representative = accountGroup.First();
+            try
+            {
+                var tenantDeployments = await Task.Run(
+                    () => _azureDiscovery.DiscoverAcrossSubscriptionsAsync(
+                        representative.TenantId,
+                        accountGroup.Select(subscription => subscription.Id).ToList(),
+                        representative.Id,
+                        cancellationToken),
+                    cancellationToken);
+                return (Deployments: tenantDeployments, Failed: false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                TryLog(ex, "Could not list Azure deployments for an Azure CLI account scope.");
+                return (Deployments: (IReadOnlyList<AzureFoundryDeployment>)Array.Empty<AzureFoundryDeployment>(),
+                    Failed: true);
+            }
+        });
+
+        var results = await Task.WhenAll(tasks);
+        var deployments = results
+            .SelectMany(result => result.Deployments)
+            .DistinctBy(item => (item.Endpoint, item.DeploymentName))
+            .OrderBy(item => item.AccountName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.DeploymentName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return (deployments, results.Count(result => result.Failed));
     }
 
     /// <summary>The subscription the filter dropdown points at, or null for "All subscriptions".</summary>
@@ -1751,7 +1818,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var currentId = SelectedAzureSubscription?.Id;
+        var current = SelectedAzureSubscription;
+        var currentId = current?.Id;
         _updatingAzureSubscriptions = true;
         try
         {
@@ -1774,6 +1842,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 {
                     reselect = label;
                 }
+            }
+
+            if (reselect is null && current is not null)
+            {
+                var label = current.DisplayName;
+                if (label == AllAzureSubscriptionsLabel || _azureSubscriptionMap.ContainsKey(label))
+                {
+                    label = $"{current.DisplayName} ({current.Id})";
+                }
+
+                _azureSubscriptionMap[label] = current;
+                items.Add(label);
+                reselect = label;
             }
 
             AzureSubscriptionBox.ItemsSource = items;
@@ -1799,7 +1880,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var savedId = _settings.AiCleanupAzureSubscriptionId?.Trim();
             if (!string.IsNullOrEmpty(savedId))
             {
-                var standIn = new AzureSubscription(savedId, _settings.AiCleanupAzureSubscriptionName ?? savedId);
+                var standIn = new AzureSubscription(
+                    savedId,
+                    _settings.AiCleanupAzureSubscriptionName ?? savedId,
+                    _settings.AiCleanupAzureSubscriptionTenantId ?? string.Empty);
                 _azureSubscriptionMap[standIn.DisplayName] = standIn;
                 items.Add(standIn.DisplayName);
                 selected = standIn.DisplayName;
@@ -2324,6 +2408,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var azureSubscription = SelectedAzureSubscription;
             _settings.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
             _settings.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
+            _settings.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
             _settings.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
             _settings.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
             _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);

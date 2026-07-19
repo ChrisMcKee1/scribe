@@ -100,6 +100,9 @@ public sealed class AppSettings
     /// <summary>Friendly name of the filtered subscription (for display only).</summary>
     public string? AiCleanupAzureSubscriptionName { get; set; }
 
+    /// <summary>Tenant that owns the selected Azure subscription (populated by CLI discovery).</summary>
+    public string? AiCleanupAzureSubscriptionTenantId { get; set; }
+
     /// <summary>
     /// User-editable writing-style guidance appended to the AI cleanup prompt. Describes the tone,
     /// punctuation and structure the model should apply when polishing a transcript. Blank means use
@@ -133,16 +136,15 @@ public sealed class AppSettings
 
     /// <summary>
     /// Optional Azure AD (Entra) tenant id (GUID) used when the provider is Microsoft Foundry and
-    /// authentication falls back to the user's sign-in. <see cref="DefaultAzureCredential"/> otherwise
-    /// uses whichever tenant the Azure CLI is currently set to, which is wrong for users who juggle a
-    /// corporate and a demo tenant. Leave blank to use the active <c>az login</c> tenant. Ignored when
-    /// an API key is supplied.
+    /// authentication uses the user's Azure CLI sign-in. Leave blank to use the tenant attached to
+    /// the selected subscription, or the CLI's active tenant when no subscription is selected.
+    /// Ignored when an API key is supplied.
     /// </summary>
     public string? AiCleanupAzureTenantId { get; set; }
 
     /// <summary>
     /// Optional Azure OpenAI API key. When set, the Azure provider authenticates with this key instead
-    /// of the user's <c>az login</c> (DefaultAzureCredential). Encrypted at rest with Windows DPAPI via
+    /// of the user's <c>az login</c>. Encrypted at rest with Windows DPAPI via
     /// <see cref="DpapiProtectedStringConverter"/>; this property exposes the plaintext in memory.
     /// </summary>
     [JsonConverter(typeof(DpapiProtectedStringConverter))]

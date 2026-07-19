@@ -1152,7 +1152,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             // Native Foundry path: the project client turns the endpoint + deployment into an agent
             // directly (a code-first "responses" agent — no server-side agent resource is created).
             // The project data-plane requires an AAD token, so this path is AAD-only.
-            var credential = CreateAzureCredential(options.AzureTenantId);
+            var credential = AzureCliCredentialFactory.Create(options.AzureTenantId, options.AzureSubscriptionId);
             var project = new AIProjectClient(endpointUri, credential);
             _pendingFactory = i => project.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
             agent = _pendingFactory(instructions);
@@ -1165,10 +1165,8 @@ internal sealed class TextCleanupService : ITextCleanupService
                 ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
                 : endpointUri;
 
-            // When the user supplies an API key, authenticate with it directly; otherwise reuse their
-            // existing az / Visual Studio / environment / managed-identity sign-in (optionally pinned
-            // to a specific tenant). Interactive browser is excluded so credential resolution never
-            // blocks on a popup in the background.
+            // When the user supplies an API key, authenticate with it directly; otherwise reuse the
+            // existing Azure CLI sign-in, pinned to the selected subscription when one is saved.
             // Benchmark runs may intentionally measure models beyond the SDK's 100-second default.
             // The app never sets this override, so its normal transport and cleanup budgets stay put.
             var networkTimeout = CleanupTimeoutOverride is { } timeout
@@ -1189,7 +1187,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     DisableRetries)
                 : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
                     accountHost,
-                    CreateAzureCredential(options.AzureTenantId),
+                    AzureCliCredentialFactory.Create(options.AzureTenantId, options.AzureSubscriptionId),
                     networkTimeout,
                     DisableRetries);
             _pendingFactory = i => responses.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
@@ -1221,24 +1219,6 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         return agent;
-    }
-
-    // Builds a credential for Azure auth, optionally pinned to a specific tenant. Interactive browser
-    // is excluded so a background init can never block on a popup; an explicit tenant overrides the
-    // Azure CLI's active tenant, which matters for users who switch between corp and demo tenants.
-    private static DefaultAzureCredential CreateAzureCredential(string? tenantId)
-    {
-        var credentialOptions = new DefaultAzureCredentialOptions
-        {
-            ExcludeInteractiveBrowserCredential = true,
-        };
-
-        if (!string.IsNullOrWhiteSpace(tenantId))
-        {
-            credentialOptions.TenantId = tenantId.Trim();
-        }
-
-        return new DefaultAzureCredential(credentialOptions);
     }
 
     // Ensures the Foundry Local manager + catalog exist, without starting the web service or

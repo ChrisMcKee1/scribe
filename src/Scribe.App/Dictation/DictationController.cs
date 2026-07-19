@@ -193,7 +193,7 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureEndpoint,
         settings.AiCleanupAzureDeployment,
         settings.AiCleanupAzureApiKey,
-        settings.AiCleanupAzureTenantId,
+        settings.AiCleanupAzureTenantId ?? settings.AiCleanupAzureSubscriptionTenantId,
         settings.AiCleanupWritingStyle,
         BuildGlossary(),
         settings.AiCleanupCustomEndpoint,
@@ -201,7 +201,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupCustomApiKey,
         settings.AiCleanupPromptStyle,
         settings.AiCleanupFrontierPrompt,
-        settings.AiCleanupLocalPrompt);
+        settings.AiCleanupLocalPrompt,
+        settings.AiCleanupAzureSubscriptionId);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —

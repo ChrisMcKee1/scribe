@@ -83,6 +83,22 @@ public sealed class AzureDeploymentFilterTests
     }
 
     [Fact]
+    public void Explicit_responses_false_is_authoritative()
+    {
+        var caps = Caps(("responses", "false"), ("chatCompletion", "true"));
+
+        Assert.False(AzureFoundryDiscovery.SupportsTextCleanup(caps, "legacy-chat", "legacy-chat"));
+    }
+
+    [Fact]
+    public void Non_text_model_is_excluded_even_when_responses_is_advertised()
+    {
+        var caps = Caps(("responses", "true"), ("chatCompletion", "true"));
+
+        Assert.False(AzureFoundryDiscovery.SupportsTextCleanup(caps, "gpt-audio", "meeting-cleanup"));
+    }
+
+    [Fact]
     public void Capability_flag_wins_over_chat_sounding_name()
     {
         // Even a "gpt"-named deployment is hidden when the map says it can't chat.
@@ -121,5 +137,11 @@ public sealed class AzureDeploymentFilterTests
 
         Assert.False(AzureFoundryDiscovery.SupportsTextCleanup(empty, "text-embedding-ada-002", "embeddings"));
         Assert.True(AzureFoundryDiscovery.SupportsTextCleanup(empty, "gpt-4.1", "chat"));
+    }
+
+    [Fact]
+    public void Deployment_name_does_not_hide_a_known_chat_model_when_capabilities_are_absent()
+    {
+        Assert.True(AzureFoundryDiscovery.SupportsTextCleanup(null, "gpt-4.1", "audio-notes"));
     }
 }

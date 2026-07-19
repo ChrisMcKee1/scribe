@@ -49,4 +49,49 @@ public sealed class AzureSubscriptionTests
 
         Assert.Equal("d3adbeef-0000-4000-8000-000000000001", subscription.DisplayName);
     }
+
+    [Fact]
+    public void Cli_inventory_includes_enabled_subscriptions_across_tenants()
+    {
+        const string json = """
+            [
+              { "id": "d3adbeef-0000-4000-8000-000000000001", "name": "Zulu", "tenantId": "aaaaaaaa-0000-4000-8000-000000000001", "state": "Enabled", "user": { "name": "first@example.test" } },
+              { "id": "d3adbeef-0000-4000-8000-000000000002", "name": "Alpha", "tenantId": "bbbbbbbb-0000-4000-8000-000000000002", "state": "Enabled", "user": { "name": "second@example.test" } },
+              { "id": "d3adbeef-0000-4000-8000-000000000003", "name": "Disabled", "tenantId": "bbbbbbbb-0000-4000-8000-000000000002", "state": "Disabled" }
+            ]
+            """;
+
+        var subscriptions = AzureCliAccountParser.ParseSubscriptions(json);
+
+        Assert.Collection(
+            subscriptions,
+            subscription =>
+            {
+                Assert.Equal("Alpha", subscription.Name);
+                Assert.Equal("bbbbbbbb-0000-4000-8000-000000000002", subscription.TenantId);
+                Assert.Equal("second@example.test", subscription.AccountName);
+            },
+            subscription =>
+            {
+                Assert.Equal("Zulu", subscription.Name);
+                Assert.Equal("aaaaaaaa-0000-4000-8000-000000000001", subscription.TenantId);
+            });
+    }
+
+    [Fact]
+    public void Cli_inventory_deduplicates_ids_and_ignores_malformed_rows()
+    {
+        const string json = """
+            [
+              { "id": "d3adbeef-0000-4000-8000-000000000001", "name": "Old", "tenantId": "aaaaaaaa-0000-4000-8000-000000000001", "state": "Enabled" },
+              { "id": "D3ADBEEF-0000-4000-8000-000000000001", "name": "Current", "tenantId": "aaaaaaaa-0000-4000-8000-000000000001", "state": "Enabled" },
+              { "id": "not-a-guid", "name": "Broken", "tenantId": "aaaaaaaa-0000-4000-8000-000000000001", "state": "Enabled" },
+              { "id": "d3adbeef-0000-4000-8000-000000000002", "name": "No tenant", "state": "Enabled" }
+            ]
+            """;
+
+        var subscription = Assert.Single(AzureCliAccountParser.ParseSubscriptions(json));
+
+        Assert.Equal("Current", subscription.Name);
+    }
 }

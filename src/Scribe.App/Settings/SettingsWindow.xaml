@@ -701,6 +701,7 @@
                                                  Picking one here narrows the Model list (and speeds discovery up). -->
                                             <TextBlock Text="Subscription" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <ComboBox x:Name="AzureSubscriptionBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      AutomationProperties.Name="Azure subscription"
                                                       SelectionChanged="AzureSubscriptionBox_SelectionChanged"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Models below are listed from this subscription only. Choose All subscriptions to browse everything your sign-in can access."/>
@@ -709,6 +710,7 @@
                                                  Click to browse them all, or type to quick-filter the list. -->
                                             <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <ComboBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      AutomationProperties.Name="Azure model deployment"
                                                       IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
                                                       SelectionChanged="AzureModelBox_SelectionChanged"
                                                       DropDownOpened="ModelCombo_DropDownOpened"
@@ -753,7 +755,7 @@
                                                                 VerticalContentAlignment="Center"
                                                                 PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
                                                     <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                               Text="When provided, discovery and cleanup use this tenant and override your default az login tenant. Leave empty to use the default. Ignored when an API key is set."/>
+                                                               Text="Used for a manually entered endpoint when no subscription is selected. A subscription selected above uses its own tenant. Ignored when an API key is set."/>
                                                 </StackPanel>
                                             </ui:CardExpander>
                                         </StackPanel>
