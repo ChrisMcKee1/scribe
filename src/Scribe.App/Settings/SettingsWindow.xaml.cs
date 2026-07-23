@@ -2406,13 +2406,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Surface the live engine status on whichever provider is actually running.
         if (_settings.AiCleanupProvider == CleanupProvider.AzureFoundry)
         {
-            if (_azureConnectionKnown &&
-                !_azureSignInStatus.IsSignedIn &&
-                string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password))
-            {
-                return;
-            }
-
             AzureCleanupStatusText.Text = detail;
         }
         else
