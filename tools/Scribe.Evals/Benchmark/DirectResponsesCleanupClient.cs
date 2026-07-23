@@ -28,6 +28,11 @@ internal sealed class DirectResponsesCleanupClient
     {
         var credentialOptions = new DefaultAzureCredentialOptions
         {
+            // The eval harness is a local developer tool. Keep service-principal environment support,
+            // but skip deployed-host credentials so an unavailable IMDS endpoint cannot stop the chain
+            // before Azure CLI, Visual Studio, or the other developer credentials are tried.
+            ExcludeWorkloadIdentityCredential = true,
+            ExcludeManagedIdentityCredential = true,
             ExcludeInteractiveBrowserCredential = true,
         };
         if (!string.IsNullOrWhiteSpace(tenantId))

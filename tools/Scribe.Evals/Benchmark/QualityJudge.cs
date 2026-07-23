@@ -70,7 +70,14 @@ internal sealed class QualityJudge
         Endpoint = endpoint;
         Deployment = deployment;
 
-        var options = new DefaultAzureCredentialOptions { ExcludeInteractiveBrowserCredential = true };
+        var options = new DefaultAzureCredentialOptions
+        {
+            // This executable runs as a local developer tool. Avoid deployed-host probes while
+            // retaining environment credentials for automation and the normal developer chain.
+            ExcludeWorkloadIdentityCredential = true,
+            ExcludeManagedIdentityCredential = true,
+            ExcludeInteractiveBrowserCredential = true,
+        };
         if (!string.IsNullOrWhiteSpace(tenantId))
         {
             options.TenantId = tenantId.Trim();

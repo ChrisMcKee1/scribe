@@ -9,6 +9,7 @@ using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
@@ -193,7 +194,10 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureEndpoint,
         settings.AiCleanupAzureDeployment,
         settings.AiCleanupAzureApiKey,
-        settings.AiCleanupAzureTenantId ?? settings.AiCleanupAzureSubscriptionTenantId,
+        AzureSubscriptionSelection.ResolveTenantId(
+            settings.AiCleanupAzureSubscriptionId,
+            settings.AiCleanupAzureSubscriptionTenantId,
+            settings.AiCleanupAzureTenantId),
         settings.AiCleanupWritingStyle,
         BuildGlossary(),
         settings.AiCleanupCustomEndpoint,

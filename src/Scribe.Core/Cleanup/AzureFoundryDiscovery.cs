@@ -16,7 +16,9 @@ namespace Scribe.Core.Cleanup;
 /// are what the cleanup service needs to call it; the rest is for display.
 /// </summary>
 public sealed record AzureFoundryDeployment(
+    string SubscriptionId,
     string SubscriptionName,
+    string TenantId,
     string ResourceGroup,
     string AccountName,
     string Kind,
@@ -42,7 +44,12 @@ public sealed record AzureFoundryDeployment(
 /// <see cref="Id"/> is the subscription GUID; <see cref="Name"/> is the display name. Tenant and
 /// account identify the matching cached Azure CLI sign-in for multi-account discovery.
 /// </summary>
-public sealed record AzureSubscription(string Id, string Name, string TenantId = "", string AccountName = "")
+public sealed record AzureSubscription(
+    string Id,
+    string Name,
+    string TenantId = "",
+    string AccountName = "",
+    bool IsDefault = false)
 {
     /// <summary>Label for the settings dropdown; never blank.</summary>
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Id : Name;
@@ -53,8 +60,9 @@ public sealed record AzureSubscription(string Id, string Name, string TenantId =
 /// <see cref="AzureCliCredential"/> can mint an ARM token from the user's existing <c>az login</c>.
 /// <see cref="Account"/>
 /// is the signed-in identity (UPN/email or app id) when it can be read from the token, else null.
+/// <see cref="TenantId"/> is the tenant that issued the verified token when available.
 /// </summary>
-public sealed record AzureSignInStatus(bool IsSignedIn, string? Account);
+public sealed record AzureSignInStatus(bool IsSignedIn, string? Account, string? TenantId = null);
 
 /// <summary>
 /// Discovers chat-capable model deployments across the Azure subscriptions the signed-in user can
@@ -91,9 +99,12 @@ public interface IAzureFoundryDiscovery
     /// list deployments automatically
     /// instead of forcing a sign-in click. Never throws — a failed/absent credential returns
     /// <see cref="AzureSignInStatus.IsSignedIn"/> = false.
+    /// <paramref name="subscriptionId"/> selects the matching cached CLI account when supplied.
     /// </summary>
     Task<AzureSignInStatus> GetSignInStatusAsync(
-        string? tenantId = null, CancellationToken cancellationToken = default);
+        string? tenantId = null,
+        string? subscriptionId = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -196,7 +207,11 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             // per-subscription crawl rather than failing outright. Auth failures still bubble up so
             // the UI can prompt for az login.
             _log.LogWarning(ex, "Resource Graph account discovery failed; falling back to per-subscription enumeration.");
-            return await DiscoverViaEnumerationAsync(arm, subscriptionFilters, cancellationToken).ConfigureAwait(false);
+            return await DiscoverViaEnumerationAsync(
+                arm,
+                tenantId,
+                subscriptionFilters,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -206,14 +221,17 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         Guid.TryParse(subscriptionId?.Trim(), out var parsed) ? parsed.ToString("D") : null;
 
     public async Task<AzureSignInStatus> GetSignInStatusAsync(
-        string? tenantId = null, CancellationToken cancellationToken = default)
+        string? tenantId = null,
+        string? subscriptionId = null,
+        CancellationToken cancellationToken = default)
     {
         try
         {
-            var credential = AzureCliCredentialFactory.Create(tenantId);
+            var credential = AzureCliCredentialFactory.Create(tenantId, subscriptionId);
             var token = await credential.GetTokenAsync(
                 new TokenRequestContext(ArmScopes), cancellationToken).ConfigureAwait(false);
-            return new AzureSignInStatus(true, ReadAccountFromToken(token.Token));
+            var identity = ReadIdentityFromToken(token.Token);
+            return new AzureSignInStatus(true, identity.Account, identity.TenantId);
         }
         catch (Exception ex) when (ex is AuthenticationFailedException or CredentialUnavailableException)
         {
@@ -231,17 +249,16 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     // ARM scope used for both discovery and the sign-in probe.
     private static readonly string[] ArmScopes = { "https://management.azure.com/.default" };
 
-    // Best-effort identity for the "signed in as …" hint: pull a human-readable claim from the ARM
-    // access token (a JWT). Falls back to null for non-user identities (managed identity / SP) or any
-    // decode failure — the caller still shows a generic "signed in" state.
-    private static string? ReadAccountFromToken(string jwt)
+    // Best-effort identity for the signed-in hint: pull human-readable account and tenant claims from
+    // the verified ARM token. Decode failures never invalidate an otherwise successful token probe.
+    internal static (string? Account, string? TenantId) ReadIdentityFromToken(string jwt)
     {
         try
         {
             var parts = jwt.Split('.');
             if (parts.Length < 2)
             {
-                return null;
+                return (null, null);
             }
 
             var payload = parts[1].Replace('-', '+').Replace('_', '/');
@@ -254,22 +271,32 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
             using var doc = JsonDocument.Parse(Convert.FromBase64String(payload));
             var root = doc.RootElement;
+            string? account = null;
             foreach (var claim in new[] { "upn", "preferred_username", "unique_name", "email", "appid" })
             {
                 if (root.TryGetProperty(claim, out var value) &&
                     value.ValueKind == JsonValueKind.String &&
                     !string.IsNullOrWhiteSpace(value.GetString()))
                 {
-                    return value.GetString();
+                    account = value.GetString();
+                    break;
                 }
             }
+
+            var tokenTenantId =
+                root.TryGetProperty("tid", out var tenantClaim) &&
+                tenantClaim.ValueKind == JsonValueKind.String &&
+                Guid.TryParse(tenantClaim.GetString(), out var parsedTenantId)
+                    ? parsedTenantId.ToString("D")
+                    : null;
+            return (account, tokenTenantId);
         }
         catch
         {
             // Token shape varies; the account label is cosmetic, so never fail the probe over it.
         }
 
-        return null;
+        return (null, null);
     }
 
     private static bool IsAuthFailure(Exception ex) =>
@@ -319,7 +346,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                 GetString(row, "kind"),
                 endpoint,
                 GetString(row, "resourceGroup"),
+                subscriptionId,
                 subscriptionName,
+                tenantId ?? string.Empty,
                 GetString(row, "location")));
         }
 
@@ -387,7 +416,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                 }
 
                 results.Add(new AzureFoundryDeployment(
+                    account.SubscriptionId,
                     account.SubscriptionName,
+                    account.TenantId,
                     account.ResourceGroup,
                     account.AccountName,
                     account.Kind,
@@ -479,7 +510,10 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     // ---- Fallback: per-subscription ARM enumeration -------------------------------------------
 
     private async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverViaEnumerationAsync(
-        ArmClient arm, IReadOnlyCollection<string>? subscriptionFilters, CancellationToken cancellationToken)
+        ArmClient arm,
+        string? tenantId,
+        IReadOnlyCollection<string>? subscriptionFilters,
+        CancellationToken cancellationToken)
     {
         var results = new List<AzureFoundryDeployment>();
         var subscriptionSet = subscriptionFilters is null
@@ -496,7 +530,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                 continue;
             }
 
-            var subName = subscription.Data?.DisplayName ?? subscription.Data?.SubscriptionId ?? "subscription";
+            var subscriptionId = subscription.Data?.SubscriptionId ?? string.Empty;
+            var subName = subscription.Data?.DisplayName ??
+                (string.IsNullOrWhiteSpace(subscriptionId) ? "subscription" : subscriptionId);
 
             try
             {
@@ -543,7 +579,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                             }
 
                             results.Add(new AzureFoundryDeployment(
+                                subscriptionId,
                                 subName,
+                                tenantId ?? string.Empty,
                                 resourceGroup,
                                 accountName,
                                 kind!,
@@ -663,6 +701,8 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         string Kind,
         string Endpoint,
         string ResourceGroup,
+        string SubscriptionId,
         string SubscriptionName,
+        string TenantId,
         string Location);
 }

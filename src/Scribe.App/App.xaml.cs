@@ -76,6 +76,14 @@ public partial class App : Application
         var log = services.GetRequiredService<ILogger<App>>();
         WireGlobalExceptionLogging(log);
 
+        // Azure CLI may have been installed or updated after this tray process inherited its PATH.
+        // Prepare it before DictationController.Start configures cloud cleanup in the background.
+        var azureCliInstaller = services.GetRequiredService<AzureCliInstaller>();
+        if (azureCliInstaller.PrepareEnvironment())
+        {
+            log.LogInformation("Azure CLI environment prepared for Microsoft Foundry authentication.");
+        }
+
         // Install the seed dictionary on first run so post-processing is useful out of the box.
         services.GetRequiredService<IDictionaryRepository>().SeedIfEmpty(DefaultVocabulary.Entries);
 
