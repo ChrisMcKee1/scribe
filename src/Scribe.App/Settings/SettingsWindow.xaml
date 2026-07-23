@@ -656,9 +656,8 @@
                                             </Border>
                                         </StackPanel>
 
-                                        <!-- Microsoft Foundry — your Azure sign-in is the default; manual entry lives under Advanced -->
+                                        <!-- Microsoft Foundry: verify sign-in before revealing cloud resources. -->
                                         <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
-                                            <!-- Primary path: reuse the user's az login and list their deployments -->
                                             <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
                                                     Background="{DynamicResource ControlFillColorSecondaryBrush}">
                                                 <Grid>
@@ -669,16 +668,21 @@
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="Uses Azure CLI sign-in, no key needed. Scribe opens the browser when sign-in is required."/>
+                                                                   Text="Checking your Azure CLI sign-in before showing cloud resources."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AzureRefreshButton" Grid.Column="1" Content="Sign in &amp; find models"
-                                                               MinWidth="76" VerticalAlignment="Center"
-                                                               Click="AzureRefreshButton_Click"/>
+                                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <ui:Button x:Name="AzureManualButton" Content="Use endpoint instead"
+                                                                   MinWidth="118" Margin="0,0,8,0" Appearance="Secondary"
+                                                                   Click="AzureManualButton_Click"/>
+                                                        <ui:Button x:Name="AzureRefreshButton" Content="Sign in &amp; find models"
+                                                                   MinWidth="124" Appearance="Primary" IsEnabled="False"
+                                                                   Click="AzureRefreshButton_Click"/>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
 
-                                            <!-- Azure CLI: the 'az login' path needs the Azure CLI present. One-click install/update. -->
-                                            <Border Margin="0,10,0,0" Padding="12,10" CornerRadius="6"
+                                            <Border x:Name="AzureCliSetupPanel" Margin="0,10,0,0" Padding="12,10"
+                                                    CornerRadius="6" Visibility="Collapsed"
                                                     Background="{DynamicResource ControlFillColorSecondaryBrush}">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
@@ -686,78 +690,79 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock Text="Azure CLI" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock Text="Azure CLI required" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AzureCliStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="Azure sign-in needs the Azure CLI. Install or update it here (uses winget)."/>
+                                                                   Text="Install Azure CLI to use browser sign-in and discover models. Manual API-key setup remains available."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install / update"
+                                                    <ui:Button x:Name="AzureCliButton" Grid.Column="1" Content="Install Azure CLI"
                                                                MinWidth="76" VerticalAlignment="Center"
                                                                Click="AzureCliButton_Click"/>
                                                 </Grid>
                                             </Border>
 
-                                            <!-- Subscription filter: discovery spans every subscription the sign-in can
-                                                 see, which surprises users whose account also has shared/foreign projects.
-                                                 Picking one here narrows the Model list (and speeds discovery up). -->
-                                            <TextBlock Text="Subscription" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ComboBox x:Name="AzureSubscriptionBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                      AutomationProperties.Name="Azure subscription"
-                                                      SelectionChanged="AzureSubscriptionBox_SelectionChanged"/>
-                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Models below are listed from this subscription only. Choose All subscriptions to browse everything your sign-in can access."/>
+                                            <StackPanel x:Name="AzureDiscoveryPanel" Visibility="Collapsed">
+                                                <TextBlock Text="Subscription" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="AzureSubscriptionBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.Name="Azure subscription"
+                                                          SelectionChanged="AzureSubscriptionBox_SelectionChanged"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="Scribe starts with the active Azure CLI subscription. Choose All subscriptions only when you need to browse every subscription this verified sign-in can access."/>
 
-                                            <!-- Model picker: a dropdown of the deployments discovered from your sign-in.
-                                                 Click to browse them all, or type to quick-filter the list. -->
-                                            <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ComboBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                      AutomationProperties.Name="Azure model deployment"
-                                                      IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
-                                                      SelectionChanged="AzureModelBox_SelectionChanged"
-                                                      DropDownOpened="ModelCombo_DropDownOpened"
-                                                      LostFocus="AzureModelBox_LostFocus"/>
-                                            <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+                                                <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="AzureModelBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.Name="Azure model deployment"
+                                                          IsEditable="True" IsTextSearchEnabled="False" StaysOpenOnEdit="True"
+                                                          SelectionChanged="AzureModelBox_SelectionChanged"
+                                                          DropDownOpened="ModelCombo_DropDownOpened"
+                                                          LostFocus="AzureModelBox_LostFocus"/>
+                                                <TextBlock x:Name="AzureDeploymentHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"/>
+                                            </StackPanel>
 
-                                            <!-- Endpoint sits BELOW the picker: picking a model fills it in, so the
-                                                 cause-and-effect reads top to bottom. Manual paste still works. -->
-                                            <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
-                                            <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                        VerticalContentAlignment="Center"
-                                                        PlaceholderText="https://my-resource.services.ai.azure.com/"/>
-                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Filled in automatically when you pick a model above. You can also paste your Microsoft Foundry project or Azure OpenAI endpoint here directly."/>
+                                            <StackPanel x:Name="AzureConfigurationPanel" Visibility="Collapsed">
+                                                <TextBlock Text="Cleanup status" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <TextBlock x:Name="AzureCleanupStatusText" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="Cleanup readiness appears here after the configuration is validated."/>
 
-                                            <!-- Advanced: manual endpoint/deployment, API key, or tenant override -->
-                                            <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
-                                                <ui:CardExpander.Header>
-                                                    <StackPanel>
-                                                        <TextBlock Text="Advanced" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="Everything here is optional and overrides the choices above when set. Leave these empty to keep using your Azure sign-in."/>
-                                                    </StackPanel>
-                                                </ui:CardExpander.Header>
-                                                <StackPanel Margin="0,4,0,0">
-                                                    <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
-                                                    <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                VerticalContentAlignment="Center"
-                                                                PlaceholderText="e.g. gpt-4o"/>
-                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                               Text="The model picker above fills this in for you. Editing it overrides the picked model — leave it as-is unless you're naming a deployment by hand."/>
+                                                <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="https://my-resource.services.ai.azure.com/"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="A discovered model fills this automatically. For manual setup, paste the Microsoft Foundry project or Azure OpenAI endpoint."/>
 
-                                                    <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                    <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="Deployment and authentication" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                                       Text="Use the discovered values, or enter a deployment and API key for manual setup."/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
+                                                        <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                                     VerticalContentAlignment="Center"
-                                                                    PlaceholderText="Leave blank to use your Azure sign-in (az login)"/>
-                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                               Text="When provided, Scribe authenticates with this key and overrides your Azure sign-in. Leave empty to use az login. Stored encrypted on this PC (Windows DPAPI)."/>
+                                                                    PlaceholderText="e.g. gpt-4o"/>
+                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                                   Text="The model picker fills this in after sign-in. Enter the exact Azure deployment name when configuring manually."/>
 
-                                                    <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                    <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                VerticalContentAlignment="Center"
-                                                                PlaceholderText="Entra tenant GUID — leave blank to use your active az login tenant"/>
-                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                               Text="Used for a manually entered endpoint when no subscription is selected. A subscription selected above uses its own tenant. Ignored when an API key is set."/>
-                                                </StackPanel>
-                                            </ui:CardExpander>
+                                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                        <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                        VerticalContentAlignment="Center"
+                                                                        PlaceholderText="Leave blank to use your verified Azure sign-in"/>
+                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                                   Text="An API key bypasses Azure CLI authentication. It is stored encrypted on this PC with Windows DPAPI."/>
+
+                                                        <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                        <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                    VerticalContentAlignment="Center"
+                                                                    PlaceholderText="Entra tenant GUID"
+                                                                    TextChanged="AzureTenantBox_TextChanged"/>
+                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                                   Text="Pins Azure CLI authentication to one tenant when no subscription is selected. It is ignored when an API key is set."/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
+                                            </StackPanel>
                                         </StackPanel>
 
                                         <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->

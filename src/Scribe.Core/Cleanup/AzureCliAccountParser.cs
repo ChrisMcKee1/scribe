@@ -37,11 +37,15 @@ public static class AzureCliAccountParser
             var accountName = account.TryGetProperty("user", out var user)
                 ? GetString(user, "name")
                 : string.Empty;
+            var isDefault =
+                account.TryGetProperty("isDefault", out var defaultValue) &&
+                defaultValue.ValueKind is JsonValueKind.True;
             subscriptions[normalizedId] = new AzureSubscription(
                 normalizedId,
                 string.IsNullOrWhiteSpace(name) ? normalizedId : name,
                 parsedTenantId.ToString("D"),
-                accountName);
+                accountName,
+                isDefault);
         }
 
         return subscriptions.Values

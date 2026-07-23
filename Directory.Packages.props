@@ -61,7 +61,7 @@
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
-         user's existing Azure CLI sign-in (DefaultAzureCredential, AAD tokens — no key stored). -->
+         user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens — no key stored). -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.5.2" />
     <!-- Azure Resource Graph powers a single tenant-wide KQL query to enumerate every chat

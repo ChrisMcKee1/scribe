@@ -25,30 +25,37 @@ public sealed class AzureCliInstaller
 
     public AzureCliInstaller(ILogger<AzureCliInstaller> log) => _log = log;
 
-    /// <summary>True if Azure CLI resolves from PATH or a standard Windows install location.</summary>
-    public Task<bool> IsInstalledAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Resolves Azure CLI from the current, user, and machine PATH values plus standard Windows
+    /// install locations, then adds its directory to this process. This must run before Azure.Identity
+    /// creates an <see cref="Azure.Identity.AzureCliCredential"/> because a long-running tray process
+    /// does not automatically inherit PATH changes made after it started.
+    /// </summary>
+    public bool PrepareEnvironment()
     {
-        ct.ThrowIfCancellationRequested();
         try
         {
             var path = ResolveAzureCliPath();
             if (path is null)
             {
-                return Task.FromResult(false);
+                return false;
             }
 
             EnsureAzureCliOnProcessPath(path);
-            return Task.FromResult(true);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
+            return true;
         }
         catch (Exception ex)
         {
-            TryLog(ex, "Could not determine whether Azure CLI is installed.");
-            return Task.FromResult(false);
+            TryLog(ex, "Could not prepare the Azure CLI environment.");
+            return false;
         }
+    }
+
+    /// <summary>True if Azure CLI resolves from PATH or a standard Windows install location.</summary>
+    public Task<bool> IsInstalledAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(PrepareEnvironment());
     }
 
     /// <summary>
@@ -145,11 +152,13 @@ public sealed class AzureCliInstaller
                 loginArguments.Add(tenantId.Trim());
             }
 
-            var (exit, stdout, stderr) = await RunAsync(
-                azureCliPath,
-                loginArguments,
-                ct,
-                disableLoginSubscriptionSelector: true).ConfigureAwait(false);
+            var (exit, stdout, stderr) = await AzureCliProcessCoordinator.RunAsync(
+                token => RunAsync(
+                    azureCliPath,
+                    loginArguments,
+                    token,
+                    disableLoginSubscriptionSelector: true),
+                ct).ConfigureAwait(false);
 
             if (exit != 0)
             {
@@ -185,9 +194,11 @@ public sealed class AzureCliInstaller
             }
 
             EnsureAzureCliOnProcessPath(azureCliPath);
-            var (exit, stdout, stderr) = await RunAsync(
-                azureCliPath,
-                ["account", "list", "--all", "--output", "json"],
+            var (exit, stdout, stderr) = await AzureCliProcessCoordinator.RunAsync(
+                token => RunAsync(
+                    azureCliPath,
+                    ["account", "list", "--all", "--output", "json"],
+                    token),
                 ct).ConfigureAwait(false);
             if (exit != 0)
             {

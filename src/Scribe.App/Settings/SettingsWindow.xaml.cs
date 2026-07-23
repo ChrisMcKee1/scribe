@@ -73,6 +73,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _updatingAzureSubscriptions;
     private bool _foundryModelOp;
     private bool _azureAutoListed;
+    private int _azureSignInProbeVersion;
+    private bool _azureCliInstalled;
+    private bool _azureConnectionKnown;
+    private bool _azureConnectionBusy;
+    private bool _azureManualConfiguration;
+    private AzureSignInStatus _azureSignInStatus = new(false, null);
+    private AzureFoundryDeployment? _selectedAzureDeployment;
     private bool _transcriptionModelOp;
 
     private HotkeyBinding _pendingBinding;
@@ -597,6 +604,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
+        _azureManualConfiguration = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey);
 
         CustomEndpointBox.Text = _settings.AiCleanupCustomEndpoint ?? string.Empty;
         CustomModelBox.Text = _settings.AiCleanupCustomModel ?? string.Empty;
@@ -634,6 +642,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiLocalPromptBox.Text = CleanupPrompt.ResolveLocalPrompt(_settings.AiCleanupLocalPrompt);
 
         UpdateAiProviderPanels();
+        ApplyAzureSettingsAccess();
         UpdateAiEnabledState();
         UpdateAiModelHint();
         UpdateAzureDeploymentHint();
@@ -1282,6 +1291,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateAiEnabledState();
+        if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
+        {
+            _ = ProbeAzureSignInAsync();
+        }
     }
 
     private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1414,6 +1427,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (!string.IsNullOrWhiteSpace(display) &&
             _azureModelMap.TryGetValue(display.Trim(), out var deployment))
         {
+            _selectedAzureDeployment = deployment;
             AzureEndpointBox.Text = deployment.Endpoint;
             AzureDeploymentBox.Text = deployment.DeploymentName;
         }
@@ -1560,103 +1574,252 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        AzureRefreshButton.IsEnabled = false;
+        await RefreshAzureConnectionAsync(
+            allowInteractiveLogin: true,
+            listModels: true,
+            forceListModels: true);
+    }
+
+    private void AzureManualButton_Click(object sender, RoutedEventArgs e)
+    {
+        _azureManualConfiguration = true;
+        AzureAdvancedExpander.IsExpanded = true;
+        ApplyAzureSettingsAccess();
+        AzureStatusText.Text =
+            "Manual setup is open. Enter an endpoint, deployment name, and API key.";
+        AzureEndpointBox.Focus();
+    }
+
+    private void AzureTenantBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        ++_azureSignInProbeVersion;
+        ++_azureDeploymentLoadVersion;
+        _azureSignInStatus = new AzureSignInStatus(false, null);
+        _azureAutoListed = false;
+        _azureManualConfiguration = true;
+        _selectedAzureDeployment = null;
+        _updatingAzureSubscriptions = true;
         try
         {
-            if (!await _azureCliInstaller.IsInstalledAsync())
+            AzureSubscriptionBox.SelectedItem = AllAzureSubscriptionsLabel;
+        }
+        finally
+        {
+            _updatingAzureSubscriptions = false;
+        }
+
+        SetAzureConnectionBusy(false);
+        AzureStatusText.Text = "Tenant changed. Verify Azure sign-in before browsing subscriptions and models.";
+    }
+
+    // Best-effort and non-blocking; runs when the Azure panel is shown.
+    private Task ProbeAzureSignInAsync() =>
+        RefreshAzureConnectionAsync(allowInteractiveLogin: false, listModels: true);
+
+    private async Task RefreshAzureConnectionAsync(
+        bool allowInteractiveLogin,
+        bool listModels,
+        bool forceListModels = false)
+    {
+        var operationVersion = ++_azureSignInProbeVersion;
+        var shouldListModels = false;
+        _azureSignInStatus = new AzureSignInStatus(false, null);
+        SetAzureConnectionBusy(true);
+        AzureStatusText.Text = "Checking your Azure CLI sign-in…";
+
+        try
+        {
+            _azureCliInstalled = await _azureCliInstaller.IsInstalledAsync();
+            _azureConnectionKnown = true;
+            if (!_azureCliInstalled)
             {
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                ApplyAzureSettingsAccess();
                 AzureStatusText.Text =
-                    "Azure CLI couldn't be found. Install it below, then choose Sign in & find models again.";
+                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.";
                 return;
             }
 
-            using var probeCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var tenantId = NullIfBlank(AzureTenantBox.Text);
-            var status = await Task.Run(
-                () => _azureDiscovery.GetSignInStatusAsync(tenantId, probeCts.Token),
-                probeCts.Token);
-
-            if (!status.IsSignedIn)
+            await ClearUnavailableSelectedSubscriptionAsync();
+            var status = await ProbeCurrentAzureSignInAsync();
+            if (!status.IsSignedIn && allowInteractiveLogin)
             {
                 AzureStatusText.Text = "Opening Azure sign-in in your browser…";
                 using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                var selectedSubscription = SelectedAzureSubscription;
+                var tenantId = selectedSubscription is null ||
+                               string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
+                    ? NullIfBlank(AzureTenantBox.Text)
+                    : selectedSubscription.TenantId;
                 var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
                 if (!ok)
                 {
+                    _azureSignInStatus = new AzureSignInStatus(false, null);
+                    ApplyAzureSettingsAccess();
                     AzureStatusText.Text = message;
                     return;
                 }
 
-                AzureStatusText.Text = "Signed in to Azure. Listing your deployments…";
-                AzureRefreshButton.Content = "Refresh models";
+                status = await ProbeCurrentAzureSignInAsync();
+                if (!status.IsSignedIn && SelectedAzureSubscription is not null)
+                {
+                    ClearSelectedAzureSubscription();
+                    status = await ProbeCurrentAzureSignInAsync();
+                }
             }
+
+            if (operationVersion != _azureSignInProbeVersion)
+            {
+                return;
+            }
+
+            _azureSignInStatus = status;
+            ApplyAzureSettingsAccess();
+            if (!status.IsSignedIn)
+            {
+                AzureStatusText.Text = allowInteractiveLogin
+                    ? "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again."
+                    : "Not signed in to Azure. Sign in to reveal subscriptions and models.";
+                return;
+            }
+
+            AzureStatusText.Text = $"{DescribeAzureIdentity(status)} Listing compatible deployments…";
+            shouldListModels =
+                listModels && (forceListModels || allowInteractiveLogin || !_azureAutoListed);
         }
         catch (OperationCanceledException)
         {
-            AzureStatusText.Text = "Azure sign-in timed out. Please try again.";
-            return;
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                _azureConnectionKnown = true;
+                ApplyAzureSettingsAccess();
+                AzureStatusText.Text = "Azure sign-in timed out. Please try again.";
+            }
         }
         catch (Exception ex)
         {
-            TryLog(ex, "Could not start Azure sign-in.");
-            AzureStatusText.Text = "Couldn't start Azure sign-in. Please try again.";
-            return;
+            TryLog(ex, "Could not verify Azure sign-in.");
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                _azureConnectionKnown = true;
+                ApplyAzureSettingsAccess();
+                AzureStatusText.Text = "Couldn't verify Azure sign-in. Please try again.";
+            }
         }
         finally
         {
-            AzureRefreshButton.IsEnabled = true;
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                SetAzureConnectionBusy(false);
+            }
         }
 
-        await ListAzureDeploymentsAsync();
+        if (shouldListModels && operationVersion == _azureSignInProbeVersion)
+        {
+            await ListAzureDeploymentsAsync();
+        }
     }
 
-    // Probes whether the user is already signed in to Azure through the CLI
-    // and reflects it in the UI: if signed in we show the identity, relabel the button to "Refresh
-    // models", and list deployments automatically so the search box just works — no forced sign-in click.
-    // Best-effort and non-blocking; runs when the Azure panel is shown.
-    private async Task ProbeAzureSignInAsync()
+    private async Task<AzureSignInStatus> ProbeCurrentAzureSignInAsync()
     {
-        AzureStatusText.Text = "Checking your Azure sign-in…";
-        if (!await _azureCliInstaller.IsInstalledAsync())
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var selectedSubscription = SelectedAzureSubscription;
+        var tenantId = selectedSubscription is null || string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
+            ? NullIfBlank(AzureTenantBox.Text)
+            : selectedSubscription.TenantId;
+        return await _azureDiscovery.GetSignInStatusAsync(
+            tenantId,
+            selectedSubscription?.Id,
+            cts.Token);
+    }
+
+    private async Task ClearUnavailableSelectedSubscriptionAsync()
+    {
+        var selectedSubscription = SelectedAzureSubscription;
+        if (selectedSubscription is null)
         {
-            AzureRefreshButton.Content = "Sign in & find models";
-            AzureStatusText.Text = "Azure CLI couldn't be found. Install it below to use your Azure sign-in.";
             return;
         }
 
-        AzureSignInStatus status;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var (ok, subscriptions, _) = await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
+        if (ok && subscriptions.All(subscription => !string.Equals(
+                subscription.Id,
+                selectedSubscription.Id,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            ClearSelectedAzureSubscription();
+        }
+    }
+
+    private void ClearSelectedAzureSubscription()
+    {
+        _updatingAzureSubscriptions = true;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            var tenantId = NullIfBlank(AzureTenantBox.Text);
-            status = await Task.Run(() => _azureDiscovery.GetSignInStatusAsync(tenantId, cts.Token), cts.Token);
+            AzureSubscriptionBox.SelectedItem = AllAzureSubscriptionsLabel;
         }
-        catch
+        finally
         {
-            status = new AzureSignInStatus(false, null);
+            _updatingAzureSubscriptions = false;
+        }
+    }
+
+    private void SetAzureConnectionBusy(bool busy)
+    {
+        _azureConnectionBusy = busy;
+        ApplyAzureSettingsAccess();
+    }
+
+    private AzureSettingsAccess.State CurrentAzureSettingsAccess =>
+        AzureSettingsAccess.Resolve(
+            _azureCliInstalled,
+            _azureSignInStatus.IsSignedIn,
+            _azureManualConfiguration,
+            !string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password));
+
+    private void ApplyAzureSettingsAccess()
+    {
+        if (AzureCliSetupPanel is null ||
+            AzureDiscoveryPanel is null ||
+            AzureConfigurationPanel is null ||
+            AzureManualButton is null ||
+            AzureRefreshButton is null)
+        {
+            return;
         }
 
-        if (status.IsSignedIn)
-        {
-            AzureRefreshButton.Content = "Refresh models";
-            AzureStatusText.Text = string.IsNullOrWhiteSpace(status.Account)
-                ? "Signed in to Azure. Listing your deployments…"
-                : $"Signed in as {status.Account}. Listing your deployments…";
+        var access = CurrentAzureSettingsAccess;
+        AzureCliSetupPanel.Visibility =
+            _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
+        AzureDiscoveryPanel.Visibility = access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
+        AzureConfigurationPanel.Visibility = access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
+        AzureManualButton.Visibility =
+            access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
+        AzureRefreshButton.Content = _azureSignInStatus.IsSignedIn ? "Refresh models" : "Sign in & find models";
+        AzureRefreshButton.IsEnabled =
+            !_azureConnectionBusy && _azureConnectionKnown && access.CanStartSignIn;
+    }
 
-            // Auto-list once per window so the picker is populated without a manual click; the manual
-            // "Refresh models" button re-lists on demand afterwards.
-            if (!_azureAutoListed)
-            {
-                _azureAutoListed = true;
-                await ListAzureDeploymentsAsync();
-            }
-        }
-        else
+    private static string DescribeAzureIdentity(AzureSignInStatus status)
+    {
+        if (string.IsNullOrWhiteSpace(status.Account))
         {
-            AzureRefreshButton.Content = "Sign in & find models";
-            AzureStatusText.Text =
-                "Not signed in to Azure. Choose Sign in & find models to open Azure sign-in in your browser.";
+            return string.IsNullOrWhiteSpace(status.TenantId)
+                ? "Signed in to Azure."
+                : $"Signed in to Azure. Tenant: {status.TenantId}.";
         }
+
+        return string.IsNullOrWhiteSpace(status.TenantId)
+            ? $"Signed in as {status.Account}."
+            : $"Signed in as {status.Account}. Tenant: {status.TenantId}.";
     }
 
     // Shared by the manual Refresh button, the auto-list-on-sign-in path, and the subscription
@@ -1664,17 +1827,29 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // filter is on the "All subscriptions" sentinel).
     private async Task ListAzureDeploymentsAsync()
     {
+        if (!_azureSignInStatus.IsSignedIn)
+        {
+            ApplyAzureSettingsAccess();
+            return;
+        }
+
         var loadVersion = ++_azureDeploymentLoadVersion;
         AzureRefreshButton.IsEnabled = false;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-            var tenantOverride = NullIfBlank(AzureTenantBox.Text);
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            var tenantInput = NullIfBlank(AzureTenantBox.Text);
+            var tenantOverride = tenantInput is null
+                ? null
+                : _azureSignInStatus.TenantId ??
+                  (Guid.TryParse(tenantInput, out var parsedTenantId)
+                      ? parsedTenantId.ToString("D")
+                      : null);
             var (subscriptionsOk, subscriptions, subscriptionsMessage) =
                 await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
             if (!subscriptionsOk)
             {
-                AzureStatusText.Text = subscriptionsMessage;
+                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 
@@ -1683,8 +1858,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
+            var preserveAllSelection =
+                _azureAutoListed &&
+                SelectedAzureSubscription is null &&
+                string.Equals(
+                    AzureSubscriptionBox.SelectedItem as string,
+                    AllAzureSubscriptionsLabel,
+                    StringComparison.Ordinal);
             _azureAutoListed = true;
-            PopulateAzureSubscriptions(subscriptions);
+            PopulateAzureSubscriptions(subscriptions, preserveAllSelection);
             var selectedSubscription = SelectedAzureSubscription;
             var discovery = await DiscoverAzureDeploymentsAsync(
                 subscriptions, selectedSubscription, tenantOverride, cts.Token);
@@ -1702,13 +1884,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 preferDeployment: NullIfBlank(AzureDeploymentBox.Text) ?? previous?.DeploymentName);
 
             var scope = selectedSubscription is null ? string.Empty : $" in {selectedSubscription.DisplayName}";
+            var identity = DescribeAzureIdentity(_azureSignInStatus);
             AzureStatusText.Text = discovery.FailedTenantCount > 0
                 ? deployments.Count == 0
-                    ? "No deployments could be listed. Check your access to the selected Azure tenant subscriptions."
-                    : $"Found {deployments.Count} compatible deployment(s){scope}. Some Azure tenants couldn't be checked."
+                    ? $"{identity} No deployments could be listed. Check access to the selected tenant subscriptions."
+                    : $"{identity} Found {deployments.Count} compatible deployment(s){scope}. Some tenants couldn't be checked."
                 : deployments.Count == 0
-                    ? $"No compatible deployments were returned{scope}. Check that the subscription contains a Responses-capable text model and that your Azure account can list its deployments."
-                    : $"Found {deployments.Count} compatible deployment(s){scope}. Choose one to use for cleanup.";
+                    ? $"{identity} No compatible deployments were returned{scope}. Check that the subscription contains a Responses-capable text model and that your account can list deployments."
+                    : $"{identity} Found {deployments.Count} compatible deployment(s){scope}. Choose one for cleanup.";
         }
         catch (OperationCanceledException)
         {
@@ -1765,8 +1948,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        using var concurrency = new SemaphoreSlim(3, 3);
         var tasks = accountGroups.Select(async accountGroup =>
         {
+            await concurrency.WaitAsync(cancellationToken);
             var representative = accountGroup.First();
             try
             {
@@ -1786,8 +1971,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             catch (Exception ex)
             {
                 TryLog(ex, "Could not list Azure deployments for an Azure CLI account scope.");
-                return (Deployments: (IReadOnlyList<AzureFoundryDeployment>)Array.Empty<AzureFoundryDeployment>(),
+                return (
+                    Deployments: (IReadOnlyList<AzureFoundryDeployment>)Array.Empty<AzureFoundryDeployment>(),
                     Failed: true);
+            }
+            finally
+            {
+                concurrency.Release();
             }
         });
 
@@ -1811,7 +2001,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Rebuilds the subscription dropdown from a fresh listing, keeping the current choice selected
     // by id. An empty listing (transient failure) keeps the seeded stand-in so a saved filter is
     // never silently dropped.
-    private void PopulateAzureSubscriptions(IReadOnlyList<AzureSubscription> subscriptions)
+    private void PopulateAzureSubscriptions(
+        IReadOnlyList<AzureSubscription> subscriptions,
+        bool preserveAllSelection)
     {
         if (subscriptions.Count == 0)
         {
@@ -1820,6 +2012,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         var current = SelectedAzureSubscription;
         var currentId = current?.Id;
+        var candidates = current is null
+            ? subscriptions
+            : subscriptions.Concat([current]).ToList();
+        var preferredId = preserveAllSelection
+            ? null
+            : AzureSubscriptionSelection.ChooseInitialSubscriptionId(
+                candidates,
+                currentId,
+                _azureSignInStatus.TenantId);
         _updatingAzureSubscriptions = true;
         try
         {
@@ -1837,14 +2038,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
                 _azureSubscriptionMap[label] = subscription;
                 items.Add(label);
-                if (currentId is not null &&
-                    string.Equals(subscription.Id, currentId, StringComparison.OrdinalIgnoreCase))
+                if (preferredId is not null &&
+                    string.Equals(subscription.Id, preferredId, StringComparison.OrdinalIgnoreCase))
                 {
                     reselect = label;
                 }
             }
 
-            if (reselect is null && current is not null)
+            if (reselect is null &&
+                current is not null &&
+                preferredId is not null &&
+                string.Equals(current.Id, preferredId, StringComparison.OrdinalIgnoreCase))
             {
                 var label = current.DisplayName;
                 if (label == AllAzureSubscriptionsLabel || _azureSubscriptionMap.ContainsKey(label))
@@ -1856,7 +2060,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 items.Add(label);
                 reselect = label;
             }
-
+            AzureSubscriptionBox.ItemsSource = items;
             AzureSubscriptionBox.ItemsSource = items;
             AzureSubscriptionBox.SelectedItem = reselect ?? AllAzureSubscriptionsLabel;
         }
@@ -1913,7 +2117,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        await ListAzureDeploymentsAsync();
+        await RefreshAzureConnectionAsync(
+            allowInteractiveLogin: false,
+            listModels: true,
+            forceListModels: true);
     }
 
     private async void AzureCliButton_Click(object sender, RoutedEventArgs e)
@@ -1923,16 +2130,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-            var (_, message) = await _azureCliInstaller.InstallOrUpdateAsync(cts.Token);
+            var (ok, message) = await _azureCliInstaller.InstallOrUpdateAsync(cts.Token);
             AzureCliStatusText.Text = message;
+            if (ok)
+            {
+                _azureCliInstalled = true;
+                _azureConnectionKnown = true;
+                ApplyAzureSettingsAccess();
+                await RefreshAzureConnectionAsync(
+                    allowInteractiveLogin: false,
+                    listModels: true,
+                    forceListModels: true);
+            }
         }
         catch (OperationCanceledException)
         {
             AzureCliStatusText.Text =
                 "Azure CLI install timed out. Try again, or install it from https://aka.ms/installazurecliwindows.";
         }
-        catch
+        catch (Exception ex)
         {
+            TryLog(ex, "Could not install or update Azure CLI.");
             AzureCliStatusText.Text =
                 "Couldn't run the installer. Install the Azure CLI from https://aka.ms/installazurecliwindows.";
         }
@@ -2042,7 +2260,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // replaces it. Empty AccountName makes Detail render the endpoint; ModelName == DeploymentName
         // makes DisplayName render just the deployment.
         var current = new AzureFoundryDeployment(
-            SubscriptionName: string.Empty,
+            SubscriptionId: _settings.AiCleanupAzureSubscriptionId ?? string.Empty,
+            SubscriptionName: _settings.AiCleanupAzureSubscriptionName ?? string.Empty,
+            TenantId: _settings.AiCleanupAzureSubscriptionTenantId ?? string.Empty,
             ResourceGroup: string.Empty,
             AccountName: string.Empty,
             Kind: string.Empty,
@@ -2055,6 +2275,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var items = BuildAzureModelItems(new[] { current });
         SetComboItems(AzureModelBox, items);
         AzureModelBox.Text = items[0];
+        _selectedAzureDeployment = current;
     }
 
     private void UpdateAiProviderPanels()
@@ -2163,7 +2384,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var key = AzureModelBox.Text?.Trim() ?? string.Empty;
         AzureDeploymentHint.Text = _azureModelMap.TryGetValue(key, out var deployment)
             ? deployment.Detail
-            : "Sign in to list your models, or enter one under Advanced.";
+            : _azureSignInStatus.IsSignedIn
+                ? "Choose a discovered deployment, or enter its exact name below."
+                : "Sign in before browsing deployments.";
     }
 
     private void OnCleanupStatusChanged() => Dispatcher.BeginInvoke(new Action(() =>
@@ -2183,7 +2406,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Surface the live engine status on whichever provider is actually running.
         if (_settings.AiCleanupProvider == CleanupProvider.AzureFoundry)
         {
-            AzureStatusText.Text = detail;
+            if (_azureConnectionKnown &&
+                !_azureSignInStatus.IsSignedIn &&
+                string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password))
+            {
+                return;
+            }
+
+            AzureCleanupStatusText.Text = detail;
         }
         else
         {
@@ -2368,6 +2598,31 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        var azureValidation = AzureSettingsAccess.ValidateCleanup(
+            enabled: AiCleanupCheck.IsChecked == true,
+            usesAzureProvider: SelectedProvider == CleanupProvider.AzureFoundry,
+            signedIn: _azureSignInStatus.IsSignedIn,
+            apiKey: AzureApiKeyBox.Password,
+            endpoint: AzureEndpointBox.Text,
+            deployment: AzureDeploymentBox.Text);
+        if (azureValidation != AzureSettingsAccess.ValidationIssue.None)
+        {
+            ShowSection(SectionAi);
+            var message = azureValidation switch
+            {
+                AzureSettingsAccess.ValidationIssue.AuthenticationRequired =>
+                    "Sign in to Azure, or use an endpoint and API key, before enabling Microsoft Foundry cleanup.",
+                AzureSettingsAccess.ValidationIssue.EndpointRequired =>
+                    "Choose a discovered model or enter the Microsoft Foundry or Azure OpenAI endpoint.",
+                AzureSettingsAccess.ValidationIssue.DeploymentRequired =>
+                    "Choose a discovered model or enter its exact Azure deployment name.",
+                _ => "Complete the Microsoft Foundry configuration before saving.",
+            };
+            AzureStatusText.Text = message;
+            ShowThemedMessage("Microsoft Foundry is not ready", message);
+            return false;
+        }
+
         try
         {
             var device = (DeviceChoice?)DeviceCombo.SelectedItem;
@@ -2405,7 +2660,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
             _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
-            var azureSubscription = SelectedAzureSubscription;
+            var azureSubscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
+                _selectedAzureDeployment,
+                SelectedAzureSubscription,
+                AzureEndpointBox.Text,
+                AzureDeploymentBox.Text);
             _settings.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
             _settings.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
             _settings.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;

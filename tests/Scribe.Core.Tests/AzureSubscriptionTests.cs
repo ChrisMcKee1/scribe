@@ -1,4 +1,5 @@
 using Scribe.Core.Cleanup;
+using System.Text;
 using Xunit;
 
 namespace Scribe.Core.Tests;
@@ -56,7 +57,7 @@ public sealed class AzureSubscriptionTests
         const string json = """
             [
               { "id": "d3adbeef-0000-4000-8000-000000000001", "name": "Zulu", "tenantId": "aaaaaaaa-0000-4000-8000-000000000001", "state": "Enabled", "user": { "name": "first@example.test" } },
-              { "id": "d3adbeef-0000-4000-8000-000000000002", "name": "Alpha", "tenantId": "bbbbbbbb-0000-4000-8000-000000000002", "state": "Enabled", "user": { "name": "second@example.test" } },
+              { "id": "d3adbeef-0000-4000-8000-000000000002", "name": "Alpha", "tenantId": "bbbbbbbb-0000-4000-8000-000000000002", "state": "Enabled", "isDefault": true, "user": { "name": "second@example.test" } },
               { "id": "d3adbeef-0000-4000-8000-000000000003", "name": "Disabled", "tenantId": "bbbbbbbb-0000-4000-8000-000000000002", "state": "Disabled" }
             ]
             """;
@@ -70,11 +71,13 @@ public sealed class AzureSubscriptionTests
                 Assert.Equal("Alpha", subscription.Name);
                 Assert.Equal("bbbbbbbb-0000-4000-8000-000000000002", subscription.TenantId);
                 Assert.Equal("second@example.test", subscription.AccountName);
+                Assert.True(subscription.IsDefault);
             },
             subscription =>
             {
                 Assert.Equal("Zulu", subscription.Name);
                 Assert.Equal("aaaaaaaa-0000-4000-8000-000000000001", subscription.TenantId);
+                Assert.False(subscription.IsDefault);
             });
     }
 
@@ -93,5 +96,21 @@ public sealed class AzureSubscriptionTests
         var subscription = Assert.Single(AzureCliAccountParser.ParseSubscriptions(json));
 
         Assert.Equal("Current", subscription.Name);
+    }
+
+    [Fact]
+    public void Sign_in_identity_reads_account_and_verified_tenant_from_token()
+    {
+        const string tenantId = "6e898202-3a97-48e6-9eb2-71fd5fe7de39";
+        var payload = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                $$"""{"preferred_username":"user@example.test","tid":"{{tenantId}}"}"""))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+        var identity = AzureFoundryDiscovery.ReadIdentityFromToken($"header.{payload}.signature");
+
+        Assert.Equal("user@example.test", identity.Account);
+        Assert.Equal(tenantId, identity.TenantId);
     }
 }

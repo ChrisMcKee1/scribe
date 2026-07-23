@@ -92,8 +92,8 @@ public sealed class AppSettings
     /// <summary>
     /// Azure subscription id (GUID) that model discovery is filtered to in Settings. Null lists
     /// deployments from every subscription the sign-in can see, which surprises users whose
-    /// account spans shared or foreign projects. Discovery-time only; cleanup calls the saved
-    /// endpoint directly and never consults this.
+    /// account spans shared or foreign projects. It also pins token authentication to the identity
+    /// that owns a selected deployment when browsing across subscriptions.
     /// </summary>
     public string? AiCleanupAzureSubscriptionId { get; set; }
 

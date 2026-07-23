@@ -1,14 +1,18 @@
+using Azure.Core;
 using Azure.Identity;
 
 namespace Scribe.Core.Cleanup;
 
 internal static class AzureCliCredentialFactory
 {
-    internal static AzureCliCredential Create(string? tenantId, string? subscriptionId = null)
+    internal static TokenCredential Create(string? tenantId, string? subscriptionId = null)
     {
+        // DefaultAzureCredential can exclude managed identity and the other deployed credentials, but
+        // Azure CLI is Scribe's explicit user contract. A concrete credential is deterministic, avoids
+        // desktop IMDS probes, and supports selecting the cached CLI account by subscription.
         var options = new AzureCliCredentialOptions
         {
-            ProcessTimeout = TimeSpan.FromSeconds(30),
+            ProcessTimeout = TimeSpan.FromSeconds(60),
         };
 
         // A subscription selects the matching cached CLI account as well as its tenant. Supplying
@@ -23,6 +27,6 @@ internal static class AzureCliCredentialFactory
             options.TenantId = tenantId.Trim();
         }
 
-        return new AzureCliCredential(options);
+        return new SerializedAzureCliCredential(new AzureCliCredential(options));
     }
 }
