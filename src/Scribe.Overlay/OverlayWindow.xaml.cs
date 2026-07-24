@@ -268,10 +268,10 @@ public sealed partial class OverlayWindow : Window
     });
 
     /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
-    public void ShowProcessing(bool polishing) => RunOnUi(() =>
+    public void ShowProcessing(bool aiPolishing) => RunOnUi(() =>
     {
         ClearFailedHold();
-        ProcessingText.Text = polishing ? "Polishing…" : "Transcribing…";
+        ProcessingText.Text = aiPolishing ? "AI polishing…" : "Transcribing…";
         ShowState(OverlayState.Processing);
     });
 

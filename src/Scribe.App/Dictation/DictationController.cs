@@ -138,6 +138,15 @@ internal sealed class DictationController : IDisposable
         get { lock (_gate) { return _settings; } }
     }
 
+    /// <summary>
+    /// True when the active capture will run AI cleanup. This reflects the per-capture hotkey
+    /// override, not just the global setting, so UI state can distinguish the two processing paths.
+    /// </summary>
+    public bool ActiveCaptureUsesAiCleanup
+    {
+        get { lock (_gate) { return _captureSettings?.EnableAiCleanup ?? false; } }
+    }
+
     /// <summary>Loads persisted settings, applies the hotkey binding and installs the hook.</summary>
     public void Start()
     {
@@ -275,11 +284,7 @@ internal sealed class DictationController : IDisposable
             }
 
             _state = DictationState.Recording;
-            settings = _settings.Clone();
-            if (e.Trigger == HotkeyTrigger.DictationOnly)
-            {
-                settings.EnableAiCleanup = false;
-            }
+            settings = DictationCaptureSettingsResolver.Resolve(_settings, e.Trigger);
             _captureSettings = settings;
             _captureTargetWindow = GetForegroundWindow();
             _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);

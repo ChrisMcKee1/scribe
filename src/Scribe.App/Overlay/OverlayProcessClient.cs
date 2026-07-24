@@ -89,11 +89,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue($"WARNING {clean}", ensureAlive: true);
     }
 
-    public void ShowProcessing(bool polishing)
+    public void ShowProcessing(bool aiPolishing)
     {
         CancelPreview();
         Unsubscribe();
-        _desiredState = $"PROCESSING {(polishing ? 1 : 0)}";
+        _desiredState = $"PROCESSING {(aiPolishing ? 1 : 0)}";
         Enqueue(_desiredState, ensureAlive: true);
     }
 

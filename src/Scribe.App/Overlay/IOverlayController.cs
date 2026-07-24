@@ -21,7 +21,7 @@ public interface IOverlayController
     void ShowRecordingWarning(string? reason);
 
     /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
-    void ShowProcessing(bool polishing);
+    void ShowProcessing(bool aiPolishing);
 
     /// <summary>Brief red "intelligence failed" flash, then auto-hides.</summary>
     void ShowFailed(string? reason);
