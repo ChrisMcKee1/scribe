@@ -280,7 +280,9 @@ public partial class App : Application
         _tray?.SetState(state);
 
         var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
-        var polishing = _controller?.CurrentSettings.EnableAiCleanup ?? false;
+        // The dictation-only hotkey overrides AI cleanup for its capture without changing the
+        // global setting, so the overlay must read the active capture snapshot.
+        var aiPolishing = _controller?.ActiveCaptureUsesAiCleanup ?? false;
         Dispatcher.BeginInvoke(() =>
         {
             if (!overlayEnabled)
@@ -295,7 +297,7 @@ public partial class App : Application
                     _overlay?.ShowRecording();
                     break;
                 case DictationState.Processing:
-                    _overlay?.ShowProcessing(polishing);
+                    _overlay?.ShowProcessing(aiPolishing);
                     break;
                 default:
                     _overlay?.HideOverlay();
