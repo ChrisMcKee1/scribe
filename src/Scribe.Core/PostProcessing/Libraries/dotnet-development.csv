@@ -1,0 +1,112 @@
+# name: .NET and C# Development
+# category: Software Development
+# description: .NET platforms, C# tooling, application frameworks, testing libraries, and common runtime acronyms.
+pattern,replacement
+#
+# --- Platform and web development ---
+dot net,.NET
+dot net framework,.NET Framework
+dot net core,.NET Core
+dot net standard,.NET Standard
+asp net,ASP.NET
+asp dot net,ASP.NET
+asp net core,ASP.NET Core
+asp dot net core,ASP.NET Core
+blazor,Blazor
+blazor server,Blazor Server
+blazor web assembly,Blazor WebAssembly
+blazor webassembly,Blazor WebAssembly
+blazor hybrid,Blazor Hybrid
+razor pages,Razor Pages
+razor components,Razor components
+signal r,SignalR
+signalr,SignalR
+minimal apis,minimal APIs
+web api,Web API
+grpc web,gRPC-Web
+#
+# --- Data access and application frameworks ---
+entity framework,Entity Framework
+entity framework core,Entity Framework Core
+ef core,EF Core
+e f core,EF Core
+ado net,ADO.NET
+dapper,Dapper
+linq,LINQ
+link query,LINQ query
+aspire dashboard,Aspire Dashboard
+dot net aspire,.NET Aspire
+dot net maui,.NET MAUI
+maui workload,.NET MAUI workload
+#
+# --- Windows application development ---
+wpf,WPF
+windows presentation foundation,Windows Presentation Foundation
+winforms,Windows Forms
+win forms,Windows Forms
+windows forms,Windows Forms
+win ui,WinUI
+win ui 3,WinUI 3
+windows app sdk,Windows App SDK
+xaml,XAML
+msix,MSIX
+#
+# --- Language, compiler, and runtime ---
+c sharp,C#
+f sharp,F#
+visual basic dot net,Visual Basic .NET
+roslyn,Roslyn
+common language runtime,Common Language Runtime
+clr,CLR
+c l r,CLR
+base class library,Base Class Library
+bcl,BCL
+common intermediate language,Common Intermediate Language
+cil,CIL
+intermediate language,Intermediate Language
+il,IL
+jit,JIT
+aot,AOT
+native aot,Native AOT
+gc,GC
+linq to sql,LINQ to SQL
+linq to xml,LINQ to XML
+#
+# --- Build and package tooling ---
+dot net cli,.NET CLI
+dotnet cli,.NET CLI
+msbuild,MSBuild
+nuget,NuGet
+nuget package,NuGet package
+nuget gallery,NuGet Gallery
+benchmark dot net,BenchmarkDotNet
+benchmarkdotnet,BenchmarkDotNet
+#
+# --- Testing and developer libraries ---
+x unit,xUnit
+xunit,xUnit
+n unit,NUnit
+nunit,NUnit
+ms test,MSTest
+mstest,MSTest
+moq,Moq
+n substitute,NSubstitute
+nsubstitute,NSubstitute
+fluent assertions,Fluent Assertions
+auto mapper,AutoMapper
+automapper,AutoMapper
+mediator library,MediatR
+mediatr,MediatR
+serilog,Serilog
+n log,NLog
+polly library,Polly
+resharper,ReSharper
+jetbrains rider,JetBrains Rider
+#
+# --- Architecture acronyms ---
+di,DI
+ioc,IoC
+cqrs,CQRS
+ddd,DDD
+task parallel library,Task Parallel Library
+tpl,TPL
