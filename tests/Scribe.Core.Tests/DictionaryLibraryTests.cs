@@ -111,12 +111,64 @@ public sealed class DictionaryLibraryTests
         Assert.Contains(all, l => l.Id == "software-development");
         Assert.Contains(all, l => l.Id == "modern-developer-stack");
         Assert.Contains(all, l => l.Id == "data-and-ai");
+        Assert.Contains(all, l => l.Id == "dotnet-development");
+        Assert.Contains(all, l => l.Id == "data-engineering");
+        Assert.Contains(all, l => l.Id == "data-science-machine-learning");
+        Assert.Equal(9, all.Count);
 
         var azure = all.Single(l => l.Id == "microsoft-azure");
         Assert.True(azure.BuiltIn);
         Assert.Equal("Microsoft", azure.Category);
         Assert.Contains(azure.Entries, e => e.Replacement == "APIM");
         Assert.Contains(azure.Entries, e => e.Pattern == "cosmos db" && e.Replacement == "Cosmos DB");
+    }
+
+    [Fact]
+    public void BuiltIn_libraries_have_complete_metadata_and_meaningful_depth()
+    {
+        var minimumEntries = new Dictionary<string, int>
+        {
+            ["data-and-ai"] = 125,
+            ["data-engineering"] = 90,
+            ["data-science-machine-learning"] = 85,
+            ["dotnet-development"] = 85,
+            ["github"] = 50,
+            ["microsoft-365"] = 95,
+            ["microsoft-azure"] = 125,
+            ["modern-developer-stack"] = 140,
+            ["software-development"] = 165,
+        };
+
+        foreach (var library in BuiltInDictionaryLibraries.All)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(library.Name));
+            Assert.False(string.IsNullOrWhiteSpace(library.Category));
+            Assert.False(string.IsNullOrWhiteSpace(library.Description));
+            Assert.True(library.Entries.Count >= minimumEntries[library.Id],
+                $"Library '{library.Id}' has only {library.Entries.Count} entries.");
+        }
+    }
+
+    [Fact]
+    public void BuiltIn_library_resources_parse_without_errors()
+    {
+        var assembly = typeof(BuiltInDictionaryLibraries).Assembly;
+        var resources = assembly.GetManifestResourceNames()
+            .Where(name => name.Contains(".PostProcessing.Libraries.", StringComparison.Ordinal) &&
+                           name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        Assert.Equal(9, resources.Count);
+        foreach (var resource in resources)
+        {
+            using var stream = assembly.GetManifestResourceStream(resource);
+            Assert.NotNull(stream);
+            using var reader = new StreamReader(stream!);
+            var parsed = DictionaryLibraryCsv.Parse(reader.ReadToEnd());
+
+            Assert.True(parsed.Errors.Count == 0,
+                $"Resource '{resource}' has CSV errors: {string.Join("; ", parsed.Errors)}");
+        }
     }
 
     [Fact]
@@ -136,6 +188,24 @@ public sealed class DictionaryLibraryTests
     }
 
     [Fact]
+    public void BuiltIn_libraries_use_consistent_replacements_for_overlapping_patterns()
+    {
+        var conflicts = BuiltInDictionaryLibraries.All
+            .SelectMany(library => library.Entries.Select(entry => (library.Id, Entry: entry)))
+            .GroupBy(item => item.Entry.Pattern.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group
+                .Select(item => item.Entry.Replacement.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .Count() > 1)
+            .Select(group =>
+                $"{group.Key}: {string.Join(", ", group.Select(item => $"{item.Id}={item.Entry.Replacement}"))}")
+            .ToList();
+
+        Assert.True(conflicts.Count == 0,
+            $"Overlapping library patterns disagree: {string.Join("; ", conflicts)}");
+    }
+
+    [Fact]
     public void BuiltIn_libraries_avoid_multiword_no_op_entries()
     {
         // A multi-word phrase mapped to itself (e.g. "resource group" -> "resource group") adds no
@@ -149,6 +219,27 @@ public sealed class DictionaryLibraryTests
                     entry.Pattern.Trim(), entry.Replacement.Trim(), StringComparison.Ordinal);
                 Assert.False(isSelfMap && entry.Pattern.Contains(' '),
                     $"Library '{library.Id}' maps the phrase '{entry.Pattern}' to itself.");
+            }
+        }
+    }
+
+    [Fact]
+    public void Specialized_libraries_avoid_ambiguous_bare_english_patterns()
+    {
+        var forbiddenByLibrary = new Dictionary<string, string[]>
+        {
+            ["dotnet-development"] = ["maui", "razor", "polly", "rider"],
+            ["data-engineering"] = ["airflow", "spark", "beam", "iceberg", "prefect", "athena", "redshift"],
+            ["data-science-machine-learning"] = ["lime", "lightning", "ray", "r", "torch"],
+        };
+
+        foreach (var (libraryId, forbiddenPatterns) in forbiddenByLibrary)
+        {
+            var library = BuiltInDictionaryLibraries.All.Single(l => l.Id == libraryId);
+            foreach (var pattern in forbiddenPatterns)
+            {
+                Assert.DoesNotContain(library.Entries, entry =>
+                    string.Equals(entry.Pattern, pattern, StringComparison.OrdinalIgnoreCase));
             }
         }
     }

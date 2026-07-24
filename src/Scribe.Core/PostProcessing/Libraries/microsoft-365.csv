@@ -10,10 +10,17 @@ m365,Microsoft 365
 o365,Office 365
 microsoft teams,Microsoft Teams
 teams,Teams
+teams premium,Teams Premium
+teams phone,Teams Phone
+teams rooms,Teams Rooms
 sharepoint,SharePoint
 share point,SharePoint
+sharepoint online,SharePoint Online
+share point online,SharePoint Online
+sharepoint premium,SharePoint Premium
 onedrive,OneDrive
 one drive,OneDrive
+onedrive for business,OneDrive for Business
 outlook,Outlook
 exchange online,Exchange Online
 onenote,OneNote
@@ -26,6 +33,11 @@ microsoft loop,Microsoft Loop
 microsoft forms,Microsoft Forms
 microsoft planner,Microsoft Planner
 microsoft bookings,Microsoft Bookings
+microsoft lists,Microsoft Lists
+microsoft stream,Microsoft Stream
+microsoft whiteboard,Microsoft Whiteboard
+microsoft clipchamp,Microsoft Clipchamp
+microsoft to do,Microsoft To Do
 visio,Visio
 microsoft graph,Microsoft Graph
 #
@@ -38,16 +50,38 @@ power automate,Power Automate
 power pages,Power Pages
 power fx,Power Fx
 dataverse,Dataverse
+ai builder,AI Builder
+power query,Power Query
+power bi desktop,Power BI Desktop
+power bi service,Power BI service
+power bi report server,Power BI Report Server
 #
 # --- Copilot and AI ---
 copilot,Copilot
 microsoft copilot,Microsoft Copilot
+microsoft 365 copilot,Microsoft 365 Copilot
+m 365 copilot,Microsoft 365 Copilot
+copilot chat,Copilot Chat
+microsoft 365 copilot chat,Microsoft 365 Copilot Chat
 copilot studio,Copilot Studio
 github copilot,GitHub Copilot
+microsoft agent 365,Microsoft Agent 365
+agent 365,Microsoft Agent 365
+agent builder,Agent Builder
+sharepoint agents,SharePoint agents
+copilot prompt gallery,Copilot Prompt Gallery
+copilot analytics,Copilot Analytics
 #
 # --- Identity and management ---
 microsoft entra,Microsoft Entra
 entra id,Microsoft Entra ID
+entra external id,Microsoft Entra External ID
+entra id governance,Microsoft Entra ID Governance
+entra internet access,Microsoft Entra Internet Access
+entra private access,Microsoft Entra Private Access
+entra verified id,Microsoft Entra Verified ID
+entra workload id,Microsoft Entra Workload ID
+entra agent id,Microsoft Entra Agent ID
 active directory,Active Directory
 microsoft intune,Microsoft Intune
 intune,Intune
@@ -58,6 +92,9 @@ conditional access,Conditional Access
 microsoft viva,Microsoft Viva
 viva engage,Viva Engage
 viva learning,Viva Learning
+viva insights,Viva Insights
+viva connections,Viva Connections
+viva amplify,Viva Amplify
 #
 # --- Windows and dev tools ---
 windows,Windows
@@ -67,8 +104,14 @@ powershell,PowerShell
 power shell,PowerShell
 visual studio code,Visual Studio Code
 visual studio,Visual Studio
-vs code,VS Code
+vs code,Visual Studio Code
 dot net,.NET
+windows terminal,Windows Terminal
+windows app sdk,Windows App SDK
+win ui,WinUI
+win ui 3,WinUI 3
+winget,WinGet
+msix,MSIX
 #
 # --- Spoken acronyms ---
 sso,SSO
@@ -80,3 +123,8 @@ e discovery,eDiscovery
 rdp,RDP
 smb,SMB
 uwp,UWP
+wpf,WPF
+rbac,RBAC
+abac,ABAC
+scim,SCIM
+oidc,OIDC

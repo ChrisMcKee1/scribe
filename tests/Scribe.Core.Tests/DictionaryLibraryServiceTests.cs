@@ -46,7 +46,10 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
         var libraries = _service.GetLibraries();
 
         Assert.Contains(libraries, l => l.Id == "microsoft-azure" && l.BuiltIn);
-        Assert.True(libraries.Count >= 6);
+        Assert.Contains(libraries, l => l.Id == "dotnet-development" && l.BuiltIn);
+        Assert.Contains(libraries, l => l.Id == "data-engineering" && l.BuiltIn);
+        Assert.Contains(libraries, l => l.Id == "data-science-machine-learning" && l.BuiltIn);
+        Assert.True(libraries.Count >= 9);
     }
 
     [Fact]
@@ -172,5 +175,32 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
             "react quickly and go home because rust covered the swift car near a bun; the postman made it prettier " +
             "while the playwright moved the cursor before the warp drive",
             ordinary);
+    }
+
+    [Theory]
+    [InlineData(
+        "dotnet-development",
+        "build asp net core with entity framework core and x unit on win ui 3",
+        "build ASP.NET Core with Entity Framework Core and xUnit on WinUI 3")]
+    [InlineData(
+        "data-engineering",
+        "run dbt core in fabric data factory and write apache iceberg from py spark",
+        "run dbt Core in Fabric Data Factory and write Apache Iceberg from PySpark")]
+    [InlineData(
+        "data-science-machine-learning",
+        "train xg boost with scikit learn and track it in weights and biases using f one score",
+        "train XGBoost with scikit-learn and track it in Weights & Biases using F1 score")]
+    public void Enabled_specialized_library_canonicalizes_representative_terms(
+        string libraryId, string dictated, string expected)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Add(libraryId);
+        _settings.Save(settings);
+
+        var dictionary = new DictionaryRepository(_db);
+        var processor = new TextPostProcessor(
+            dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: _service);
+
+        Assert.Equal(expected, processor.Process(dictated));
     }
 }

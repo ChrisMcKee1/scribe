@@ -1,0 +1,113 @@
+# name: Data Science and Machine Learning
+# category: Data and AI
+# description: Statistical computing, machine learning frameworks, experiment tools, model metrics, and generative AI acronyms.
+pattern,replacement
+#
+# --- Scientific Python and notebooks ---
+numpy,NumPy
+num py,NumPy
+pandas,pandas
+scipy,SciPy
+scikit learn,scikit-learn
+stats models,statsmodels
+statsmodels,statsmodels
+matplotlib,Matplotlib
+seaborn,Seaborn
+plotly,Plotly
+jupyter,Jupyter
+jupyter lab,JupyterLab
+jupyter notebook,Jupyter Notebook
+anaconda,Anaconda
+mini conda,Miniconda
+conda,conda
+#
+# --- Machine learning frameworks ---
+pytorch,PyTorch
+py torch,PyTorch
+pytorch lightning,PyTorch Lightning
+torch vision,torchvision
+torchvision,torchvision
+torch audio,torchaudio
+torchaudio,torchaudio
+tensor flow,TensorFlow
+tensorflow,TensorFlow
+keras,Keras
+jax,JAX
+xg boost,XGBoost
+xgboost,XGBoost
+light gbm,LightGBM
+lightgbm,LightGBM
+cat boost,CatBoost
+catboost,CatBoost
+h 2 o ai,H2O.ai
+#
+# --- NLP, vision, and generative AI tooling ---
+hugging face,Hugging Face
+hugging face transformers,Hugging Face Transformers
+sentence transformers,Sentence Transformers
+spacy,spaCy
+nltk,NLTK
+gensim,Gensim
+open cv,OpenCV
+opencv,OpenCV
+langchain,LangChain
+lang chain,LangChain
+langgraph,LangGraph
+llama index,LlamaIndex
+#
+# --- Experimentation and model operations ---
+mlflow,MLflow
+ml flow,MLflow
+weights and biases,Weights & Biases
+wandb,Weights & Biases
+optuna,Optuna
+ray tune,Ray Tune
+kubeflow,Kubeflow
+dvc,DVC
+data version control,Data Version Control
+azure machine learning,Azure Machine Learning
+amazon sagemaker,Amazon SageMaker
+vertex ai,Vertex AI
+databricks ml,Databricks ML
+#
+# --- Evaluation and statistical acronyms ---
+eda,EDA
+pca,PCA
+t sne,t-SNE
+tsne,t-SNE
+umap,UMAP
+roc,ROC
+roc curve,ROC curve
+auc,AUC
+f one score,F1 score
+rmse,RMSE
+mse,MSE
+mae,MAE
+mape,MAPE
+r squared,R-squared
+r 2 score,R2 score
+shap,SHAP
+lime explainer,LIME explainer
+#
+# --- AI model terminology ---
+llm,LLM
+llms,LLMs
+vlm,VLM
+slm,SLM
+nlp,NLP
+rag,RAG
+r a g,RAG
+rlhf,RLHF
+sft,SFT
+lora,LoRA
+qlora,QLoRA
+peft,PEFT
+dpo,DPO
+moe,MoE
+model context protocol,Model Context Protocol
+mcp,MCP
+asr,ASR
+text to speech,text-to-speech
+tts,TTS
+speech to text,speech-to-text
+stt,STT

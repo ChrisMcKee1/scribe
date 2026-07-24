@@ -11,18 +11,58 @@ github copilot,GitHub Copilot
 get hub copilot,GitHub Copilot
 git hub copilot,GitHub Copilot
 copilot,Copilot
+github dot com,GitHub.com
+github api,GitHub API
+github rest api,GitHub REST API
+github graph q l api,GitHub GraphQL API
 #
-# --- Products ---
+# --- Collaboration and platform products ---
 github actions,GitHub Actions
 github enterprise,GitHub Enterprise
+github enterprise cloud,GitHub Enterprise Cloud
+github enterprise server,GitHub Enterprise Server
 github pages,GitHub Pages
 github desktop,GitHub Desktop
 github cli,GitHub CLI
+g h cli,GitHub CLI
 github advanced security,GitHub Advanced Security
 github packages,GitHub Packages
 github codespaces,GitHub Codespaces
+github issues,GitHub Issues
+github projects,GitHub Projects
+github discussions,GitHub Discussions
+github sponsors,GitHub Sponsors
+github marketplace,GitHub Marketplace
+github gist,GitHub Gist
+github apps,GitHub Apps
+github app,GitHub App
 codespaces,Codespaces
 code spaces,Codespaces
 dependabot,Dependabot
 octocat,Octocat
 readme,README
+#
+# --- Copilot and AI ---
+github copilot chat,GitHub Copilot Chat
+github copilot cli,GitHub Copilot CLI
+copilot coding agent,Copilot coding agent
+copilot cloud agent,Copilot cloud agent
+copilot agent mode,Copilot agent mode
+copilot spaces,Copilot Spaces
+github models,GitHub Models
+github spark,GitHub Spark
+#
+# --- Security and automation ---
+code q l,CodeQL
+codeql,CodeQL
+github code security,GitHub Code Security
+github secret protection,GitHub Secret Protection
+github secret scanning,GitHub secret scanning
+github code scanning,GitHub code scanning
+dependabot alerts,Dependabot alerts
+dependabot security updates,Dependabot security updates
+dependabot version updates,Dependabot version updates
+github actions runner,GitHub Actions runner
+self hosted runner,self-hosted runner
+git lfs,Git LFS
+git large file storage,Git Large File Storage

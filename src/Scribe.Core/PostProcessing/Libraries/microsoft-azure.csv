@@ -18,26 +18,46 @@ azure policy,Azure Policy
 azure devops,Azure DevOps
 azure dev ops,Azure DevOps
 bicep,Bicep
+azure portal,Azure portal
+azure landing zone,Azure landing zone
+azure resource graph,Azure Resource Graph
+azure lighthouse,Azure Lighthouse
 #
 # --- Compute, web, and containers ---
 app service,App Service
+azure app service,Azure App Service
 azure functions,Azure Functions
 logic apps,Logic Apps
 container apps,Container Apps
+azure container apps,Azure Container Apps
 container registry,Container Registry
+container instances,Container Instances
+azure container instances,Azure Container Instances
 azure kubernetes service,Azure Kubernetes Service
+azure red hat openshift,Azure Red Hat OpenShift
 service fabric,Service Fabric
+azure batch,Azure Batch
+azure virtual machines,Azure Virtual Machines
+azure vmware solution,Azure VMware Solution
 #
 # --- Data and storage ---
 cosmos db,Cosmos DB
 cosmos d b,Cosmos DB
+azure cosmos db,Azure Cosmos DB
 blob storage,Blob Storage
 table storage,Table Storage
 queue storage,Queue Storage
 data lake,Data Lake
+azure data lake storage,Azure Data Lake Storage
+data lake storage gen 2,Data Lake Storage Gen2
+azure files,Azure Files
+managed disks,Managed Disks
+azure netapp files,Azure NetApp Files
 azure sql,Azure SQL
 sql database,SQL Database
 sql managed instance,SQL Managed Instance
+azure database for postgresql,Azure Database for PostgreSQL
+azure database for mysql,Azure Database for MySQL
 azure cache for redis,Azure Cache for Redis
 azure managed redis,Azure Managed Redis
 data factory,Data Factory
@@ -46,6 +66,8 @@ synapse,Synapse
 azure databricks,Azure Databricks
 databricks,Databricks
 stream analytics,Stream Analytics
+azure data explorer,Azure Data Explorer
+kusto,Kusto
 #
 # --- Messaging and integration ---
 service bus,Service Bus
@@ -53,6 +75,7 @@ event hubs,Event Hubs
 event hub,Event Hub
 event grid,Event Grid
 api management,API Management
+api center,API Center
 app configuration,App Configuration
 #
 # --- Networking ---
@@ -63,24 +86,39 @@ express route,ExpressRoute
 private link,Private Link
 azure firewall,Azure Firewall
 azure bastion,Azure Bastion
+vpn gateway,VPN Gateway
+nat gateway,NAT Gateway
+azure load balancer,Azure Load Balancer
+azure private dns,Azure Private DNS
+ddos protection,DDoS Protection
+web application firewall,Web Application Firewall
 #
 # --- Security ---
 key vault,Key Vault
+managed hsm,Managed HSM
 microsoft sentinel,Microsoft Sentinel
 sentinel,Microsoft Sentinel
 microsoft defender,Microsoft Defender
+defender for cloud,Microsoft Defender for Cloud
 microsoft purview,Microsoft Purview
 purview,Microsoft Purview
+azure confidential computing,Azure confidential computing
 #
 # --- AI ---
 cognitive services,Azure AI services
 azure openai,Azure OpenAI
 azure ai foundry,Azure AI Foundry
 ai foundry,AI Foundry
+microsoft foundry,Microsoft Foundry
+foundry agent service,Microsoft Foundry Agent Service
+microsoft foundry agent service,Microsoft Foundry Agent Service
 foundry local,Foundry Local
 azure ai search,Azure AI Search
 cognitive search,Azure AI Search
 document intelligence,Document Intelligence
+azure machine learning,Azure Machine Learning
+azure ai content safety,Azure AI Content Safety
+azure speech service,Azure Speech service
 azure virtual desktop,Azure Virtual Desktop
 #
 # --- Observability ---
@@ -89,6 +127,15 @@ application insights,Application Insights
 app insights,Application Insights
 azure monitor,Azure Monitor
 azure advisor,Azure Advisor
+azure managed grafana,Azure Managed Grafana
+azure service health,Azure Service Health
+#
+# --- Azure DevOps ---
+azure boards,Azure Boards
+azure repos,Azure Repos
+azure pipelines,Azure Pipelines
+azure artifacts,Azure Artifacts
+azure test plans,Azure Test Plans
 #
 # --- Spoken acronyms (letter-by-letter and word forms) ---
 apim,APIM
@@ -98,7 +145,11 @@ a k s,AKS
 acr,ACR
 a c r,ACR
 aca,ACA
+aci,ACI
+a c i,ACI
 adf,ADF
+adls,ADLS
+a d l s,ADLS
 avd,AVD
 vnet,VNet
 v net,VNet
@@ -106,9 +157,12 @@ nsg,NSG
 n s g,NSG
 udr,UDR
 vmss,VMSS
+v m s s,VMSS
 sku,SKU
 i a c,IaC
 arm template,ARM template
 rbac,RBAC
 r b a c,RBAC
 abac,ABAC
+waf,WAF
+hsm,HSM

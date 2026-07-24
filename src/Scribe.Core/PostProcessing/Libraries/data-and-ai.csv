@@ -12,23 +12,57 @@ apache spark,Apache Spark
 spark,Spark
 hadoop,Hadoop
 airflow,Airflow
+apache airflow,Apache Airflow
+apache flink,Apache Flink
+apache beam,Apache Beam
+apache iceberg,Apache Iceberg
+delta lake,Delta Lake
+delta sharing,Delta Sharing
 tableau,Tableau
 pandas,pandas
 numpy,NumPy
 num py,NumPy
+scipy,SciPy
+matplotlib,Matplotlib
+seaborn,Seaborn
 pytorch,PyTorch
 py torch,PyTorch
 tensorflow,TensorFlow
 tensor flow,TensorFlow
 scikit learn,scikit-learn
+xg boost,XGBoost
+xgboost,XGBoost
+light gbm,LightGBM
+lightgbm,LightGBM
+cat boost,CatBoost
+catboost,CatBoost
 hugging face,Hugging Face
 langchain,LangChain
 lang chain,LangChain
+langgraph,LangGraph
+lang graph,LangGraph
+llama index,LlamaIndex
+semantic kernel,Semantic Kernel
 jupyter,Jupyter
+mlflow,MLflow
+ml flow,MLflow
+weights and biases,Weights & Biases
+wandb,Weights & Biases
 parquet,Parquet
+apache parquet,Apache Parquet
+apache arrow,Apache Arrow
+py arrow,PyArrow
+pyarrow,PyArrow
 onnx,ONNX
 o n n x,ONNX
 cuda,CUDA
+jax,JAX
+keras,Keras
+spacy,spaCy
+open cv,OpenCV
+opencv,OpenCV
+ollama,Ollama
+lm studio,LM Studio
 #
 # --- AI and ML terms ---
 llm,LLM
@@ -36,16 +70,34 @@ l l m,LLM
 llms,LLMs
 gpt,GPT
 gen ai,GenAI
+generative ai,generative AI
 nlp,NLP
 n l p,NLP
 cnn,CNN
 rnn,RNN
 gan,GAN
+rag,RAG
+r a g,RAG
+vlm,VLM
+v l m,VLM
+slm,SLM
+moe,MoE
+model context protocol,Model Context Protocol
+mcp,MCP
+agentic ai,agentic AI
 mlops,MLOps
 ml ops,MLOps
+llm ops,LLMOps
+llmops,LLMOps
+ai ops,AIOps
+aiops,AIOps
 rlhf,RLHF
 sft,SFT
 lora,LoRA
+qlora,QLoRA
+q lora,QLoRA
+peft,PEFT
+dpo,DPO
 fine tuning,fine-tuning
 fine tune,fine-tune
 vector db,vector database
@@ -54,19 +106,42 @@ vector db,vector database
 etl,ETL
 e t l,ETL
 elt,ELT
+cdc,CDC
+scd,SCD
 nosql,NoSQL
 no sql,NoSQL
 olap,OLAP
 oltp,OLTP
+dbt,dbt
+airbyte,Airbyte
+fivetran,Fivetran
+dagster,Dagster
+prefect workflow,Prefect
+microsoft fabric,Microsoft Fabric
+one lake,OneLake
+onelake,OneLake
 #
 # --- Analytics and metrics ---
 kpi,KPI
 kpis,KPIs
 eda,EDA
+auc,AUC
+roc,ROC
+rmse,RMSE
+mse,MSE
+mae,MAE
+mape,MAPE
+f one score,F1 score
+r squared,R-squared
 #
 # --- Formats and hardware ---
 csv,CSV
 tsv,TSV
+json lines,JSON Lines
+jsonl,JSONL
+ndjson,NDJSON
+avro,Avro
+orc,ORC
 gpu,GPU
 tpu,TPU
 #
@@ -75,6 +150,10 @@ ocr,OCR
 tts,TTS
 stt,STT
 asr,ASR
+ctc,CTC
 #
 # --- Governance ---
 pii,PII
+phi,PHI
+gdpr,GDPR
+hipaa,HIPAA
