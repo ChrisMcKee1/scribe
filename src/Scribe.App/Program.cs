@@ -18,7 +18,11 @@ internal static class Program
         // here must never block the app from launching, so swallow and continue to the UI.
         try
         {
-            VelopackApp.Build().Run();
+            VelopackApp.Build()
+                .OnAfterInstallFastCallback(_ => Infrastructure.ShellIconCache.Refresh())
+                .OnAfterUpdateFastCallback(_ => Infrastructure.ShellIconCache.Refresh())
+                .OnRestarted(_ => Infrastructure.ShellIconCache.Refresh())
+                .Run();
         }
         catch
         {

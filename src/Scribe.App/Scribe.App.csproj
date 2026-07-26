@@ -14,6 +14,15 @@
     <PackageReference Include="WPF-UI" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Keep the brand and state variants inside Scribe.exe. Velopack replaces the executable as
+         one unit, so upgrades cannot leave an old tray-icon file beside the new application. -->
+    <EmbeddedResource Include="Assets\scribe.ico" LogicalName="Scribe.App.Assets.scribe.ico" />
+    <EmbeddedResource Include="Assets\scribe-recording.ico" LogicalName="Scribe.App.Assets.scribe-recording.ico" />
+    <EmbeddedResource Include="Assets\scribe-processing.ico" LogicalName="Scribe.App.Assets.scribe-processing.ico" />
+    <EmbeddedResource Include="Assets\scribe-paused.ico" LogicalName="Scribe.App.Assets.scribe-paused.ico" />
+  </ItemGroup>
+
   <!-- Velopack's install/update hooks must run before WPF starts, so we use an explicit Program.Main
        (StartupObject) instead of the auto-generated App entry point. That requires App.xaml to be a
        Page rather than the ApplicationDefinition (which would emit a second Main). -->
