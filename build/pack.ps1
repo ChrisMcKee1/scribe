@@ -54,6 +54,15 @@ if ($Version -ne $sourceVersion) {
     throw "Requested version $Version does not match Directory.Build.props version $sourceVersion. Update VersionPrefix first."
 }
 
+# Branding for the installer and the Add/Remove Programs entry, read from the same single source of
+# truth as the version so the shipped metadata can never drift from the project file.
+$packTitle = [string]$props.Project.PropertyGroup.Product
+if ([string]::IsNullOrWhiteSpace($packTitle)) { $packTitle = $packId }
+$packAuthors = [string]$props.Project.PropertyGroup.Authors
+if ([string]::IsNullOrWhiteSpace($packAuthors)) { throw "Authors missing from $propsPath" }
+$brandIcon = Join-Path $repoRoot 'src/Scribe.App/Assets/scribe.ico'
+if (-not (Test-Path $brandIcon -PathType Leaf)) { throw "Brand icon missing: $brandIcon" }
+
 . (Join-Path $repoRoot 'scripts/Model-Manifest.ps1')
 $sourceModels = Join-Path $repoRoot 'src/Scribe.App/models'
 Test-ScribeRuntimeModels -ModelsDir $sourceModels -VerifyHashes
@@ -125,7 +134,12 @@ $packArgs = @(
     '--packDir', $publishDir,
     '--mainExe', $mainExe,
     '--outputDir', $releaseDir,
-    '--channel', $runtime
+    '--channel', $runtime,
+    # Brand the installer and the Add/Remove Programs entry. Without an explicit icon vpk ships a
+    # generic Setup.exe, and the publisher falls back to the pack id instead of the real author.
+    '--icon', $brandIcon,
+    '--packTitle', $packTitle,
+    '--packAuthors', $packAuthors
 )
 
 Write-Host '==> vpk pack...' -ForegroundColor Cyan
