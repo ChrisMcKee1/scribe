@@ -926,8 +926,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (stats.ParakeetDecodeMs is { } decode)
             {
                 DecodeSummaryHint.Text =
-                    $"Only time inside Parakeet over {stats.ParakeetDecodeCount} " +
-                    $"run{(stats.ParakeetDecodeCount == 1 ? string.Empty : "s")}. " +
+                    $"Time inside Parakeet only, over {stats.ParakeetDecodeCount} " +
+                    $"run{(stats.ParakeetDecodeCount == 1 ? string.Empty : "s")}. AI cleanup is never counted here. " +
                     $"Typical pace {FormatPace(stats.RtfP50)} realtime; slower runs {FormatPace(stats.RtfP95)}.";
                 StatDecodeAverage.Text = FormatLatency(decode.Average);
                 StatDecodeMin.Text = FormatLatency(decode.Min);
@@ -947,7 +947,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (stats.CleanupMs is { } cleanup)
             {
                 CleanupSummaryHint.Text =
-                    $"AI cleanup stage over {stats.CleanupCount} run{(stats.CleanupCount == 1 ? string.Empty : "s")}.";
+                    $"The cleanup model round trip on its own, over {stats.CleanupCount} " +
+                    $"run{(stats.CleanupCount == 1 ? string.Empty : "s")}. Recognition time is not included.";
                 StatCleanupAverage.Text = FormatLatency(cleanup.Average);
                 StatCleanupMin.Text = FormatLatency(cleanup.Min);
                 StatCleanupMax.Text = FormatLatency(cleanup.Max);
@@ -961,13 +962,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CleanupSummaryHint.Text = "No AI cleanup runs in this period yet.";
                 CleanupMetricsGrid.Visibility = Visibility.Collapsed;
                 CleanupNoDataText.Visibility = Visibility.Visible;
+                CleanupSpeedExpander.IsExpanded = false;
             }
 
             if (stats.CombinedMs is { } combined)
             {
                 CombinedSummaryHint.Text =
-                    $"Recognition through cleanup over {stats.CombinedCount} " +
-                    $"run{(stats.CombinedCount == 1 ? string.Empty : "s")}.";
+                    $"Recognition plus the cleanup model round trip over {stats.CombinedCount} " +
+                    $"run{(stats.CombinedCount == 1 ? string.Empty : "s")}. This is the wait you actually feel.";
                 StatCombinedAverage.Text = FormatLatency(combined.Average);
                 StatCombinedMin.Text = FormatLatency(combined.Min);
                 StatCombinedMax.Text = FormatLatency(combined.Max);
@@ -981,6 +983,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 CombinedSummaryHint.Text = "No cleanup-enabled runs in this period yet.";
                 CombinedMetricsGrid.Visibility = Visibility.Collapsed;
                 CombinedNoDataText.Visibility = Visibility.Visible;
+                CombinedSpeedExpander.IsExpanded = false;
             }
 
             StatsGrid.Visibility = Visibility.Visible;
