@@ -18,6 +18,10 @@ internal sealed class TrayIconHost : IDisposable
     private readonly MenuItem _pauseItem;
     private readonly MenuItem _aiItem;
 
+    // The icon currently assigned to the tray. Held so its handle can be released once it has been
+    // replaced; H.NotifyIcon owns nothing beyond the instance it is showing.
+    private System.Drawing.Icon? _currentIcon;
+
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
 
@@ -107,10 +111,11 @@ internal sealed class TrayIconHost : IDisposable
         quit.Click += (_, _) => QuitRequested?.Invoke();
         menu.Items.Add(quit);
 
+        _currentIcon = TrayIcons.CreateIdle();
         _icon = new TaskbarIcon
         {
             ToolTipText = "Scribe — ready",
-            Icon = TrayIcons.Idle,
+            Icon = _currentIcon,
             ContextMenu = menu,
             MenuActivation = PopupActivationMode.RightClick,
         };
@@ -120,13 +125,23 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Updates the tray icon and tooltip to match the current dictation state.</summary>
     public void SetState(DictationState state) => Dispatch(() =>
     {
-        (_icon.Icon, _icon.ToolTipText) = state switch
+        var (icon, tooltip) = state switch
         {
-            DictationState.Recording => (TrayIcons.Recording, "Scribe — recording…"),
-            DictationState.Processing => (TrayIcons.Processing, "Scribe — transcribing…"),
-            DictationState.Paused => (TrayIcons.Paused, "Scribe — paused"),
-            _ => (TrayIcons.Idle, "Scribe — ready"),
+            DictationState.Recording => (TrayIcons.CreateRecording(), "Scribe — recording…"),
+            DictationState.Processing => (TrayIcons.CreateProcessing(), "Scribe — transcribing…"),
+            DictationState.Paused => (TrayIcons.CreatePaused(), "Scribe — paused"),
+            _ => (TrayIcons.CreateIdle(), "Scribe — ready"),
         };
+
+        var previous = _currentIcon;
+        _currentIcon = icon;
+        _icon.Icon = icon;
+        _icon.ToolTipText = tooltip;
+
+        // Release the icon we just replaced. H.NotifyIcon may already have disposed it, and Icon
+        // tolerates a second dispose, so this only guarantees the handle is not leaked once the
+        // tray has stopped referencing it.
+        previous?.Dispose();
 
         _pauseItem.IsChecked = state == DictationState.Paused;
     });
@@ -204,5 +219,10 @@ internal sealed class TrayIconHost : IDisposable
         }
     }
 
-    public void Dispose() => _icon.Dispose();
+    public void Dispose()
+    {
+        _icon.Dispose();
+        _currentIcon?.Dispose();
+        _currentIcon = null;
+    }
 }
