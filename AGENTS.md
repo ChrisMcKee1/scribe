@@ -49,7 +49,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.5**.
+  in `Directory.Build.props`. Current version: **0.2.13**.
 
 ## Commands (run these — include the flags)
 
@@ -79,8 +79,11 @@ dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 # Auxiliary prompt evals (UsageInsight + AiDictionarySuggester, deterministic checks)
 dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 
-# Build the Velopack installer locally (version must match Directory.Build.props)
-./build/pack.ps1 -Version 0.2.5
+# Build the Velopack installer locally (version comes from Directory.Build.props)
+./build/pack.ps1
+
+# Build the Microsoft Store package (MSIX, needs the Windows SDK; never build an MSI)
+./build/pack-msix.ps1
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
@@ -112,6 +115,7 @@ Scribe.slnx                         solution (Core, App, Overlay[x64], tests, to
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   scripts/Download-Models.ps1       fetches ASR + VAD models
   build/pack.ps1                    Velopack installer + GitHub-release publisher
+  build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
   Directory.Build.props             single source of version truth (<VersionPrefix>)
   Directory.Packages.props          central NuGet version management — add versions HERE
 ```
@@ -202,6 +206,9 @@ store, GitHub signing secrets, or a publisher trust bundle.
 
 - The script derives `-Version` from `Directory.Build.props` when omitted and rejects an explicit
   value that does not match `<VersionPrefix>`.
+- Installer branding (`--icon`, `--packTitle`, `--packAuthors`) is read from
+  `Directory.Build.props` and `src/Scribe.App/Assets/scribe.ico`, so shipped metadata cannot drift
+  from the project file. Never hardcode the title, author, or icon path in the pack arguments.
 - `vpk` **refuses to pack an equal/greater version that already exists** in `releases\`.
   To repack the same version, delete that version's `*-full.nupkg`, `*-delta.nupkg`,
   `Scribe-win-x64-Setup.exe`, `Scribe-win-x64-Portable.zip`, and `releases.win-x64.json`
@@ -214,6 +221,45 @@ store, GitHub signing secrets, or a publisher trust bundle.
 - To publish without a rebuild, set `$env:GITHUB_TOKEN = gh auth token` and run
   `vpk upload github -o releases --channel win-x64 --repoUrl https://github.com/ChrisMcKee1/scribe --publish --releaseName "Scribe <ver>" --tag v<ver> --targetCommitish main --merge`.
 
+### Manual release (GitHub Actions credits exhausted)
+
+The hosted workflow is not always available. To cut a release entirely from this machine:
+
+```powershell
+# 1. main must already carry the version bump and the tag
+./build/pack.ps1                       # version comes from Directory.Build.props
+
+# 2. publish the release and upload every asset
+$t = (gh auth token | Out-String).Trim()
+vpk upload github -o releases --channel win-x64 `
+    --repoUrl https://github.com/ChrisMcKee1/scribe --publish `
+    --releaseName "Scribe <ver>" --tag v<ver> --targetCommitish main --merge --token $t
+```
+
+A delta package only builds when the previous version's `*-full.nupkg` is present in `releases\`;
+download it from the prior GitHub release first, or the upload ships a full package only.
+
+## Microsoft Store (MSIX, not MSI)
+
+`build/pack-msix.ps1` builds the Store package. **Do not build an MSI**: the Store accepts either
+an MSIX or an existing `.exe`/`.msi`, so an MSI would be a third installer to maintain with no
+benefit over the Velopack `.exe` we already ship.
+
+MSIX is the chosen path because Microsoft signs and hosts it for free, which removes the
+SmartScreen friction the unsigned Velopack installer carries, and because it is the only option
+supporting S Mode and Windows 11 backup and restore. See issue #42 for the full comparison.
+
+- The script needs `makeappx.exe` from the Windows SDK. It never touches a certificate: Store
+  packages are signed by Microsoft after upload.
+- Identity and publisher must match the Partner Center reservation exactly; pass `-IdentityName`
+  and `-Publisher` once that reservation exists.
+- MSIX versions are four-part and the revision field is reserved for the Store, so it is always
+  `<VersionPrefix>.0`.
+- Store logos are generated from `docs/icon.png` at build time so the listing artwork can never
+  drift from the in-app brand mark.
+- Velopack must not fight the OS updater on a Store install; treat that as an open item from #42
+  before submitting.
+
 ## GitHub release automation
 
 `.github\workflows\release.yml` validates that the source version matches the tag and that
@@ -224,6 +270,23 @@ For a same-version replacement, remove the old release and tag only after the re
 commit and local artifacts are ready. Recreate the annotated tag at current `main`, let the
 workflow publish it, then verify every remote asset before reinstalling. Existing installations
 at that same version will **not** auto-update; they need a manual installer run.
+
+## Branding and icons
+
+The tray icon, window icon, installer, and Add/Remove Programs entry all resolve to one brand
+mark. Changing it means changing every one of these together:
+
+- `src/Scribe.App/Assets/scribe.ico` plus the `-recording`, `-processing`, and `-paused` state
+  variants, each carrying 16/24/32/48/64/128/256 px frames.
+- All four are **embedded resources** (`Scribe.App.Assets.*.ico`) loaded by `Tray/TrayIcons.cs`, so
+  an upgrade replaces them atomically with the executable and can never leave stale artwork beside
+  the new binary.
+- `<ApplicationIcon>` in `Scribe.App.csproj` sets the executable icon, which is what the uninstall
+  entry's `DisplayIcon` and every shortcut resolve to.
+- `docs/icon.png` is the README mark and the source for the generated Store logos.
+- Windows caches shortcut and search artwork aggressively, so `Infrastructure/ShellIconCache.cs`
+  calls `SHChangeNotify` after install, update, and restart. Without it an upgraded install keeps
+  showing the previous icon until the cache expires.
 
 ## Git workflow
 
