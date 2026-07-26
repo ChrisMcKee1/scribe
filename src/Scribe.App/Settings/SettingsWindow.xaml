@@ -372,9 +372,23 @@
                                         <Slider x:Name="ThreadsSlider" Minimum="0" Maximum="16"
                                                 TickFrequency="1" IsSnapToTickEnabled="True"
                                                 Margin="0,8,0,0"
+                                                AutomationProperties.Name="Decode threads"
                                                 ValueChanged="ThreadsSlider_ValueChanged"/>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="CPU threads for transcription (0 = automatic)."/>
+                                        <!-- End labels: without them the track carries no scale, so the leftmost
+                                             position reads as an unset slider rather than the Auto default. -->
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Auto" Margin="0"
+                                                       Style="{StaticResource SettingHint}"/>
+                                            <TextBlock Grid.Column="2" Text="16" Margin="0"
+                                                       Style="{StaticResource SettingHint}"/>
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="CPU threads for transcription. Auto lets Scribe pick the thread count that suits your processor."/>
                                     </StackPanel>
                                 </ui:CardExpander>
 
