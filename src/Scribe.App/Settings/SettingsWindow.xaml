@@ -1582,9 +1582,9 @@
                                     <ui:CardExpander x:Name="DecodeSpeedExpander" IsExpanded="True" Margin="0,0,0,8">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
-                                                <TextBlock Text="Parakeet decoding" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="Speech recognition" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
                                                 <TextBlock x:Name="DecodeSummaryHint" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                           Text="Only time spent inside the Parakeet recognizer."/>
+                                                           Text="Time inside the Parakeet recognizer only. AI cleanup is never counted here."/>
                                             </StackPanel>
                                         </ui:CardExpander.Header>
                                         <StackPanel Margin="0,8,0,0">
@@ -1620,12 +1620,12 @@
                                         </StackPanel>
                                     </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="False" Margin="0,0,0,8">
+                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="True" Margin="0,0,0,8">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
-                                                <TextBlock Text="AI cleanup speed" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="AI cleanup model" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
                                                 <TextBlock x:Name="CleanupSummaryHint" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                           Text="Captured only when AI cleanup runs successfully enough to inject text."/>
+                                                           Text="The cleanup model round trip on its own, measured after recognition finishes."/>
                                             </StackPanel>
                                         </ui:CardExpander.Header>
                                         <StackPanel Margin="0,8,0,0">
@@ -1661,12 +1661,12 @@
                                         </StackPanel>
                                     </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="False">
+                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="True">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
-                                                <TextBlock Text="Decode + AI cleanup" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
+                                                <TextBlock Text="End to end, recognition plus AI cleanup" Style="{StaticResource SettingTitle}" FontWeight="SemiBold"/>
                                                 <TextBlock x:Name="CombinedSummaryHint" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                           Text="Time from recognition start through AI cleanup, only when cleanup ran."/>
+                                                           Text="Recognition plus the cleanup model round trip. This is the wait you actually feel when AI cleanup is on."/>
                                             </StackPanel>
                                         </ui:CardExpander.Header>
                                         <StackPanel Margin="0,8,0,0">
