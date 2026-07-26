@@ -49,7 +49,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.13**.
+  in `Directory.Build.props`. Current version: **0.2.14**.
 
 ## Commands (run these — include the flags)
 
@@ -248,6 +248,19 @@ benefit over the Velopack `.exe` we already ship.
 MSIX is the chosen path because Microsoft signs and hosts it for free, which removes the
 SmartScreen friction the unsigned Velopack installer carries, and because it is the only option
 supporting S Mode and Windows 11 backup and restore. See issue #42 for the full comparison.
+
+**Free Microsoft signing is MSIX only.** This is the single most misunderstood point, so do not
+re-litigate it from memory:
+
+| Path | Who signs | Cost |
+|---|---|---|
+| Store, MSIX | Microsoft re-signs after certification | free |
+| Store, MSI or EXE | **you must Authenticode-sign before submission**, chaining to a CA in the Microsoft Trusted Root Program; self-signed is rejected | $150-500/yr, or Azure Artifact Signing ~$10/mo |
+| Direct download (our GitHub Releases) | you | same as above |
+
+Choosing an MSI therefore *buys* a signing bill rather than avoiding one. Azure Artifact Signing
+(~$9.99/month) is the option worth considering for the GitHub Releases channel, which the Store
+never covers; note it builds SmartScreen reputation over weeks rather than granting instant trust.
 
 - The script needs `makeappx.exe` from the Windows SDK. It never touches a certificate: Store
   packages are signed by Microsoft after upload.

@@ -277,7 +277,18 @@ public partial class App : Application
     /// </summary>
     private void OnStateChanged(DictationState state)
     {
-        _tray?.SetState(state);
+        // The tray and the overlay are independent views of the same state. A failure updating one
+        // must never stop the other: when this method threw, the overlay was left showing whatever
+        // it had last been told, so the pill sat on "Transcribing" while dictation kept working.
+        try
+        {
+            _tray?.SetState(state);
+        }
+        catch (Exception ex)
+        {
+            _host?.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Could not update the tray icon for state {State}.", state);
+        }
 
         var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
         // The dictation-only hotkey overrides AI cleanup for its capture without changing the
