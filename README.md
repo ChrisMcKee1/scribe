@@ -237,7 +237,8 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 
 ## 🔐 Your privacy, precisely
 
-- **Audio never leaves your machine. Ever.** It is captured, transcribed in memory, and dropped.
+- **Audio never leaves your machine. Ever.** It is captured and transcribed locally, then discarded
+  unless you explicitly enable local audio history.
 - **Transcription is 100% local** (Parakeet via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on CPU).
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
   offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is
@@ -245,6 +246,9 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 - **Even the stats are local.** Performance and Usage are computed from history already on your disk.
   Usage AI insight runs only when you click it and sends bounded aggregate data without transcripts,
   audio, application names or timestamps.
+
+See the full **[Scribe AI Privacy Policy](PRIVACY.md)** for data storage, optional transmissions,
+security, retention, and user controls.
 
 ## 🛠️ Building from source
 
