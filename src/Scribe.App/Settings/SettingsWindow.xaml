@@ -672,6 +672,47 @@
 
                                         <!-- Microsoft Foundry: verify sign-in before revealing cloud resources. -->
                                         <StackPanel x:Name="AzurePanel" Visibility="Collapsed">
+                                            <TextBlock Text="Sign-in method" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <ComboBox x:Name="AzureAuthModeBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                      AutomationProperties.Name="Azure sign-in method"
+                                                      SelectionChanged="AzureAuthModeBox_SelectionChanged">
+                                                <ComboBoxItem Content="Azure CLI (your az login account)"/>
+                                                <ComboBoxItem Content="Service principal (app registration)"/>
+                                            </ComboBox>
+                                            <TextBlock x:Name="AzureAuthModeHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Azure CLI uses whichever account you signed in with. Choose a service principal to pin one identity, which is the reliable option when you belong to more than one tenant."/>
+
+                                            <StackPanel x:Name="AzureServicePrincipalPanel" Visibility="Collapsed">
+                                                <TextBlock Text="Directory (tenant) ID" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="SpTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="GUID, or contoso.onmicrosoft.com"
+                                                            TextChanged="ServicePrincipalField_Changed"/>
+
+                                                <TextBlock Text="Application (client) ID" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                <ui:TextBox x:Name="SpClientIdBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="GUID from the app registration overview"
+                                                            TextChanged="ServicePrincipalField_Changed"/>
+
+                                                <TextBlock Text="Client secret" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                <ui:PasswordBox x:Name="SpClientSecretBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                VerticalContentAlignment="Center"
+                                                                PlaceholderText="The secret Value, not the Secret ID"
+                                                                PasswordChanged="ServicePrincipalField_Changed"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="The secret is encrypted on this PC with Windows DPAPI and is never written to an environment variable or a file. Azure shows the secret Value only once, when you create it."/>
+                                                <TextBlock x:Name="SpValidationText" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                                           Visibility="Collapsed"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0">
+                                                    <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/docs/service-principal-setup.md"
+                                                               RequestNavigate="Hyperlink_RequestNavigate">
+                                                        How to create a service principal and grant it access to your model
+                                                    </Hyperlink>
+                                                </TextBlock>
+                                            </StackPanel>
+
                                             <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="6"
                                                     Background="{DynamicResource ControlFillColorSecondaryBrush}">
                                                 <Grid>
@@ -680,7 +721,7 @@
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
-                                                        <TextBlock Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                        <TextBlock x:Name="AzureStatusTitle" Text="Use your Azure sign-in" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AzureStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                                                    Text="Checking your Azure CLI sign-in before showing cloud resources."/>
                                                     </StackPanel>
@@ -767,13 +808,15 @@
                                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                                    Text="An API key bypasses Azure CLI authentication. It is stored encrypted on this PC with Windows DPAPI."/>
 
-                                                        <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                        <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                    VerticalContentAlignment="Center"
-                                                                    PlaceholderText="Entra tenant GUID"
-                                                                    TextChanged="AzureTenantBox_TextChanged"/>
-                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                                   Text="Pins Azure CLI authentication to one tenant when no subscription is selected. It is ignored when an API key is set."/>
+                                                        <StackPanel x:Name="AzureCliTenantPanel">
+                                                            <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                            <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                        VerticalContentAlignment="Center"
+                                                                        PlaceholderText="Entra tenant GUID"
+                                                                        TextChanged="AzureTenantBox_TextChanged"/>
+                                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                                       Text="Pins Azure CLI authentication to one tenant when no subscription is selected. It is ignored when an API key is set."/>
+                                                        </StackPanel>
                                                     </StackPanel>
                                                 </ui:CardExpander>
                                             </StackPanel>

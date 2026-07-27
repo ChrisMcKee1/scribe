@@ -604,6 +604,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
+        AzureAuthModeBox.SelectedIndex =
+            _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
+        SpTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
+        SpClientIdBox.Text = _settings.AiCleanupAzureClientId ?? string.Empty;
+        SpClientSecretBox.Password = _settings.AiCleanupAzureClientSecret ?? string.Empty;
         _azureManualConfiguration = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey);
 
         CustomEndpointBox.Text = _settings.AiCleanupCustomEndpoint ?? string.Empty;
@@ -1577,6 +1582,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
     {
+        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            await VerifyServicePrincipalAsync();
+            return;
+        }
+
         await RefreshAzureConnectionAsync(
             allowInteractiveLogin: true,
             listModels: true,
@@ -1621,14 +1632,41 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     // Best-effort and non-blocking; runs when the Azure panel is shown.
-    private Task ProbeAzureSignInAsync() =>
-        RefreshAzureConnectionAsync(allowInteractiveLogin: false, listModels: true);
+    private Task ProbeAzureSignInAsync()
+    {
+        // A saved service principal is not auto-verified on open. Verification costs a real token
+        // request, and a silent failure at load would read as a broken panel; the explicit button
+        // makes the result attributable to an action the user took.
+        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            _azureConnectionKnown = true;
+            if (AzureStatusText is not null)
+            {
+                AzureStatusText.Text = CurrentServicePrincipal is null
+                    ? "Enter the service principal details, then verify them."
+                    : "Verify the saved service principal to confirm it can still sign in.";
+            }
+
+            ApplyAzureSettingsAccess();
+            return Task.CompletedTask;
+        }
+
+        return RefreshAzureConnectionAsync(allowInteractiveLogin: false, listModels: true);
+    }
 
     private async Task RefreshAzureConnectionAsync(
         bool allowInteractiveLogin,
         bool listModels,
         bool forceListModels = false)
     {
+        // Everything below probes Azure CLI specifically. In service principal mode a valid CLI
+        // session would otherwise mark the panel signed in, making an unverified app registration
+        // look verified and revealing configuration that its identity may not actually reach.
+        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            return;
+        }
+
         var operationVersion = ++_azureSignInProbeVersion;
         var shouldListModels = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
@@ -1781,12 +1819,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ApplyAzureSettingsAccess();
     }
 
+    private AzureAuthMode SelectedAzureAuthMode =>
+        AzureAuthModeBox?.SelectedIndex == 1 ? AzureAuthMode.ServicePrincipal : AzureAuthMode.AzureCli;
+
+    /// <summary>The app registration currently entered, or null when it is incomplete.</summary>
+    private AzureServicePrincipal? CurrentServicePrincipal => AzureServicePrincipal.TryCreate(
+        SelectedAzureAuthMode,
+        SpTenantBox?.Text,
+        SpClientIdBox?.Text,
+        SpClientSecretBox?.Password);
+
     private AzureSettingsAccess.State CurrentAzureSettingsAccess =>
         AzureSettingsAccess.Resolve(
             _azureCliInstalled,
             _azureSignInStatus.IsSignedIn,
             _azureManualConfiguration,
-            !string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password));
+            !string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password),
+            SelectedAzureAuthMode,
+            CurrentServicePrincipal is not null);
 
     private void ApplyAzureSettingsAccess()
     {
@@ -1800,15 +1850,227 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var access = CurrentAzureSettingsAccess;
+        var servicePrincipal = access.ShowServicePrincipalFields;
         AzureCliSetupPanel.Visibility =
             _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
         AzureDiscoveryPanel.Visibility = access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
         AzureConfigurationPanel.Visibility = access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
         AzureManualButton.Visibility =
             access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
-        AzureRefreshButton.Content = _azureSignInStatus.IsSignedIn ? "Refresh models" : "Sign in & find models";
-        AzureRefreshButton.IsEnabled =
-            !_azureConnectionBusy && _azureConnectionKnown && access.CanStartSignIn;
+
+        if (AzureServicePrincipalPanel is not null)
+        {
+            AzureServicePrincipalPanel.Visibility = servicePrincipal ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // The optional CLI tenant box pins the az login account to a tenant. In service principal
+        // mode the app registration names its own tenant, so a second tenant field would be two
+        // controls claiming the same setting.
+        if (AzureCliTenantPanel is not null)
+        {
+            AzureCliTenantPanel.Visibility = servicePrincipal ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        if (AzureStatusTitle is not null)
+        {
+            AzureStatusTitle.Text = servicePrincipal ? "Use a service principal" : "Use your Azure sign-in";
+        }
+
+        AzureRefreshButton.Content = servicePrincipal
+            ? _azureSignInStatus.IsSignedIn ? "Re-verify" : "Verify service principal"
+            : _azureSignInStatus.IsSignedIn ? "Refresh models" : "Sign in & find models";
+
+        // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
+        // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
+        AzureRefreshButton.IsEnabled = !_azureConnectionBusy && access.CanStartSignIn &&
+            (servicePrincipal || _azureConnectionKnown);
+
+        UpdateServicePrincipalValidation(servicePrincipal);
+    }
+
+    // Shows the first unmet requirement while the user is still typing, but stays quiet on an
+    // untouched form so an empty panel doesn't open covered in red.
+    private void UpdateServicePrincipalValidation(bool servicePrincipalMode)
+    {
+        if (SpValidationText is null)
+        {
+            return;
+        }
+
+        if (!servicePrincipalMode)
+        {
+            SpValidationText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var untouched = string.IsNullOrWhiteSpace(SpTenantBox?.Text)
+            && string.IsNullOrWhiteSpace(SpClientIdBox?.Text)
+            && string.IsNullOrEmpty(SpClientSecretBox?.Password);
+        var issue = AzureServicePrincipalValidator.Validate(
+            SpTenantBox?.Text, SpClientIdBox?.Text, SpClientSecretBox?.Password);
+
+        if (untouched || issue == AzureServicePrincipalValidator.Issue.None)
+        {
+            SpValidationText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        SpValidationText.Text = AzureServicePrincipalValidator.Describe(issue);
+        SpValidationText.Visibility = Visibility.Visible;
+    }
+
+    private void AzureAuthModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        // Both modes ultimately write one tenant setting, so carry the current value across rather
+        // than making the user retype it. Copy unconditionally: only syncing into a blank box would
+        // leave the destination holding a stale tenant that Save would then persist over the edit
+        // the user actually made.
+        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            if (SpTenantBox is not null && AzureTenantBox is not null
+                && !string.IsNullOrWhiteSpace(AzureTenantBox.Text))
+            {
+                SpTenantBox.Text = AzureTenantBox.Text;
+            }
+        }
+        else if (AzureTenantBox is not null && SpTenantBox is not null
+                 && !string.IsNullOrWhiteSpace(SpTenantBox.Text))
+        {
+            AzureTenantBox.Text = SpTenantBox.Text;
+        }
+
+        // The previous mode's verification says nothing about this one's identity, so drop it and
+        // make the user verify again instead of showing a stale signed-in state. Bumping the
+        // versions abandons any probe still in flight from the mode being left; that probe's
+        // cleanup is version-guarded and will not run, so busy is released here instead or the
+        // action button would stay disabled forever.
+        ++_azureSignInProbeVersion;
+        ++_azureDeploymentLoadVersion;
+        _azureSignInStatus = new AzureSignInStatus(false, null);
+        _azureAutoListed = false;
+        AzureCredentialInvalidation.Invalidate();
+        SetAzureConnectionBusy(false);
+        if (AzureStatusText is not null)
+        {
+            AzureStatusText.Text = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
+                ? "Enter the service principal details, then verify them."
+                : "Checking your Azure CLI sign-in before showing cloud resources.";
+        }
+
+        ApplyAzureSettingsAccess();
+
+        // Returning to the CLI needs a fresh probe; nothing else re-runs it on this path.
+        if (SelectedAzureAuthMode == AzureAuthMode.AzureCli)
+        {
+            _ = RefreshAzureConnectionAsync(
+                allowInteractiveLogin: false, listModels: true, forceListModels: false);
+        }
+    }
+
+    private void ServicePrincipalField_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        // Editing the identity retires any verification, in flight or already applied. Bumping
+        // unconditionally matters: a verification started against the previous details must not be
+        // allowed to land on the new ones just because nothing was verified yet.
+        ++_azureSignInProbeVersion;
+        if (_azureSignInStatus.IsSignedIn && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        {
+            _azureSignInStatus = new AzureSignInStatus(false, null);
+            if (AzureStatusText is not null)
+            {
+                AzureStatusText.Text = "The service principal changed. Verify it again.";
+            }
+        }
+
+        AzureCredentialInvalidation.Invalidate();
+        ApplyAzureSettingsAccess();
+    }
+
+    private void Hyperlink_RequestNavigate(
+        object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not open the documentation link.");
+        }
+
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Verifies the entered app registration by requesting a real ARM token with it, so the UI
+    /// reports whether that identity actually works rather than merely whether it looks well formed.
+    /// </summary>
+    private async Task VerifyServicePrincipalAsync()
+    {
+        var principal = CurrentServicePrincipal;
+        if (principal is null)
+        {
+            return;
+        }
+
+        // Guard the completion the same way the CLI probe does. Without this, editing a field or
+        // switching modes mid-verification would let the old identity's result land on the new one.
+        var operationVersion = ++_azureSignInProbeVersion;
+        SetAzureConnectionBusy(true);
+        AzureStatusText.Text = "Verifying the service principal…";
+        try
+        {
+            AzureCredentialInvalidation.Invalidate();
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var status = await _azureDiscovery.GetSignInStatusAsync(
+                principal.TenantId, null, cts.Token, principal);
+            if (operationVersion != _azureSignInProbeVersion)
+            {
+                return;
+            }
+
+            _azureSignInStatus = status;
+            AzureStatusText.Text = status.IsSignedIn
+                ? $"{DescribeAzureIdentity(status)} Enter the endpoint and deployment name for your model."
+                : status.FailureReason ?? AzureSignInDiagnostics.Generic;
+        }
+        catch (OperationCanceledException)
+        {
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                AzureStatusText.Text = "Verifying the service principal timed out. Please try again.";
+            }
+        }
+        catch (Exception ex)
+        {
+            // The exception is logged, never shown: an Entra failure can echo request details, and
+            // this path handles a secret.
+            TryLog(ex, "Could not verify the Azure service principal.");
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                AzureStatusText.Text = "The service principal could not be verified. Check the details and try again.";
+            }
+        }
+        finally
+        {
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                SetAzureConnectionBusy(false);
+            }
+        }
     }
 
     private static string DescribeAzureIdentity(AzureSignInStatus status)
@@ -2600,7 +2862,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             signedIn: _azureSignInStatus.IsSignedIn,
             apiKey: AzureApiKeyBox.Password,
             endpoint: AzureEndpointBox.Text,
-            deployment: AzureDeploymentBox.Text);
+            deployment: AzureDeploymentBox.Text,
+            authMode: SelectedAzureAuthMode,
+            tenantId: SpTenantBox.Text,
+            clientId: SpClientIdBox.Text,
+            clientSecret: SpClientSecretBox.Password);
         if (azureValidation != AzureSettingsAccess.ValidationIssue.None)
         {
             ShowSection(SectionAi);
@@ -2608,6 +2874,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 AzureSettingsAccess.ValidationIssue.AuthenticationRequired =>
                     "Sign in to Azure, or use an endpoint and API key, before enabling Microsoft Foundry cleanup.",
+                AzureSettingsAccess.ValidationIssue.ServicePrincipalIncomplete =>
+                    "Enter the tenant ID, client ID, and client secret for the service principal, then verify them.",
                 AzureSettingsAccess.ValidationIssue.EndpointRequired =>
                     "Choose a discovered model or enter the Microsoft Foundry or Azure OpenAI endpoint.",
                 AzureSettingsAccess.ValidationIssue.DeploymentRequired =>
@@ -2655,7 +2923,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
             _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
-            _settings.AiCleanupAzureTenantId = NullIfBlank(AzureTenantBox.Text);
+            _settings.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
+            // One tenant setting, edited from whichever box the active mode shows.
+            _settings.AiCleanupAzureTenantId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
+                ? NullIfBlank(SpTenantBox.Text)
+                : NullIfBlank(AzureTenantBox.Text);
+            _settings.AiCleanupAzureClientId = NullIfBlank(SpClientIdBox.Text);
+            _settings.AiCleanupAzureClientSecret = NullIfBlank(SpClientSecretBox.Password);
+            // The credential is cached for token reuse, so a changed identity has to drop it or the
+            // next dictation would keep authenticating as the previous one.
+            AzureCredentialInvalidation.Invalidate();
             var azureSubscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
                 _selectedAzureDeployment,
                 SelectedAzureSubscription,

@@ -50,7 +50,10 @@ public sealed record CleanupOptions(
     CleanupPromptStyle PromptStyle = CleanupPromptStyle.Auto,
     string? FrontierPrompt = null,
     string? LocalPrompt = null,
-    string? AzureSubscriptionId = null)
+    string? AzureSubscriptionId = null,
+    Settings.AzureAuthMode AzureAuthMode = Settings.AzureAuthMode.AzureCli,
+    string? AzureClientId = null,
+    string? AzureClientSecret = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

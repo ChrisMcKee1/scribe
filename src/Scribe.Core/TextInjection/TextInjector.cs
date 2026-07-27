@@ -290,7 +290,7 @@ public sealed class TextInjector : ITextInjector
 
     private (int Sent, int Total) TypeUnicode(string text, nint expectedForegroundWindow)
     {
-        int total = text.Length * 2;
+        int total = CountKeyEvents(text, 0, text.Length);
         if (total == 0)
         {
             return (0, 0);
@@ -303,14 +303,14 @@ public sealed class TextInjector : ITextInjector
         // over raw speed: a few hundred milliseconds on a rare long paragraph is imperceptible next to
         // dropped text.
         int sent = 0;
-        for (int start = 0; start < text.Length; start += UnicodeChunkChars)
+        for (int start = 0; start < text.Length;)
         {
             if (!IsExpectedForeground(expectedForegroundWindow))
             {
                 break;
             }
 
-            int count = Math.Min(UnicodeChunkChars, text.Length - start);
+            int count = ChunkLength(text, start, UnicodeChunkChars);
             var inputs = BuildUnicodeChunk(text, start, count);
 
             int delivered = SendWithRetry(inputs);
@@ -323,8 +323,10 @@ public sealed class TextInjector : ITextInjector
                 break;
             }
 
+            start += count;
+
             // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
-            if (start + count < text.Length)
+            if (start < text.Length)
             {
                 Thread.Sleep(InterChunkSettleMs);
             }
@@ -339,18 +341,70 @@ public sealed class TextInjector : ITextInjector
     }
 
     // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because
-    // each surrogate half is sent as its own KEYEVENTF_UNICODE event.
-    private static INPUT[] BuildUnicodeChunk(string text, int start, int count)
+    // each surrogate half is sent as its own KEYEVENTF_UNICODE event. Line breaks are the exception:
+    // see BuildUnicodeChunk.
+    internal static INPUT[] BuildUnicodeChunk(string text, int start, int count)
     {
-        var inputs = new INPUT[count * 2];
-        int index = 0;
-        for (int i = start; i < start + count; i++)
+        var inputs = new List<INPUT>(count * 2);
+        int end = start + count;
+        for (int i = start; i < end; i++)
         {
-            inputs[index++] = UnicodeKey(text[i], keyUp: false);
-            inputs[index++] = UnicodeKey(text[i], keyUp: true);
+            char ch = text[i];
+            if (ch is '\r' or '\n')
+            {
+                // A line break has to be a real Return keypress. Sent as KEYEVENTF_UNICODE the bare LF
+                // control character is discarded by most edit controls, so the two lines ran together
+                // with no separator at all ("first line.second line").
+                inputs.Add(KeyDown(VK_RETURN));
+                inputs.Add(KeyUp(VK_RETURN));
+
+                // CRLF is one line break, not two. ChunkLength guarantees the pair is never split
+                // across batches, so the lookahead never runs past the end of this chunk.
+                if (ch == '\r' && i + 1 < end && text[i + 1] == '\n')
+                {
+                    i++;
+                }
+
+                continue;
+            }
+
+            inputs.Add(UnicodeKey(ch, keyUp: false));
+            inputs.Add(UnicodeKey(ch, keyUp: true));
         }
 
-        return inputs;
+        return [.. inputs];
+    }
+
+    // Keeps a CRLF pair inside a single batch: split across two SendInput calls the CR and the LF
+    // would each become their own Return and type an extra blank line.
+    internal static int ChunkLength(string text, int start, int max)
+    {
+        int count = Math.Min(max, text.Length - start);
+        int end = start + count;
+        if (count > 1 && end < text.Length && text[end - 1] == '\r' && text[end] == '\n')
+        {
+            count--;
+        }
+
+        return count;
+    }
+
+    // The number of INPUT events BuildUnicodeChunk will produce for a span, so a completed send is
+    // never misreported as truncated now that a CRLF collapses to a single keypress.
+    internal static int CountKeyEvents(string text, int start, int count)
+    {
+        int events = 0;
+        int end = start + count;
+        for (int i = start; i < end; i++)
+        {
+            events += 2;
+            if (text[i] == '\r' && i + 1 < end && text[i + 1] == '\n')
+            {
+                i++;
+            }
+        }
+
+        return events;
     }
 
     // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the

@@ -143,6 +143,29 @@ public sealed class AppSettings
     public string? AiCleanupAzureTenantId { get; set; }
 
     /// <summary>
+    /// Which Entra identity the Microsoft Foundry provider authenticates with. Defaults to the
+    /// user's Azure CLI sign-in; <see cref="Settings.AzureAuthMode.ServicePrincipal"/> pins one
+    /// app registration instead, which is what users who belong to several tenants need.
+    /// Ignored when an API key is supplied.
+    /// </summary>
+    public Settings.AzureAuthMode AiCleanupAzureAuthMode { get; set; } = Settings.AzureAuthMode.AzureCli;
+
+    /// <summary>
+    /// Application (client) id of the Entra app registration used when
+    /// <see cref="AiCleanupAzureAuthMode"/> is <see cref="Settings.AzureAuthMode.ServicePrincipal"/>.
+    /// </summary>
+    public string? AiCleanupAzureClientId { get; set; }
+
+    /// <summary>
+    /// Client secret for <see cref="AiCleanupAzureClientId"/>. Encrypted at rest with Windows DPAPI
+    /// (current user) via <see cref="DpapiProtectedStringConverter"/>, the same treatment as the
+    /// API keys; this property exposes the plaintext in memory. Never written to an environment
+    /// variable or a script on disk.
+    /// </summary>
+    [JsonConverter(typeof(DpapiProtectedStringConverter))]
+    public string? AiCleanupAzureClientSecret { get; set; }
+
+    /// <summary>
     /// Optional Azure OpenAI API key. When set, the Azure provider authenticates with this key instead
     /// of the user's <c>az login</c>. Encrypted at rest with Windows DPAPI via
     /// <see cref="DpapiProtectedStringConverter"/>; this property exposes the plaintext in memory.

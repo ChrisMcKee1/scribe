@@ -15,6 +15,7 @@ internal static class InjectionNativeMethods
 
     internal const ushort VK_CONTROL = 0x11;
     internal const ushort VK_V = 0x56;
+    internal const ushort VK_RETURN = 0x0D;
 
     internal const uint EM_REPLACESEL = 0x00C2;
     internal const uint SMTO_ABORTIFHUNG = 0x0002;
