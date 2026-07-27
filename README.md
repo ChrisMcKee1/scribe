@@ -101,7 +101,9 @@ If the model isn't ready, dictation just continues with the raw transcript.
 ### …or bring your own model
 Point Scribe at a model you've already deployed in **Microsoft Foundry**: it signs in with your
 existing `az login`, discovers your deployments, and lists them in a **browsable dropdown** (type
-to filter) so you pick a model instead of remembering deployment names. Or aim it at **any
+to filter) so you pick a model instead of remembering deployment names. Live in more than one
+tenant? Choose **service principal** sign-in instead and Scribe authenticates as exactly the
+identity you name, every time ([setup guide](docs/service-principal-setup.md)). Or aim it at **any
 OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
 or api.openai.com with your own key. Only the transcribed *text* is ever sent (never audio), and
 only to the endpoint **you** configure. And when you want the raw transcript, **toggle AI cleanup
@@ -192,7 +194,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Dictionary libraries | Nine curated opt-in libraries, including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own custom CSV libraries |
 | Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
 | Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
-| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login), or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
+| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
 | Playground | Captures normal push-to-talk dictation, then shows raw recognition, final highlighted dictionary, library, and snippet replacements, and per-step timing |
 
 **Insight and recovery**

@@ -78,9 +78,14 @@ public interface IAzureFoundryDiscovery
     /// instead of the Azure CLI's active tenant (useful when the user juggles corp and demo tenants).
     /// <paramref name="subscriptionId"/> optionally restricts discovery to a single subscription;
     /// null spans every subscription the sign-in can see.
+    /// <paramref name="servicePrincipal"/> authenticates as an Entra app registration instead of the
+    /// Azure CLI sign-in when supplied.
     /// </summary>
     Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
-        string? tenantId = null, string? subscriptionId = null, CancellationToken cancellationToken = default);
+        string? tenantId = null,
+        string? subscriptionId = null,
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null);
 
     /// <summary>
     /// Enumerates deployments from an explicit set of subscriptions belonging to one cached Azure
@@ -91,7 +96,8 @@ public interface IAzureFoundryDiscovery
         string tenantId,
         IReadOnlyCollection<string> subscriptionIds,
         string credentialSubscriptionId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null);
 
     /// <summary>
     /// Cheaply checks whether the user is already signed in through Azure CLI by requesting an ARM
@@ -100,11 +106,14 @@ public interface IAzureFoundryDiscovery
     /// instead of forcing a sign-in click. Never throws — a failed/absent credential returns
     /// <see cref="AzureSignInStatus.IsSignedIn"/> = false.
     /// <paramref name="subscriptionId"/> selects the matching cached CLI account when supplied.
+    /// <paramref name="servicePrincipal"/> probes the app registration instead when supplied, so the
+    /// UI reports whether that identity actually works rather than whether a CLI session exists.
     /// </summary>
     Task<AzureSignInStatus> GetSignInStatusAsync(
         string? tenantId = null,
         string? subscriptionId = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null);
 }
 
 /// <inheritdoc />
@@ -148,7 +157,10 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     public AzureFoundryDiscovery(ILogger<AzureFoundryDiscovery> log) => _log = log;
 
     public async Task<IReadOnlyList<AzureFoundryDeployment>> DiscoverAsync(
-        string? tenantId = null, string? subscriptionId = null, CancellationToken cancellationToken = default)
+        string? tenantId = null,
+        string? subscriptionId = null,
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null)
     {
         var subscriptionFilter = NormalizeSubscriptionId(subscriptionId);
         var subscriptionFilters = subscriptionFilter is null ? null : new[] { subscriptionFilter };
@@ -156,6 +168,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             tenantId,
             subscriptionFilters,
             subscriptionFilter,
+            servicePrincipal,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -163,7 +176,8 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         string tenantId,
         IReadOnlyCollection<string> subscriptionIds,
         string credentialSubscriptionId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null)
     {
         var normalizedSubscriptions = subscriptionIds
             .Select(NormalizeSubscriptionId)
@@ -182,6 +196,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             tenantId,
             normalizedSubscriptions,
             normalizedCredentialSubscription,
+            servicePrincipal,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -189,9 +204,12 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         string? tenantId,
         IReadOnlyCollection<string>? subscriptionFilters,
         string? credentialSubscriptionId,
+        AzureServicePrincipal? servicePrincipal,
         CancellationToken cancellationToken)
     {
-        var credential = AzureCliCredentialFactory.Create(tenantId, credentialSubscriptionId);
+        var credential = AzureCredentialFactory.Create(
+            servicePrincipal?.ToRequest(credentialSubscriptionId)
+            ?? AzureCredentialRequest.Cli(tenantId, credentialSubscriptionId));
 
         var arm = new ArmClient(credential);
 
@@ -223,11 +241,14 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     public async Task<AzureSignInStatus> GetSignInStatusAsync(
         string? tenantId = null,
         string? subscriptionId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        AzureServicePrincipal? servicePrincipal = null)
     {
         try
         {
-            var credential = AzureCliCredentialFactory.Create(tenantId, subscriptionId);
+            var credential = AzureCredentialFactory.Create(
+                servicePrincipal?.ToRequest(subscriptionId)
+                ?? AzureCredentialRequest.Cli(tenantId, subscriptionId));
             var token = await credential.GetTokenAsync(
                 new TokenRequestContext(ArmScopes), cancellationToken).ConfigureAwait(false);
             var identity = ReadIdentityFromToken(token.Token);
@@ -237,6 +258,12 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         {
             // Expected when the user simply isn't signed in — not an error worth surfacing as a stack.
             _log.LogDebug(ex, "Azure sign-in probe: no non-interactive credential available.");
+            return new AzureSignInStatus(false, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // An incomplete service principal: the same "not usable yet" state as a missing sign-in.
+            _log.LogDebug(ex, "Azure sign-in probe: service principal is incomplete.");
             return new AzureSignInStatus(false, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

@@ -17,8 +17,8 @@ endpoint (sends the *transcribed text only*, never audio, and is strictly opt‑
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
 suggestions); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
 (writing style + newline mode by focused process); **AI cleanup** across three providers
-(Foundry Local on‑device, Microsoft Foundry via `az login`, or any OpenAI‑compatible
-endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
+(Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
+any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
 **playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet
 replacement highlights, and per-step timings across the full pipeline;
 **diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
@@ -195,6 +195,44 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
   `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, and that the overlay PID
   stays alive (no teardown) with **zero IOExceptions** after launch.
+
+## Azure authentication (read before touching credentials)
+
+The Microsoft Foundry provider authenticates one of two ways, chosen by
+`AppSettings.AiCleanupAzureAuthMode`: the user's **Azure CLI** sign-in (default) or an Entra
+**service principal**. `Scribe.Core/Cleanup/AzureCredentialFactory.cs` is the single place that
+builds the `TokenCredential`; everything else goes through it.
+
+- **Do not swap in `DefaultAzureCredential`, with or without `Exclude*` options.** This was tried
+  and shipped a real bug: `ManagedIdentityCredential` probed a nonexistent IMDS endpoint on a
+  desktop and blocked cleanup. Microsoft's own guidance agrees, saying the winning credential in a
+  chain "can't be guaranteed ahead of time", that persistent `AZURE_*` variables "apply globally
+  and therefore alter the behavior of `DefaultAzureCredential` at runtime in any app running on
+  that machine", and that once several `Exclude` flags are set "the advantages of using
+  `DefaultAzureCredential` diminish".
+- **The credential instance is cached and reused** because Azure.Identity caches tokens per
+  instance and Microsoft warns that an app which doesn't reuse them "may encounter HTTP 429
+  throttling responses from Microsoft Entra ID". Any change of identity MUST call
+  `AzureCredentialInvalidation.Invalidate()`, or the next request authenticates as the old one.
+- **Azure CLI token requests are serialized** through `AzureCliProcessCoordinator`: `az` shares one
+  token cache, and concurrent processes made it time out on multi-tenant machines. A service
+  principal never shells out, so it skips that path.
+- **Service principal mode deliberately hides ARM discovery.** Enumerating subscriptions and
+  deployments is a control-plane operation needing `Reader` across the subscription, while
+  inference only needs a data-plane role on the one resource. Requiring only the smaller grant is
+  what makes the feature approvable in a locked-down tenant, so that mode takes the endpoint and
+  deployment name by hand. Don't "fix" this by adding discovery.
+- **Roles that actually work** (assign by GUID; Microsoft renamed the Foundry ones):
+  `Cognitive Services OpenAI User` (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) for an Azure OpenAI
+  account, `Cognitive Services User` (`a97b65f3-24c7-4388-baec-2e87135dc908`) for a Foundry
+  resource. `Azure AI Inference Deployment Operator` has **zero** dataActions despite the name, and
+  `Cognitive Services Contributor` can create deployments but not call them.
+- Entra auth requires the resource to have a **custom subdomain**; a regional endpoint rejects the
+  token regardless of roles.
+- The client secret is DPAPI-encrypted at rest via `DpapiProtectedStringConverter` (same as the API
+  keys). **Never** write it to an environment variable, a `.env`, or a script: those are plaintext
+  on disk, and persistent `AZURE_CLIENT_*` variables would hijack every other Azure tool on the box.
+- User-facing setup lives in `docs/service-principal-setup.md` and is linked from Settings.
 
 ## Releases & Velopack (gotchas)
 

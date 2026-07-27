@@ -203,10 +203,15 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureEndpoint,
         settings.AiCleanupAzureDeployment,
         settings.AiCleanupAzureApiKey,
-        AzureSubscriptionSelection.ResolveTenantId(
-            settings.AiCleanupAzureSubscriptionId,
-            settings.AiCleanupAzureSubscriptionTenantId,
-            settings.AiCleanupAzureTenantId),
+        // A service principal names its own tenant, so it wins outright. Deriving the tenant from the
+        // selected subscription is a CLI-only convenience, and applying it here would authenticate
+        // the app registration against the wrong directory.
+        settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal
+            ? settings.AiCleanupAzureTenantId
+            : AzureSubscriptionSelection.ResolveTenantId(
+                settings.AiCleanupAzureSubscriptionId,
+                settings.AiCleanupAzureSubscriptionTenantId,
+                settings.AiCleanupAzureTenantId),
         settings.AiCleanupWritingStyle,
         BuildGlossary(),
         settings.AiCleanupCustomEndpoint,
@@ -215,7 +220,10 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupPromptStyle,
         settings.AiCleanupFrontierPrompt,
         settings.AiCleanupLocalPrompt,
-        settings.AiCleanupAzureSubscriptionId);
+        settings.AiCleanupAzureSubscriptionId,
+        settings.AiCleanupAzureAuthMode,
+        settings.AiCleanupAzureClientId,
+        settings.AiCleanupAzureClientSecret);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —

@@ -1152,7 +1152,12 @@ internal sealed class TextCleanupService : ITextCleanupService
             // Native Foundry path: the project client turns the endpoint + deployment into an agent
             // directly (a code-first "responses" agent — no server-side agent resource is created).
             // The project data-plane requires an AAD token, so this path is AAD-only.
-            var credential = AzureCliCredentialFactory.Create(options.AzureTenantId, options.AzureSubscriptionId);
+            var credential = AzureCredentialFactory.Create(new AzureCredentialRequest(
+                options.AzureAuthMode,
+                options.AzureTenantId,
+                options.AzureSubscriptionId,
+                options.AzureClientId,
+                options.AzureClientSecret));
             var project = new AIProjectClient(endpointUri, credential);
             _pendingFactory = i => project.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
             agent = _pendingFactory(instructions);
@@ -1187,7 +1192,12 @@ internal sealed class TextCleanupService : ITextCleanupService
                     DisableRetries)
                 : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
                     accountHost,
-                    AzureCliCredentialFactory.Create(options.AzureTenantId, options.AzureSubscriptionId),
+                    AzureCredentialFactory.Create(new AzureCredentialRequest(
+                        options.AzureAuthMode,
+                        options.AzureTenantId,
+                        options.AzureSubscriptionId,
+                        options.AzureClientId,
+                        options.AzureClientSecret)),
                     networkTimeout,
                     DisableRetries);
             _pendingFactory = i => responses.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
