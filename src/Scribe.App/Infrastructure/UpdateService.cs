@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Infrastructure;
 using Velopack;
 using Velopack.Sources;
 
@@ -21,6 +22,7 @@ public sealed class UpdateService
 
     private readonly ILogger<UpdateService> _log;
     private readonly SemaphoreSlim _checkGate = new(1, 1);
+    private readonly bool _isStoreManaged = WindowsPackageIdentity.IsPackaged();
     private UpdateManager? _manager;
     private UpdateInfo? _pending;
 
@@ -29,9 +31,17 @@ public sealed class UpdateService
     /// <summary>Raised (once) with a user-facing message when an update has been staged.</summary>
     public event Action<string>? UpdateReady;
 
+    /// <summary>True when Microsoft Store, rather than Velopack, owns this installation.</summary>
+    public bool IsStoreManaged => _isStoreManaged;
+
     /// <summary>Checks only local Velopack state for an update staged by an earlier session.</summary>
     public void ProbePendingLocal()
     {
+        if (_isStoreManaged)
+        {
+            return;
+        }
+
         try
         {
             var manager = _manager ?? new UpdateManager(
@@ -101,6 +111,11 @@ public sealed class UpdateService
     /// </summary>
     public async Task<string> CheckAndDownloadAsync(CancellationToken ct = default)
     {
+        if (_isStoreManaged)
+        {
+            return $"Scribe {RunningVersion} is updated by Microsoft Store.";
+        }
+
         await _checkGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -175,6 +190,11 @@ public sealed class UpdateService
     /// </summary>
     public bool ApplyNowAndRestart()
     {
+        if (_isStoreManaged)
+        {
+            return false;
+        }
+
         var asset = _pending?.TargetFullRelease ?? _manager?.UpdatePendingRestart;
         if (_manager is null || asset is null)
         {
@@ -201,6 +221,11 @@ public sealed class UpdateService
     /// </summary>
     public void ApplyPendingOnExit()
     {
+        if (_isStoreManaged)
+        {
+            return;
+        }
+
         var asset = _pending?.TargetFullRelease ?? _manager?.UpdatePendingRestart;
         if (_manager is null || asset is null)
         {

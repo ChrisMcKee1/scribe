@@ -31,6 +31,10 @@ namespace Scribe.App.Settings;
 /// </summary>
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
+    private const string RepositoryUrl = "https://github.com/ChrisMcKee1/scribe";
+    private const string PrivacyPolicyUrl = RepositoryUrl + "/blob/main/PRIVACY.md";
+    private const string NewIssueUrl = RepositoryUrl + "/issues/new";
+
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
     private readonly IDictionaryRepository _dictionary;
@@ -160,12 +164,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Closed += OnClosed;
         RefreshAiStatus();
         InitializeUpdateCard();
+        AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
     }
 
     // --- Updates card (General) --------------------------------------------------------------
 
     private void InitializeUpdateCard()
     {
+        if (_updates?.IsStoreManaged == true)
+        {
+            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} is updated by Microsoft Store.";
+            UpdateCheckButton.Visibility = Visibility.Collapsed;
+            UpdateApplyButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
             ? $"Scribe {UpdateService.RunningVersion} — {pending} is downloaded and ready to install."
             : $"Scribe {UpdateService.RunningVersion} — use Check for updates when you want to connect.";
@@ -432,7 +445,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     [
         SectionGeneral, SectionDictation, SectionOverlay, SectionAi,
         SectionDictionary, SectionLibraries, SectionSnippets, SectionProfiles, SectionPlayground, SectionHistory,
-        SectionUsage, SectionDiagnostics,
+        SectionUsage, SectionDiagnostics, SectionAbout,
     ];
 
     private void NavList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1999,17 +2012,34 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void Hyperlink_RequestNavigate(
         object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
     {
+        OpenExternalLink(e.Uri.AbsoluteUri, "Could not open the link.");
+        e.Handled = true;
+    }
+
+    private void PrivacyPolicyButton_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(PrivacyPolicyUrl, "Could not open the privacy policy.");
+
+    private void GitHubStarButton_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(RepositoryUrl, "Could not open the Scribe GitHub page.");
+
+    private void GitHubIssueButton_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(NewIssueUrl, "Could not open GitHub Issues.");
+
+    private void GitHubSourceButton_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(RepositoryUrl, "Could not open the Scribe source code.");
+
+    private void OpenExternalLink(string url, string failureMessage)
+    {
         try
         {
             System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            TryLog(ex, "Could not open the documentation link.");
+            TryLog(ex, failureMessage);
+            ShowInfo(failureMessage, Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
-
-        e.Handled = true;
     }
 
     /// <summary>
@@ -3290,6 +3320,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
         if (_cleanup.Status == CleanupStatus.Ready)
         {
+            if (SelectedProvider != CleanupProvider.FoundryLocal &&
+                !await ConfirmAsync(
+                    "Send recent dictations to your AI provider?",
+                    "To suggest vocabulary, Scribe will send up to 6,000 characters from recent " +
+                    "dictation history to the provider endpoint you configured. Audio is never sent.",
+                    "Send and continue"))
+            {
+                return;
+            }
+
             await SuggestWithAiAsync(current);
         }
         else
@@ -3355,9 +3395,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             DictionarySuggestBusy.Visibility = Visibility.Collapsed;
             DictionarySuggestButton.IsEnabled = true;
             DictionarySuggestButton.ToolTip =
-                "Learn vocabulary from your recent dictations. When an AI model is set up, it " +
-                "works out how terms are spoken and how they should be spelled; otherwise it " +
-                "scans for repeated technical terms.";
+                "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
+                "a bounded text sample only after you confirm; otherwise Scribe scans locally.";
         }
     }
 

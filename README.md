@@ -7,15 +7,19 @@
 **You talk three times faster than you type. Scribe closes the gap, privately.**
 
 Hold a key, speak, release. Polished text lands at your cursor in any app on Windows 11.
-No cloud. No account. No subscription. No audio ever leaves your PC.
+No required cloud. No account. No subscription. No audio ever leaves your PC.
 
 <img src="docs/screenshots/pill.png" alt="The Scribe recording pill listening, with a live level meter" width="420" />
 
-**⚡ ~¼-second response** &nbsp;·&nbsp; **🏎️ transcribes ~30× faster than realtime** &nbsp;·&nbsp; **🔒 100% on-device** &nbsp;·&nbsp; **💸 $0 forever**
+**⚡ ~¼-second response** &nbsp;·&nbsp; **🏎️ transcribes ~30× faster than realtime** &nbsp;·&nbsp; **🔒 On-device speech** &nbsp;·&nbsp; **💸 $0 forever**
 
 </div>
 
 ---
+
+If Scribe earns a place in your workflow, click **Star** at the top of this
+[GitHub repository](https://github.com/ChrisMcKee1/scribe). It helps other people find private,
+offline dictation.
 
 Scribe is a lightweight tray app that turns your voice into text anywhere on Windows: your
 editor, browser, chat, terminal, notes, email. Dictation apps usually make you choose. The
@@ -27,8 +31,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 
 ## ✨ Why people switch
 
-- **🔒 Private by architecture, not by promise.** Audio is captured, transcribed in memory, and
-  discarded on your machine. There is no server to trust, because there is no server.
+- **🔒 Private by architecture, not by promise.** Audio is captured and transcribed locally, then
+  discarded unless you explicitly enable local audio history.
 - **⚡ Two keys, your choice.** Hold **Right Ctrl** (or any key), talk, release. Add an optional
   second hotkey when you want dictation that always skips AI cleanup. Prefer hands-free? Toggle
   mode ends the dictation by itself when you stop talking.
@@ -250,6 +254,9 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 See the full **[Scribe AI Privacy Policy](PRIVACY.md)** for data storage, optional transmissions,
 security, retention, and user controls.
 
+For help, feature requests, or bug reports, use **[GitHub Issues](../../issues/new)**. Do not include
+transcripts, audio, credentials, or other sensitive information in a public issue.
+
 ## 🛠️ Building from source
 
 **You'll need:** Windows 11 (x64) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
@@ -269,6 +276,10 @@ dotnet run --project src/Scribe.App
 Want to contribute? Everything else you need (project layout, code style, tests, the pull-request
 workflow, the AI-cleanup eval harness, and how releases are packed) lives in
 **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+Preparing a Store release? Use the checked-in
+**[Microsoft Store submission checklist](docs/microsoft-store-submission.md)** for Partner Center
+answers, listing copy, screenshots, certification notes, and package validation.
 
 ## 📄 Licenses & attribution
 

@@ -22,11 +22,12 @@ any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence au
 **playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet
 replacement highlights, and per-step timings across the full pipeline;
 **diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
-(local totals/trend chart/top apps/recurring terms with one‑click dictionary add; opt‑in AI
-insight sends aggregate totals + dictionary‑covered term labels ONLY — novel mined terms never
+(local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
+insight sends aggregate totals + dictionary-covered term labels ONLY — novel mined terms never
 leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu, injection
 failure raises a recovery notification); tray quick toggles (AI cleanup on/off, pause) and a
-first‑run **welcome**. The default writing style ships
+first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
+The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
 benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
 
@@ -308,8 +309,10 @@ never covers; note it builds SmartScreen reputation over weeks rather than grant
   `<VersionPrefix>.0`.
 - Store logos are generated from `docs/icon.png` at build time so the listing artwork can never
   drift from the in-app brand mark.
-- Velopack must not fight the OS updater on a Store install; treat that as an open item from #42
-  before submitting.
+- Store-installed packages are detected through Windows package identity. `UpdateService` then
+  disables the Velopack/GitHub update path and reports that Microsoft Store manages updates.
+- `docs/microsoft-store-submission.md` is the working Partner Center checklist and contains listing
+  copy, certification notes, screenshot order, and the remaining pre-submission decisions.
 
 ## GitHub release automation
 
