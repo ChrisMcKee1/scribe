@@ -59,9 +59,13 @@ if ($Version -ne $sourceVersion) {
 # MSIX requires a four-part version and reserves the revision field for Store use, so it must be 0.
 $msixVersion = "$Version.0"
 $displayName = [string]$props.Project.PropertyGroup.Product
-$publisherDisplay = [string]$props.Project.PropertyGroup.Authors
+$publisherDisplay = [string]$props.Project.PropertyGroup.StorePublisherDisplayName
+if ([string]::IsNullOrWhiteSpace($publisherDisplay)) {
+    throw 'Directory.Build.props must define StorePublisherDisplayName exactly as it appears in Partner Center.'
+}
 
 Write-Host "==> Scribe MSIX  v$msixVersion  ($Configuration, $runtime)" -ForegroundColor Cyan
+Write-Host "==> Identity: $IdentityName | Publisher: $Publisher | Publisher display: $publisherDisplay" -ForegroundColor Cyan
 
 # --- 1. Locate the Windows SDK packaging tools -----------------------------------------------------
 function Get-SdkTool([string]$name) {

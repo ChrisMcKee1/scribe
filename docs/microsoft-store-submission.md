@@ -13,7 +13,7 @@ Last reviewed: July 27, 2026.
 | Reserved product name | Ready | Use **Scribe AI** in Partner Center. |
 | Privacy policy | Ready | Use the public `PRIVACY.md` URL listed below and answer **Yes** for personal information. |
 | Store-managed updates | Ready | Packaged Store installs now bypass the Velopack/GitHub updater. |
-| Package build | Conditional | Replace the placeholder identity and publisher with the exact Partner Center values. |
+| Package build | Conditional | Confirm the package identity and publisher match the exact Partner Center values. |
 | Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
@@ -26,7 +26,7 @@ Last reviewed: July 27, 2026.
 
 - Store product name: **Scribe AI**
 - Installed application name: **Scribe**
-- Publisher display name: **Chris McKee**
+- Publisher display name: **Veteran Apps**
 - Package type: **MSIX**
 - Device family: **Windows.Desktop**
 - Architecture: **x64**
