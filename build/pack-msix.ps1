@@ -29,11 +29,10 @@ param(
 
     [string]$Configuration = 'Release',
 
-    # Publisher subject that must match the identity reserved in Partner Center exactly.
-    [string]$Publisher = 'CN=ChrisMcKee',
+    # Optional overrides. By default, both values come from Directory.Build.props.
+    [string]$Publisher,
 
-    # Package identity name reserved in Partner Center.
-    [string]$IdentityName = 'ChrisMcKee.Scribe',
+    [string]$IdentityName,
 
     # Reuse an existing publish folder instead of rebuilding it.
     [switch]$SkipPublish
@@ -58,8 +57,21 @@ if ($Version -ne $sourceVersion) {
 
 # MSIX requires a four-part version and reserves the revision field for Store use, so it must be 0.
 $msixVersion = "$Version.0"
-$displayName = [string]$props.Project.PropertyGroup.Product
+$storeIdentityName = [string]$props.Project.PropertyGroup.StoreIdentityName
+$storeIdentityPublisher = [string]$props.Project.PropertyGroup.StoreIdentityPublisher
+$displayName = [string]$props.Project.PropertyGroup.StoreProductDisplayName
 $publisherDisplay = [string]$props.Project.PropertyGroup.StorePublisherDisplayName
+if ([string]::IsNullOrWhiteSpace($IdentityName)) { $IdentityName = $storeIdentityName }
+if ([string]::IsNullOrWhiteSpace($Publisher)) { $Publisher = $storeIdentityPublisher }
+if ([string]::IsNullOrWhiteSpace($IdentityName)) {
+    throw 'Directory.Build.props must define StoreIdentityName exactly as it appears in Partner Center.'
+}
+if ([string]::IsNullOrWhiteSpace($Publisher)) {
+    throw 'Directory.Build.props must define StoreIdentityPublisher exactly as it appears in Partner Center.'
+}
+if ([string]::IsNullOrWhiteSpace($displayName)) {
+    throw 'Directory.Build.props must define StoreProductDisplayName as a reserved Partner Center app name.'
+}
 if ([string]::IsNullOrWhiteSpace($publisherDisplay)) {
     throw 'Directory.Build.props must define StorePublisherDisplayName exactly as it appears in Partner Center.'
 }

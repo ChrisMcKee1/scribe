@@ -11,7 +11,11 @@
     <Authors>Chris McKee</Authors>
     <Company>Chris McKee</Company>
     <Product>Scribe</Product>
-    <!-- Partner Center validates this friendly name separately from Package/Identity/Publisher. -->
+    <!-- Store identity values come from Scribe AI > Product management > Product identity. -->
+    <StoreIdentityName>53984VeteranApps.ScribeAI</StoreIdentityName>
+    <StoreIdentityPublisher>CN=A4B26056-B631-480C-912C-5EF24F1CBD6B</StoreIdentityPublisher>
+    <StoreProductDisplayName>Scribe AI</StoreProductDisplayName>
+    <!-- Partner Center validates this public name separately from the technical identity. -->
     <StorePublisherDisplayName>McKee AI Solutions</StorePublisherDisplayName>
     <Copyright>Copyright © Chris McKee</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

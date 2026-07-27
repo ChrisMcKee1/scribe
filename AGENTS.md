@@ -303,8 +303,10 @@ never covers; note it builds SmartScreen reputation over weeks rather than grant
 
 - The script needs `makeappx.exe` from the Windows SDK. It never touches a certificate: Store
   packages are signed by Microsoft after upload.
-- Identity and publisher must match the Partner Center reservation exactly; pass `-IdentityName`
-  and `-Publisher` once that reservation exists.
+- Store identity metadata is recorded in `Directory.Build.props`: the technical identity is
+  `53984VeteranApps.ScribeAI` / `CN=A4B26056-B631-480C-912C-5EF24F1CBD6B`, the reserved display
+  name is `Scribe AI`, and the public publisher is `McKee AI Solutions`. These values must match
+  Partner Center exactly; the package family name is derived from the technical identity.
 - MSIX versions are four-part and the revision field is reserved for the Store, so it is always
   `<VersionPrefix>.0`.
 - Store logos are generated from `docs/icon.png` at build time so the listing artwork can never

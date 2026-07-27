@@ -13,7 +13,7 @@ Last reviewed: July 27, 2026.
 | Reserved product name | Ready | Use **Scribe AI** in Partner Center. |
 | Privacy policy | Ready | Use the public `PRIVACY.md` URL listed below and answer **Yes** for personal information. |
 | Store-managed updates | Ready | Packaged Store installs now bypass the Velopack/GitHub updater. |
-| Package build | Conditional | Confirm the package identity and publisher match the exact Partner Center values. |
+| Package build | Ready | Store identity, reserved display name, and public publisher are recorded in `Directory.Build.props`. |
 | Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
@@ -30,17 +30,21 @@ Last reviewed: July 27, 2026.
 - Package type: **MSIX**
 - Device family: **Windows.Desktop**
 - Architecture: **x64**
+- Package/Identity/Name: **53984VeteranApps.ScribeAI**
+- Package/Identity/Publisher: **CN=A4B26056-B631-480C-912C-5EF24F1CBD6B**
+- Package family name: **53984VeteranApps.ScribeAI_e3jkm6dfkwwbm**
 
-Partner Center assigns the package Identity Name and Publisher values. Copy them from the
-product's identity page exactly, including capitalization, punctuation, and spaces:
+Partner Center assigns the technical identity values. They must match the product identity page
+exactly, including capitalization, punctuation, and spaces. The build script reads the assigned
+values above from `Directory.Build.props`, so the normal Store build command is:
 
 ```powershell
-./build/pack-msix.ps1 `
-    -IdentityName '<Package/Identity/Name from Partner Center>' `
-    -Publisher '<Package/Identity/Publisher from Partner Center>'
+./build/pack-msix.ps1
 ```
 
-Do not upload a package built with the script's placeholder identity values.
+The `VeteranApps` segment is an opaque part of the existing product's technical identity. It does
+not control the customer-facing publisher name. The Store listing displays **McKee AI Solutions**.
+Do not delete and recreate the product merely to change this internal identifier.
 
 ## Pricing and availability
 
