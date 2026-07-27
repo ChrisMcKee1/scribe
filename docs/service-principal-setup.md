@@ -71,6 +71,11 @@ Portal:
 4. Copy the **Value** column immediately. Azure shows it exactly once and never again. The Secret
    ID next to it is not the secret; if you copy that one, authentication will fail.
 
+**A brand new secret does not work instantly.** For up to a minute or two Entra rejects it with
+`AADSTS7000215: Invalid client secret provided`, which reads as though you typed it wrong. You
+probably did not. Wait a moment and select Verify again. This is measurable rather than folklore:
+the same secret can fail and then succeed roughly thirty seconds later.
+
 Put a reminder in your calendar for the expiry date. When a secret expires, cleanup starts failing
 and the cause is not obvious. Rotate it with `az ad sp credential reset`.
 
@@ -158,7 +163,7 @@ change how every other Azure tool on your machine picks its credentials.
 | What you see | What it means | What to do |
 | --- | --- | --- |
 | `AADSTS700016` application not found | The app registration is in a different tenant than the one entered | Confirm the tenant ID matches the directory that owns the app registration |
-| `AADSTS7000215` invalid client secret | The secret is wrong, or the Secret ID was copied instead of the Value | Create a new secret and copy the Value column |
+| `AADSTS7000215` invalid client secret | Usually a secret created moments ago that has not propagated. Otherwise the Secret ID was copied instead of the Value | Wait a minute and verify again, then check you copied the Value column |
 | 401 Unauthorized | The token was rejected | Check the resource has a custom subdomain (step 4) |
 | 403 Forbidden | Authentication worked, authorization did not | The role assignment in step 3 is missing, on the wrong resource, or has not propagated yet |
 | Verification succeeds but cleanup fails | The identity is valid but cannot call the model | The role in step 3 is probably one of the two look-alike roles that grant no data actions |

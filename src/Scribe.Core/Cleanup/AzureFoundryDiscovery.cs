@@ -61,8 +61,12 @@ public sealed record AzureSubscription(
 /// <see cref="Account"/>
 /// is the signed-in identity (UPN/email or app id) when it can be read from the token, else null.
 /// <see cref="TenantId"/> is the tenant that issued the verified token when available.
+/// <see cref="FailureReason"/> explains a failed probe in terms the user can act on; it is null on
+/// success. Without it a rejected credential is indistinguishable from "never tried", which is
+/// exactly the state a user stares at when a brand new client secret has not propagated yet.
 /// </summary>
-public sealed record AzureSignInStatus(bool IsSignedIn, string? Account, string? TenantId = null);
+public sealed record AzureSignInStatus(
+    bool IsSignedIn, string? Account, string? TenantId = null, string? FailureReason = null);
 
 /// <summary>
 /// Discovers chat-capable model deployments across the Azure subscriptions the signed-in user can
@@ -256,7 +260,17 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         }
         catch (Exception ex) when (ex is AuthenticationFailedException or CredentialUnavailableException)
         {
-            // Expected when the user simply isn't signed in — not an error worth surfacing as a stack.
+            // A missing az login is routine and stays at Debug. A rejected service principal is not:
+            // the user explicitly entered those details, so log the reason at Warning and hand it
+            // back so the UI can say something better than "it didn't work".
+            if (servicePrincipal is not null)
+            {
+                _log.LogWarning(
+                    "Azure sign-in probe: the service principal was rejected. {Message}", ex.Message);
+                return new AzureSignInStatus(
+                    false, null, null, AzureSignInDiagnostics.Describe(ex.ToString()));
+            }
+
             _log.LogDebug(ex, "Azure sign-in probe: no non-interactive credential available.");
             return new AzureSignInStatus(false, null);
         }
@@ -264,10 +278,17 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         {
             // An incomplete service principal: the same "not usable yet" state as a missing sign-in.
             _log.LogDebug(ex, "Azure sign-in probe: service principal is incomplete.");
-            return new AzureSignInStatus(false, null);
+            return new AzureSignInStatus(false, null, null, ex.Message);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            if (servicePrincipal is not null)
+            {
+                _log.LogWarning(ex, "Azure sign-in probe failed for the service principal.");
+                return new AzureSignInStatus(
+                    false, null, null, AzureSignInDiagnostics.Describe(ex.ToString()));
+            }
+
             _log.LogDebug(ex, "Azure sign-in probe failed.");
             return new AzureSignInStatus(false, null);
         }

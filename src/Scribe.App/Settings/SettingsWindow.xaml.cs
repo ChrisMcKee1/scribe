@@ -2043,7 +2043,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _azureSignInStatus = status;
             AzureStatusText.Text = status.IsSignedIn
                 ? $"{DescribeAzureIdentity(status)} Enter the endpoint and deployment name for your model."
-                : "The service principal could not sign in. Check the tenant, client ID, and secret, and that the secret has not expired.";
+                : status.FailureReason ?? AzureSignInDiagnostics.Generic;
         }
         catch (OperationCanceledException)
         {
