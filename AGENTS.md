@@ -50,7 +50,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.14**.
+  in `Directory.Build.props`. Current version: **0.2.16**.
 
 ## Commands (run these — include the flags)
 
