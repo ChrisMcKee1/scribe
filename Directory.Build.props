@@ -12,7 +12,7 @@
     <Company>Chris McKee</Company>
     <Product>Scribe</Product>
     <!-- Partner Center validates this friendly name separately from Package/Identity/Publisher. -->
-    <StorePublisherDisplayName>Veteran Apps</StorePublisherDisplayName>
+    <StorePublisherDisplayName>McKee AI Solutions</StorePublisherDisplayName>
     <Copyright>Copyright © Chris McKee</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/ChrisMcKee1/scribe</RepositoryUrl>

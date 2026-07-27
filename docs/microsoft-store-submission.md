@@ -26,7 +26,7 @@ Last reviewed: July 27, 2026.
 
 - Store product name: **Scribe AI**
 - Installed application name: **Scribe**
-- Publisher display name: **Veteran Apps**
+- Publisher display name: **McKee AI Solutions**
 - Package type: **MSIX**
 - Device family: **Windows.Desktop**
 - Architecture: **x64**
