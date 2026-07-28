@@ -3,8 +3,13 @@
 > **Latest focused benchmark:** [GPT-5.6 Phonetic Cleanup Benchmark](gpt56-phonetic-benchmark.md)
 > compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and
 > `gpt-5.4-mini` across 11 WAV-backed cases, including three sound-alike transcript challenges.
-> It also records two general prompt-tuning experiments. Neither candidate cleared the five-model
-> regression gate, so the shipped `DefaultWritingStyle` and `DefaultFrontierPrompt` remain in place.
+> A **July 28 rerun** in that report re-ranks the 5.6 trio on the candidate v4 prompt pair. On East
+> US 2 GlobalStandard `gpt-5.6-sol` led on quality; on South Central DataZoneStandard, pooled over
+> two replicates, quality is a three-way tie (91.0 / 90.9 / 90.1) and `gpt-5.6-terra` wins on speed
+> at every percentile. Rankings are deployment-specific: always report endpoint, region, and SKU.
+> On the **shipped** prompts the earlier finding still stands: neither the July 10 candidate v1 nor
+> v2 cleared the five-model regression gate, so `DefaultWritingStyle` and `DefaultFrontierPrompt`
+> remain in place pending a decision on candidate v4.
 
 A speed **and** quality benchmark of every Foundry model reachable from Scribe: **24 Microsoft
 Foundry (Azure cloud) deployments across 10 providers** and **22 Foundry Local (on-device)**

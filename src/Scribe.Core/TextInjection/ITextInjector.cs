@@ -14,11 +14,14 @@ public interface ITextInjector
     /// Injects <paramref name="text"/> into the focused application using the given
     /// <paramref name="method"/>. Runs the clipboard/SendInput sequence on a dedicated STA
     /// thread; callers should invoke this off the UI thread because it includes short delays.
+    /// When <paramref name="shiftEnterLineBreaks"/> is true (the default), typed line breaks are
+    /// sent as Shift+Enter so they do not submit a chat message.
     /// </summary>
     InjectionResult Inject(
         string text,
         InjectionMethod method = InjectionMethod.ClipboardPaste,
-        nint expectedForegroundWindow = 0);
+        nint expectedForegroundWindow = 0,
+        bool shiftEnterLineBreaks = true);
 }
 
 /// <summary>Outcome of placing text into the target application.</summary>

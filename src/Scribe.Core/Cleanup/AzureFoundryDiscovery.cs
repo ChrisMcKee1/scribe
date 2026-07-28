@@ -26,7 +26,9 @@ public sealed record AzureFoundryDeployment(
     string DeploymentName,
     string ModelName,
     string? ModelVersion,
-    string Location)
+    string Location,
+    string? ProjectEndpoint = null,
+    string? ProjectName = null)
 {
     /// <summary>Primary label for a settings dropdown, e.g. "gpt-4o-mini · gpt-4o-mini".</summary>
     public string DisplayName =>
@@ -37,6 +39,22 @@ public sealed record AzureFoundryDeployment(
     /// <summary>Secondary label: which account / subscription this deployment lives in.</summary>
     public string Detail =>
         string.IsNullOrWhiteSpace(AccountName) ? Endpoint : $"{AccountName} ({Kind}) — {SubscriptionName}";
+
+    /// <summary>
+    /// The endpoint to configure for this deployment. Microsoft's recommended shape is the Foundry
+    /// <b>project</b> endpoint (…/api/projects/NAME), which <see cref="TextCleanupService"/> routes
+    /// natively through <c>AIProjectClient</c>; the classic account endpoint is the fallback when the
+    /// account exposes no project. Note the project data plane is AAD-only, so key auth must keep
+    /// using <see cref="Endpoint"/> — see <see cref="EndpointFor"/>.
+    /// </summary>
+    public string PreferredEndpoint =>
+        string.IsNullOrWhiteSpace(ProjectEndpoint) ? Endpoint : ProjectEndpoint!;
+
+    /// <summary>
+    /// The endpoint appropriate for the chosen auth. A Foundry project endpoint cannot be called with
+    /// an API key (its data plane requires an Entra token), so key auth always gets the account form.
+    /// </summary>
+    public string EndpointFor(bool usingApiKey) => usingApiKey ? Endpoint : PreferredEndpoint;
 }
 
 /// <summary>
@@ -444,6 +462,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         try
         {
             var accountResource = arm.GetCognitiveServicesAccountResource(new ResourceIdentifier(account.Id));
+            var (projectEndpoint, projectName) =
+                await ResolveProjectEndpointAsync(accountResource, cancellationToken).ConfigureAwait(false);
+
             await foreach (var deployment in accountResource.GetCognitiveServicesAccountDeployments()
                 .GetAllAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
             {
@@ -474,7 +495,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                     deploymentName,
                     modelName,
                     model?.Version,
-                    account.Location));
+                    account.Location,
+                    projectEndpoint,
+                    projectName));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -607,6 +630,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
                     try
                     {
+                        var (projectEndpoint, projectName) =
+                            await ResolveProjectEndpointAsync(account, cancellationToken).ConfigureAwait(false);
+
                         await foreach (var deployment in account.GetCognitiveServicesAccountDeployments()
                             .GetAllAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
                         {
@@ -637,7 +663,9 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                                 deploymentName,
                                 modelName,
                                 model?.Version,
-                                location));
+                                location,
+                                projectEndpoint,
+                                projectName));
                         }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
@@ -753,4 +781,82 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         string SubscriptionName,
         string TenantId,
         string Location);
+
+    // The key on properties.endpoints that carries the Foundry project data-plane URL, i.e.
+    // https://<account>.services.ai.azure.com/api/projects/<project>. This is the endpoint shape
+    // Microsoft documents for AIProjectClient, and the one TextCleanupService routes natively.
+    private const string FoundryApiEndpointKey = "AI Foundry API";
+
+    /// <summary>
+    /// Finds the Foundry <b>project</b> endpoint for an account, which is the endpoint Microsoft
+    /// recommends and the only shape <c>AIProjectClient</c> accepts. Returns <c>(null, null)</c> for a
+    /// classic Azure OpenAI account, which has no projects, so callers fall back to the account
+    /// endpoint. Prefers the account's default project when several exist.
+    /// <para>
+    /// Failure is deliberately silent: listing projects needs a newer API version and an extra RBAC
+    /// read that some tenants deny, and a user who cannot enumerate projects can still use the
+    /// account endpoint. Discovery must degrade, never break.
+    /// </para>
+    /// </summary>
+    private async Task<(string? Endpoint, string? Name)> ResolveProjectEndpointAsync(
+        CognitiveServicesAccountResource account, CancellationToken cancellationToken)
+    {
+        try
+        {
+            CognitiveServicesProjectResource? best = null;
+            await foreach (var project in account.GetCognitiveServicesProjects()
+                .GetAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (ProjectEndpointOf(project) is null)
+                {
+                    continue;
+                }
+
+                // The default project is what the portal opens and what a user is most likely to
+                // paste, so it wins; otherwise keep the first usable one for a stable choice.
+                if (project.Data?.Properties?.IsDefault == true)
+                {
+                    best = project;
+                    break;
+                }
+
+                best ??= project;
+            }
+
+            if (best is null)
+            {
+                return (null, null);
+            }
+
+            var endpoint = ProjectEndpointOf(best);
+            var name = best.Data?.Name is { Length: > 0 } fullName
+                ? fullName[(fullName.LastIndexOf('/') + 1)..]
+                : best.Id.Name;
+            return (endpoint, name);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not list Foundry projects for account {Account}.", account.Id.Name);
+            return (null, null);
+        }
+    }
+
+    private static string? ProjectEndpointOf(CognitiveServicesProjectResource project)
+    {
+        var endpoints = project.Data?.Properties?.Endpoints;
+        if (endpoints is null ||
+            !endpoints.TryGetValue(FoundryApiEndpointKey, out var endpoint) ||
+            string.IsNullOrWhiteSpace(endpoint))
+        {
+            return null;
+        }
+
+        return Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out _) ? endpoint.Trim() : null;
+    }
 }

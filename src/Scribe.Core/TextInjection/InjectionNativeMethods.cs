@@ -14,6 +14,7 @@ internal static class InjectionNativeMethods
     internal const uint KEYEVENTF_UNICODE = 0x0004;
 
     internal const ushort VK_CONTROL = 0x11;
+    internal const ushort VK_SHIFT = 0x10;
     internal const ushort VK_V = 0x56;
     internal const ushort VK_RETURN = 0x0D;
 

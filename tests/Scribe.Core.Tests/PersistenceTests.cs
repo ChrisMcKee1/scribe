@@ -65,6 +65,7 @@ public class PersistenceTests
         var repo = new SettingsRepository(db);
 
         var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Clear(); // drop the first-run defaults; this is a round-trip test
         settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
         settings.EnabledDictionaryLibraryIds.Add("software-development");
         repo.Save(settings);
@@ -78,6 +79,7 @@ public class PersistenceTests
     public void Clone_deep_copies_enabled_dictionary_libraries()
     {
         var settings = AppSettings.CreateDefault();
+        settings.EnabledDictionaryLibraryIds.Clear(); // this test is about list sharing, not defaults
         settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");
 
         var clone = settings.Clone();

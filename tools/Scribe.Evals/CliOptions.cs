@@ -1,4 +1,5 @@
 using Scribe.Core.Cleanup;
+using Scribe.Core.PostProcessing;
 using Microsoft.Extensions.AI;
 
 namespace Scribe.Evals;
@@ -46,6 +47,7 @@ internal sealed class CliOptions
     public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
     public string? BenchWritingStyleFile { get; private set; }
     public string? BenchFrontierPromptFile { get; private set; }
+    public string[]? BenchGlossaryLibraries { get; private set; }
     public ReasoningEffort? BenchReasoningEffort { get; private set; }
     public int? BenchMaxOutputTokens { get; private set; }
     public bool BenchDisableRetries { get; private set; }
@@ -85,6 +87,7 @@ internal sealed class CliOptions
             PromptStyle = PromptStyle,
             WritingStyle = ReadPromptFile(BenchWritingStyleFile),
             FrontierPrompt = ReadPromptFile(BenchFrontierPromptFile),
+            Glossary = BuildGlossary(BenchGlossaryLibraries),
             ReasoningEffort = BenchReasoningEffort,
             MaxOutputTokens = BenchMaxOutputTokens,
             DisableRetries = BenchDisableRetries,
@@ -244,6 +247,10 @@ internal sealed class CliOptions
                 case "--frontier-prompt-file":
                     o.BenchFrontierPromptFile = Next();
                     break;
+                case "--glossary-libraries":
+                    o.BenchGlossaryLibraries = Next()
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    break;
                 case "--reasoning-effort":
                     o.BenchReasoningEffort = Next().ToLowerInvariant() switch
                     {
@@ -299,6 +306,38 @@ internal sealed class CliOptions
         }
 
         return o;
+    }
+
+    /// <summary>
+    /// Renders the shipped dictionary libraries into the same glossary block the app appends to the
+    /// cleanup system prompt, so a benchmark arm can measure the glossary's contribution rather than
+    /// assuming it. Unknown ids fail loudly: silently benchmarking an empty glossary would produce a
+    /// plausible-looking "no effect" result.
+    /// </summary>
+    private static string? BuildGlossary(string[]? libraryIds)
+    {
+        if (libraryIds is null || libraryIds.Length == 0)
+        {
+            return null;
+        }
+
+        var wanted = new HashSet<string>(libraryIds, StringComparer.OrdinalIgnoreCase);
+        var known = BuiltInDictionaryLibraries.All.ToDictionary(l => l.Id, StringComparer.OrdinalIgnoreCase);
+        var missing = wanted.Where(id => !known.ContainsKey(id)).ToList();
+        if (missing.Count > 0)
+        {
+            throw new ArgumentException(
+                $"Unknown dictionary library id(s): {string.Join(", ", missing)}. " +
+                $"Available: {string.Join(", ", known.Keys.Order())}");
+        }
+
+        var entries = BuiltInDictionaryLibraries.All
+            .Where(l => wanted.Contains(l.Id))
+            .SelectMany(l => l.Entries)
+            .ToList();
+
+        var glossary = CleanupPrompt.BuildGlossary(entries);
+        return string.IsNullOrEmpty(glossary) ? null : glossary;
     }
 
     private static string? ReadPromptFile(string? path)
@@ -362,6 +401,8 @@ internal sealed class CliOptions
               --no-wav                          Use the authored transcript (skip TTS+ASR).
               --writing-style-file <path>       Benchmark-only writing-style override.
               --frontier-prompt-file <path>     Benchmark-only frontier-prompt override.
+              --glossary-libraries <a,b>        Append these built-in dictionary libraries to the
+                                                prompt as a glossary (e.g. ai-model-names,ai-terminology).
               --reasoning-effort <level>        default, none, low, medium, high, or xhigh.
               --max-output-tokens <n>           Benchmark-only output/reasoning token cap.
               --no-retries                      Disable Azure SDK retries for latency diagnosis.

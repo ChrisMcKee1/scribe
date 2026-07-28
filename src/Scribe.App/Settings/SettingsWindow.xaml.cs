@@ -609,8 +609,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         InjectionCombo.DisplayMemberPath = nameof(InjectionChoice.Label);
         InjectionCombo.ItemsSource = new[]
         {
-            new InjectionChoice(InjectionMethod.UnicodeType, "Unicode typing (recommended)"),
-            new InjectionChoice(InjectionMethod.ClipboardPaste, "Clipboard paste"),
+            new InjectionChoice(InjectionMethod.UnicodeType, "Type it in (recommended, works everywhere)"),
+            new InjectionChoice(InjectionMethod.ClipboardPaste, "Paste it in (faster for long text)"),
         };
 
         NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
@@ -642,6 +642,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
+            ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             BeamSearchCheck.IsChecked = _settings.UseHighAccuracyDecoding;
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
@@ -779,7 +780,38 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
+        _rows.CollectionChanged += (_, _) => UpdateDictionaryGlossaryHint();
+        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(UpdateDictionaryGlossaryHint);
+        UpdateDictionaryGlossaryHint();
         _dictionarySnapshot = DictionarySignature();
+    }
+
+    // The prompt glossary is capped (CleanupPrompt.MaxGlossaryTerms) but local find-and-replace is
+    // not, so this is deliberately not enforced as an input limit on the grid: blocking the 81st
+    // entry would break a feature that still works. It is surfaced as a status line instead, and
+    // only when the user is actually over the cap and has AI cleanup on, so it stays quiet for the
+    // majority who never reach it.
+    private void UpdateDictionaryGlossaryHint()
+    {
+        if (DictionaryGlossaryHint is null)
+        {
+            return;
+        }
+
+        var enabled = _rows.Count(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Replacement));
+        var cap = CleanupPrompt.MaxGlossaryTerms;
+
+        if (enabled <= cap)
+        {
+            DictionaryGlossaryHint.Text =
+                $"{enabled:N0} of {_rows.Count:N0} entries enabled.";
+            return;
+        }
+
+        DictionaryGlossaryHint.Text =
+            $"{enabled:N0} of {_rows.Count:N0} entries enabled. All of them are replaced locally. " +
+            $"AI cleanup also receives a glossary of your terms, and that list is capped at {cap:N0}, " +
+            $"so {enabled - cap:N0} will not be sent to the model. Local replacement still covers them.";
     }
 
     // --- Libraries -----------------------------------------------------------------------
@@ -1536,7 +1568,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _azureModelMap.TryGetValue(display.Trim(), out var deployment))
         {
             _selectedAzureDeployment = deployment;
-            AzureEndpointBox.Text = deployment.Endpoint;
+
+            // Prefer the Foundry project endpoint (Microsoft's recommended shape, routed natively
+            // through AIProjectClient). Its data plane is Entra-only, so a user working with an API
+            // key gets the classic account endpoint instead.
+            var usingApiKey = !string.IsNullOrWhiteSpace(AzureApiKeyBox.Password);
+            AzureEndpointBox.Text = deployment.EndpointFor(usingApiKey);
             AzureDeploymentBox.Text = deployment.DeploymentName;
         }
 
@@ -2594,7 +2631,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 var d = _azureModelMap[item];
                 if (string.Equals(d.DeploymentName, preferDeployment, StringComparison.OrdinalIgnoreCase) &&
                     (string.IsNullOrWhiteSpace(preferEndpoint) ||
-                     string.Equals(d.Endpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase)))
+                     string.Equals(d.Endpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase) ||
+                     // A saved endpoint may be either form for the same deployment, so a project
+                     // endpoint must still re-select its discovered entry on the next open.
+                     string.Equals(d.ProjectEndpoint, preferEndpoint, StringComparison.OrdinalIgnoreCase)))
                 {
                     selected = item;
                     break;
@@ -3047,6 +3087,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
+            _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
             _settings.UseHighAccuracyDecoding = BeamSearchCheck.IsChecked == true;
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;

@@ -35,10 +35,29 @@ public enum CleanupOutcome
 /// <param name="Text">The text to inject (cleaned, unchanged, or the raw fallback).</param>
 /// <param name="Outcome">How the call resolved.</param>
 /// <param name="FailureReason">Human-readable failure detail, or <c>null</c> when fully successful.</param>
-public sealed record CleanupResult(string Text, CleanupOutcome Outcome, string? FailureReason = null)
+/// <param name="SkipReason">
+/// Why a <see cref="CleanupOutcome.Skipped"/> result skipped. "Enabled but not ready" and "switched
+/// off" are indistinguishable in the outcome alone, which is exactly the ambiguity that let a
+/// misconfigured deployment silently disable cleanup for an entire session while every dictation
+/// logged a bland "Skipped". Null when cleanup was not skipped.
+/// </param>
+public sealed record CleanupResult(
+    string Text,
+    CleanupOutcome Outcome,
+    string? FailureReason = null,
+    string? SkipReason = null)
 {
     /// <summary>A skip result that passes the input through untouched.</summary>
-    public static CleanupResult Skip(string text) => new(text, CleanupOutcome.Skipped);
+    public static CleanupResult Skip(string text, string? reason = null) =>
+        new(text, CleanupOutcome.Skipped, SkipReason: reason);
+
+    /// <summary>
+    /// True when cleanup was expected to run but could not, i.e. the user has it switched on yet the
+    /// engine was not ready. This is the state worth surfacing: the user believes cleanup is active
+    /// and it silently is not.
+    /// </summary>
+    public bool SkippedUnexpectedly =>
+        Outcome == CleanupOutcome.Skipped && SkipReason is not null;
 
     /// <summary>True when the model ran and altered the text.</summary>
     public bool Changed => Outcome == CleanupOutcome.Cleaned;

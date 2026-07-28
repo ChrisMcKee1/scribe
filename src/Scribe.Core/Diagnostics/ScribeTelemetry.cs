@@ -34,6 +34,12 @@ public static class ScribeTelemetry
     public const string TagAiCleanup = "scribe.ai_cleanup";
     public const string TagAiChanged = "scribe.ai_changed";
     public const string TagAiOutcome = "scribe.ai_outcome";
+
+    /// <summary>
+    /// Why cleanup was skipped despite being enabled. Present only on the unexpected-skip path, so
+    /// its presence on a dictation trace is itself the signal that cleanup silently did not run.
+    /// </summary>
+    public const string TagAiSkipReason = "scribe.ai_skip_reason";
     public const string TagFinalChars = "scribe.final_chars";
     public const string TagTargetApp = "scribe.target_app";
     public const string TagInjectMethod = "scribe.inject.method";

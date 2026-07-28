@@ -36,7 +36,8 @@ public sealed class TextInjector : ITextInjector
     public InjectionResult Inject(
         string text,
         InjectionMethod method = InjectionMethod.ClipboardPaste,
-        nint expectedForegroundWindow = 0)
+        nint expectedForegroundWindow = 0,
+        bool shiftEnterLineBreaks = true)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -71,7 +72,7 @@ public sealed class TextInjector : ITextInjector
 
             if (method == InjectionMethod.UnicodeType)
             {
-                var typed = TypeUnicode(text, expectedForegroundWindow);
+                var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
                 ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: false);
                 return new InjectionResult(
                     typed.Sent == typed.Total, "unicode", typed.Sent, typed.Total,
@@ -92,7 +93,7 @@ public sealed class TextInjector : ITextInjector
             }
 
             _logger.LogWarning("Clipboard paste failed; falling back to Unicode typing.");
-            var fallback = TypeUnicode(text, expectedForegroundWindow);
+            var fallback = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
             ReportInjection(activity, "unicode", fallback.Sent, fallback.Total, fallback: true);
             return new InjectionResult(
                 fallback.Sent == fallback.Total, "unicode", fallback.Sent, fallback.Total,
@@ -288,9 +289,9 @@ public sealed class TextInjector : ITextInjector
         return ((int)sent, inputs.Length);
     }
 
-    private (int Sent, int Total) TypeUnicode(string text, nint expectedForegroundWindow)
+    private (int Sent, int Total) TypeUnicode(string text, nint expectedForegroundWindow, bool shiftEnter)
     {
-        int total = CountKeyEvents(text, 0, text.Length);
+        int total = CountKeyEvents(text, 0, text.Length, shiftEnter);
         if (total == 0)
         {
             return (0, 0);
@@ -311,7 +312,7 @@ public sealed class TextInjector : ITextInjector
             }
 
             int count = ChunkLength(text, start, UnicodeChunkChars);
-            var inputs = BuildUnicodeChunk(text, start, count);
+            var inputs = BuildUnicodeChunk(text, start, count, shiftEnter);
 
             int delivered = SendWithRetry(inputs);
             sent += delivered;
@@ -320,6 +321,14 @@ public sealed class TextInjector : ITextInjector
             // report the partial send (the text.inject span is marked errored when sent != total).
             if (delivered < inputs.Length)
             {
+                // A truncated chunk can leave Shift logically down (the chord's release is its last
+                // event), which would turn anything the user types next into a shortcut. Same reason
+                // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
+                if (shiftEnter)
+                {
+                    ReleaseShift();
+                }
+
                 break;
             }
 
@@ -340,10 +349,20 @@ public sealed class TextInjector : ITextInjector
         return (sent, total);
     }
 
+    // Best-effort key-up after a partial chunk that may have ended mid-chord.
+    private void ReleaseShift()
+    {
+        INPUT[] inputs = [KeyUp(VK_SHIFT)];
+        if (SendWithRetry(inputs) != inputs.Length)
+        {
+            _logger.LogWarning("Releasing Shift after a partial Unicode chunk did not deliver.");
+        }
+    }
+
     // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because
     // each surrogate half is sent as its own KEYEVENTF_UNICODE event. Line breaks are the exception:
-    // see BuildUnicodeChunk.
-    internal static INPUT[] BuildUnicodeChunk(string text, int start, int count)
+    // see BuildLineBreak.
+    internal static INPUT[] BuildUnicodeChunk(string text, int start, int count, bool shiftEnter = true)
     {
         var inputs = new List<INPUT>(count * 2);
         int end = start + count;
@@ -352,11 +371,7 @@ public sealed class TextInjector : ITextInjector
             char ch = text[i];
             if (ch is '\r' or '\n')
             {
-                // A line break has to be a real Return keypress. Sent as KEYEVENTF_UNICODE the bare LF
-                // control character is discarded by most edit controls, so the two lines ran together
-                // with no separator at all ("first line.second line").
-                inputs.Add(KeyDown(VK_RETURN));
-                inputs.Add(KeyUp(VK_RETURN));
+                inputs.AddRange(BuildLineBreak(shiftEnter));
 
                 // CRLF is one line break, not two. ChunkLength guarantees the pair is never split
                 // across batches, so the lookahead never runs past the end of this chunk.
@@ -375,33 +390,95 @@ public sealed class TextInjector : ITextInjector
         return [.. inputs];
     }
 
+    // A line break has to be a real Return keypress. Sent as KEYEVENTF_UNICODE the bare LF control
+    // character is discarded by most edit controls, so the two lines ran together with no separator
+    // at all ("first line.second line").
+    //
+    // It is shifted by default because chat apps (Teams, Slack, Discord, and the web clients of all
+    // three) bind a bare Enter to "send". AI cleanup is what introduces paragraph breaks in the first
+    // place — raw ASR output has none — so a polished two-paragraph dictation typed into a chat box
+    // fired the message on the first break and typed the rest into an empty composer. Shift+Enter is
+    // the soft-newline chord in every one of those apps, and in a plain edit control, textarea or
+    // RichEdit it is indistinguishable from Enter, so the shifted form is safe or strictly better
+    // nearly everywhere. Word treats it as a line break rather than a paragraph mark, which is the
+    // one visible difference and still renders as the new line the speaker asked for.
+    internal static IEnumerable<INPUT> BuildLineBreak(bool shiftEnter)
+    {
+        if (!shiftEnter)
+        {
+            return [KeyDown(VK_RETURN), KeyUp(VK_RETURN)];
+        }
+
+        // Physical chord order: hold shift, tap Return, release shift. Unicode events are unaffected
+        // by modifier state, and shift is released before the next character, so nothing leaks.
+        return [KeyDown(VK_SHIFT), KeyDown(VK_RETURN), KeyUp(VK_RETURN), KeyUp(VK_SHIFT)];
+    }
+
     // Keeps a CRLF pair inside a single batch: split across two SendInput calls the CR and the LF
     // would each become their own Return and type an extra blank line.
+    //
+    // It also prefers to end a batch on a word boundary. Each batch is a separate SendInput followed
+    // by a settle, so the target repaints between them and the user watches the text arrive in
+    // pieces. Cutting at a fixed character count tore words in half mid-render ("consider" landing as
+    // "consi" then "der"); backing up to the last space in the batch means whole words appear at a
+    // time, which reads as typing rather than glitching. The backoff never gives up more than half a
+    // batch, so a long unbroken token (a URL, a file path) still makes steady progress instead of
+    // degrading toward one character per send.
     internal static int ChunkLength(string text, int start, int max)
     {
         int count = Math.Min(max, text.Length - start);
         int end = start + count;
+
+        // Never split a CRLF pair.
         if (count > 1 && end < text.Length && text[end - 1] == '\r' && text[end] == '\n')
         {
-            count--;
+            return count - 1;
+        }
+
+        // The batch already ends the text, or ends exactly at a break: nothing to adjust.
+        if (end >= text.Length || IsBreakBetween(text[end - 1], text[end]))
+        {
+            return count;
+        }
+
+        int floor = start + (count / 2);
+        for (int i = end - 1; i > floor; i--)
+        {
+            if (IsBreakBetween(text[i - 1], text[i]))
+            {
+                return i - start;
+            }
         }
 
         return count;
     }
 
+    // A batch may end after whitespace or a line break, so the next batch starts a fresh word.
+    private static bool IsBreakBetween(char last, char next) =>
+        char.IsWhiteSpace(last) || last is '\r' or '\n' || next is '\r' or '\n';
+
     // The number of INPUT events BuildUnicodeChunk will produce for a span, so a completed send is
-    // never misreported as truncated now that a CRLF collapses to a single keypress.
-    internal static int CountKeyEvents(string text, int start, int count)
+    // never misreported as truncated now that a CRLF collapses to a single keypress and a shifted
+    // line break costs four events instead of two.
+    internal static int CountKeyEvents(string text, int start, int count, bool shiftEnter = true)
     {
+        int lineBreakEvents = shiftEnter ? 4 : 2;
         int events = 0;
         int end = start + count;
         for (int i = start; i < end; i++)
         {
-            events += 2;
-            if (text[i] == '\r' && i + 1 < end && text[i + 1] == '\n')
+            if (text[i] is '\r' or '\n')
             {
-                i++;
+                events += lineBreakEvents;
+                if (text[i] == '\r' && i + 1 < end && text[i + 1] == '\n')
+                {
+                    i++;
+                }
+
+                continue;
             }
+
+            events += 2;
         }
 
         return events;

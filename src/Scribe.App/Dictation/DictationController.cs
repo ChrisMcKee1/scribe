@@ -539,6 +539,17 @@ internal sealed class DictationController : IDisposable
                 activity?.SetTag(ScribeTelemetry.TagAiOutcome, cleanup.Outcome.ToString());
                 activity?.SetTag(ScribeTelemetry.TagAiChanged, cleanup.Changed);
 
+                // Cleanup is switched on but the engine was not ready, so this dictation went out
+                // raw. Without this the only clue was a single startup warning, and every later
+                // dictation logged an unexplained "Skipped" while the user assumed cleanup ran.
+                if (cleanup.SkippedUnexpectedly)
+                {
+                    _log.LogWarning(
+                        "AI cleanup was skipped for this dictation: {Reason} The raw transcription was used.",
+                        cleanup.SkipReason);
+                    activity?.SetTag(ScribeTelemetry.TagAiSkipReason, cleanup.SkipReason);
+                }
+
                 if (cleanup.Outcome == CleanupOutcome.Failed)
                 {
                     // Intelligence failed at runtime: keep the raw transcription, signal the UI FIRST
@@ -624,7 +635,8 @@ internal sealed class DictationController : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             currentStage = "Text insertion";
             var injectionTimer = Stopwatch.StartNew();
-            var injection = _injector.Inject(text, settings.InjectionMethod, session.TargetWindow);
+            var injection = _injector.Inject(
+                text, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks);
             injectionTimer.Stop();
             report.InjectionDuration = injectionTimer.Elapsed;
             report.Injection = injection;

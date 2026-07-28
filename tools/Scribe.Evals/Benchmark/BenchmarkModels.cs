@@ -60,6 +60,14 @@ internal static class BenchmarkModels
         IReadOnlyList<string> missing = [];
         if (only is { Count: > 0 })
         {
+            // An explicit --endpoint is a deliberate instruction about WHICH resource to measure, so
+            // it outranks the convenience preference below. Without this, a deployment name that also
+            // exists on the preferred resource silently redirected the run there and the reported
+            // latency belonged to a different region and SKU than the one requested. Discovery
+            // returns account endpoints while a user may pass a project endpoint, so the resources
+            // are matched on the first host label (the account name), which both forms share.
+            var pinnedAccount = ExtractAccountLabel(explicitEndpoint);
+
             selected = only
                 .Select(requested => deployments
                     .Where(d => string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase) ||
@@ -67,12 +75,31 @@ internal static class BenchmarkModels
                     .OrderByDescending(d =>
                         string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase))
                     .ThenByDescending(d =>
+                        pinnedAccount is not null &&
+                        string.Equals(ExtractAccountLabel(d.Endpoint), pinnedAccount, StringComparison.OrdinalIgnoreCase))
+                    .ThenByDescending(d =>
+                        pinnedAccount is null &&
                         d.Endpoint.Contains("mtech-project-resource", StringComparison.OrdinalIgnoreCase))
                     .FirstOrDefault())
                 .Where(d => d is not null)
                 .Cast<AzureFoundryDeployment>()
                 .DistinctBy(d => $"{d.Endpoint}/{d.DeploymentName}", StringComparer.OrdinalIgnoreCase)
                 .ToList();
+
+            if (pinnedAccount is not null)
+            {
+                foreach (var d in selected)
+                {
+                    var actual = ExtractAccountLabel(d.Endpoint);
+                    if (!string.Equals(actual, pinnedAccount, StringComparison.OrdinalIgnoreCase))
+                    {
+                        log.LogWarning(
+                            "Deployment {Deployment} was not found on the requested resource '{Pinned}'; " +
+                            "measuring '{Actual}' instead. Latency will describe that resource.",
+                            d.DeploymentName, pinnedAccount, actual);
+                    }
+                }
+            }
 
             missing = only.Where(requested => !selected.Any(d =>
                 string.Equals(d.DeploymentName, requested, StringComparison.OrdinalIgnoreCase) ||
@@ -151,5 +178,21 @@ internal static class BenchmarkModels
         }
 
         return models;
+    }
+
+    // First host label of an endpoint, which is the Cognitive Services account name and is shared by
+    // both the account form (https://NAME.cognitiveservices.azure.com/) and the Foundry project form
+    // (https://NAME.services.ai.azure.com/api/projects/x). Returns null when there is nothing to pin.
+    private static string? ExtractAccountLabel(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) ||
+            !Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var host = uri.Host;
+        var dot = host.IndexOf('.');
+        return dot > 0 ? host[..dot] : host;
     }
 }

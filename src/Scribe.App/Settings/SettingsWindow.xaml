@@ -483,9 +483,9 @@
                                 <TextBlock Text="Text insertion" Style="{StaticResource GroupHeader}"/>
                                 <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
-                                        <TextBlock Text="Insertion method" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Text="How text gets inserted" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Unicode typing works in the widest range of apps and never touches your clipboard. Clipboard paste can be faster, but some apps block it."/>
+                                                   Text="Type it in enters your text one keystroke at a time, like you typed it yourself. It works in the widest range of apps and never touches your clipboard. Paste it in copies the text and presses Ctrl+V, which is quicker for long dictations but replaces what you had copied and is blocked by some apps."/>
                                         <ComboBox x:Name="InjectionCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
                                     </StackPanel>
                                 </ui:Card>
@@ -496,6 +496,20 @@
                                                    Text="Terminals treat a line break as Enter, so a long dictation with paragraphs can send several partial messages. Smart replaces line breaks with spaces only in terminals."/>
                                         <ComboBox x:Name="NewlineCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
                                     </StackPanel>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Don't send chat messages early" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Chat apps like Teams, Slack, and Discord send a message when you press Enter, so a dictation with paragraphs used to send itself on the first break. This types line breaks as Shift+Enter instead, which starts a new line without sending. Turn it off only if an app you use does something else with Shift+Enter."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="ShiftEnterCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
                                 </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
@@ -980,8 +994,12 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </ui:Card>
-                        <TextBlock Grid.Row="3" Style="{StaticResource SettingHint}" Margin="2,8,2,0"
-                                   Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
+                        <StackPanel Grid.Row="3" Margin="2,8,2,0">
+                            <TextBlock Style="{StaticResource SettingHint}"
+                                       Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
+                            <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource SettingHint}"
+                                       Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
                     </Grid>
 
                     <!-- ============================ Libraries ============================ -->
@@ -995,7 +1013,7 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
                             <TextBlock Text="Libraries" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Turn on ready-made vocabulary packs so Scribe spells technical terms the way you say them. 'a p i m' becomes 'APIM', 'cosmos db' becomes 'Cosmos DB'. Enabled libraries layer on top of your dictionary, and your own entries always win. Import a CSV to add your own. Changes apply when you save."/>
+                                       Text="Turn on ready-made vocabulary packs so Scribe spells technical terms the way you say them. 'a p i m' becomes 'APIM', 'gpt five six terra' becomes 'GPT-5.6-Terra'. The two AI packs are on by default; the rest are opt-in. Enabled libraries layer on top of your dictionary, and your own entries always win. Import a CSV to add your own. Changes apply when you save."/>
                         </StackPanel>
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
                             <ui:Button x:Name="LibraryImportButton" Content="Import library…"

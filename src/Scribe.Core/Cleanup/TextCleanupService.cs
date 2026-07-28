@@ -288,7 +288,14 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null)
             {
-                return CleanupResult.Skip(text);
+                // Distinguish "the user turned it off" from "the user turned it on and it is
+                // broken". The second case previously looked identical in the logs, so a bad
+                // endpoint or deployment name disabled cleanup for a whole session with no signal
+                // beyond one startup warning the user had long scrolled past.
+                var reason = !_options.Enabled
+                    ? null
+                    : $"AI cleanup is enabled but {_status} ({StatusDetail}).";
+                return CleanupResult.Skip(text, reason);
             }
 
             agent = _agent;
@@ -1267,14 +1274,99 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Azure deployment validation failed for {Deployment}.", options.AzureDeployment);
-            SetStatus(CleanupStatus.Unavailable, useKey
-                ? "Couldn't reach the Azure deployment. Check the endpoint, deployment name, and API key."
-                : "Couldn't reach the Azure deployment. Check that you're signed in (az login), the tenant is correct, and you have access.");
+            _log.LogWarning(ex, "Azure deployment validation failed for {Deployment} at {Endpoint} (auth={Auth}).",
+                options.AzureDeployment, endpointUri, useKey ? "ApiKey" : options.AzureAuthMode.ToString());
+            SetStatus(CleanupStatus.Unavailable, DescribeAzureFailure(ex, useKey, options.AzureAuthMode, options.AzureDeployment));
             return null;
         }
 
         return agent;
+    }
+
+    /// <summary>
+    /// Turns an Azure validation failure into a message that names the actual problem. This exists
+    /// because a single generic string sent a user chasing <c>az login</c> for two days while the
+    /// real fault was a 403: the right endpoint and deployment, but no data-plane role assignment.
+    /// The HTTP status is the highest-signal thing we have, so it drives the message.
+    /// </summary>
+    internal static string DescribeAzureFailure(Exception ex, bool useKey, Settings.AzureAuthMode mode, string? deployment)
+    {
+        var status = ExtractHttpStatus(ex);
+        var identity = useKey ? "The API key" : mode == Settings.AzureAuthMode.ServicePrincipal
+            ? "The service principal"
+            : "Your Azure CLI sign-in";
+
+        return status switch
+        {
+            401 => $"Azure rejected the credentials (401). {identity} is not valid for this resource." +
+                   (useKey ? " Check the key." : " Check the tenant, then re-authenticate."),
+
+            // The distinction that matters most: reachable and authenticated, but not authorized.
+            // Propagation is called out first because a freshly assigned role reads as a wrong role
+            // for roughly ten minutes, which is longer than Azure's own documentation suggests.
+            403 => $"Azure accepted the sign-in but denied access (403). {identity} can reach the resource " +
+                   "yet is not authorized to call it. If you just assigned a role, wait about ten minutes: " +
+                   "role assignments take longer to take effect than Azure documents. Otherwise assign " +
+                   "'Cognitive Services User' or 'Foundry User' (Foundry resource), or " +
+                   "'Cognitive Services OpenAI User' (Azure OpenAI account), on the resource that hosts " +
+                   "the deployment.",
+
+            404 => $"Azure could not find the deployment '{deployment}' (404). The endpoint is reachable, so " +
+                   "check that the deployment name matches exactly, including any suffix, and that it lives " +
+                   "on this resource.",
+
+            429 => "Azure is throttling requests (429). The deployment is correct but over its quota. " +
+                   "Wait and retry, or raise the deployment's capacity.",
+
+            >= 500 => $"Azure returned a server error ({status}). This is usually transient; try again shortly.",
+
+            _ when ex is OperationCanceledException or TimeoutException =>
+                "The Azure request timed out before the deployment answered. Check the endpoint host and " +
+                "your network, then try again.",
+
+            _ when useKey =>
+                "Couldn't reach the Azure deployment. Check the endpoint, deployment name, and API key.",
+
+            _ when mode == Settings.AzureAuthMode.ServicePrincipal =>
+                "Couldn't reach the Azure deployment. Check the endpoint, deployment name, tenant, client ID, " +
+                "and client secret.",
+
+            _ => "Couldn't reach the Azure deployment. Check that you're signed in (az login), the tenant is " +
+                 "correct, and you have access.",
+        };
+    }
+
+    /// <summary>
+    /// Digs the HTTP status out of the two exception shapes the Azure and OpenAI clients throw, including
+    /// when either is wrapped by the Agent Framework. Returns 0 when the failure was not an HTTP response.
+    /// </summary>
+    internal static int ExtractHttpStatus(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            switch (current)
+            {
+                case System.ClientModel.ClientResultException client:
+                    return client.Status;
+                case Azure.RequestFailedException request:
+                    return request.Status;
+                case AggregateException aggregate:
+                {
+                    foreach (var inner in aggregate.InnerExceptions)
+                    {
+                        var nested = ExtractHttpStatus(inner);
+                        if (nested != 0)
+                        {
+                            return nested;
+                        }
+                    }
+
+                    break;
+                }
+            }
+        }
+
+        return 0;
     }
 
     // Ensures the Foundry Local manager + catalog exist, without starting the web service or

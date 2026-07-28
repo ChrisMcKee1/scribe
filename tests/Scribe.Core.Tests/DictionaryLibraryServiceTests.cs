@@ -103,7 +103,10 @@ public sealed class DictionaryLibraryServiceTests : IDisposable
     [Fact]
     public void GetEnabledLibraryEntries_composes_only_enabled_libraries()
     {
-        Assert.Empty(_service.GetEnabledLibraryEntries()); // nothing enabled by default
+        // A fresh install ships with the AI vocabulary on, and nothing else.
+        var initial = _service.GetEnabledLibraryEntries();
+        Assert.Contains(initial, e => e.Replacement == "GPT-5.6-Terra");
+        Assert.DoesNotContain(initial, e => e.Replacement == "APIM");
 
         var settings = AppSettings.CreateDefault();
         settings.EnabledDictionaryLibraryIds.Add("microsoft-azure");

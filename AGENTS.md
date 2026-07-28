@@ -224,10 +224,33 @@ builds the `TokenCredential`; everything else goes through it.
   what makes the feature approvable in a locked-down tenant, so that mode takes the endpoint and
   deployment name by hand. Don't "fix" this by adding discovery.
 - **Roles that actually work** (assign by GUID; Microsoft renamed the Foundry ones):
-  `Cognitive Services OpenAI User` (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) for an Azure OpenAI
-  account, `Cognitive Services User` (`a97b65f3-24c7-4388-baec-2e87135dc908`) for a Foundry
-  resource. `Azure AI Inference Deployment Operator` has **zero** dataActions despite the name, and
-  `Cognitive Services Contributor` can create deployments but not call them.
+  **`Foundry User`** (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) for a Foundry resource
+  (`kind=AIServices`), including project endpoints; `Cognitive Services OpenAI User`
+  (`5e0bd9bd-7b93-4f28-af87-19fc36ad61bd`) for a true Azure OpenAI account (`kind=OpenAI`).
+- **Do NOT use the `Cognitive Services *` roles on a Foundry resource.** Microsoft states it
+  verbatim: "Don't assign built-in roles that start with **Cognitive Services**. These roles are
+  designed for accessing AI Services resources directly and don't apply to Foundry scenarios."
+  `Cognitive Services User` currently still *works* against a Foundry endpoint, which is exactly why
+  this doc previously recommended it. Working is not the same as supported; don't re-derive that
+  recommendation from an experiment. Same page also rules out **`Azure AI Developer`** (it targets ML
+  workspaces and Foundry hubs). Source:
+  <https://learn.microsoft.com/azure/foundry/concepts/rbac-foundry>
+- **`Azure AI User` is the old name for `Foundry User`, not a separate role.** The whole family was
+  renamed (`Azure AI Owner`→`Foundry Owner`, `Azure AI Account Owner`→`Foundry Account Owner`,
+  `Azure AI Project Manager`→`Foundry Project Manager`) with IDs unchanged, so **always assign by
+  GUID** while the rename rolls out.
+- `Azure AI Inference Deployment Operator` has **zero** dataActions despite the name;
+  `Cognitive Services Contributor` can create deployments but not call them; and
+  `Foundry Project Manager` cannot deploy models despite one Microsoft scenario table saying it can
+  (the per-permission reference wins).
+- The role goes on the **account resource** even for a project endpoint; a project is not a separate
+  assignment scope for inference.
+- **Role propagation outlasts the documented five minutes.** A fresh assignment on a Foundry
+  resource took closer to ten before the data plane stopped returning 403. Do not diagnose a 403 as
+  the wrong role until the assignment has existed for at least that long; swapping roles during the
+  window destroys the evidence about which change worked. This exact trap cost a live debugging
+  session, and is why `TextCleanupService.DescribeAzureFailure` now leads with propagation rather
+  than "check az login".
 - Entra auth requires the resource to have a **custom subdomain**; a regional endpoint rejects the
   token regardless of roles.
 - The client secret is DPAPI-encrypted at rest via `DpapiProtectedStringConverter` (same as the API

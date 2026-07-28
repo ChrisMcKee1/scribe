@@ -29,6 +29,13 @@ internal sealed record BenchmarkConfig
     public CleanupPromptStyle PromptStyle { get; init; } = CleanupPromptStyle.Auto;
     public string? WritingStyle { get; init; }
     public string? FrontierPrompt { get; init; }
+
+    /// <summary>
+    /// Pre-rendered glossary block appended to the system prompt, mirroring what the app builds from
+    /// the user's enabled dictionary libraries. Null runs the arm with no glossary, which is how the
+    /// libraries' contribution is isolated.
+    /// </summary>
+    public string? Glossary { get; init; }
     public ReasoningEffort? ReasoningEffort { get; init; }
     public int? MaxOutputTokens { get; init; }
     public bool DisableRetries { get; init; }
@@ -238,9 +245,11 @@ internal sealed class BenchmarkRunner
         var options = model.Provider == CleanupProvider.AzureFoundry
             ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
                 model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style,
+                Glossary: _cfg.Glossary,
                 PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt)
             : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
-                WritingStyle: style, PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt);
+                WritingStyle: style, Glossary: _cfg.Glossary,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt);
 
         var loadTimeout = TimeSpan.FromSeconds(
             model.Group == BenchGroup.Cloud ? _cfg.CloudReadyTimeoutSeconds : _cfg.LocalReadyTimeoutSeconds);

@@ -1,0 +1,310 @@
+# name: AI Model Names
+# category: Data and AI
+# description: Frontier and open-weight model names, including the spoken decimal forms dictation produces (say "GPT five point six terra", get GPT-5.6-Terra).
+pattern,replacement
+#
+# --- OpenAI and Azure OpenAI: GPT-5.6 ---
+gpt five point six sol,GPT-5.6-Sol
+gpt five six sol,GPT-5.6-Sol
+gpt five point six terra,GPT-5.6-Terra
+gpt five six terra,GPT-5.6-Terra
+gpt five point six luna,GPT-5.6-Luna
+gpt five six luna,GPT-5.6-Luna
+gpt five point six,GPT-5.6
+gpt five six,GPT-5.6
+#
+# --- OpenAI: GPT-5.5 and GPT-5.4 ---
+gpt five point five instant,GPT-5.5 Instant
+gpt five five instant,GPT-5.5 Instant
+gpt five point five,GPT-5.5
+gpt five five,GPT-5.5
+gpt five point four mini,GPT-5.4-mini
+gpt five four mini,GPT-5.4-mini
+gpt five point four nano,GPT-5.4-nano
+gpt five four nano,GPT-5.4-nano
+gpt five point four pro,GPT-5.4-pro
+gpt five four pro,GPT-5.4-pro
+gpt five point four,GPT-5.4
+gpt five four,GPT-5.4
+#
+# --- OpenAI: GPT-5.3 through GPT-5.1 ---
+gpt five point three codex,GPT-5.3-codex
+gpt five three codex,GPT-5.3-codex
+gpt five point three chat,GPT-5.3-chat
+gpt five three chat,GPT-5.3-chat
+gpt five point three,GPT-5.3
+gpt five three,GPT-5.3
+gpt five point two codex,GPT-5.2-codex
+gpt five two codex,GPT-5.2-codex
+gpt five point two chat,GPT-5.2-chat
+gpt five two chat,GPT-5.2-chat
+gpt five point two,GPT-5.2
+gpt five two,GPT-5.2
+gpt five point one codex mini,GPT-5.1-codex-mini
+gpt five one codex mini,GPT-5.1-codex-mini
+gpt five point one codex max,GPT-5.1-codex-max
+gpt five one codex max,GPT-5.1-codex-max
+gpt five point one codex,GPT-5.1-codex
+gpt five one codex,GPT-5.1-codex
+gpt five point one chat,GPT-5.1-chat
+gpt five one chat,GPT-5.1-chat
+gpt five point one,GPT-5.1
+gpt five one,GPT-5.1
+#
+# --- OpenAI: GPT-5 base family ---
+gpt five codex,GPT-5-codex
+gpt five chat,GPT-5-chat
+gpt five mini,GPT-5-mini
+gpt five nano,GPT-5-nano
+gpt five pro,GPT-5-pro
+gpt five,GPT-5
+gpt oss one twenty b,gpt-oss-120b
+gpt oss twenty b,gpt-oss-20b
+#
+# --- OpenAI: GPT-4 family ---
+gpt four point one mini,GPT-4.1-mini
+gpt four one mini,GPT-4.1-mini
+gpt four point one nano,GPT-4.1-nano
+gpt four one nano,GPT-4.1-nano
+gpt four point one,GPT-4.1
+gpt four one,GPT-4.1
+gpt four oh mini,GPT-4o mini
+gpt four o mini,GPT-4o mini
+gpt four oh,GPT-4o
+gpt four o,GPT-4o
+gpt four turbo,GPT-4 Turbo
+gpt four,GPT-4
+gpt three point five turbo,GPT-3.5 Turbo
+#
+# --- OpenAI: reasoning series ---
+oh one preview,o1-preview
+o one preview,o1-preview
+oh one mini,o1-mini
+o one mini,o1-mini
+oh three deep research,o3-deep-research
+o three deep research,o3-deep-research
+oh three mini,o3-mini
+o three mini,o3-mini
+oh three pro,o3-pro
+o three pro,o3-pro
+oh four mini,o4-mini
+o four mini,o4-mini
+codex mini,codex-mini
+computer use preview,computer-use-preview
+#
+# --- OpenAI: audio, image, and embedding models ---
+text embedding three large,text-embedding-3-large
+text embedding three small,text-embedding-3-small
+text embedding ada zero zero two,text-embedding-ada-002
+text embedding ada,text-embedding-ada-002
+gpt image one point five,gpt-image-1.5
+gpt image one mini,gpt-image-1-mini
+gpt image one,gpt-image-1
+gpt image two,gpt-image-2
+sora two,Sora 2
+sora,Sora
+gpt four oh transcribe,gpt-4o-transcribe
+gpt four o transcribe,gpt-4o-transcribe
+gpt four oh mini transcribe,gpt-4o-mini-transcribe
+gpt four o mini transcribe,gpt-4o-mini-transcribe
+gpt realtime two point one,gpt-realtime-2.1
+gpt realtime two,gpt-realtime-2
+gpt realtime one point five,gpt-realtime-1.5
+gpt realtime translate,gpt-realtime-translate
+gpt realtime whisper,gpt-realtime-whisper
+gpt realtime,gpt-realtime
+gpt audio one point five,gpt-audio-1.5
+gpt audio,gpt-audio
+chat gpt,ChatGPT
+chatgpt,ChatGPT
+#
+# --- Anthropic: Claude ("cloud" is the usual mishear) ---
+claude fable five,Claude Fable 5
+cloud fable five,Claude Fable 5
+claude mythos five,Claude Mythos 5
+cloud mythos five,Claude Mythos 5
+claude opus five,Claude Opus 5
+cloud opus five,Claude Opus 5
+claude opus four point eight,Claude Opus 4.8
+cloud opus four point eight,Claude Opus 4.8
+opus four point eight,Opus 4.8
+claude opus four point seven,Claude Opus 4.7
+cloud opus four point seven,Claude Opus 4.7
+opus four point seven,Opus 4.7
+claude opus four point six,Claude Opus 4.6
+cloud opus four point six,Claude Opus 4.6
+opus four point six,Opus 4.6
+claude opus four point five,Claude Opus 4.5
+cloud opus four point five,Claude Opus 4.5
+claude opus four point one,Claude Opus 4.1
+cloud opus four point one,Claude Opus 4.1
+claude opus four,Claude Opus 4
+cloud opus four,Claude Opus 4
+claude sonnet five,Claude Sonnet 5
+cloud sonnet five,Claude Sonnet 5
+claude sonet five,Claude Sonnet 5
+claude sonnet four point six,Claude Sonnet 4.6
+cloud sonnet four point six,Claude Sonnet 4.6
+sonnet four point six,Sonnet 4.6
+claude sonnet four point five,Claude Sonnet 4.5
+cloud sonnet four point five,Claude Sonnet 4.5
+claude sonnet four,Claude Sonnet 4
+cloud sonnet four,Claude Sonnet 4
+claude sonnet three point seven,Claude Sonnet 3.7
+cloud sonnet three point seven,Claude Sonnet 3.7
+claude sonnet three point five,Claude Sonnet 3.5
+cloud sonnet three point five,Claude Sonnet 3.5
+claude haiku four point five,Claude Haiku 4.5
+cloud haiku four point five,Claude Haiku 4.5
+haiku four point five,Haiku 4.5
+claude haiku three point five,Claude Haiku 3.5
+cloud haiku three point five,Claude Haiku 3.5
+anthropic,Anthropic
+claude code,Claude Code
+claude desktop,Claude Desktop
+#
+# --- Google: Gemini and Gemma ---
+gemini three point one pro,Gemini 3.1 Pro
+gemini three point six flash,Gemini 3.6 Flash
+gemini three deep think,Gemini 3 Deep Think
+gemini three pro,Gemini 3 Pro
+gemini three flash,Gemini 3 Flash
+gemini three,Gemini 3
+gemini two point five flash lite,Gemini 2.5 Flash-Lite
+gemini two point five flash light,Gemini 2.5 Flash-Lite
+gemini two point five deep think,Gemini 2.5 Deep Think
+gemini two point five pro,Gemini 2.5 Pro
+gemini two point five flash,Gemini 2.5 Flash
+gemini two point five,Gemini 2.5
+gemini two point zero flash,Gemini 2.0 Flash
+gemini one point five pro,Gemini 1.5 Pro
+gemini one point five flash,Gemini 1.5 Flash
+gemini omni flash,Gemini Omni Flash
+gemini nano,Gemini Nano
+gemma four,Gemma 4
+gamma four,Gemma 4
+gemma three twenty seven b,Gemma 3 27B
+gemma three twelve b,Gemma 3 12B
+gemma three four b,Gemma 3 4B
+gemma three one b,Gemma 3 1B
+gemma three,Gemma 3
+gemma two twenty seven b,Gemma 2 27B
+gemma two nine b,Gemma 2 9B
+gemma two,Gemma 2
+shield gemma two,ShieldGemma 2
+vertex a i,Vertex AI
+google a i studio,Google AI Studio
+imagen four,Imagen 4
+imagen three,Imagen 3
+veo three point one,Veo 3.1
+veo three,Veo 3
+palm two,PaLM 2
+#
+# --- Alibaba: Qwen ("when" is the usual mishear) ---
+qwen three zero point six b,Qwen3-0.6B
+qwen three one point seven b,Qwen3-1.7B
+qwen three thirty two b,Qwen3-32B
+when three thirty two b,Qwen3-32B
+qwen three fourteen b,Qwen3-14B
+when three fourteen b,Qwen3-14B
+qwen three eight b,Qwen3-8B
+when three eight b,Qwen3-8B
+qwen three four b,Qwen3-4B
+qwen three,Qwen3
+when three,Qwen3
+qwen two point five seventy two b,Qwen2.5-72B
+when two point five seventy two b,Qwen2.5-72B
+qwen two point five fourteen b,Qwen2.5-14B
+qwen two point five seven b,Qwen2.5-7B
+qwen two point five v l,Qwen2.5-VL
+qwen two point five,Qwen2.5
+q w q thirty two b,QwQ-32B
+q w q,QwQ
+#
+# --- Meta: Llama ---
+llama four maverick,Llama 4 Maverick
+llama four scout,Llama 4 Scout
+llama four,Llama 4
+llama three point three seventy b,Llama 3.3-70B
+llama three point three,Llama 3.3
+llama three point two ninety b,Llama 3.2-90B
+llama three point two eleven b,Llama 3.2-11B
+llama three point two three b,Llama 3.2-3B
+llama three point two one b,Llama 3.2-1B
+llama three point two,Llama 3.2
+llama three point one four oh five b,Llama 3.1-405B
+llama three point one seventy b,Llama 3.1-70B
+llama three point one eight b,Llama 3.1-8B
+llama three point one,Llama 3.1
+llama three seventy b,Llama 3-70B
+llama three eight b,Llama 3-8B
+llama three,Llama 3
+llama cpp,llama.cpp
+llama c p p,llama.cpp
+#
+# --- Mistral ---
+mistral small three point two,Mistral Small 3.2
+mistral small three point one,Mistral Small 3.1
+mistral small,Mistral Small
+mistral large,Mistral Large
+mistral nemo,Mistral NeMo
+mistral seven b,Mistral 7B
+ministral eight b,Ministral 8B
+ministral three b,Ministral 3B
+ministral,Ministral
+mixtral eight by twenty two b,Mixtral 8x22B
+mixtral eight by seven b,Mixtral 8x7B
+mixtral,Mixtral
+codestral,Codestral
+devstral,Devstral
+magistral,Magistral
+magistral small,Magistral Small
+magistral medium,Magistral Medium
+#
+# --- DeepSeek ---
+deep seek coder v two,DeepSeek-Coder-V2
+deep seek coder,DeepSeek-Coder
+deep seek r one,DeepSeek-R1
+deep seek v three,DeepSeek-V3
+deep seek v two,DeepSeek-V2
+deep seek,DeepSeek
+deepseek,DeepSeek
+#
+# --- Microsoft: Phi ---
+phi four multimodal,Phi-4-multimodal
+phi four reasoning,Phi-4-reasoning
+phi four mini,Phi-4-mini
+phi four,Phi-4
+phi three point five mini,Phi-3.5-mini
+phi three point five,Phi-3.5
+phi three medium,Phi-3-medium
+phi three mini,Phi-3-mini
+phi three,Phi-3
+#
+# --- Other open-weight families ---
+ol mo two,OLMo 2
+ol mo,OLMo
+smol lm two,SmolLM2
+smol lm,SmolLM
+kimi k two,Kimi K2
+grok three mini,Grok 3 Mini
+grok three,Grok 3
+command r plus,Command R+
+command r,Command R
+nemotron four,Nemotron-4
+nemotron,Nemotron
+granite three point three,Granite 3.3
+falcon forty b,Falcon-40B
+falcon seven b,Falcon-7B
+y i one point five,Yi-1.5
+g l m four,GLM-4
+#
+# --- Speech models ---
+whisper large v three turbo,Whisper large-v3-turbo
+whisper large v three,Whisper large-v3
+whisper large v two,Whisper large-v2
+parakeet t d t,Parakeet TDT
+parakeet tdt,Parakeet TDT
+silero v a d,Silero VAD
+silero vad,Silero VAD
+nvidia nemo,NVIDIA NeMo

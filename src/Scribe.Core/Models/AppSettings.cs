@@ -60,11 +60,28 @@ public sealed class AppSettings
     /// <summary>
     /// Ids of the dictionary libraries the user has switched on. Each enabled library's entries are
     /// layered on top of the base dictionary (the user's own entries win on conflict) and feed both
-    /// the deterministic post-processor and the AI cleanup glossary. Empty by default, so libraries
-    /// are strictly opt-in and never change behaviour for someone who hasn't chosen any. A plain
-    /// string list, deep-copied in <see cref="Clone"/>.
+    /// the deterministic post-processor and the AI cleanup glossary. A plain string list,
+    /// deep-copied in <see cref="Clone"/>.
     /// </summary>
-    public List<string> EnabledDictionaryLibraryIds { get; set; } = new();
+    /// <remarks>
+    /// Defaults to empty here on purpose. <see cref="CreateDefault"/> seeds
+    /// <see cref="DefaultLibraryIds"/> instead, so a fresh install gets them while an existing
+    /// install that predates a library is never silently opted in by deserialization filling in the
+    /// property initializer for a key its JSON does not contain.
+    /// </remarks>
+    public List<string> EnabledDictionaryLibraryIds { get; set; } = [];
+
+    /// <summary>
+    /// Libraries switched on for a fresh install. Only the AI vocabulary is on by default: model
+    /// names and AI terminology are the terms Parakeet gets wrong most often and that no prompt can
+    /// recover reliably, and unlike the platform-specific packs they are useful to nearly everyone
+    /// who dictates about software. Everything else stays opt-in.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultLibraryIds =
+    [
+        "ai-model-names",
+        "ai-terminology",
+    ];
 
     /// <summary>
     /// Run transcribed text through an AI model to fix punctuation, capitalization and grammar
@@ -204,6 +221,15 @@ public sealed class AppSettings
     /// </summary>
     public NewlineInjectionMode NewlineHandling { get; set; } = NewlineInjectionMode.SmartFlatten;
 
+    /// <summary>
+    /// Send a typed line break as Shift+Enter rather than a bare Enter. Chat apps (Teams, Slack,
+    /// Discord) bind Enter to "send", so a cleaned multi-paragraph dictation submitted itself on the
+    /// first paragraph break and typed the rest into an empty composer. Shift+Enter is the
+    /// soft-newline chord in those apps and is indistinguishable from Enter in a plain text box, so
+    /// this defaults to on; turn it off for an app that binds Shift+Enter to something else.
+    /// </summary>
+    public bool ShiftEnterLineBreaks { get; set; } = true;
+
     /// <summary>Persist a copy of each capture's audio alongside its history entry.</summary>
     public bool StoreAudioHistory { get; set; }
 
@@ -220,7 +246,14 @@ public sealed class AppSettings
     /// </summary>
     public bool HasCompletedFirstRun { get; set; }
 
-    public static AppSettings CreateDefault() => new();
+    /// <summary>
+    /// A settings object for a brand new install. Distinct from <c>new AppSettings()</c>: this is
+    /// where first-run opt-ins live, so deserializing an existing install can never acquire them.
+    /// </summary>
+    public static AppSettings CreateDefault() => new()
+    {
+        EnabledDictionaryLibraryIds = [.. DefaultLibraryIds],
+    };
 
     public AppSettings Clone()
     {

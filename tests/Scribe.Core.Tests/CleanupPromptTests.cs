@@ -84,6 +84,40 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void Default_style_generalizes_model_identifiers_beyond_the_dictionary()
+    {
+        // A dictionary can only cover models that existed when it was written, and new ones ship
+        // weekly. "Keep model names verbatim" used to block the rewrite entirely, so a dictated
+        // "gpt five six terra" arrived as spelled-out speech. The style now has to teach the shape.
+        var style = CleanupPrompt.DefaultWritingStyle;
+
+        Assert.Contains("GPT-5.6-Terra", style);
+        Assert.Contains("follow the pattern of the ones you do know", style);
+        // The absolute rule that caused the failure must not come back.
+        Assert.DoesNotContain("model names, code, and URLs verbatim", style);
+    }
+
+    [Fact]
+    public void Frontier_prompt_treats_written_form_as_formatting_not_a_value_change()
+    {
+        // The frontier guardrail forbids changing a value. Without this clarification the model
+        // reads normalizing a spoken identifier as a forbidden value change and leaves it raw.
+        var prompt = CleanupPrompt.DefaultFrontierPrompt;
+
+        Assert.Contains("formatting, not a change of value", prompt);
+        Assert.Contains("GPT-5.6-Terra", prompt);
+    }
+
+    [Fact]
+    public void Glossary_invites_generalization_rather_than_exact_lookup_only()
+    {
+        var glossary = CleanupPrompt.BuildGlossary(
+            [Scribe.Core.Models.DictionaryEntry.New("gpt five point six", "GPT-5.6")]);
+
+        Assert.Contains("style guide rather than a closed set", glossary);
+    }
+
+    [Fact]
     public void Single_line_target_keeps_the_effective_style_and_appends_terminal_contract()
     {
         var style = CleanupPrompt.ResolveWritingStyleOverride(

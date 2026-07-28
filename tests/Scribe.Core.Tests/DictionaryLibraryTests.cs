@@ -114,7 +114,9 @@ public sealed class DictionaryLibraryTests
         Assert.Contains(all, l => l.Id == "dotnet-development");
         Assert.Contains(all, l => l.Id == "data-engineering");
         Assert.Contains(all, l => l.Id == "data-science-machine-learning");
-        Assert.Equal(9, all.Count);
+        Assert.Contains(all, l => l.Id == "ai-model-names");
+        Assert.Contains(all, l => l.Id == "ai-terminology");
+        Assert.Equal(11, all.Count);
 
         var azure = all.Single(l => l.Id == "microsoft-azure");
         Assert.True(azure.BuiltIn);
@@ -128,6 +130,8 @@ public sealed class DictionaryLibraryTests
     {
         var minimumEntries = new Dictionary<string, int>
         {
+            ["ai-model-names"] = 240,
+            ["ai-terminology"] = 175,
             ["data-and-ai"] = 125,
             ["data-engineering"] = 90,
             ["data-science-machine-learning"] = 85,
@@ -158,7 +162,7 @@ public sealed class DictionaryLibraryTests
                            name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        Assert.Equal(9, resources.Count);
+        Assert.Equal(11, resources.Count);
         foreach (var resource in resources)
         {
             using var stream = assembly.GetManifestResourceStream(resource);

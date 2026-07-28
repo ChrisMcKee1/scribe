@@ -1,13 +1,96 @@
 # GPT-5.6 Phonetic Cleanup Benchmark
 
-Updated July 10, 2026.
+Updated July 28, 2026.
 
 This report compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and
 `gpt-5.4-mini` on Scribe's real post-ASR cleanup path. It also records two prompt-tuning
 experiments, why neither candidate replaced the shipped defaults, and the regional deployment
 investigation that made the 5.6 models practical for interactive cleanup.
 
-## Result
+## July 28 rerun: candidate v4 prompts
+
+A later run supersedes the July 10 model ranking below for anyone adopting the candidate v4
+prompt pair. It is reported separately because the numbers are **not** comparable to the July 10
+table: it uses the candidate v4 frontier prompt and writing style rather than the shipped
+constants.
+
+**Deployment actually measured:** `mtech-project-resource` (East US 2, GlobalStandard, capacity
+500), endpoint `https://mtech-project-resource.cognitiveservices.azure.com/`, deployment names
+`gpt-5.6-sol` / `gpt-5.6-luna` / `gpt-5.6-terra`. The run was launched with an explicit
+`--endpoint` pointing at a South Central project, but `BenchmarkModels.BuildCloudAsync` resolves
+`--cloud-models` through ARM discovery first and deliberately prefers `mtech-project-resource`;
+the explicit endpoint is only a fallback for deployments discovery cannot find. Latency below is
+therefore East US 2 GlobalStandard, **not** the South Central DataZoneStandard deployments.
+Quality is unaffected by that distinction because all three models ran identical prompts and
+cases on the same resource.
+
+Method: 19 cases (the 12 original plus a new 7-case voice suite), 5 timed runs each after a
+discarded warmup, 95 latency samples per model, all 19 cases graded per model by the same
+`gpt-4.1` golden-referenced judge. Because every model received an identical prompt, any
+style bias in the goldens applies equally to all three and cancels out of the ranking.
+
+| Model | Quality | p50 | p75 | p90 | p95 | max | Samples over 15 s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `gpt-5.6-sol` | **94** | 3,896 ms | 4,631 ms | 5,743 ms | 8,578 ms | 39,479 ms | 1 / 95 |
+| `gpt-5.6-luna` | 90 | 3,548 ms | 4,311 ms | 5,657 ms | 6,615 ms | 9,003 ms | 0 / 95 |
+| `gpt-5.6-terra` | 85 | **3,007 ms** | **3,668 ms** | **5,396 ms** | 7,836 ms | 36,150 ms | 1 / 95 |
+
+### The same test on South Central, and the ranking inverts
+
+Repeating the identical 19 cases, 5 runs, and v4 prompts against `mtech-sc-resource`
+(South Central US, DataZoneStandard) rather than East US 2 GlobalStandard, pooled over **two**
+independent replicates (190 latency samples and 38 graded cases per model):
+
+| Model | Quality (r1 / r2) | p50 | p75 | p90 | p95 | max | Samples over 15 s |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `gpt-5.6-sol` | **91.0** (90 / 92) | 3,409 ms | 4,523 ms | 6,890 ms | 9,347 ms | 29,714 ms | 5 / 190 |
+| `gpt-5.6-terra` | 90.9 (91 / 91) | **2,688 ms** | **3,298 ms** | **4,395 ms** | **5,732 ms** | 28,616 ms | **4 / 190** |
+| `gpt-5.6-luna` | 90.1 (89 / 91) | 3,024 ms | 4,033 ms | 6,653 ms | 8,594 ms | 26,584 ms | 4 / 190 |
+
+**Quality is a three-way tie on this deployment.** The spread is 0.9 points across models while
+each model's own two replicates differ by up to 2 points, so quality cannot separate them and any
+single-run ranking of these three is noise. That retroactively explains the "inversion" seen in the
+first South Central pass: Terra's 85 on East US 2 and 91 here is a swing larger than the gaps
+between models, and the honest reading is that quality was never reliably distinguishable, not that
+a region changed model behaviour.
+
+Speed does separate them. Terra is fastest at every percentile, and its p95 is 3.6 s ahead of Sol,
+which is the difference a user feels on a long dictation.
+
+**On South Central, pick `gpt-5.6-terra`:** tied on quality, fastest at every percentile, tightest
+tail. This supersedes the East US 2 recommendation above for anyone deploying to South Central.
+
+Two cautions this data supports:
+
+1. **A model ranking is only valid for the deployment it was measured on.** Report endpoint, region,
+   and SKU with any row, and re-measure before adopting a ranking from a different resource.
+2. **Never rank on a single run.** The first three-sample pass produced a Terra latency verdict that
+   190 samples contradict, and the first five-run quality pass produced a model ordering that a
+   second replicate erases.
+
+Combined score, weighting quality 70% and speed 30% (a wrong rewrite costs more to repair by hand
+than a second of waiting), with speed derived from p50 and the p95-to-p50 spread:
+
+| Rank | Model | Quality | Speed | Combined |
+|---|---|---:|---:|---:|
+| 1 | `gpt-5.6-sol` | 94 | 72 | **87.3** |
+| 2 | `gpt-5.6-luna` | 90 | 78 | **86.5** |
+| 3 | `gpt-5.6-terra` | 85 | 80 | **83.6** |
+
+**Recommendation: `gpt-5.6-sol` for quality, `gpt-5.6-luna` if predictability matters more.**
+Their combined scores are 0.8 apart, which is inside the noise of a single 5-run pass, so treat
+them as tied on the aggregate and choose on the axis you care about. Sol is the only model that
+merged the `redundancy` restatements into a single sentence, recovered the ASR garble "Frida" to
+"Friday" from context, and converted "kinda" to "kind of" instead of deleting the word. Luna is
+the only model with zero samples over 15 s. Terra is third on quality and its p50 lead does not
+recover the 9-point gap to Sol.
+
+**A three-run pilot overstated Terra's tail.** An earlier 9-case pass recorded Terra at 4.7 s,
+26.8 s, and 57.6 s on the same case and concluded the model was unstable. Across 95 samples Terra
+has exactly one excursion over 15 s, the same as Sol, so the long tail is a roughly 1% property of
+this endpoint rather than a Terra defect. Do not draw latency conclusions from three samples.
+
+## Result (July 10, shipped prompts, US Data Zone)
 
 | Quality rank | Model and best tested deployment | Quality | Grade | Median | Phonetic quality | Practical verdict |
 |---|---|---:|---:|---:|---:|---|
