@@ -32,7 +32,14 @@ public partial class App : Application
 {
     private const string SingleInstanceMutexName = "Scribe.SingleInstance.9E5C1A2F";
 
+    // A second launch carrying --settings signals this instead of dying behind an "already running"
+    // dialog. Shortcuts and the installer both use that switch, so the old behaviour turned a
+    // deliberate "open settings" into a dead end.
+    private const string ShowSettingsEventName = "Scribe.ShowSettings.9E5C1A2F";
+
     private Mutex? _singleInstanceMutex;
+    private EventWaitHandle? _showSettingsSignal;
+    private RegisteredWaitHandle? _showSettingsRegistration;
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
@@ -49,10 +56,22 @@ public partial class App : Application
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         if (!isNew)
         {
+            var wantsSettings = HasSettingsSwitch(e.Args);
+
+            // Hand the request to the running instance rather than telling the user to go find the
+            // tray icon themselves. Only fall back to the notice when the signal cannot be raised.
+            if (wantsSettings && TrySignalShowSettings())
+            {
+                Shutdown();
+                return;
+            }
+
             ShowSingleInstanceNotice();
             Shutdown();
             return;
         }
+
+        StartShowSettingsListener();
 
         // Tray app: never exit just because a window closed; quit happens explicitly from the tray.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -241,9 +260,67 @@ public partial class App : Application
         _updates.ProbePendingLocal();
 
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
-        if (e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase)))
+        if (HasSettingsSwitch(e.Args))
         {
             OpenSettings();
+        }
+    }
+
+    private static bool HasSettingsSwitch(IEnumerable<string> args) =>
+        args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Raises the cross-process signal that asks the running instance to show Settings. Returns
+    /// false when no instance is listening, so the caller can fall back to the notice.
+    /// </summary>
+    private static bool TrySignalShowSettings()
+    {
+        try
+        {
+            if (!EventWaitHandle.TryOpenExisting(ShowSettingsEventName, out var signal))
+            {
+                return false;
+            }
+
+            using (signal)
+            {
+                return signal.Set();
+            }
+        }
+        catch
+        {
+            // A second launch must never crash on its way out; the notice is the fallback.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Listens for <see cref="ShowSettingsEventName"/> for the life of the process. The wait is
+    /// registered on a pool thread, so opening Settings hops back to the dispatcher.
+    /// </summary>
+    private void StartShowSettingsListener()
+    {
+        try
+        {
+            _showSettingsSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSettingsEventName);
+            _showSettingsRegistration = ThreadPool.RegisterWaitForSingleObject(
+                _showSettingsSignal,
+                (_, timedOut) =>
+                {
+                    if (!timedOut)
+                    {
+                        Dispatcher.BeginInvoke(new Action(OpenSettings));
+                    }
+                },
+                state: null,
+                Timeout.Infinite,
+                executeOnlyOnce: false);
+        }
+        catch
+        {
+            // Losing the listener only costs the shortcut; the tray menu still opens Settings.
+            _showSettingsSignal = null;
+            _showSettingsRegistration = null;
         }
     }
 
@@ -573,6 +650,9 @@ public partial class App : Application
         }
         finally
         {
+            // Unregister before disposing the handle it waits on, or the pool can touch a freed one.
+            try { _showSettingsRegistration?.Unregister(null); } catch { }
+            try { _showSettingsSignal?.Dispose(); } catch { }
             _singleInstanceMutex?.Dispose();
         }
 
