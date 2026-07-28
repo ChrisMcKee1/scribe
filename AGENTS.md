@@ -312,9 +312,46 @@ never covers; note it builds SmartScreen reputation over weeks rather than grant
 - Store logos are generated from `docs/icon.png` at build time so the listing artwork can never
   drift from the in-app brand mark.
 - Store-installed packages are detected through Windows package identity. `UpdateService` then
-  disables the Velopack/GitHub update path and reports that Microsoft Store manages updates.
+  disables the Velopack/GitHub update path, and `StoreUpdateService` takes over the "check for
+  updates" button using `Windows.Services.Store`. That check is gated on
+  `Package.Current.SignatureKind == Store`, not merely on being packaged: the Store re-signs what it
+  publishes, so a sideloaded MSIX carries our own signature and the Store has no record of it.
+  Calling those WinRT APIs is why `Scribe.App` targets `net10.0-windows10.0.19041.0`.
 - `docs/microsoft-store-submission.md` is the working Partner Center checklist and contains listing
   copy, certification notes, screenshot order, and the remaining pre-submission decisions.
+
+### Submitting to the Store
+
+`.github/workflows/store.yml` builds the MSIX and submits it through the
+[Microsoft Store Developer CLI](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/overview).
+It is **manual dispatch only**, deliberately: a submission goes to Microsoft for certification, and
+once a submission is created through the API it must not be edited in Partner Center or it can no
+longer be committed by the API. Run it after the GitHub release for the same version so both
+channels ship the same build.
+
+Repository secrets it needs (Settings > Secrets and variables > Actions):
+`STORE_TENANT_ID`, `STORE_SELLER_ID`, `STORE_CLIENT_ID`, `STORE_CLIENT_SECRET`, `STORE_PRODUCT_ID`
+(the 12-character Store ID from Partner Center > Product identity). The first four come from an
+Entra app registration associated with the Partner Center account under Account settings > User
+management > Azure AD applications.
+
+Constraints that are easy to trip over:
+- The API **cannot** be used on a product that uses **mandatory app updates**; it returns HTTP 409.
+- The app must already have **one completed manual submission**, including the age ratings
+  questionnaire. Scribe satisfies this.
+- MSIX packages may be up to 25 GB, so our ~650 MB package is fine, but the upload uses an Azure
+  blob SAS with its own expiry; a very slow upload needs a fresh submission GET rather than a retry.
+- **MSIX only.** The `api.store.microsoft.com` submission API documented for MSI/EXE apps does not
+  handle MSIX, and the `microsoft/store-submission` action is unmaintained (still `node16`) and has
+  no MSIX upload path. Use `microsoft/microsoft-store-apppublisher` as the workflow does.
+
+Both installers are kept on purpose. The Store is the recommended path (Microsoft signs it, so
+there is no SmartScreen friction), but Store certification adds latency to a hotfix, a low-level
+keyboard hook plus microphone capture is the kind of profile that attracts policy review, and many
+managed corporate devices block the Store outright. The direct download is the escape hatch for all
+three. Both installs share `%LOCALAPPDATA%\ScribeData`, because `AppPaths` resolves
+`Environment.GetFolderPath(LocalApplicationData)`, which is not virtualized for a packaged Win32
+app, so a user can move between channels without losing settings, dictionary, or history.
 
 ## GitHub release automation
 

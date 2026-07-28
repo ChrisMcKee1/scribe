@@ -1,0 +1,100 @@
+name: Store submission
+
+# Manual on purpose. A Store submission goes to Microsoft for certification and, once created
+# through the API, must not be edited in Partner Center or it can no longer be committed by the
+# API. Firing that automatically on every tag would be a surprise with real consequences, so the
+# GitHub release stays automatic and this one is a deliberate click.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to submit, for example v0.2.18. Defaults to the current source version.'
+        required: false
+        type: string
+      draft_only:
+        description: 'Create or update the submission but do not send it for certification.'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: store-submission
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    runs-on: windows-latest        # makeappx and the MSIX toolchain are Windows only
+    timeout-minutes: 120           # the package is ~650 MB to build and upload
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          $version = [string]$props.Project.PropertyGroup.VersionPrefix
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Could not read VersionPrefix.' }
+          if ($env:INPUT_TAG -and $env:INPUT_TAG -ne "v$version") {
+              throw "Tag $env:INPUT_TAG does not match source version v$version."
+          }
+          "VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+
+      - name: Download offline speech models
+        shell: pwsh
+        run: ./scripts/Download-Models.ps1
+
+      - name: Run regression tests
+        shell: pwsh
+        run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release
+
+      # Builds the same package we ship by hand, so the automated and manual paths cannot drift.
+      # The Store re-signs after certification, so this stays unsigned deliberately.
+      - name: Build MSIX
+        shell: pwsh
+        run: ./build/pack-msix.ps1
+
+      - name: Verify the package
+        shell: pwsh
+        run: |
+          $msix = "releases/Scribe-$env:VERSION-win-x64.msix"
+          if (-not (Test-Path $msix)) { throw "Expected $msix." }
+          $size = [math]::Round((Get-Item $msix).Length / 1MB, 1)
+          Write-Host "Submitting $msix ($size MB)"
+          # The Store reserves the fourth version field; a non-zero value is rejected at ingestion.
+          $manifest = [xml](Get-Content publish/msix-stage/AppxManifest.xml)
+          $packageVersion = $manifest.Package.Identity.Version
+          if ($packageVersion -ne "$env:VERSION.0") {
+              throw "Manifest version $packageVersion does not match $env:VERSION.0."
+          }
+          "MSIX_PATH=$msix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Set up Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.4
+
+      - name: Configure Partner Center credentials
+        shell: pwsh
+        run: |
+          msstore reconfigure `
+              --tenantId "${{ secrets.STORE_TENANT_ID }}" `
+              --sellerId "${{ secrets.STORE_SELLER_ID }}" `
+              --clientId "${{ secrets.STORE_CLIENT_ID }}" `
+              --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
+
+      - name: Submit to the Microsoft Store
+        shell: pwsh
+        run: |
+          # -nc creates or updates the draft without committing it for certification.
+          $noCommit = if ($env:DRAFT_ONLY -eq 'true') { '-nc' } else { '' }
+          msstore publish "$env:MSIX_PATH" -id "${{ secrets.STORE_PRODUCT_ID }}" $noCommit
+        env:
+          DRAFT_ONLY: ${{ inputs.draft_only }}
