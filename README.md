@@ -2,12 +2,22 @@
 
 <img src="docs/icon.png" alt="Scribe" width="128" height="128" />
 
-# 🎙️ Scribe
+# 🎙️ Scribe AI
 
 **You talk three times faster than you type. Scribe closes the gap, privately.**
 
 Hold a key, speak, release. Polished text lands at your cursor in any app on Windows 11.
 No required cloud. No account. No subscription. No audio ever leaves your PC.
+
+## 🎉 Scribe AI is officially live in the Microsoft Store
+
+Install the trusted, Microsoft-signed release and let the Store keep it updated automatically.
+
+<a href="https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&amp;gl=US&amp;ocid=pdpshare">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get Scribe AI from Microsoft" width="200" />
+</a>
+
+**[Download Scribe AI free from the Microsoft Store](https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&gl=US&ocid=pdpshare)**
 
 <img src="docs/screenshots/pill.png" alt="The Scribe recording pill listening, with a live level meter" width="420" />
 
@@ -150,15 +160,18 @@ on your machine, and it never sends transcript text, audio, application names or
 **You'll need:** Windows 11 (x64). That's it. The speech model is bundled, so there's nothing else
 to install.
 
-1. Go to the **[Releases](../../releases/latest)** page.
-2. Download **`Scribe-win-x64-Setup.exe`** (the installer). It installs Scribe and keeps it up to
-   date automatically. Prefer not to install? Grab **`Scribe-win-x64-Portable.zip`** and run it from
-   any folder instead.
-3. Run the installer and launch Scribe. It appears in your **system tray**.
+1. Open **[Scribe AI in the Microsoft Store](https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&gl=US&ocid=pdpshare)**.
+2. Select **Install**. Microsoft signs, delivers and updates the app through the Store.
+3. Launch Scribe AI. It appears in your **system tray**.
 
-> **Windows security prompt:** Scribe releases are intentionally unsigned and do not require a
-> publisher certificate. Windows may show an "Unknown publisher" or SmartScreen warning. Verify
-> that the download came from this repository's Releases page before running it.
+Prefer a portable build, or need the original standalone installer? Advanced users can still visit
+the **[GitHub Releases](../../releases/latest)** page. Download
+**`Scribe-win-x64-Portable.zip`** to run it from any folder, or
+**`Scribe-win-x64-Setup.exe`** for the independently updated Velopack installation.
+
+> **Windows security prompt for GitHub downloads:** Direct GitHub releases are intentionally
+> unsigned, so Windows may show an "Unknown publisher" or SmartScreen warning. The Microsoft Store
+> version is signed by Microsoft and is the recommended installation.
 
 Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
 Right-click the tray icon for settings, one-click vocabulary learning, copying any of your last
@@ -216,7 +229,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Feature | What it does |
 |---|---|
 | Tray quick actions | Pause, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
-| Auto-updates | Velopack keeps installs current with small delta packages |
+| Auto-updates | Microsoft Store installs are signed and updated by Microsoft; standalone GitHub installs use Velopack delta updates |
 | Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
 
 ## 📏 Performance, measured
@@ -295,5 +308,9 @@ It stands on the shoulders of excellent open work:
 ---
 
 <div align="center">
+<strong>🎉 Scribe AI is now available free from the Microsoft Store.</strong>
+<br /><br />
+<a href="https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&amp;gl=US&amp;ocid=pdpshare">Download Scribe AI</a>
+<br /><br />
 <sub>Built for people who'd rather talk than type. 🎙️</sub>
 </div>
