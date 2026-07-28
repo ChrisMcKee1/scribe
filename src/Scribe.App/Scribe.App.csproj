@@ -42,7 +42,13 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- Windows-version-specific TFM so the app can call WinRT (Windows.Services.Store) for
+         Microsoft Store update checks. This is the documented .NET 6+ approach; the
+         Microsoft.Windows.SDK.Contracts package is explicitly not recommended here. The version
+         selects which APIs compile, not the OS the app runs on, so SupportedOSPlatformVersion
+         keeps older Windows 10 builds supported. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

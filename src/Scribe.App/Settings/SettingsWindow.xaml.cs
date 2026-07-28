@@ -50,6 +50,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Action<AppSettings> _applySettings;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
+    private StoreUpdateService? _storeUpdates;
     private readonly ILogger<SettingsWindow> _log;
 
     private readonly AppSettings _settings;
@@ -173,8 +174,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (_updates?.IsStoreManaged == true)
         {
-            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} is updated by Microsoft Store.";
-            UpdateCheckButton.Visibility = Visibility.Collapsed;
+            // A Store install still gets a working button; it just goes through the Store rather
+            // than Velopack. Hiding it entirely left Store users with no way to check at all.
+            _storeUpdates ??= new StoreUpdateService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<StoreUpdateService>.Instance);
+
+            if (!StoreUpdateService.IsStoreInstall())
+            {
+                // Packaged but sideloaded: the Store has no record of this install, so offering a
+                // check would only ever fail.
+                UpdateStatusText.Text =
+                    $"Scribe {UpdateService.RunningVersion} was installed from a package. Updates are managed outside the app.";
+                UpdateCheckButton.Visibility = Visibility.Collapsed;
+                UpdateApplyButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            UpdateStatusText.Text =
+                $"Scribe {UpdateService.RunningVersion} is installed from Microsoft Store.";
+            UpdateCheckButton.Visibility = Visibility.Visible;
             UpdateApplyButton.Visibility = Visibility.Collapsed;
             return;
         }
@@ -238,6 +256,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_updates?.IsStoreManaged == true)
+        {
+            await CheckStoreUpdatesAsync();
+            return;
+        }
+
         if (_updates is null)
         {
             UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build — updates apply to installed builds only).";
@@ -257,13 +281,76 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void UpdateApplyButton_Click(object sender, RoutedEventArgs e)
+    private async Task CheckStoreUpdatesAsync()
     {
+        _storeUpdates ??= new StoreUpdateService(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<StoreUpdateService>.Instance);
+
+        UpdateCheckButton.IsEnabled = false;
+        UpdateStatusText.Text = "Checking Microsoft Store for updates…";
+        try
+        {
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            var available = await _storeUpdates.CheckAsync(hwnd);
+
+            // The Store does not document which version StorePackageUpdate carries, so the message
+            // deliberately does not name one rather than risk showing the wrong number.
+            UpdateStatusText.Text = available
+                ? "An update is available from Microsoft Store."
+                : $"Scribe {UpdateService.RunningVersion} is up to date.";
+            UpdateApplyButton.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+        }
+        finally
+        {
+            UpdateCheckButton.IsEnabled = true;
+        }
+    }
+
+    private async void UpdateApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updates?.IsStoreManaged == true)
+        {
+            await ApplyStoreUpdateAsync();
+            return;
+        }
+
         // On success this never returns — the process exits, the update applies, and Scribe
         // relaunches on the new version.
         if (_updates is null || !_updates.ApplyNowAndRestart())
         {
             UpdateStatusText.Text = "Couldn't restart into the update — it will install when you quit Scribe.";
+        }
+    }
+
+    private async Task ApplyStoreUpdateAsync()
+    {
+        if (_storeUpdates is null)
+        {
+            return;
+        }
+
+        UpdateApplyButton.IsEnabled = false;
+        UpdateStatusText.Text = "Installing the update from Microsoft Store…";
+        try
+        {
+            // Windows shows its own consent and progress dialogs here, and may close Scribe to
+            // replace it, so a "Completed" result often never gets rendered.
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            var outcome = await _storeUpdates.ApplyAsync(hwnd);
+            UpdateStatusText.Text = outcome switch
+            {
+                StoreUpdateOutcome.Completed => "The update is installed. Restart Scribe to run the new version.",
+                StoreUpdateOutcome.Canceled => "The update was cancelled.",
+                StoreUpdateOutcome.NothingToDo => $"Scribe {UpdateService.RunningVersion} is up to date.",
+                _ => "The update could not be installed. Try again from the Microsoft Store app.",
+            };
+            UpdateApplyButton.Visibility = outcome == StoreUpdateOutcome.Completed
+                ? Visibility.Collapsed
+                : UpdateApplyButton.Visibility;
+        }
+        finally
+        {
+            UpdateApplyButton.IsEnabled = true;
         }
     }
 
