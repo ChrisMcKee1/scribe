@@ -49,6 +49,11 @@ internal sealed class TextCleanupService : ITextCleanupService
     // a couple of seconds regardless, so the cap only ever bites a genuinely slow model.
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
+
+    // How much of the cloud budget one attempt may spend. Measured cleanups on a real deployment
+    // run around 2s and peak near 12s, so 25s is far beyond any healthy call and leaves 20s to
+    // recover from a stalled connection.
+    private const int CloudFirstAttemptTimeoutSeconds = 25;
     private const int TotalCleanupTimeoutSeconds = 90;
     // Cold-start validation gets a longer budget than a per-cleanup call: a reasoning model's first
     // request can take far longer than its warm steady-state latency, and a spurious timeout here
@@ -478,18 +483,54 @@ internal sealed class TextCleanupService : ITextCleanupService
     private async Task<(string Text, string? Error)> CleanChunkAsync(
         AIAgent agent, CleanupOptions options, string chunk, CancellationToken cancellationToken)
     {
+        // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
+        // reasoning model whose hidden thinking precedes the visible rewrite.
+        var isCloud = options.Provider is CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible;
+        var budget = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
+            isCloud ? AzureCleanupTimeoutSeconds : CleanupTimeoutSeconds);
+
+        // A cloud connection that has sat idle can be silently dead: the request goes out and
+        // nothing ever comes back, so the entire budget drains and the dictation falls back to raw
+        // text, while an attempt moments later succeeds in about a second. Spending the whole
+        // budget on one attempt makes that stall unrecoverable, so the first attempt gets a slice
+        // large enough for any healthy call and a stall still leaves room to try again.
+        // Benchmarks pin the timeout explicitly and want exactly one attempt.
+        var retryOnStall = isCloud && CleanupTimeoutOverride is null;
+        var firstAttempt = retryOnStall
+            ? TimeSpan.FromSeconds(CloudFirstAttemptTimeoutSeconds)
+            : budget;
+
+        var (text, error, stalled) = await RunChunkAttemptAsync(
+            agent, options, chunk, firstAttempt, cancellationToken).ConfigureAwait(false);
+        if (!stalled || !retryOnStall)
+        {
+            return (text, error);
+        }
+
+        _log.LogWarning(
+            "AI cleanup stalled for {Seconds:F0}s; retrying once before falling back to raw text.",
+            firstAttempt.TotalSeconds);
+
+        var remaining = budget - firstAttempt;
+        var (retryText, retryError, _) = await RunChunkAttemptAsync(
+            agent, options, chunk, remaining, cancellationToken).ConfigureAwait(false);
+        return (retryText, retryError);
+    }
+
+    // One model call. Stalled is true only when this attempt's own budget expired, which is the
+    // recoverable case; a caller cancellation still propagates.
+    private async Task<(string Text, string? Error, bool Stalled)> RunChunkAttemptAsync(
+        AIAgent agent,
+        CleanupOptions options,
+        string chunk,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(timeout);
+
         try
         {
-            // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
-            // reasoning model whose hidden thinking precedes the visible rewrite.
-            var timeout = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
-                options.Provider is CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible
-                    ? AzureCleanupTimeoutSeconds
-                    : CleanupTimeoutSeconds);
-
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(timeout);
-
             // The system prompt is baked into the agent at creation, so we only send the delimited
             // transcript and run statelessly (no thread) — each dictation is independent, with no
             // history to grow.
@@ -504,7 +545,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (string.IsNullOrWhiteSpace(result.Text))
             {
-                return (chunk, "AI cleanup returned no text.");
+                return (chunk, "AI cleanup returned no text.", false);
             }
 
             // A non-empty answer can still be unusable (only a think-block, an empty fence, or an
@@ -516,10 +557,10 @@ internal sealed class TextCleanupService : ITextCleanupService
                 var reason = LooksLikeRefusal(result.Text)
                     ? "AI cleanup was declined by the model; used raw text."
                     : "AI cleanup returned unusable output.";
-                return (chunk, reason);
+                return (chunk, reason, false);
             }
 
-            return (cleaned, null);
+            return (cleaned, null, false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -527,10 +568,15 @@ internal sealed class TextCleanupService : ITextCleanupService
             // per-segment timeout — otherwise we'd keep calling the model after the user gave up.
             throw;
         }
+        catch (OperationCanceledException ex)
+        {
+            _log.LogDebug(ex, "AI cleanup timed out for a segment.");
+            return (chunk, DescribeFailure(ex), true);
+        }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "AI cleanup failed or timed out for a segment; using raw text.");
-            return (chunk, DescribeFailure(ex));
+            _log.LogDebug(ex, "AI cleanup failed for a segment; using raw text.");
+            return (chunk, DescribeFailure(ex), false);
         }
     }
 

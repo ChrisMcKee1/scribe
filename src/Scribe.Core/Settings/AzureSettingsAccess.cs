@@ -47,13 +47,20 @@ public static class AzureSettingsAccess
             // resource. Asking a corporate admin for the smaller grant is the difference between
             // this feature being approvable and not, so this mode takes an endpoint and deployment
             // name directly.
+            //
+            // Configuration keys off the credential being COMPLETE rather than live-verified. A
+            // service principal is the credential, so "do I have one" is answerable offline, and
+            // gating on a network round trip meant a saved setup rendered as an empty unconfigured
+            // panel until the user pressed Verify again on every visit. It also made first-time
+            // setup circular: the endpoint boxes stayed hidden until you verified, but verifying
+            // was not what supplied them.
             return new State(
                 ShowCliSetup: false,
                 ShowDiscovery: false,
-                ShowConfiguration: signedIn || manualConfigurationAvailable,
+                ShowConfiguration: servicePrincipalComplete || signedIn || manualConfigurationAvailable,
                 ShowManualConfigurationAction: false,
                 CanStartSignIn: servicePrincipalComplete,
-                HasUsableAuthentication: signedIn || hasApiKey,
+                HasUsableAuthentication: servicePrincipalComplete || signedIn || hasApiKey,
                 ShowServicePrincipalFields: true);
         }
 
@@ -85,16 +92,21 @@ public static class AzureSettingsAccess
         }
 
         var hasApiKey = !string.IsNullOrWhiteSpace(apiKey);
+        var servicePrincipalComplete = authMode == AzureAuthMode.ServicePrincipal
+            && AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret);
 
         // An API key bypasses Entra entirely, so half-entered app registration details are only a
         // blocker when the token path is actually the one being used.
-        if (authMode == AzureAuthMode.ServicePrincipal && !hasApiKey
-            && !AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret))
+        if (authMode == AzureAuthMode.ServicePrincipal && !hasApiKey && !servicePrincipalComplete)
         {
             return ValidationIssue.ServicePrincipalIncomplete;
         }
 
-        if (!signedIn && !hasApiKey)
+        // A complete service principal counts as authentication even when it has not been verified
+        // in this session. Verification is a live network call, so requiring it to save would let a
+        // dropped connection block edits to unrelated settings, and cleanup already falls back to
+        // the raw transcript when a credential stops working.
+        if (!signedIn && !hasApiKey && !servicePrincipalComplete)
         {
             return ValidationIssue.AuthenticationRequired;
         }

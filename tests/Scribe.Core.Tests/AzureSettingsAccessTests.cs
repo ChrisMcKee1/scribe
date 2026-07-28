@@ -246,6 +246,75 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
+    public void A_saved_service_principal_shows_its_configuration_without_reverifying()
+    {
+        // Opening Settings must not hide an already-configured setup behind a button press: the
+        // credential is present, and whether Entra accepted it moments ago is a separate question.
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: false,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            authMode: AzureAuthMode.ServicePrincipal,
+            servicePrincipalComplete: true);
+
+        Assert.True(state.ShowConfiguration);
+        Assert.True(state.HasUsableAuthentication);
+        Assert.True(state.CanStartSignIn);
+    }
+
+    [Fact]
+    public void An_incomplete_service_principal_still_hides_configuration()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: false,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            authMode: AzureAuthMode.ServicePrincipal,
+            servicePrincipalComplete: false);
+
+        Assert.False(state.ShowConfiguration);
+        Assert.False(state.HasUsableAuthentication);
+    }
+
+    [Fact]
+    public void A_complete_service_principal_can_save_without_a_live_verification()
+    {
+        // A dropped connection must not block editing unrelated settings.
+        var issue = AzureSettingsAccess.ValidateCleanup(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: null,
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            authMode: AzureAuthMode.ServicePrincipal,
+            tenantId: Tenant,
+            clientId: Client,
+            clientSecret: Secret);
+
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
+    }
+
+    [Fact]
+    public void The_cli_path_still_requires_a_verified_sign_in_to_save()
+    {
+        // Unlike a service principal, an az login session cannot be judged offline, so this keeps
+        // its original behaviour.
+        var issue = AzureSettingsAccess.ValidateCleanup(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: null,
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            authMode: AzureAuthMode.AzureCli);
+
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.AuthenticationRequired, issue);
+    }
+
+    [Fact]
     public void Azure_cli_mode_never_shows_the_service_principal_fields()
     {
         var state = AzureSettingsAccess.Resolve(

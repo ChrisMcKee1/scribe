@@ -1647,21 +1647,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Best-effort and non-blocking; runs when the Azure panel is shown.
     private Task ProbeAzureSignInAsync()
     {
-        // A saved service principal is not auto-verified on open. Verification costs a real token
-        // request, and a silent failure at load would read as a broken panel; the explicit button
-        // makes the result attributable to an action the user took.
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             _azureConnectionKnown = true;
-            if (AzureStatusText is not null)
+            var principal = CurrentServicePrincipal;
+            if (principal is null)
             {
-                AzureStatusText.Text = CurrentServicePrincipal is null
-                    ? "Enter the service principal details, then verify them."
-                    : "Verify the saved service principal to confirm it can still sign in.";
+                if (AzureStatusText is not null)
+                {
+                    AzureStatusText.Text = "Enter the service principal details, then verify them.";
+                }
+
+                ApplyAzureSettingsAccess();
+                return Task.CompletedTask;
             }
 
-            ApplyAzureSettingsAccess();
-            return Task.CompletedTask;
+            // A saved service principal verifies itself on open, exactly as the Azure CLI path
+            // probes its sign-in. Making the user press a button to re-confirm credentials Scribe
+            // already has, on every visit, is busywork: the details cannot have changed since they
+            // were saved, and cleanup has usually already authenticated with them in the background.
+            return VerifyServicePrincipalAsync(automatic: true);
         }
 
         return RefreshAzureConnectionAsync(allowInteractiveLogin: false, listModels: true);
@@ -2046,7 +2051,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// Verifies the entered app registration by requesting a real ARM token with it, so the UI
     /// reports whether that identity actually works rather than merely whether it looks well formed.
     /// </summary>
-    private async Task VerifyServicePrincipalAsync()
+    // Only asks for the endpoint and deployment when they are actually missing. Telling someone to
+    // enter values already sitting in the boxes below reads as though the save did not take.
+    private string DescribeServicePrincipalReady(AzureSignInStatus status)
+    {
+        var identity = DescribeAzureIdentity(status);
+        var configured = !string.IsNullOrWhiteSpace(AzureEndpointBox?.Text)
+            && !string.IsNullOrWhiteSpace(AzureDeploymentBox?.Text);
+        return configured
+            ? $"{identity} AI cleanup is ready to use."
+            : $"{identity} Enter the endpoint and deployment name for your model.";
+    }
+
+    private async Task VerifyServicePrincipalAsync(bool automatic = false)
     {
         var principal = CurrentServicePrincipal;
         if (principal is null)
@@ -2058,10 +2075,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // switching modes mid-verification would let the old identity's result land on the new one.
         var operationVersion = ++_azureSignInProbeVersion;
         SetAzureConnectionBusy(true);
-        AzureStatusText.Text = "Verifying the service principal…";
+        AzureStatusText.Text = automatic
+            ? "Checking the saved service principal…"
+            : "Verifying the service principal…";
         try
         {
-            AzureCredentialInvalidation.Invalidate();
+            // An explicit press means "try again", so drop the cached credential. An automatic
+            // check reuses it, which is the whole point of the cache and keeps opening Settings
+            // from costing a token request when cleanup already holds a valid one.
+            if (!automatic)
+            {
+                AzureCredentialInvalidation.Invalidate();
+            }
+
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var status = await _azureDiscovery.GetSignInStatusAsync(
                 principal.TenantId, null, cts.Token, principal);
@@ -2072,7 +2098,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _azureSignInStatus = status;
             AzureStatusText.Text = status.IsSignedIn
-                ? $"{DescribeAzureIdentity(status)} Enter the endpoint and deployment name for your model."
+                ? DescribeServicePrincipalReady(status)
                 : status.FailureReason ?? AzureSignInDiagnostics.Generic;
         }
         catch (OperationCanceledException)
