@@ -1,18 +1,21 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Standalone WinUI 3 recording pill. Built as an UNPACKAGED, SELF-CONTAINED win-x64 exe so it
+  <!-- Standalone WinUI 3 recording pill. Built as an UNPACKAGED, SELF-CONTAINED exe so it
        ships inside the Velopack payload next to Scribe.exe with no MSIX and no dependency on a
        machine-wide Windows App SDK runtime (an unpackaged WinUI app silently fails to start if the
        runtime is missing — self-contained bundles it, ~+150 MB, but is reliable). The WPF app
-       launches and keeps this process warm and drives its state over a named pipe. -->
+       launches and keeps this process warm and drives its state over a named pipe.
+
+       WinUI tooling requires an explicit Platform (it has no AnyCPU story), so both x64 and ARM64
+       are declared and the caller selects one with -p:Platform=. RuntimeIdentifier is derived from
+       Platform below so a build can never pair an ARM64 Platform with an x64 native payload. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Scribe.Overlay</RootNamespace>
     <AssemblyName>Scribe.Overlay</AssemblyName>
-    <Platforms>x64</Platforms>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64;ARM64</Platforms>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
@@ -21,6 +24,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Platform)' == 'ARM64'">
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Platform)' != 'ARM64'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>

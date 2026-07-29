@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Scribe.AsrCheck</RootNamespace>
+    <AssemblyName>Scribe.AsrCheck</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <!-- Internal dev/CI tool: never packed, never published with the app. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+  <!-- The recogniser needs the model files beside the binary, exactly as the shipped app does.
+       ModelLocator also probes ancestor directories, but copying keeps this tool runnable from a
+       published folder on a CI runner where the source tree layout is not guaranteed. -->
+  <ItemGroup>
+    <None Include="..\..\src\Scribe.App\models\**" LinkBase="models" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -157,17 +157,18 @@ on your machine, and it never sends transcript text, audio, application names or
 
 ## 🚀 Getting started
 
-**You'll need:** Windows 11 (x64). That's it. The speech model is bundled, so there's nothing else
-to install.
+**You'll need:** Windows 11 on Intel, AMD, or Arm (including Copilot+ PCs). That's it. The speech
+model is bundled, so there's nothing else to install.
 
 1. Open **[Scribe AI in the Microsoft Store](https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&gl=US&ocid=pdpshare)**.
 2. Select **Install**. Microsoft signs, delivers and updates the app through the Store.
 3. Launch Scribe AI. It appears in your **system tray**.
 
 Prefer a portable build, or need the original standalone installer? Advanced users can still visit
-the **[GitHub Releases](../../releases/latest)** page. Download
-**`Scribe-win-x64-Portable.zip`** to run it from any folder, or
-**`Scribe-win-x64-Setup.exe`** for the independently updated Velopack installation.
+the **[GitHub Releases](../../releases/latest)** page. Pick the file matching your PC:
+**`Scribe-win-x64-Setup.exe`** for Intel and AMD, or **`Scribe-win-arm64-Setup.exe`** for Arm
+(Snapdragon / Copilot+). Portable zips are published for both. Not sure which you have? Open
+Settings, System, About and read "System type", or just install from the Store, which picks for you.
 
 > **Windows security prompt for GitHub downloads:** Direct GitHub releases are intentionally
 > unsigned, so Windows may show an "Unknown publisher" or SmartScreen warning. The Microsoft Store
@@ -272,7 +273,7 @@ transcripts, audio, credentials, or other sensitive information in a public issu
 
 ## 🛠️ Building from source
 
-**You'll need:** Windows 11 (x64) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
+**You'll need:** Windows 11 (Intel, AMD, or Arm) and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
 
 ```powershell
 git clone https://github.com/ChrisMcKee1/scribe.git
@@ -285,6 +286,9 @@ pwsh ./scripts/Download-Models.ps1
 dotnet build Scribe.slnx -c Debug
 dotnet run --project src/Scribe.App
 ```
+
+The build targets whichever architecture you are on, and either machine can cross-build the other
+with `-r win-x64` or `-r win-arm64`.
 
 Want to contribute? Everything else you need (project layout, code style, tests, the pull-request
 workflow, the AI-cleanup eval harness, and how releases are packed) lives in

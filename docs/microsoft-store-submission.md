@@ -29,7 +29,7 @@ Last reviewed: July 27, 2026.
 - Publisher display name: **McKee AI Solutions**
 - Package type: **MSIX**
 - Device family: **Windows.Desktop**
-- Architecture: **x64**
+- Architecture: **x64 and arm64** (submitted as one `.msixbundle`)
 - Package/Identity/Name: **53984VeteranApps.ScribeAI**
 - Package/Identity/Publisher: **CN=A4B26056-B631-480C-912C-5EF24F1CBD6B**
 - Package family name: **53984VeteranApps.ScribeAI_e3jkm6dfkwwbm**
@@ -101,7 +101,7 @@ cloud-hosted, or supplied by a third party.
 ### System requirements
 
 - Operating system: Windows 11
-- Architecture: x64
+- Architecture: x64 and arm64 (Arm64 covers Snapdragon / Copilot+ PCs)
 - Microphone: required
 - Keyboard: required for the default push-to-talk workflow
 - Internet connection: not required for dictation
@@ -128,19 +128,45 @@ email address with IARC during this process.
 
 ## Packages
 
-Upload the final file produced under `releases`:
+Upload the single bundle produced under `releases`:
 
-`Scribe-<version>-win-x64.msix`
+`Scribe-<version>.msixbundle`
+
+It contains both `Scribe-<version>-win-x64.msix` and `Scribe-<version>-win-arm64.msix`. Upload the
+**bundle**, not the individual `.msix` files: one bundle is one submission that serves every device,
+and Windows downloads only the architecture the customer's PC actually needs.
 
 Before upload:
 
 1. Confirm Identity Name and Publisher exactly match Partner Center.
 2. Confirm the four-part package version ends in `.0` and is greater than the prior Store version.
-3. Confirm the package targets Windows.Desktop and x64 only.
+3. Confirm the bundle targets Windows.Desktop and contains exactly one x64 and one arm64 package.
+   Every package in a bundle must be identical apart from `Identity/ProcessorArchitecture`.
 4. Run the Windows App Certification Kit.
 5. Install and test the package using an appropriate local test-signing workflow.
 6. Verify microphone capture, global hotkey handling, text injection, the tray, the overlay process,
    settings, restart, and uninstall.
+
+### What changes in Partner Center when Arm64 is added
+
+There is **no "supports Arm64" checkbox**. Architecture support is inferred entirely from the
+packages you upload, so the work is upload-side, not settings-side:
+
+- **Packages page.** Uploading the `.msixbundle` makes Partner Center list both an x64 and an arm64
+  package under the submission. Confirm both appear; if only x64 shows, the bundle did not build
+  correctly and the Store will keep serving x64 to Arm devices under emulation.
+- **Do not delete the previous x64-only package** until the bundle is validated. The Store ranks by
+  version then architecture, so a bundle at a higher version supersedes it cleanly.
+- **Availability, Device families.** Confirm **Windows 11 Desktop** remains selected. There is no
+  separate Arm device family to tick; `Windows.Desktop` covers Arm64 desktops.
+- **Properties, System requirements.** These are free-text minimum-spec fields and do not gate
+  architecture, but update the listing copy so Arm users can tell the app is native.
+- **Store listing.** Mention native Arm64 / Copilot+ support in the description; this is the only
+  place a customer can actually see it before installing.
+- **Product declarations.** Nothing architecture-related to change. Leave the existing declarations
+  (generative AI, backup, alternate drives) as they are.
+
+Nothing about the reserved name, identity, publisher, age rating, or pricing changes.
 7. Verify Settings reports that updates are managed by Microsoft Store.
 8. Confirm no GitHub update is downloaded or applied by a Store-installed build.
 

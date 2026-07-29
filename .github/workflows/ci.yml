@@ -1,0 +1,100 @@
+name: CI
+
+# Scribe ships two architectures from one source tree, and the failure mode of getting that wrong is
+# invisible at build time: Windows on Arm silently emulates an x64 binary, so a mispackaged build
+# runs slowly rather than crashing. Both architectures are therefore built AND exercised against the
+# real speech engine here, on native silicon, rather than trusted to compile-time checks.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            runner: windows-latest
+            rid: win-x64
+            overlay-platform: x64
+          # windows-11-arm is GA and free for public repositories. It will fail on a private repo,
+          # which is intentional: we want to know if this repo's visibility ever changes.
+          - name: arm64
+            runner: windows-11-arm
+            rid: win-arm64
+            overlay-platform: ARM64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      # ~640 MB of model weights, identical on both architectures and pinned by SHA-256 in
+      # Model-Manifest.ps1, so the manifest is the correct cache key: it changes only when the
+      # models themselves change.
+      - name: Cache speech models
+        id: models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/Scribe.App/models
+          key: models-${{ hashFiles('scripts/Model-Manifest.ps1') }}
+
+      - name: Download speech models
+        if: steps.models.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./scripts/Download-Models.ps1
+
+      - name: Build solution
+        shell: pwsh
+        run: dotnet build Scribe.slnx -c Release --nologo
+
+      - name: Build overlay (${{ matrix.overlay-platform }})
+        shell: pwsh
+        run: dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c Release -p:Platform=${{ matrix.overlay-platform }} --nologo
+
+      - name: Run unit tests
+        shell: pwsh
+        run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release --nologo
+
+      # The unit tests never touch the native recogniser, so this is the only step that proves
+      # sherpa-onnx and its ONNX Runtime actually load and decode on this architecture.
+      - name: Generate speech fixtures
+        shell: pwsh
+        run: ./scripts/New-SpeechFixtures.ps1
+
+      - name: Transcribe fixtures through the real pipeline
+        shell: pwsh
+        run: dotnet run --project tools/Scribe.AsrCheck -c Release
+
+      # Publishing is what the installer does, and it is where an architecture mismatch would
+      # actually ship, so verify the payload rather than just the build output.
+      - name: Publish self-contained (${{ matrix.rid }})
+        shell: pwsh
+        run: |
+          dotnet publish src/Scribe.App/Scribe.App.csproj -c Release -r ${{ matrix.rid }} --self-contained true -o publish/ci
+          dotnet publish src/Scribe.Overlay/Scribe.Overlay.csproj -c Release -r ${{ matrix.rid }} -p:Platform=${{ matrix.overlay-platform }} --self-contained true -o publish/ci/Overlay
+
+      - name: Verify payload architecture
+        shell: pwsh
+        run: |
+          . ./scripts/Payload-Architecture.ps1
+          Test-ScribePayloadArchitecture -PublishDir (Resolve-Path publish/ci) -Runtime ${{ matrix.rid }}

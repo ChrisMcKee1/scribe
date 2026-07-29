@@ -12,9 +12,12 @@
          (dotnet/wpf #11321) by rendering through DWM composition instead of the legacy layered path. -->
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
 
-    <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime, win-x64 native -->
+    <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime. The native runtime is
+         architecture-specific; Scribe.Core references both and selects by RuntimeIdentifier so
+         one source tree builds for Intel/AMD and for Snapdragon Copilot+ PCs. -->
     <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.4" />
     <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.4" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.4" />
 
     <!-- Audio capture -->
     <PackageVersion Include="NAudio" Version="2.3.0" />

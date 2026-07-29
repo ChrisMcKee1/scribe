@@ -66,17 +66,29 @@ jobs:
       - name: Verify the package
         shell: pwsh
         run: |
-          $msix = "releases/Scribe-$env:VERSION-win-x64.msix"
-          if (-not (Test-Path $msix)) { throw "Expected $msix." }
-          $size = [math]::Round((Get-Item $msix).Length / 1MB, 1)
-          Write-Host "Submitting $msix ($size MB)"
-          # The Store reserves the fourth version field; a non-zero value is rejected at ingestion.
-          $manifest = [xml](Get-Content publish/msix-stage/AppxManifest.xml)
-          $packageVersion = $manifest.Package.Identity.Version
-          if ($packageVersion -ne "$env:VERSION.0") {
-              throw "Manifest version $packageVersion does not match $env:VERSION.0."
+          # One bundle carries both architectures, so a single submission serves Intel/AMD and
+          # Arm64 devices and Windows installs only the matching payload.
+          $bundle = "releases/Scribe-$env:VERSION.msixbundle"
+          if (-not (Test-Path $bundle)) { throw "Expected $bundle." }
+          $size = [math]::Round((Get-Item $bundle).Length / 1MB, 1)
+          Write-Host "Submitting $bundle ($size MB)"
+
+          foreach ($runtime in 'win-x64', 'win-arm64') {
+              $stage = "publish/msix-stage-$runtime/AppxManifest.xml"
+              if (-not (Test-Path $stage)) { throw "Expected staged manifest $stage." }
+              # The Store reserves the fourth version field; a non-zero value is rejected at ingestion.
+              $manifest = [xml](Get-Content $stage)
+              $packageVersion = $manifest.Package.Identity.Version
+              if ($packageVersion -ne "$env:VERSION.0") {
+                  throw "Manifest version $packageVersion for $runtime does not match $env:VERSION.0."
+              }
+              $architecture = $manifest.Package.Identity.ProcessorArchitecture
+              $expected = if ($runtime -eq 'win-arm64') { 'arm64' } else { 'x64' }
+              if ($architecture -ne $expected) {
+                  throw "Manifest for $runtime declares ProcessorArchitecture '$architecture', expected '$expected'."
+              }
           }
-          "MSIX_PATH=$msix" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "MSIX_PATH=$bundle" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Set up Microsoft Store Developer CLI
         uses: microsoft/microsoft-store-apppublisher@v1.4

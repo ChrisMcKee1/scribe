@@ -1241,8 +1241,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _dictionarySnapshot = string.Empty;
     private string _snippetSnapshot = string.Empty;
 
+    private void LoadSystemCapability()
+    {
+        try
+        {
+            var report = ComputeCapabilityReport.Detect();
+            SystemCapabilityText.Text = report.Describe();
+
+            if (report.Recommendation is { } advice)
+            {
+                SystemCapabilityAdviceText.Text = advice;
+                SystemCapabilityAdviceText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                SystemCapabilityAdviceText.Visibility = Visibility.Collapsed;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Hardware detection is descriptive only; never let it break the diagnostics page.
+            TryLog(ex, "Compute capability detection failed.");
+            SystemCapabilityText.Text = "Hardware details unavailable.";
+        }
+    }
+
     private void LoadPerformanceStats()
     {
+        LoadSystemCapability();
+
         try
         {
             var entries = _history.GetRecent(1000);

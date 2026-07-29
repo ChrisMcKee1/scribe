@@ -1669,7 +1669,13 @@
 
                         <!-- Local latency stats from stored history, expanded by pipeline stage. -->
                         <StackPanel Grid.Row="1" Margin="0,0,0,12">
-                            <TextBlock Text="Performance, last 7 days" Style="{StaticResource SettingTitle}"/>
+                            <TextBlock Text="This PC" Style="{StaticResource SettingTitle}"/>
+                            <TextBlock x:Name="SystemCapabilityText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                       Text="Checking hardware..."/>
+                            <TextBlock x:Name="SystemCapabilityAdviceText" Style="{StaticResource SettingHint}"
+                                       Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed"
+                                       Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                            <TextBlock Text="Performance, last 7 days" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                             <TextBlock x:Name="StatsSummaryText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                        Text="No dictations recorded in the last week."/>
                             <StackPanel x:Name="StatsGrid" Margin="0,12,0,0" Visibility="Collapsed">

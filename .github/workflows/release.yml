@@ -65,36 +65,50 @@ jobs:
               Select-Object -First 1
           if ($null -eq $previous) {
               Write-Host 'No previous stable release is available; a delta package is not expected.'
+              return
           }
-          else {
-              New-Item -ItemType Directory -Path releases -Force | Out-Null
+
+          New-Item -ItemType Directory -Path releases -Force | Out-Null
+          # Per channel, because each architecture builds its delta against its own history. A
+          # channel with no prior full package simply packs a full release, which is the expected
+          # path the first time an architecture ships, so a miss here is reported and not fatal.
+          foreach ($channel in 'win-x64', 'win-arm64') {
               gh release download $previous.tagName `
                   --repo "${{ github.repository }}" `
-                  --pattern 'Scribe-*-win-x64-full.nupkg' `
+                  --pattern "Scribe-*-$channel-full.nupkg" `
                   --dir releases
               if ($LASTEXITCODE -ne 0) {
-                  throw "Could not download the previous full package from $($previous.tagName)."
+                  Write-Host "No $channel package in $($previous.tagName); it will pack as a full release."
               }
           }
+          # gh sets a non-zero exit code for an empty pattern match, and the Actions pwsh shim exits
+          # with whatever LASTEXITCODE holds, so clear it after a tolerated miss.
+          $global:LASTEXITCODE = 0
 
       - name: Build release artifacts
         shell: pwsh
-        run: ./build/pack.ps1
+        run: ./build/pack.ps1 -Architecture all
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: |
           $token = $env:GITHUB_TOKEN
-          vpk upload github `
-              --repoUrl "https://github.com/${{ github.repository }}" `
-              --publish `
-              --releaseName "Scribe $env:VERSION" `
-              --tag "v$env:VERSION" `
-              --targetCommitish "${{ github.sha }}" `
-              --token $token `
-              --outputDir releases `
-              --channel win-x64
+          # One release, one tag, one channel upload per architecture. --merge lets the second
+          # upload attach to the release the first one created instead of failing on a conflict.
+          foreach ($channel in 'win-x64', 'win-arm64') {
+              vpk upload github `
+                  --repoUrl "https://github.com/${{ github.repository }}" `
+                  --publish `
+                  --releaseName "Scribe $env:VERSION" `
+                  --tag "v$env:VERSION" `
+                  --targetCommitish "${{ github.sha }}" `
+                  --token $token `
+                  --outputDir releases `
+                  --channel $channel `
+                  --merge
+              if ($LASTEXITCODE -ne 0) { throw "vpk upload failed for $channel." }
+          }
 
       - name: Upload release artifacts for manual run
         if: github.event_name == 'workflow_dispatch'
@@ -103,9 +117,14 @@ jobs:
           name: scribe-${{ env.VERSION }}
           path: |
             releases/releases.win-x64.json
+            releases/releases.win-arm64.json
             releases/Scribe-${{ env.VERSION }}-win-x64-full.nupkg
             releases/Scribe-${{ env.VERSION }}-win-x64-delta.nupkg
+            releases/Scribe-${{ env.VERSION }}-win-arm64-full.nupkg
+            releases/Scribe-${{ env.VERSION }}-win-arm64-delta.nupkg
             releases/Scribe-win-x64-Portable.zip
             releases/Scribe-win-x64-Setup.exe
+            releases/Scribe-win-arm64-Portable.zip
+            releases/Scribe-win-arm64-Setup.exe
           if-no-files-found: error
           retention-days: 7

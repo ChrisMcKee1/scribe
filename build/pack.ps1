@@ -7,9 +7,12 @@
     Scribe self-updates at runtime from its GitHub Releases (see Infrastructure/UpdateService.cs).
     This script produces the matching release artifacts:
 
-        1. dotnet publish  -> a self-contained win-x64 build (no .NET install required on the user PC).
+        1. dotnet publish  -> a self-contained build (no .NET install required on the user PC).
         2. vpk pack        -> Setup.exe (installer), a full .nupkg, delta packages, and RELEASES.
         3. vpk upload       -> attaches those artifacts to a GitHub Release (optional, -Publish).
+
+    Each architecture is packed into its own Velopack channel (win-x64, win-arm64), so an installed
+    app only ever receives updates built for the silicon it is running on.
 
 .LINK
     https://docs.velopack.io/               (Velopack)
@@ -17,6 +20,12 @@
 
 .EXAMPLE
     ./build/pack.ps1
+
+.EXAMPLE
+    ./build/pack.ps1 -Architecture arm64
+
+.EXAMPLE
+    ./build/pack.ps1 -Architecture all -Publish
 #>
 [CmdletBinding()]
 param(
@@ -33,17 +42,33 @@ param(
     [switch]$Publish,
 
     # Run only version/model preflight. Does not publish, install tools, or delete build output.
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+
+    # Target architecture. "all" builds x64 and arm64 in sequence, each into its own channel.
+    [ValidateSet('x64', 'arm64', 'all')]
+    [string]$Architecture = 'x64'
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $appProj  = Join-Path $repoRoot 'src/Scribe.App/Scribe.App.csproj'
-$publishDir = Join-Path $repoRoot 'publish/win-x64'
 $releaseDir = Join-Path $repoRoot 'releases'
 $packId = 'Scribe'
 $mainExe = 'Scribe.exe'
-$runtime = 'win-x64'
+
+# Velopack channel names double as the RID. Keeping them identical means the channel an installed
+# app polls for updates is literally the architecture it was built for, so an Arm64 install can
+# never be handed an x64 delta.
+# @(...) wraps the switch because a switch unrolls a single-element array back to a bare Hashtable,
+# whose .Count reports its KEY count (2), not one target.
+$targets = @(switch ($Architecture) {
+    'x64'   { , @{ Runtime = 'win-x64';   OverlayPlatform = 'x64' } }
+    'arm64' { , @{ Runtime = 'win-arm64'; OverlayPlatform = 'ARM64' } }
+    'all'   { @(
+                @{ Runtime = 'win-x64';   OverlayPlatform = 'x64' },
+                @{ Runtime = 'win-arm64'; OverlayPlatform = 'ARM64' }
+              ) }
+})
 
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
 [xml]$props = Get-Content $propsPath
@@ -64,6 +89,7 @@ $brandIcon = Join-Path $repoRoot 'src/Scribe.App/Assets/scribe.ico'
 if (-not (Test-Path $brandIcon -PathType Leaf)) { throw "Brand icon missing: $brandIcon" }
 
 . (Join-Path $repoRoot 'scripts/Model-Manifest.ps1')
+. (Join-Path $repoRoot 'scripts/Payload-Architecture.ps1')
 $sourceModels = Join-Path $repoRoot 'src/Scribe.App/models'
 Test-ScribeRuntimeModels -ModelsDir $sourceModels -VerifyHashes
 Write-Host "==> Runtime model preflight passed ($($ScribeRuntimeModelManifest.Count) files)." -ForegroundColor Green
@@ -73,7 +99,7 @@ if ($ValidateOnly) {
     return
 }
 
-Write-Host "==> Scribe pack  v$Version  ($Configuration, $runtime)" -ForegroundColor Cyan
+Write-Host "==> Scribe $Version  ($Configuration)  architectures: $(($targets.Runtime) -join ', ')" -ForegroundColor Cyan
 
 # --- 0. Ensure the Velopack CLI (vpk) is available -------------------------------------------------
 if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
@@ -82,101 +108,128 @@ if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
     $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
 }
 
-# --- 1. Publish a self-contained win-x64 build -----------------------------------------------------
-Write-Host '==> dotnet publish (self-contained)...' -ForegroundColor Cyan
-if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
-dotnet publish $appProj `
-    -c $Configuration `
-    -r $runtime `
-    --self-contained true `
-    -p:Version=$Version `
-    -o $publishDir
-if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed.' }
+# --- 1. Build one architecture end to end ----------------------------------------------------------
+# Publishes the app, publishes the matching overlay into its payload, verifies the model files
+# survived, then packs a Velopack release into the channel named after that architecture.
+function Invoke-ScribeArchitecture {
+    param(
+        [Parameter(Mandatory)][string]$Runtime,
+        [Parameter(Mandatory)][string]$OverlayPlatform
+    )
 
-# --- 1b. Publish the WinUI 3 overlay into the app payload under Overlay\ ----------------------------
-# The installed app resolves the recording pill at <BaseDirectory>\Overlay\Scribe.Overlay.exe
-# (OverlayProcessClient.ResolveOverlayExe, strategy 2). It must be self-contained + unpackaged so it
-# starts with no machine-wide Windows App SDK runtime. Published AFTER the app publish above because
-# that step wipes and recreates $publishDir.
-Write-Host '==> dotnet publish overlay (self-contained WinUI 3)...' -ForegroundColor Cyan
-$overlayProj = Join-Path $repoRoot 'src/Scribe.Overlay/Scribe.Overlay.csproj'
-$overlayDir  = Join-Path $publishDir 'Overlay'
-dotnet publish $overlayProj `
-    -c $Configuration `
-    -r $runtime `
-    --self-contained true `
-    -p:Platform=x64 `
-    -p:Version=$Version `
-    -o $overlayDir
-if ($LASTEXITCODE -ne 0) { throw 'dotnet publish (overlay) failed.' }
-$overlayExe = Join-Path $overlayDir 'Scribe.Overlay.exe'
-if (-not (Test-Path $overlayExe)) { throw "Overlay exe missing after publish: $overlayExe" }
-Write-Host "==> Overlay bundled at: $overlayExe" -ForegroundColor Green
+    $publishDir = Join-Path $repoRoot "publish/$Runtime"
 
-$publishedModels = Join-Path $publishDir 'models'
-Test-ScribeRuntimeModels -ModelsDir $publishedModels -VerifyHashes
-Write-Host '==> Published runtime model payload verified.' -ForegroundColor Green
+    Write-Host ''
+    Write-Host "==> Scribe pack  v$Version  ($Configuration, $Runtime)" -ForegroundColor Cyan
 
-# --- 2. Pack with Velopack -------------------------------------------------------------------------
-$currentFullName = "Scribe-$Version-win-x64-full.nupkg"
-$priorFullPackages = if (Test-Path $releaseDir) {
-    @(Get-ChildItem $releaseDir -Filter "Scribe-*-$runtime-full.nupkg" -File |
-        Where-Object { $_.Name -ne $currentFullName })
-}
-else {
-    @()
-}
+    Write-Host "==> dotnet publish (self-contained, $Runtime)..." -ForegroundColor Cyan
+    if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
+    dotnet publish $appProj `
+        -c $Configuration `
+        -r $Runtime `
+        --self-contained true `
+        -p:Version=$Version `
+        -o $publishDir
+    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $Runtime." }
 
-$packArgs = @(
-    'pack',
-    '--packId', $packId,
-    '--packVersion', $Version,
-    '--packDir', $publishDir,
-    '--mainExe', $mainExe,
-    '--outputDir', $releaseDir,
-    '--channel', $runtime,
-    # Brand the installer and the Add/Remove Programs entry. Without an explicit icon vpk ships a
-    # generic Setup.exe, and the publisher falls back to the pack id instead of the real author.
-    '--icon', $brandIcon,
-    '--packTitle', $packTitle,
-    '--packAuthors', $packAuthors
-)
+    # The installed app resolves the recording pill at <BaseDirectory>\Overlay\Scribe.Overlay.exe
+    # (OverlayProcessClient.ResolveOverlayExe, strategy 2). It must be self-contained + unpackaged so
+    # it starts with no machine-wide Windows App SDK runtime, and it must match the app's
+    # architecture: the pill is a separate process, so an x64 pill beside an Arm64 app would run
+    # emulated at best. Published AFTER the app publish because that step wipes $publishDir.
+    Write-Host "==> dotnet publish overlay (self-contained WinUI 3, $OverlayPlatform)..." -ForegroundColor Cyan
+    $overlayProj = Join-Path $repoRoot 'src/Scribe.Overlay/Scribe.Overlay.csproj'
+    $overlayDir  = Join-Path $publishDir 'Overlay'
+    dotnet publish $overlayProj `
+        -c $Configuration `
+        -r $Runtime `
+        --self-contained true `
+        -p:Platform=$OverlayPlatform `
+        -p:Version=$Version `
+        -o $overlayDir
+    if ($LASTEXITCODE -ne 0) { throw "dotnet publish (overlay) failed for $Runtime." }
+    $overlayExe = Join-Path $overlayDir 'Scribe.Overlay.exe'
+    if (-not (Test-Path $overlayExe)) { throw "Overlay exe missing after publish: $overlayExe" }
 
-Write-Host '==> vpk pack...' -ForegroundColor Cyan
-vpk @packArgs
-if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed.' }
+    # An architecture mismatch here ships a silently-emulated pill, which looks like a performance
+    # bug rather than a packaging bug, so assert it at pack time instead of discovering it in the wild.
+    Test-ScribePayloadArchitecture -PublishDir $publishDir -Runtime $Runtime
+    Write-Host "==> Overlay bundled at: $overlayExe" -ForegroundColor Green
 
-$expectedArtifacts = @(
-    (Join-Path $releaseDir 'releases.win-x64.json'),
-    (Join-Path $releaseDir $currentFullName),
-    (Join-Path $releaseDir 'Scribe-win-x64-Portable.zip'),
-    (Join-Path $releaseDir 'Scribe-win-x64-Setup.exe')
-)
-if ($priorFullPackages.Count -gt 0) {
-    $expectedArtifacts += Join-Path $releaseDir "Scribe-$Version-win-x64-delta.nupkg"
-}
-foreach ($artifact in $expectedArtifacts) {
-    if (-not (Test-Path $artifact -PathType Leaf)) {
-        throw "Expected release artifact missing: $artifact"
+    $publishedModels = Join-Path $publishDir 'models'
+    Test-ScribeRuntimeModels -ModelsDir $publishedModels -VerifyHashes
+    Write-Host '==> Published runtime model payload verified.' -ForegroundColor Green
+
+    # --- 2. Pack with Velopack ---------------------------------------------------------------------
+    $currentFullName = "Scribe-$Version-$Runtime-full.nupkg"
+    $priorFullPackages = if (Test-Path $releaseDir) {
+        @(Get-ChildItem $releaseDir -Filter "Scribe-*-$Runtime-full.nupkg" -File |
+            Where-Object { $_.Name -ne $currentFullName })
     }
+    else {
+        @()
+    }
+
+    $packArgs = @(
+        'pack',
+        '--packId', $packId,
+        '--packVersion', $Version,
+        '--packDir', $publishDir,
+        '--mainExe', $mainExe,
+        '--outputDir', $releaseDir,
+        '--channel', $Runtime,
+        # Brand the installer and the Add/Remove Programs entry. Without an explicit icon vpk ships a
+        # generic Setup.exe, and the publisher falls back to the pack id instead of the real author.
+        '--icon', $brandIcon,
+        '--packTitle', $packTitle,
+        '--packAuthors', $packAuthors
+    )
+
+    Write-Host "==> vpk pack ($Runtime)..." -ForegroundColor Cyan
+    vpk @packArgs
+    if ($LASTEXITCODE -ne 0) { throw "vpk pack failed for $Runtime." }
+
+    $expectedArtifacts = @(
+        (Join-Path $releaseDir "releases.$Runtime.json"),
+        (Join-Path $releaseDir $currentFullName),
+        (Join-Path $releaseDir "Scribe-$Runtime-Portable.zip"),
+        (Join-Path $releaseDir "Scribe-$Runtime-Setup.exe")
+    )
+    if ($priorFullPackages.Count -gt 0) {
+        $expectedArtifacts += Join-Path $releaseDir "Scribe-$Version-$Runtime-delta.nupkg"
+    }
+    foreach ($artifact in $expectedArtifacts) {
+        if (-not (Test-Path $artifact -PathType Leaf)) {
+            throw "Expected release artifact missing: $artifact"
+        }
+    }
+}
+
+foreach ($target in $targets) {
+    Invoke-ScribeArchitecture -Runtime $target.Runtime -OverlayPlatform $target.OverlayPlatform
 }
 
 Write-Host "==> Artifacts written to: $releaseDir" -ForegroundColor Green
 Get-ChildItem $releaseDir | Select-Object Name, Length | Format-Table -AutoSize
 
 # --- 3. Optionally publish to a GitHub Release -----------------------------------------------------
+# Each architecture is uploaded as its own channel against the same tag, so one GitHub Release
+# carries both installers and each installed app only sees updates for its own silicon.
 if ($Publish) {
     if (-not $env:GITHUB_TOKEN) { throw 'Set $env:GITHUB_TOKEN (repo scope) before using -Publish.' }
-    Write-Host "==> Uploading release to github.com/$GitHubRepo ..." -ForegroundColor Cyan
-    vpk upload github `
-        --repoUrl "https://github.com/$GitHubRepo" `
-        --publish `
-        --releaseName "Scribe $Version" `
-        --tag "v$Version" `
-        --token $env:GITHUB_TOKEN `
-        --outputDir $releaseDir `
-        --channel $runtime
-    if ($LASTEXITCODE -ne 0) { throw 'vpk upload failed.' }
+    foreach ($target in $targets) {
+        Write-Host "==> Uploading $($target.Runtime) to github.com/$GitHubRepo ..." -ForegroundColor Cyan
+        vpk upload github `
+            --repoUrl "https://github.com/$GitHubRepo" `
+            --publish `
+            --releaseName "Scribe $Version" `
+            --tag "v$Version" `
+            --token $env:GITHUB_TOKEN `
+            --outputDir $releaseDir `
+            --channel $target.Runtime `
+            --merge
+        if ($LASTEXITCODE -ne 0) { throw "vpk upload failed for $($target.Runtime)." }
+    }
     Write-Host '==> Published.' -ForegroundColor Green
 }
 else {

@@ -225,6 +225,23 @@ public partial class App : Application
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
+        // Architecture and accelerator inventory. Recorded once at startup because "which build is
+        // this and what silicon is under it" is the first question on any Arm64 or Copilot+ PC bug
+        // report, and it is not otherwise recoverable from the log.
+        try
+        {
+            var capability = Scribe.Core.Diagnostics.ComputeCapabilityReport.Detect();
+            log.LogInformation("Compute capability: {Capability}", capability.Describe());
+            if (capability.Recommendation is { } advice)
+            {
+                log.LogWarning("{Advice}", advice);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Compute capability detection failed.");
+        }
+
         // The dictionary seed above forced database initialization, so a corruption repair (if any)
         // already ran — tell the user now rather than let them discover missing history on their own.
         if (services.GetRequiredService<ScribeDatabase>().RepairedAtStartup)

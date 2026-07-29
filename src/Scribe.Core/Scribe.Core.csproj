@@ -2,14 +2,32 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- Dual-architecture: win-x64 for Intel/AMD, win-arm64 for Copilot+ PCs. PlatformTarget is
+         deliberately NOT pinned so the active RuntimeIdentifier decides the architecture; a
+         hardcoded x64 would silently produce an x64 assembly inside an ARM64 publish. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PlatformTarget>x64</PlatformTarget>
     <RootNamespace>Scribe.Core</RootNamespace>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- Which sherpa-onnx native runtime to bring in. The SDK sets RuntimeIdentifier to the host RID
+       when no explicit -r is passed, so this is normally the machine we are building on; an explicit
+       -r win-arm64 (or -r win-x64) overrides it. Resolved once here rather than repeating the
+       fallback on each PackageReference, because referencing both natives at once would put two
+       different-architecture DLLs with identical names in the same output folder. -->
+  <PropertyGroup>
+    <ScribeNativeRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</ScribeNativeRid>
+    <ScribeNativeRid Condition="'$(ScribeNativeRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</ScribeNativeRid>
+    <ScribeNativeRid Condition="'$(ScribeNativeRid)' == ''">win-x64</ScribeNativeRid>
+  </PropertyGroup>
+
+  <Target Name="ScribeValidateNativeRid" BeforeTargets="ResolvePackageAssets">
+    <Error Condition="'$(ScribeNativeRid)' != 'win-x64' and '$(ScribeNativeRid)' != 'win-arm64'"
+           Text="Scribe supports win-x64 and win-arm64 only; the speech engine has no native runtime for '$(ScribeNativeRid)'." />
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="Scribe.Benchmarks" />
@@ -31,7 +49,13 @@
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="NAudio" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" />
-    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64" />
+    <!-- sherpa-onnx ships its native ONNX Runtime per architecture, and both natives use the same
+         file names, so exactly ONE must ever be referenced or they collide in the output folder.
+         ScribeNativeRid (below) resolves that choice from the effective RID. -->
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-x64"
+                      Condition="'$(ScribeNativeRid)' == 'win-x64'" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-arm64"
+                      Condition="'$(ScribeNativeRid)' == 'win-arm64'" />
     <PackageReference Include="Microsoft.AI.Foundry.Local" />
     <PackageReference Include="OpenAI" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />

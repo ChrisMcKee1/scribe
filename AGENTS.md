@@ -39,13 +39,15 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
 ## Tech stack (be specific — versions matter)
 
 - **Language / runtime:** C# / **.NET 10** (`net10.0-windows`), **.NET 10 SDK 10.0.301+**.
-- **App shell:** **WPF** tray app (`src/Scribe.App`), `win-x64`, self‑contained.
+- **App shell:** **WPF** tray app (`src/Scribe.App`), **`win-x64` and `win-arm64`**, self-contained.
 - **Recording overlay:** **WinUI 3 / Windows App SDK 2.2.0** as a *separate* unpackaged,
-  self‑contained `x64` process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`). See
+  self-contained process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`), built for the same
+  architecture as the app. See
   [Overlay architecture](#overlay-architecture-read-before-touching-the-pill) — it is not
   a normal window.
 - **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.4**
-  (Apache‑2.0) on CPU. **VAD:** Silero (MIT).
+  (Apache‑2.0) on CPU. **VAD:** Silero (MIT). Native runtime is per-architecture; see
+  [Architecture support](#architecture-support-x64-and-arm64).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`) — one code path for on‑device
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
@@ -67,11 +69,21 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; count grows with every change, ~350+)
+# Run the unit tests (must stay green; count grows with every change, ~620+)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
-# Build the overlay alone (it is x64-only — Platform MUST be x64)
+# Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
+# the architecture you intend to ship (x64 or ARM64).
 dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c Debug -p:Platform=x64
+dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c Debug -p:Platform=ARM64
+
+# Cross-build the whole app for the other architecture from either machine
+dotnet publish src/Scribe.App/Scribe.App.csproj -c Release -r win-arm64 --self-contained true
+
+# Prove the NATIVE speech engine actually decodes on this machine (unit tests never touch it).
+# Generates real speech with the Windows TTS engine, then runs it through TranscriptionService.
+pwsh ./scripts/New-SpeechFixtures.ps1
+dotnet run --project tools/Scribe.AsrCheck
 
 # Offline AI-cleanup quality eval (no network, no judge model)
 dotnet run --project tools/Scribe.Evals
@@ -81,9 +93,12 @@ dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 
 # Build the Velopack installer locally (version comes from Directory.Build.props)
-./build/pack.ps1
+./build/pack.ps1                        # x64 only (default)
+./build/pack.ps1 -Architecture arm64    # Arm64 only
+./build/pack.ps1 -Architecture all      # both, one channel each
 
-# Build the Microsoft Store package (MSIX, needs the Windows SDK; never build an MSI)
+# Build the Microsoft Store package (MSIX, needs the Windows SDK; never build an MSI).
+# Defaults to -Architecture all, which emits a single .msixbundle covering both.
 ./build/pack-msix.ps1
 ```
 
@@ -403,6 +418,59 @@ mark. Changing it means changing every one of these together:
 - Windows caches shortcut and search artwork aggressively, so `Infrastructure/ShellIconCache.cs`
   calls `SHChangeNotify` after install, update, and restart. Without it an upgraded install keeps
   showing the previous icon until the cache expires.
+
+## Architecture support (x64 and ARM64)
+
+Scribe ships **two architectures from one source tree**. The failure mode of getting this wrong is
+invisible at build time: Windows on Arm silently emulates an x64 binary, so a mispackaged build does
+not crash, it just runs slower and drains battery. That is why the checks below are enforced
+mechanically rather than by review.
+
+- **Every project declares `RuntimeIdentifiers=win-x64;win-arm64`, and none pins `PlatformTarget`.**
+  A hardcoded `x64` silently produces an x64 assembly inside an ARM64 publish. Do not add one back.
+- **The sherpa-onnx native runtime is architecture-specific and both packages use the same DLL file
+  names.** Exactly one may ever be referenced. `Scribe.Core.csproj` computes `ScribeNativeRid` from
+  the effective RID and selects one; referencing both drops two different-architecture
+  `onnxruntime.dll`s into the same folder. An unsupported RID fails the build with an explicit error
+  rather than silently producing a payload with no native engine.
+- **`RuntimeIdentifier` is never empty in practice** — the SDK defaults it to
+  `NETCoreSdkRuntimeIdentifier` (the host). So a plain `dotnet build` on an ARM64 box is already an
+  ARM64 build; that is what makes CI on `windows-11-arm` work with no special casing.
+- **The overlay must match the app's architecture.** It is a separate process, so an x64 pill beside
+  an ARM64 app runs emulated. WinUI has no AnyCPU story: `Platform` is required (`x64` or `ARM64`)
+  and the csproj derives `RuntimeIdentifier` from it so the two can never disagree.
+- **`scripts/Payload-Architecture.ps1` asserts payload purity at pack time**, reading the PE COFF
+  machine field directly (no `dumpbin`, which needs the C++ workload). Both installers call it.
+  Verified working: it accepts a real ARM64 payload and rejects that same payload when claimed as
+  x64.
+- **`tools/Scribe.AsrCheck` is the only thing that proves the native engine actually decodes.**
+  The unit tests deliberately never load sherpa-onnx, so a wrongly-packaged native passes every test
+  and fails on the user's first dictation. CI runs it on both architectures against speech generated
+  by `scripts/New-SpeechFixtures.ps1`.
+- **Fixture phrases avoid numbers, dates and times on purpose.** Scribe's editorial rules correctly
+  rewrite "three thirty" as "3.30", which scores as a mismatch and blunts the threshold that is
+  meant to catch a broken native.
+
+### NPU: detected, deliberately not used
+
+`ComputeCapabilityReport` reports process/OS architecture, emulation, and any NPU Windows lists
+under the `ComputeAccelerator` device class (`{f01a9d53-3ff6-48d2-9f97-c8a7004be10c}`), which every
+vendor registers into. **An empty result is the normal answer on most PCs and is never an error.**
+
+Decoding stays on the CPU on every machine, and that is a measured decision, not an omission.
+A Hexagon HTP port of our exact model exists (`trsdn/parakeet-tdt-0.6b-v3-htp-int8-16s`) and
+benchmarks at **23-26x realtime for short audio versus ~25x for CPU INT8 on the same chip** — no
+faster for push-to-talk. It only wins on long audio via chunking. The cost to adopt it would be:
+encoder only (decoder and mel preprocessing stay on CPU), a 631 MB context binary on top of what we
+ship, a fixed 16 s window forcing chunk-and-stitch, six helper DLLs where a missing one crashes with
+`STATUS_STACK_BUFFER_OVERRUN`, and a binary device-gated to Snapdragon X Elite that will not run on
+other Qualcomm parts without recompiling through Qualcomm AI Hub. **Do not re-derive "we should use
+the NPU" from the fact that one exists.** The real NPU win is power draw, not latency; revisit if a
+shorter-window encoder lands.
+
+The one genuinely actionable case the report drives is **emulation**: an x64 build on an ARM64 OS
+gets a warning in the log and a caution line in Settings, Diagnostics telling the user to install the
+Arm64 build.
 
 ## Git workflow
 
