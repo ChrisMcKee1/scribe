@@ -213,7 +213,7 @@ internal sealed class DictationController : IDisposable
                 settings.AiCleanupAzureSubscriptionTenantId,
                 settings.AiCleanupAzureTenantId),
         settings.AiCleanupWritingStyle,
-        BuildGlossary(),
+        BuildGlossary(settings),
         settings.AiCleanupCustomEndpoint,
         settings.AiCleanupCustomModel,
         settings.AiCleanupCustomApiKey,
@@ -230,7 +230,13 @@ internal sealed class DictationController : IDisposable
     // i.e. right after the dictionary editor saves — and so the value lives on the value-equality
     // CleanupOptions record, which lets the service detect the change and rebuild its agent. Enabled
     // dictionary libraries are layered on top of the base dictionary, the base winning on conflict.
-    private string? BuildGlossary()
+    //
+    // The term budget follows the resolved prompt style, not a single global number. A cloud endpoint
+    // is a text service with a huge context window and no reason to drop vocabulary; a 1-2B on-device
+    // model has to fit the guardrails, style, transcript and its own output into a few thousand
+    // tokens, so there the list stays short. Merge order matters either way: the user's own entries
+    // come first, because those are the terms a model cannot infer and must survive truncation.
+    private string? BuildGlossary(AppSettings settings)
     {
         try
         {
@@ -239,7 +245,14 @@ internal sealed class DictationController : IDisposable
             var effective = libraryEntries.Count == 0
                 ? (IReadOnlyList<DictionaryEntry>)baseEntries
                 : DictionaryLibraryComposer.Merge(baseEntries, libraryEntries);
-            var glossary = CleanupPrompt.BuildGlossary(effective);
+
+            var style = CleanupPrompt.ResolvePromptStyle(
+                settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
+            var maxTerms = style == CleanupPromptStyle.Local
+                ? CleanupPrompt.MaxGlossaryTermsLocal
+                : CleanupPrompt.MaxGlossaryTermsCloud;
+
+            var glossary = CleanupPrompt.BuildGlossary(effective, maxTerms);
             return string.IsNullOrEmpty(glossary) ? null : glossary;
         }
         catch (Exception ex)

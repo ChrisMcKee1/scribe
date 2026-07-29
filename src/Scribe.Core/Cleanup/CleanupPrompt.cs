@@ -12,11 +12,27 @@ using Scribe.Core.Models;
 public static class CleanupPrompt
 {
     /// <summary>
-    /// Upper bound on glossary entries folded into the prompt, to keep it bounded. Public so the
-    /// settings UI can tell the user which of their entries reach the cleanup model. This caps the
-    /// <b>prompt glossary only</b>: local find-and-replace applies to every enabled entry.
+    /// Glossary term budget for small on-device models. A 1-2B model on a 4k context has to fit the
+    /// guardrails, the writing style, the transcript and its own output, so a long vocabulary list
+    /// crowds out the thing being edited. Cloud models have no such problem, which is why this is a
+    /// local-only limit rather than a global one.
     /// </summary>
-    public const int MaxGlossaryTerms = 80;
+    public const int MaxGlossaryTermsLocal = 80;
+
+    /// <summary>
+    /// Glossary term budget for cloud and bring-your-own endpoints. Effectively "all of them": these
+    /// are text services with six-figure context windows, and an arbitrary cap silently dropped the
+    /// user's own entries, which are precisely the ones a model cannot guess (names, internal
+    /// acronyms, project codenames). <see cref="MaxGlossaryChars"/> is the real safety net.
+    /// </summary>
+    public const int MaxGlossaryTermsCloud = 5000;
+
+    /// <summary>
+    /// Total character budget for the rendered glossary, roughly 6k tokens at the cloud limit. This
+    /// bounds the request by size rather than by an entry count that has no relationship to cost, so
+    /// a dictionary of short acronyms is not punished for the sake of one with long phrases.
+    /// </summary>
+    private const int MaxGlossaryChars = 24_000;
 
     /// <summary>Per-term character cap so one oversized dictionary entry can't bloat every request.</summary>
     private const int MaxGlossaryTermChars = 100;
@@ -181,19 +197,28 @@ public static class CleanupPrompt
     /// the cleanup system prompt as its own paragraph, <b>after</b> the writing style. This keeps the
     /// vocabulary feature independent of the tone instructions (e.g. "write like a pirate" and the
     /// glossary coexist). Casing-only fixes render as the canonical term; genuine substitutions also
-    /// show the likely transcription so the model can map a mis-heard phrase to the right term. The
-    /// list is capped at <see cref="MaxGlossaryTerms"/> to keep the prompt bounded. Returns an empty
-    /// string when there is nothing to add.
+    /// show the likely transcription so the model can map a mis-heard phrase to the right term.
+    /// Returns an empty string when there is nothing to add.
     /// </summary>
-    public static string BuildGlossary(IEnumerable<DictionaryEntry>? entries)
+    /// <param name="entries">
+    /// Enabled entries in priority order. The caller puts the user's own dictionary first, because
+    /// those are the terms a model cannot infer and so must survive any truncation.
+    /// </param>
+    /// <param name="maxTerms">
+    /// Term budget: <see cref="MaxGlossaryTermsCloud"/> for cloud endpoints,
+    /// <see cref="MaxGlossaryTermsLocal"/> for small on-device models. Whichever limit applies, the
+    /// rendered block is additionally bounded by <see cref="MaxGlossaryChars"/>.
+    /// </param>
+    public static string BuildGlossary(IEnumerable<DictionaryEntry>? entries, int maxTerms = MaxGlossaryTermsCloud)
     {
-        if (entries is null)
+        if (entries is null || maxTerms <= 0)
         {
             return string.Empty;
         }
 
         var lines = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var chars = 0;
 
         foreach (var entry in entries)
         {
@@ -223,12 +248,22 @@ public static class CleanupPrompt
                 key = canonical;
             }
 
-            if (seen.Add(key))
+            if (!seen.Add(key))
             {
-                lines.Add(line);
+                continue;
             }
 
-            if (lines.Count >= MaxGlossaryTerms)
+            // Stop on the size budget rather than truncating mid-list to a partial line: a glossary
+            // that silently loses its tail is better than a request that fails on length.
+            if (chars + line.Length + 1 > MaxGlossaryChars)
+            {
+                break;
+            }
+
+            lines.Add(line);
+            chars += line.Length + 1;
+
+            if (lines.Count >= maxTerms)
             {
                 break;
             }

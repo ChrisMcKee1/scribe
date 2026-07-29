@@ -786,11 +786,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _dictionarySnapshot = DictionarySignature();
     }
 
-    // The prompt glossary is capped (CleanupPrompt.MaxGlossaryTerms) but local find-and-replace is
-    // not, so this is deliberately not enforced as an input limit on the grid: blocking the 81st
-    // entry would break a feature that still works. It is surfaced as a status line instead, and
-    // only when the user is actually over the cap and has AI cleanup on, so it stays quiet for the
-    // majority who never reach it.
+    // The glossary sent to AI cleanup is bounded, but the bound depends on where cleanup runs: a
+    // cloud endpoint takes everything, a small on-device model takes a short list so the vocabulary
+    // does not crowd out the transcript. Local find-and-replace is never capped either way. This is
+    // surfaced as a status line rather than enforced as an input limit, because blocking the 81st
+    // entry would break a feature that still works.
     private void UpdateDictionaryGlossaryHint()
     {
         if (DictionaryGlossaryHint is null)
@@ -799,19 +799,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var enabled = _rows.Count(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Replacement));
-        var cap = CleanupPrompt.MaxGlossaryTerms;
+        var total = _rows.Count;
 
-        if (enabled <= cap)
+        if (AiCleanupCheck?.IsChecked != true)
+        {
+            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled.";
+            return;
+        }
+
+        var style = CleanupPrompt.ResolvePromptStyle(SelectedPromptStyle, SelectedProvider);
+        if (style != CleanupPromptStyle.Local)
         {
             DictionaryGlossaryHint.Text =
-                $"{enabled:N0} of {_rows.Count:N0} entries enabled.";
+                $"{enabled:N0} of {total:N0} entries enabled. All of them are replaced locally, and all " +
+                "of them are sent to AI cleanup as a glossary.";
+            return;
+        }
+
+        var cap = CleanupPrompt.MaxGlossaryTermsLocal;
+        if (enabled <= cap)
+        {
+            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled.";
             return;
         }
 
         DictionaryGlossaryHint.Text =
-            $"{enabled:N0} of {_rows.Count:N0} entries enabled. All of them are replaced locally. " +
-            $"AI cleanup also receives a glossary of your terms, and that list is capped at {cap:N0}, " +
-            $"so {enabled - cap:N0} will not be sent to the model. Local replacement still covers them.";
+            $"{enabled:N0} of {total:N0} entries enabled. All of them are replaced locally. " +
+            $"On-device cleanup has a small context window, so only the first {cap:N0} are sent to it " +
+            $"as a glossary; {enabled - cap:N0} are not. Local replacement still covers them, and a " +
+            "cloud provider receives the full list.";
     }
 
     // --- Libraries -----------------------------------------------------------------------
@@ -2951,20 +2967,135 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // --- Save / cancel -------------------------------------------------------------------
 
     // "Save" persists and keeps the window open so the user can move page by page; "Save and close"
-    // does the same and then closes.
-    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    // does the same and then closes. Both first give the user a chance to drop dictionary entries a
+    // library already covers, which has to happen here rather than inside TrySave: the prompt is
+    // async and TrySave is called on a synchronous path.
+    private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!await ConfirmDictionaryOverlapAsync())
+        {
+            return;
+        }
+
         if (TrySave())
         {
             ShowInfo("Settings saved.");
         }
     }
 
-    private void SaveCloseButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveCloseButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!await ConfirmDictionaryOverlapAsync())
+        {
+            return;
+        }
+
         if (TrySave())
         {
             Close();
+        }
+    }
+
+    /// <summary>
+    /// Offers to drop dictionary entries that an enabled library already covers identically. Returns
+    /// false only when the user backs out of saving entirely.
+    /// </summary>
+    /// <remarks>
+    /// A personal dictionary quietly accumulates entries that a library later started covering, and
+    /// nothing looks wrong because both layers produce the same text. It still costs: personal
+    /// entries merge ahead of library entries and consume the AI glossary budget first, so redundant
+    /// ones displace terms a model genuinely cannot guess.
+    /// <para>
+    /// Entries that write the same spoken form <i>differently</i> are never offered for removal.
+    /// Those are deliberate overrides ("v s" meaning versus, not Visual Studio) and deleting one
+    /// would silently change what the user's dictation says. They are reported, not touched.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> ConfirmDictionaryOverlapAsync()
+    {
+        try
+        {
+            DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+            if (DictionarySignature() == _dictionarySnapshot)
+            {
+                return true; // nothing changed, so nothing new to warn about
+            }
+
+            var entries = BuildDictionaryEntries(out var duplicate);
+            if (duplicate is not null)
+            {
+                return true; // TrySave reports the duplicate; don't stack two dialogs
+            }
+
+            var libraries = _loadedLibraries
+                .Where(l => _libraryRows.Any(r =>
+                    r.Enabled && string.Equals(r.Id, l.Id, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            var libraryEntries = new List<DictionaryEntry>();
+            var sourceByPattern = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var library in libraries)
+            {
+                foreach (var entry in library.Entries)
+                {
+                    libraryEntries.Add(entry);
+                    if (!string.IsNullOrWhiteSpace(entry.Pattern))
+                    {
+                        sourceByPattern.TryAdd(entry.Pattern.Trim(), library.Name);
+                    }
+                }
+            }
+
+            var report = DictionaryLibraryOverlapAnalyzer.Analyze(entries, libraryEntries, sourceByPattern);
+            if (report.RedundantCount == 0)
+            {
+                return true; // overrides alone are legitimate; warning about them every save is noise
+            }
+
+            var sample = string.Join('\n', report.Redundant
+                .Take(6)
+                .Select(o => $"    {o.Pattern}  ->  {o.Replacement}" +
+                             (string.IsNullOrEmpty(o.LibraryId) ? string.Empty : $"   ({o.LibraryId})")));
+            var more = report.RedundantCount > 6 ? $"\n    and {report.RedundantCount - 6:N0} more" : string.Empty;
+
+            var overrideNote = report.OverrideCount == 0
+                ? string.Empty
+                : $"\n\n{report.OverrideCount:N0} other {(report.OverrideCount == 1 ? "entry writes" : "entries write")} " +
+                  "a term differently from the library. Those are kept: your version wins, which is " +
+                  "probably why you added them.";
+
+            var count = report.RedundantCount;
+            var noun = count == 1 ? "entry is" : "entries are";
+            var confirmed = await ConfirmAsync(
+                "Some entries are already covered",
+                $"{count:N0} dictionary {noun} already handled identically by a library you have " +
+                $"turned on:\n\n{sample}{more}\n\n" +
+                "Removing them changes nothing about your dictation, and frees room in the glossary " +
+                "sent to AI cleanup for terms it cannot guess." + overrideNote,
+                count == 1 ? "Remove it" : $"Remove {count:N0}");
+
+            if (confirmed)
+            {
+                var drop = new HashSet<string>(
+                    report.Redundant.Select(o => o.Pattern), StringComparer.OrdinalIgnoreCase);
+
+                foreach (var row in _rows.Where(r =>
+                    !string.IsNullOrWhiteSpace(r.Pattern) && drop.Contains(r.Pattern.Trim())).ToList())
+                {
+                    _rows.Remove(row);
+                }
+
+                UpdateDictionaryGlossaryHint();
+            }
+
+            return true; // "Cancel" declines the cleanup, not the save
+        }
+        catch (Exception ex)
+        {
+            // A hygiene prompt must never be the reason a save fails.
+            _log.LogWarning(ex, "Could not check the dictionary against enabled libraries.");
+            return true;
         }
     }
 
