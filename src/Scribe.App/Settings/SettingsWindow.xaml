@@ -1425,6 +1425,14 @@
                                         <DataGridTextColumn Header="App" Binding="{Binding App}" Width="Auto"/>
                                         <DataGridTextColumn Header="Audio" Binding="{Binding Audio}" Width="Auto"/>
                                         <DataGridTextColumn Header="Decode" Binding="{Binding Decode}" Width="Auto"/>
+                                        <DataGridTextColumn Header="AI cleanup" Binding="{Binding Cleanup}" Width="Auto">
+                                            <DataGridTextColumn.ElementStyle>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="ToolTip"
+                                                            Value="Time the AI cleanup step took. A dash means cleanup did not run for this dictation, either because it was switched off or because it failed."/>
+                                                </Style>
+                                            </DataGridTextColumn.ElementStyle>
+                                        </DataGridTextColumn>
                                     </DataGrid.Columns>
                                 </DataGrid>
                                 <TextBlock x:Name="HistoryEmptyHint"

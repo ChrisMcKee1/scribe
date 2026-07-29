@@ -4550,15 +4550,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Override,
     }
 
-    private sealed record HistoryRow(long Id, string When, string Text, string App, string Audio, string Decode)
+    private sealed record HistoryRow(
+        long Id, string When, string Text, string App, string Audio, string Decode, string Cleanup)
     {
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
             entry.TimestampUtc.ToLocalTime().ToString("MMM d, h:mm tt"),
             entry.Text,
-            string.IsNullOrWhiteSpace(entry.TargetApp) ? "—" : entry.TargetApp!,
-            $"{entry.AudioMilliseconds / 1000.0:0.0} s",
-            $"{entry.DecodeMilliseconds} ms");
+            string.IsNullOrWhiteSpace(entry.TargetApp) ? HistoryRowFormat.NotApplicable : entry.TargetApp!,
+            HistoryRowFormat.Audio(entry.AudioMilliseconds),
+            HistoryRowFormat.Latency(entry.DecodeMilliseconds),
+            HistoryRowFormat.Latency(entry.CleanupMilliseconds));
     }
 
     /// <summary>Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable.</summary>
