@@ -1,7 +1,7 @@
 # Scribe 0.2.20
 
-AI cleanup now receives your whole vocabulary instead of the first 80 terms, and the dictionary
-tells you when an entry is already handled by a library you have turned on.
+AI cleanup now receives your whole vocabulary instead of the first 80 terms, the dictionary is
+easier to edit, and it tells you when an entry is already handled by a library you have turned on.
 
 ## Fixed: your full vocabulary reaches AI cleanup
 
@@ -26,6 +26,22 @@ losing some of their own entries on top. Enabling a vocabulary library and seein
 AI cleanup was a symptom of this.
 
 Local find-and-replace was never capped and is unchanged.
+
+## New: a dictionary you can actually edit
+
+The dictionary grid had two undiscoverable interactions: you added an entry by typing into a phantom
+row at the bottom, and removed one by selecting it and pressing Delete. Neither is visible unless
+somebody tells you.
+
+- **Add entry** button. It appends a row, scrolls to it, and puts the cursor in the Spoken cell.
+- A **remove button on every row**, so deleting no longer depends on knowing a keyboard shortcut.
+- A **Library** column showing how each entry relates to the libraries you have switched on:
+  *Same as library* means it is redundant, *Overrides library* means yours wins. Hovering explains
+  what the library would have written instead.
+
+The Library column updates as you type and as you toggle libraries on the Libraries page, so you can
+see the effect of a change before saving. An override you no longer want can be turned off with its
+Enabled checkbox rather than deleted, which leaves the library to take over.
 
 ## New: the dictionary tells you when a library already covers an entry
 

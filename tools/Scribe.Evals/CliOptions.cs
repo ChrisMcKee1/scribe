@@ -336,7 +336,10 @@ internal sealed class CliOptions
             .SelectMany(l => l.Entries)
             .ToList();
 
-        var glossary = CleanupPrompt.BuildGlossary(entries);
+        // Pinned to the cloud budget rather than the default, so this measures what a cloud arm
+        // actually sends. Leaving it implicit would let a change to the default silently move the
+        // benchmark's baseline, which is exactly how an earlier run measured the wrong thing.
+        var glossary = CleanupPrompt.BuildGlossary(entries, CleanupPrompt.MaxGlossaryTermsCloud);
         return string.IsNullOrEmpty(glossary) ? null : glossary;
     }
 

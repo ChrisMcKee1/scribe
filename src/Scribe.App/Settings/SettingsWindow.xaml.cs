@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -780,10 +783,153 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         DictionaryGrid.ItemsSource = _rows;
-        _rows.CollectionChanged += (_, _) => UpdateDictionaryGlossaryHint();
-        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(UpdateDictionaryGlossaryHint);
-        UpdateDictionaryGlossaryHint();
+        _rows.CollectionChanged += DictionaryRows_CollectionChanged;
+        foreach (var row in _rows)
+        {
+            row.PropertyChanged += DictionaryRow_PropertyChanged;
+        }
+
+        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        RefreshDictionaryStatus();
         _dictionarySnapshot = DictionarySignature();
+    }
+
+    // Rows are watched individually as well as collectively: a checkbox click commits without
+    // necessarily raising CellEditEnding, so relying on that alone left the Library badge stale.
+    private void DictionaryRows_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        foreach (var row in e.OldItems?.OfType<DictionaryRow>() ?? [])
+        {
+            row.PropertyChanged -= DictionaryRow_PropertyChanged;
+        }
+
+        foreach (var row in e.NewItems?.OfType<DictionaryRow>() ?? [])
+        {
+            row.PropertyChanged += DictionaryRow_PropertyChanged;
+        }
+
+        RefreshDictionaryStatus();
+    }
+
+    private void DictionaryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // Ignore everything UpdateDictionaryCoverage itself writes. The Coverage setter also raises
+        // CoverageLabel, CoverageAppearance and CoverageVisibility, so filtering only Coverage left
+        // three unfiltered notifications per row queuing a full recompute each: not an infinite loop
+        // (the second pass is a no-op) but a Dispatcher flood proportional to dictionary size.
+        if (e.PropertyName is null || e.PropertyName.StartsWith("Coverage", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+    }
+
+    /// <summary>Recomputes the glossary hint and the per-row library coverage badges together.</summary>
+    private void RefreshDictionaryStatus()
+    {
+        UpdateDictionaryGlossaryHint();
+        UpdateDictionaryCoverage();
+    }
+
+    /// <summary>
+    /// Tags each row with how it relates to the libraries that are switched on, so the user can see
+    /// which entries are redundant and which are deliberate overrides without saving first.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately tolerant: a failure here costs a badge, never an edit. It also runs against the
+    /// live library checkboxes rather than saved settings, so toggling a library updates the column
+    /// immediately.
+    /// </remarks>
+    private void UpdateDictionaryCoverage()
+    {
+        try
+        {
+            if (_rows.Count == 0)
+            {
+                return;
+            }
+
+            var enabledLibraries = _loadedLibraries
+                .Where(l => _libraryRows.Any(r =>
+                    r.Enabled && string.Equals(r.Id, l.Id, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            var covering = new Dictionary<string, (DictionaryEntry Entry, string Library)>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var library in enabledLibraries)
+            {
+                foreach (var entry in library.Entries)
+                {
+                    if (!entry.Enabled || string.IsNullOrWhiteSpace(entry.Pattern))
+                    {
+                        continue;
+                    }
+
+                    covering.TryAdd(entry.Pattern.Trim(), (entry, library.Name));
+                }
+            }
+
+            foreach (var row in _rows)
+            {
+                var pattern = (row.Pattern ?? string.Empty).Trim();
+                if (pattern.Length == 0 || !covering.TryGetValue(pattern, out var hit))
+                {
+                    row.Coverage = DictionaryRowCoverage.None;
+                    row.CoverageTooltip = string.Empty;
+                    continue;
+                }
+
+                var mine = (row.Replacement ?? string.Empty).Trim();
+                var theirs = (hit.Entry.Replacement ?? string.Empty).Trim();
+                var same = string.Equals(mine, theirs, StringComparison.Ordinal)
+                           && row.WholeWord == hit.Entry.WholeWord;
+
+                row.Coverage = same ? DictionaryRowCoverage.Duplicate : DictionaryRowCoverage.Override;
+                row.CoverageTooltip = same
+                    ? $"\"{hit.Library}\" already writes this as \"{theirs}\". Removing this entry " +
+                      "changes nothing and frees room in the AI cleanup glossary."
+                    : $"\"{hit.Library}\" writes this as \"{theirs}\". Your entry wins. " +
+                      "Clear Enabled to fall back to the library.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not compute dictionary library coverage.");
+        }
+    }
+
+    /// <summary>
+    /// Adds a blank row and puts the cursor in it. The grid's own placeholder row was the only way
+    /// to add an entry, which is invisible unless you already know it exists.
+    /// </summary>
+    private void DictionaryAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var row = new DictionaryRow();
+        _rows.Add(row);
+
+        DictionaryGrid.ScrollIntoView(row);
+
+        // The row container is generated lazily, and BeginEdit silently does nothing when it does
+        // not exist yet. Forcing layout first is what makes the new row actually land in edit mode
+        // rather than appearing blank and unfocused.
+        DictionaryGrid.UpdateLayout();
+
+        DictionaryGrid.SelectedItem = row;
+        DictionaryGrid.CurrentCell = new DataGridCellInfo(row, DictionaryGrid.Columns[0]);
+        DictionaryGrid.BeginEdit();
+    }
+
+    /// <summary>Removes the row whose delete button was pressed.</summary>
+    private void DictionaryDeleteRow_Click(object sender, RoutedEventArgs e)
+    {
+        // Committing first avoids removing a row the grid still believes it is editing.
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        if (sender is FrameworkElement { DataContext: DictionaryRow row })
+        {
+            _rows.Remove(row);
+        }
     }
 
     // The glossary sent to AI cleanup is bounded, but the bound depends on where cleanup runs: a
@@ -854,6 +1000,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         LibraryGrid.ItemsSource = _libraryRows;
+
+        // Switching a library on or off changes which dictionary entries are redundant, so the
+        // Library column on the dictionary page has to follow it rather than wait for a save.
+        LibraryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
 
         // Preview the first library so the detail panel is never blank when the page opens.
         if (_libraryRows.Count > 0)
@@ -2970,29 +3120,51 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // does the same and then closes. Both first give the user a chance to drop dictionary entries a
     // library already covers, which has to happen here rather than inside TrySave: the prompt is
     // async and TrySave is called on a synchronous path.
+    //
+    // _saveInProgress guards the await. These are async void handlers, so without it a second click
+    // while the confirm dialog is open would start a parallel save and the two could interleave
+    // against the same rows.
+    private bool _saveInProgress;
+
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!await ConfirmDictionaryOverlapAsync())
+        if (_saveInProgress)
         {
             return;
         }
 
-        if (TrySave())
+        _saveInProgress = true;
+        try
         {
-            ShowInfo("Settings saved.");
+            if (await ConfirmDictionaryOverlapAsync() && TrySave())
+            {
+                ShowInfo("Settings saved.");
+            }
+        }
+        finally
+        {
+            _saveInProgress = false;
         }
     }
 
     private async void SaveCloseButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!await ConfirmDictionaryOverlapAsync())
+        if (_saveInProgress)
         {
             return;
         }
 
-        if (TrySave())
+        _saveInProgress = true;
+        try
         {
-            Close();
+            if (await ConfirmDictionaryOverlapAsync() && TrySave())
+            {
+                Close();
+            }
+        }
+        finally
+        {
+            _saveInProgress = false;
         }
     }
 
@@ -3085,8 +3257,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 {
                     _rows.Remove(row);
                 }
-
-                UpdateDictionaryGlossaryHint();
             }
 
             return true; // "Cancel" declines the cleanup, not the save
@@ -4233,14 +4403,114 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
     }
 
-    /// <summary>Editable dictionary row backing the grid. Parameterless ctor enables grid add-row.</summary>
-    public sealed class DictionaryRow
+    /// <summary>
+    /// Editable dictionary row backing the grid. Raises change notifications so the Library column
+    /// can update as the user types, which is the whole point of showing it: an entry that starts
+    /// duplicating a library the moment you finish typing it should say so immediately, not after a
+    /// save round trip.
+    /// </summary>
+    public sealed class DictionaryRow : INotifyPropertyChanged
     {
+        private string _pattern = string.Empty;
+        private string _replacement = string.Empty;
+        private bool _wholeWord = true;
+        private bool _enabled = true;
+        private DictionaryRowCoverage _coverage;
+        private string _coverageTooltip = string.Empty;
+
         public long Id { get; set; }
-        public string Pattern { get; set; } = string.Empty;
-        public string Replacement { get; set; } = string.Empty;
-        public bool WholeWord { get; set; } = true;
-        public bool Enabled { get; set; } = true;
+
+        public string Pattern
+        {
+            get => _pattern;
+            set => Set(ref _pattern, value ?? string.Empty);
+        }
+
+        public string Replacement
+        {
+            get => _replacement;
+            set => Set(ref _replacement, value ?? string.Empty);
+        }
+
+        public bool WholeWord
+        {
+            get => _wholeWord;
+            set => Set(ref _wholeWord, value);
+        }
+
+        public bool Enabled
+        {
+            get => _enabled;
+            set => Set(ref _enabled, value);
+        }
+
+        /// <summary>How this entry relates to the libraries that are currently switched on.</summary>
+        public DictionaryRowCoverage Coverage
+        {
+            get => _coverage;
+            set
+            {
+                if (Set(ref _coverage, value))
+                {
+                    OnPropertyChanged(nameof(CoverageLabel));
+                    OnPropertyChanged(nameof(CoverageAppearance));
+                    OnPropertyChanged(nameof(CoverageVisibility));
+                }
+            }
+        }
+
+        public string CoverageTooltip
+        {
+            get => _coverageTooltip;
+            set => Set(ref _coverageTooltip, value);
+        }
+
+        public string CoverageLabel => Coverage switch
+        {
+            DictionaryRowCoverage.Duplicate => "Same as library",
+            DictionaryRowCoverage.Override => "Overrides library",
+            _ => string.Empty,
+        };
+
+        // Caution reads as "you can probably delete this"; Info reads as "this is doing something".
+        public Wpf.Ui.Controls.ControlAppearance CoverageAppearance => Coverage switch
+        {
+            DictionaryRowCoverage.Duplicate => Wpf.Ui.Controls.ControlAppearance.Caution,
+            _ => Wpf.Ui.Controls.ControlAppearance.Info,
+        };
+
+        public Visibility CoverageVisibility =>
+            Coverage == DictionaryRowCoverage.None ? Visibility.Collapsed : Visibility.Visible;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+        {
+            if (EqualityComparer<T>.Default.Equals(field, value))
+            {
+                return false;
+            }
+
+            field = value;
+            OnPropertyChanged(name);
+            return true;
+        }
+
+        private void OnPropertyChanged(string? name) =>
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+    }
+
+    /// <summary>How a dictionary row relates to the enabled libraries.</summary>
+    public enum DictionaryRowCoverage
+    {
+        /// <summary>No enabled library covers this spoken form. The entry is doing its own work.</summary>
+        None = 0,
+
+        /// <summary>A library produces exactly this, so the entry is clutter.</summary>
+        Duplicate,
+
+        /// <summary>A library writes this spoken form differently; this entry wins.</summary>
+        Override,
     }
 
     private sealed record HistoryRow(long Id, string When, string Text, string App, string Audio, string Decode)

@@ -951,9 +951,13 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
                             <TextBlock Text="Dictionary" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Replace spoken words or phrases with the spelling you actually want — 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
+                                       Text="Replace spoken words or phrases with the spelling you actually want. 'azure' becomes 'Azure', 'dot net' becomes '.NET'. Whole word matches on word boundaries only; clear it for phrase replacement. Edits apply when you save."/>
                         </StackPanel>
                         <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <ui:Button x:Name="DictionaryAddButton" Content="Add entry"
+                                       Icon="{ui:SymbolIcon Add24}" Appearance="Primary"
+                                       Margin="0,0,8,0" Click="DictionaryAddButton_Click"
+                                       ToolTip="Add a blank entry and start editing it."/>
                             <ui:Button x:Name="DictionarySuggestButton" Content="Learn from history"
                                        Icon="{ui:SymbolIcon Lightbulb24}"
                                        Margin="0,0,8,0" Click="DictionarySuggestButton_Click"
@@ -983,22 +987,45 @@
                         <ui:Card Grid.Row="2" Padding="0" Style="{StaticResource FillCard}">
                             <DataGrid x:Name="DictionaryGrid"
                                       AutoGenerateColumns="False"
-                                      CanUserAddRows="True" CanUserDeleteRows="True"
+                                      CanUserAddRows="False" CanUserDeleteRows="True"
                                       HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                       Background="Transparent" BorderThickness="0">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
-                                    <DataGridTextColumn Header="Replacement" Binding="{Binding Replacement}" Width="*"/>
-                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord}" Width="Auto"/>
-                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="Auto"/>
+                                    <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                    <DataGridTextColumn Header="Replacement" Binding="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}" Width="*"/>
+                                    <!-- Live comparison against the libraries that are switched on, so a user can
+                                         see at a glance which entries are doing real work and which are clutter. -->
+                                    <DataGridTemplateColumn Header="Library" Width="150" CanUserSort="True"
+                                                            SortMemberPath="Coverage">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ui:Badge Appearance="{Binding CoverageAppearance}"
+                                                          Margin="4,2" VerticalAlignment="Center"
+                                                          HorizontalAlignment="Left"
+                                                          Visibility="{Binding CoverageVisibility}"
+                                                          ToolTip="{Binding CoverageTooltip}">
+                                                    <TextBlock Text="{Binding CoverageLabel}" FontSize="11"/>
+                                                </ui:Badge>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                    <DataGridTemplateColumn Header="" Width="44">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ui:Button Icon="{ui:SymbolIcon Delete24}" Appearance="Transparent"
+                                                           Padding="6,2" Margin="0" ToolTip="Remove this entry"
+                                                           Click="DictionaryDeleteRow_Click"/>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </ui:Card>
                         <StackPanel Grid.Row="3" Margin="2,8,2,0">
-                            <TextBlock Style="{StaticResource SettingHint}"
-                                       Text="Tip: type in the empty bottom row to add an entry. Select a row and press Delete to remove it."/>
                             <TextBlock x:Name="DictionaryGlossaryHint" Style="{StaticResource SettingHint}"
-                                       Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                       TextWrapping="Wrap"/>
                         </StackPanel>
                     </Grid>
 
