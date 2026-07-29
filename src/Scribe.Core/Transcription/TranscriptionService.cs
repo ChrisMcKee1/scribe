@@ -11,6 +11,13 @@ namespace Scribe.Core.Transcription;
 public sealed class TranscriptionService : ITranscriptionService
 {
     private const string ModelType = "nemo_transducer";
+
+    /// <summary>
+    /// Mel filterbank size Parakeet TDT was trained with. sherpa-onnx defaults to 80, which is the
+    /// Icefall/Zipformer convention; the NeMo FastConformer models use 128.
+    /// </summary>
+    private const int NemoFeatureDim = 128;
+
     private const int MaxAutoThreads = 8;
     private const int WarmUpSampleCount = 8_000; // 0.5 s at 16 kHz
 
@@ -70,8 +77,17 @@ public sealed class TranscriptionService : ITranscriptionService
                 ? ResolveDecodingMethod(_options.DecodingMethod)
                 : "greedy_search";
             config.MaxActivePaths = Math.Max(1, _options.MaxActivePaths);
-            // Other defaults from the ctor are already correct: FeatConfig.SampleRate = 16000,
-            // FeatConfig.FeatureDim = 80.
+
+            // Parakeet TDT is trained on 128 mel bins, not the sherpa-onnx default of 80. The
+            // runtime corrects this from the model's own metadata, so leaving it wrong is currently
+            // harmless, but the config we hand it should still describe the model we are loading:
+            // a future reordering that reads FeatureDim before the runtime fixes it would silently
+            // produce garbage features rather than fail. Moonshine does its own preprocessing and
+            // ignores this entirely.
+            if (model.Architecture == TranscriptionModelArchitecture.NemoTransducer)
+            {
+                config.FeatConfig.FeatureDim = NemoFeatureDim;
+            }
 
             var sw = Stopwatch.StartNew();
             _recognizer = new OfflineRecognizer(config);
