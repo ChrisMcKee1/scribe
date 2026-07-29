@@ -138,6 +138,13 @@ public static class DictionaryLibraryOverlapAnalyzer
     /// Returns <paramref name="personal"/> with the redundant entries removed, preserving order.
     /// Used when the user chooses to let the libraries cover those terms.
     /// </summary>
+    /// <remarks>
+    /// Matches on pattern <i>and</i> replacement rather than pattern alone. The save path rejects
+    /// duplicate spoken forms before this runs, so today the two are equivalent, but the difference
+    /// decides what happens if that ever stops being true: keying on the pattern would delete an
+    /// entry classified as an Override, which is precisely the entry this feature promises never to
+    /// touch. Removing strictly less is the only safe direction for an automated deletion.
+    /// </remarks>
     public static IReadOnlyList<DictionaryEntry> RemoveRedundant(
         IReadOnlyList<DictionaryEntry> personal, DictionaryOverlapReport report)
     {
@@ -148,10 +155,28 @@ public static class DictionaryLibraryOverlapAnalyzer
             return personal;
         }
 
-        var drop = new HashSet<string>(
-            report.Redundant.Select(o => o.Pattern), StringComparer.OrdinalIgnoreCase);
+        var drop = new HashSet<(string Pattern, string Replacement)>(
+            report.Redundant.Select(o => (o.Pattern, o.Replacement)),
+            RedundantKeyComparer.Instance);
 
         return [.. personal.Where(e =>
-            e is null || string.IsNullOrWhiteSpace(e.Pattern) || !drop.Contains(e.Pattern.Trim()))];
+            e is null || string.IsNullOrWhiteSpace(e.Pattern) ||
+            !drop.Contains((e.Pattern.Trim(), (e.Replacement ?? string.Empty).Trim())))];
+    }
+
+    // Spoken forms are matched case-insensitively (as the post-processor does), but replacements are
+    // compared ordinally: casing is the entire point of most entries, so "gpt" -> "GPT" and
+    // "gpt" -> "gpt" are different outcomes and must not collapse into one key here either.
+    private sealed class RedundantKeyComparer : IEqualityComparer<(string Pattern, string Replacement)>
+    {
+        public static readonly RedundantKeyComparer Instance = new();
+
+        public bool Equals((string Pattern, string Replacement) x, (string Pattern, string Replacement) y) =>
+            string.Equals(x.Pattern, y.Pattern, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(x.Replacement, y.Replacement, StringComparison.Ordinal);
+
+        public int GetHashCode((string Pattern, string Replacement) obj) => HashCode.Combine(
+            StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Pattern),
+            StringComparer.Ordinal.GetHashCode(obj.Replacement));
     }
 }

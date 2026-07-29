@@ -304,41 +304,53 @@ public sealed class TextInjector : ITextInjector
         // over raw speed: a few hundred milliseconds on a rare long paragraph is imperceptible next to
         // dropped text.
         int sent = 0;
-        for (int start = 0; start < text.Length;)
+        try
         {
-            if (!IsExpectedForeground(expectedForegroundWindow))
+            for (int start = 0; start < text.Length;)
             {
-                break;
-            }
-
-            int count = ChunkLength(text, start, UnicodeChunkChars);
-            var inputs = BuildUnicodeChunk(text, start, count, shiftEnter);
-
-            int delivered = SendWithRetry(inputs);
-            sent += delivered;
-
-            // The target stopped accepting input mid-stream even after retries; stop and let the caller
-            // report the partial send (the text.inject span is marked errored when sent != total).
-            if (delivered < inputs.Length)
-            {
-                // A truncated chunk can leave Shift logically down (the chord's release is its last
-                // event), which would turn anything the user types next into a shortcut. Same reason
-                // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
-                if (shiftEnter)
+                if (!IsExpectedForeground(expectedForegroundWindow))
                 {
-                    ReleaseShift();
+                    break;
                 }
 
-                break;
-            }
+                int count = ChunkLength(text, start, UnicodeChunkChars);
+                var inputs = BuildUnicodeChunk(text, start, count, shiftEnter);
 
-            start += count;
+                int delivered = SendWithRetry(inputs);
+                sent += delivered;
 
-            // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
-            if (start < text.Length)
-            {
-                Thread.Sleep(InterChunkSettleMs);
+                // The target stopped accepting input mid-stream even after retries; stop and let the caller
+                // report the partial send (the text.inject span is marked errored when sent != total).
+                if (delivered < inputs.Length)
+                {
+                    // A truncated chunk can leave Shift logically down (the chord's release is its last
+                    // event), which would turn anything the user types next into a shortcut. Same reason
+                    // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
+                    if (shiftEnter)
+                    {
+                        ReleaseShift();
+                    }
+
+                    break;
+                }
+
+                start += count;
+
+                // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
+                if (start < text.Length)
+                {
+                    Thread.Sleep(InterChunkSettleMs);
+                }
             }
+        }
+        catch when (ReleaseShiftOnFault(shiftEnter))
+        {
+            // Unreachable: the filter always returns false so the exception keeps propagating. The
+            // filter exists purely to run the Shift key-up first. Without it, a throw between the
+            // chord's key-down and key-up (SendWithRetry, or an allocation failure building a chunk)
+            // would leave Shift latched down for the user's next real keystroke, turning it into a
+            // shortcut. A filter is used rather than catch/rethrow so the original stack is untouched.
+            throw;
         }
 
         if (sent != total)
@@ -357,6 +369,28 @@ public sealed class TextInjector : ITextInjector
         {
             _logger.LogWarning("Releasing Shift after a partial Unicode chunk did not deliver.");
         }
+    }
+
+    /// <summary>
+    /// Exception-filter helper: releases Shift, then returns false so the exception keeps unwinding.
+    /// Swallowing a failure here is deliberate. This runs while another exception is already in
+    /// flight, and throwing from a filter would replace the real fault with a misleading one.
+    /// </summary>
+    private bool ReleaseShiftOnFault(bool shiftEnter)
+    {
+        if (shiftEnter)
+        {
+            try
+            {
+                ReleaseShift();
+            }
+            catch
+            {
+                // Nothing useful to do; the original exception is the one worth reporting.
+            }
+        }
+
+        return false;
     }
 
     // Two INPUT events (down/up) per UTF-16 code unit. Surrogate pairs are handled naturally because

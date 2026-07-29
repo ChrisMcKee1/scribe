@@ -64,7 +64,11 @@ bcl,BCL
 common intermediate language,Common Intermediate Language
 cil,CIL
 intermediate language,Intermediate Language
-il,IL
+# "il" and "di" are omitted deliberately. The bundled speech model covers 25 European languages,
+# and both are among the most common function words in Italian and French ("il est", "di nuovo"),
+# so a whole-word rule would rewrite ordinary sentences for those speakers. The spelled-out forms
+# below carry the acronym instead, and the model already capitalises these in an English context.
+i l,IL
 jit,JIT
 aot,AOT
 native aot,Native AOT
@@ -104,7 +108,8 @@ resharper,ReSharper
 jetbrains rider,JetBrains Rider
 #
 # --- Architecture acronyms ---
-di,DI
+# "di" is spelled out rather than bare: see the note above "i l".
+d i,DI
 ioc,IoC
 cqrs,CQRS
 ddd,DDD

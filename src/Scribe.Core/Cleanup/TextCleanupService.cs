@@ -1307,9 +1307,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             403 => $"Azure accepted the sign-in but denied access (403). {identity} can reach the resource " +
                    "yet is not authorized to call it. If you just assigned a role, wait about ten minutes: " +
                    "role assignments take longer to take effect than Azure documents. Otherwise assign " +
-                   "'Cognitive Services User' or 'Foundry User' (Foundry resource), or " +
-                   "'Cognitive Services OpenAI User' (Azure OpenAI account), on the resource that hosts " +
-                   "the deployment.",
+                   "'Foundry User' (Foundry resource, kind=AIServices) or 'Cognitive Services OpenAI User' " +
+                   "(Azure OpenAI account, kind=OpenAI) on the resource that hosts the deployment. Do not " +
+                   "use the 'Cognitive Services' roles on a Foundry resource; Microsoft does not support " +
+                   "them there even when they appear to work.",
 
             404 => $"Azure could not find the deployment '{deployment}' (404). The endpoint is reachable, so " +
                    "check that the deployment name matches exactly, including any suffix, and that it lives " +
@@ -1340,8 +1341,21 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// Digs the HTTP status out of the two exception shapes the Azure and OpenAI clients throw, including
     /// when either is wrapped by the Agent Framework. Returns 0 when the failure was not an HTTP response.
     /// </summary>
-    internal static int ExtractHttpStatus(Exception? ex)
+    internal static int ExtractHttpStatus(Exception? ex) => ExtractHttpStatus(ex, depth: 0);
+
+    // Depth-bounded because this runs on the failure path: an AggregateException whose inner list
+    // reaches back to an ancestor would recurse until the stack overflows, and a StackOverflowException
+    // cannot be caught, so a diagnostics helper would take the process down while reporting an error
+    // the user could otherwise have acted on. Real Azure exception chains are a handful deep.
+    private const int MaxStatusSearchDepth = 16;
+
+    private static int ExtractHttpStatus(Exception? ex, int depth)
     {
+        if (depth >= MaxStatusSearchDepth)
+        {
+            return 0;
+        }
+
         for (var current = ex; current is not null; current = current.InnerException)
         {
             switch (current)
@@ -1354,7 +1368,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                 {
                     foreach (var inner in aggregate.InnerExceptions)
                     {
-                        var nested = ExtractHttpStatus(inner);
+                        var nested = ExtractHttpStatus(inner, depth + 1);
                         if (nested != 0)
                         {
                             return nested;

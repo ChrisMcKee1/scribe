@@ -45,8 +45,24 @@ public sealed class AzureCleanupDiagnosticsTests
             Http(403), useKey: false, AzureAuthMode.ServicePrincipal, "gpt-5.6-terra");
 
         Assert.Contains("403", message, StringComparison.Ordinal);
-        Assert.Contains("Cognitive Services User", message, StringComparison.Ordinal);
+        Assert.Contains("Foundry User", message, StringComparison.Ordinal);
         Assert.DoesNotContain("az login", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Forbidden_does_not_recommend_a_cognitive_services_role_for_foundry()
+    {
+        // Microsoft states it verbatim: "Don't assign built-in roles that start with Cognitive
+        // Services... they don't apply to Foundry scenarios." Cognitive Services User currently still
+        // works against a Foundry endpoint, which is exactly why this message used to recommend it.
+        // Working is not the same as supported, and a 403 is where a user acts on this advice.
+        var message = TextCleanupService.DescribeAzureFailure(
+            Http(403), useKey: false, AzureAuthMode.ServicePrincipal, "gpt-5.6-terra");
+
+        Assert.DoesNotContain("'Cognitive Services User'", message, StringComparison.Ordinal);
+
+        // The OpenAI-account role is still correct for kind=OpenAI, so it must survive the ban.
+        Assert.Contains("Cognitive Services OpenAI User", message, StringComparison.Ordinal);
     }
 
     [Fact]

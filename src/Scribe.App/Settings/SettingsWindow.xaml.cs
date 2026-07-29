@@ -962,18 +962,55 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var cap = CleanupPrompt.MaxGlossaryTermsLocal;
-        if (enabled <= cap)
+        // The glossary the model actually receives is the merged list, not just this page's rows, and
+        // the enabled libraries alone can run to several hundred terms. Counting only personal entries
+        // reported "well under the cap" on a stock install that was in fact discarding most of the
+        // library. Mirror DictionaryLibraryComposer's de-duplication (trimmed, case-insensitive,
+        // personal first) so the number quoted here is the number that gets built.
+        var effective = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in _rows)
         {
-            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled.";
+            if (row.Enabled && !string.IsNullOrWhiteSpace(row.Pattern) &&
+                !string.IsNullOrWhiteSpace(row.Replacement))
+            {
+                effective.Add(row.Pattern.Trim());
+            }
+        }
+
+        var personalCount = effective.Count;
+        foreach (var library in _loadedLibraries)
+        {
+            if (!_libraryRows.Any(r => r.Enabled &&
+                    string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            foreach (var entry in library.EnabledEntries)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.Pattern))
+                {
+                    effective.Add(entry.Pattern.Trim());
+                }
+            }
+        }
+
+        var cap = CleanupPrompt.MaxGlossaryTermsLocal;
+        var libraryCount = effective.Count - personalCount;
+        var libraryNote = libraryCount > 0 ? $" plus {libraryCount:N0} from enabled libraries" : string.Empty;
+
+        if (effective.Count <= cap)
+        {
+            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled{libraryNote}.";
             return;
         }
 
         DictionaryGlossaryHint.Text =
-            $"{enabled:N0} of {total:N0} entries enabled. All of them are replaced locally. " +
-            $"On-device cleanup has a small context window, so only the first {cap:N0} are sent to it " +
-            $"as a glossary; {enabled - cap:N0} are not. Local replacement still covers them, and a " +
-            "cloud provider receives the full list.";
+            $"{enabled:N0} of {total:N0} entries enabled{libraryNote}. All of them are replaced locally. " +
+            $"On-device cleanup has a small context window, so only the first {cap:N0} of those " +
+            $"{effective.Count:N0} terms are sent to it as a glossary; {effective.Count - cap:N0} are not. " +
+            "Your own entries come first, so they always make the cut. Local replacement still covers " +
+            "the rest, and a cloud provider receives the full list.";
     }
 
     // --- Libraries -----------------------------------------------------------------------
