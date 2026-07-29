@@ -28,6 +28,24 @@ $script:ScribePeMachine = @{
     0x014C = 'anycpu'
 }
 
+function Get-ScribePeSectionNames {
+    param([Parameter(Mandatory)][System.IO.BinaryReader]$Reader, [int]$PeOffset)
+
+    $stream = $Reader.BaseStream
+    $stream.Position = $PeOffset + 6
+    $sectionCount = $Reader.ReadUInt16()
+    $stream.Position = $PeOffset + 20
+    $optionalHeaderSize = $Reader.ReadUInt16()
+
+    $names = [System.Collections.Generic.List[string]]::new()
+    $stream.Position = $PeOffset + 24 + $optionalHeaderSize
+    for ($i = 0; $i -lt $sectionCount -and ($stream.Position + 40) -le $stream.Length; $i++) {
+        $names.Add([System.Text.Encoding]::ASCII.GetString($Reader.ReadBytes(8)).TrimEnd([char]0))
+        $null = $Reader.ReadBytes(32)
+    }
+    return $names
+}
+
 function Get-ScribePeArchitecture {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -44,6 +62,18 @@ function Get-ScribePeArchitecture {
         if ($reader.ReadUInt32() -ne 0x00004550) { return 'unknown' }  # "PE\0\0"
 
         $machine = $reader.ReadUInt16()
+
+        # ARM64EC binaries carry IMAGE_FILE_MACHINE_ARM64 but are designed to load into an x64
+        # process, and the Windows App SDK ships an _ec variant inside its x64 package on purpose.
+        # They are identified by the .hexpthk entry-thunk section, which pure ARM64 images do not
+        # have (verified against this repo's own ARM64 WinUI output). Without this they would look
+        # like ARM64 leakage in a correct x64 payload.
+        if ($machine -eq 0xAA64) {
+            if ((Get-ScribePeSectionNames -Reader $reader -PeOffset $peOffset) -contains '.hexpthk') {
+                return 'arm64ec'
+            }
+        }
+
         if ($script:ScribePeMachine.ContainsKey([int]$machine)) {
             return $script:ScribePeMachine[[int]$machine]
         }
@@ -68,11 +98,12 @@ function Test-ScribePayloadArchitecture {
 
     $offenders = [System.Collections.Generic.List[string]]::new()
     foreach ($file in Get-ChildItem $PublishDir -Recurse -File -Include *.exe, *.dll) {
-        # anycpu/unknown are not architecture violations: managed assemblies are architecture
-        # neutral, and data files that happen to end in .dll are not our problem. Note this means
-        # a 32-bit x86 native would slip through, because it shares machine 0x014C with managed
-        # assemblies; nothing in the dependency graph ships one, and the Scribe.exe check below
-        # would still catch a wholesale wrong-architecture publish.
+        # Only the opposite architecture is a violation. anycpu/unknown are not: managed assemblies
+        # are architecture neutral, and data files that happen to end in .dll are not our problem.
+        # Note this means a 32-bit x86 native would slip through, because it shares machine 0x014C
+        # with managed assemblies; nothing in the dependency graph ships one, and the Scribe.exe
+        # check below would still catch a wholesale wrong-architecture publish. arm64ec is excluded
+        # by Get-ScribePeArchitecture because it is the designed x64-interop form, not leakage.
         if ((Get-ScribePeArchitecture -Path $file.FullName) -eq $wrong) {
             $offenders.Add($file.FullName.Substring($PublishDir.Length).TrimStart('\', '/'))
         }
