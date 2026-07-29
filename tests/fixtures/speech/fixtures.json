@@ -1,0 +1,18 @@
+{
+  "greeting": {
+    "text": "Hello, this is a test of the Scribe dictation system.",
+    "file": "greeting.wav"
+  },
+  "pangram": {
+    "text": "The quick brown fox jumps over the lazy dog.",
+    "file": "pangram.wav"
+  },
+  "sentence": {
+    "text": "Please send the report to the team before Friday afternoon.",
+    "file": "sentence.wav"
+  },
+  "longer": {
+    "text": "The engineer opened the laptop, checked the microphone, and started dictating a message.",
+    "file": "longer.wav"
+  }
+}

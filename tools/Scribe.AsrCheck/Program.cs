@@ -48,7 +48,7 @@ internal static class Program
     {
         var repoRoot = FindRepoRoot();
         var fixtureDir = ArgValue(args, "--fixtures")
-            ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "artifacts", "asr-fixtures");
+            ?? Path.Combine(repoRoot ?? AppContext.BaseDirectory, "tests", "fixtures", "speech");
 
         Console.OutputEncoding = Encoding.UTF8;
         Console.WriteLine("Scribe ASR check");
@@ -60,7 +60,7 @@ internal static class Program
         var fixtures = LoadFixtures(fixtureDir);
         if (fixtures.Count == 0)
         {
-            Console.Error.WriteLine("No fixtures found. Run scripts/New-SpeechFixtures.ps1 first.");
+            Console.Error.WriteLine("No fixtures found. They are committed under tests/fixtures/speech; run scripts/New-SpeechFixtures.ps1 to regenerate them.");
             return 2;
         }
 

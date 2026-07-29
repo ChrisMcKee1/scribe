@@ -76,11 +76,9 @@ jobs:
         run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release --nologo
 
       # The unit tests never touch the native recogniser, so this is the only step that proves
-      # sherpa-onnx and its ONNX Runtime actually load and decode on this architecture.
-      - name: Generate speech fixtures
-        shell: pwsh
-        run: ./scripts/New-SpeechFixtures.ps1
-
+      # sherpa-onnx and its ONNX Runtime actually load and decode on this architecture. The speech
+      # fixtures are committed rather than generated here: SAPI fails with 0x8004503A on the
+      # headless x64 and Arm64 runners, and the audio stack is not something CI should depend on.
       - name: Transcribe fixtures through the real pipeline
         shell: pwsh
         run: dotnet run --project tools/Scribe.AsrCheck -c Release

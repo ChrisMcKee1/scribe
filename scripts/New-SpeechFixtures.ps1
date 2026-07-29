@@ -1,12 +1,16 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    Generates spoken-audio fixtures for the ASR smoke test using the Windows speech engine.
+    Regenerates the spoken-audio fixtures used by the ASR smoke test.
 
 .DESCRIPTION
-    The ASR check needs real speech, and committing WAV files would put binary blobs in the repo
-    that are awkward to review and version. Windows already ships a text-to-speech engine (SAPI) on
-    every SKU including Arm64, so the fixtures are synthesised at test time instead.
+    The ASR check needs real speech. These fixtures are generated once and COMMITTED under
+    tests/fixtures/speech, rather than produced on demand, because the Windows speech engine is not
+    usable on a headless CI runner: SAPI fails with 0x8004503A on both the x64 and Arm64 GitHub
+    runners after successfully enumerating a voice, and the audio stack is not something the build
+    should depend on. Committed WAVs also make the check deterministic across machines.
+
+    Run this only to add or change a phrase, then commit the result.
 
     SAPI is used through COM rather than the System.Speech managed assembly, because that assembly
     is .NET Framework only and is not loadable from PowerShell 7.
@@ -15,11 +19,11 @@
     fixtures exercise the same code path as a real recording with no resampling in between.
 
 .EXAMPLE
-    ./scripts/New-SpeechFixtures.ps1 -OutputDir artifacts/asr-fixtures
+    ./scripts/New-SpeechFixtures.ps1
 #>
 [CmdletBinding()]
 param(
-    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/asr-fixtures')
+    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'tests/fixtures/speech')
 )
 
 $ErrorActionPreference = 'Stop'
