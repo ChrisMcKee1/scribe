@@ -20,6 +20,7 @@ internal static class NeuralAcceleratorProbe
     private const uint DigcfPresent = 0x00000002;
     private const uint SpdrpDeviceDesc = 0x00000000;
     private const uint SpdrpFriendlyName = 0x0000000C;
+    private const uint MaxPropertyBytes = 8192;
     private static readonly IntPtr InvalidHandle = new(-1);
 
     public static IReadOnlyList<NeuralAccelerator> Enumerate()
@@ -87,7 +88,11 @@ internal static class NeuralAcceleratorProbe
     private static string? ReadProperty(IntPtr set, ref SpDevInfoData info, uint property)
     {
         SetupDiGetDeviceRegistryPropertyW(set, ref info, property, out _, null, 0, out var required);
-        if (required == 0 || required > 8192)
+
+        // A device name is a short REG_SZ. The cap is a sanity bound on a value the driver
+        // controls, not an API limit: anything larger is not a name we would want to display, and
+        // refusing it keeps a malformed property from driving a large allocation.
+        if (required == 0 || required > MaxPropertyBytes)
         {
             return null;
         }

@@ -9,6 +9,12 @@ namespace Scribe.AsrCheck;
 /// </summary>
 internal static class WavReader
 {
+    private const ushort PcmFormat = 1;
+
+    // Fixtures are a few seconds of 16 kHz mono, so a couple of hundred KB. 64 MB is far beyond
+    // anything legitimate here while staying well clear of int overflow on the cast to ReadBytes.
+    private const uint MaxChunkBytes = 64u * 1024 * 1024;
+
     public static float[] ReadMonoFloat(string path, out int sampleRate)
     {
         using var stream = File.OpenRead(path);
@@ -29,21 +35,35 @@ internal static class WavReader
             var chunkId = ReadFourCc(reader);
             var chunkSize = reader.ReadUInt32();
 
-            // A corrupt size must not turn into a huge allocation or a negative int cast.
-            if (chunkSize > stream.Length - stream.Position)
+            // A corrupt size must not turn into a huge allocation. The cast to int below is safe
+            // because chunkSize is bounded by the remaining file length, and a fixture that large
+            // is itself nonsense, so cap it well under int.MaxValue rather than reasoning about
+            // 2 GB WAV files we will never produce.
+            if (chunkSize > stream.Length - stream.Position || chunkSize > MaxChunkBytes)
             {
-                throw new InvalidDataException($"{path} declares a {chunkId} chunk of {chunkSize} bytes past the end of the file.");
+                throw new InvalidDataException($"{path} declares a {chunkId} chunk of {chunkSize} bytes, which is past the end of the file or implausibly large.");
             }
 
             if (chunkId == "fmt ")
             {
-                reader.ReadUInt16(); // audio format
+                // The canonical PCM fmt chunk is 16 bytes; anything shorter cannot hold the fields
+                // read below and would desynchronise the walk into the next chunk.
+                if (chunkSize < 16) throw new InvalidDataException($"{path} has a {chunkSize}-byte fmt chunk; expected at least 16.");
+
+                var audioFormat = reader.ReadUInt16();
                 channels = reader.ReadInt16();
                 sampleRate = reader.ReadInt32();
                 reader.ReadUInt32(); // byte rate
                 reader.ReadUInt16(); // block align
                 bitsPerSample = reader.ReadInt16();
                 if (chunkSize > 16) stream.Position += chunkSize - 16;
+
+                // 1 = WAVE_FORMAT_PCM. Without this, a 16-bit float or A-law file would be read as
+                // signed PCM and decode to noise rather than failing.
+                if (audioFormat != PcmFormat)
+                {
+                    throw new InvalidDataException($"{path} uses audio format {audioFormat}; expected PCM ({PcmFormat}).");
+                }
             }
             else if (chunkId == "data")
             {

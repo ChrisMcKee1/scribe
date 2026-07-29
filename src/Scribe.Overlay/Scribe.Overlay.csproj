@@ -8,7 +8,9 @@
 
        WinUI tooling requires an explicit Platform (it has no AnyCPU story), so both x64 and ARM64
        are declared and the caller selects one with -p:Platform=. RuntimeIdentifier is derived from
-       Platform below so a build can never pair an ARM64 Platform with an x64 native payload. -->
+       Platform below so the normal build paths cannot pair an ARM64 Platform with an x64 native
+       payload. An explicit -p:RuntimeIdentifier= on the command line is a global property and
+       still overrides this, so pack-time payload verification remains the real guarantee. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
@@ -30,6 +32,8 @@
     <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
   </PropertyGroup>
 
+  <!-- Anything not ARM64 builds x64. Platforms above constrains what the SDK will accept, so this
+       is the x64 branch rather than a silent catch-all for a typo'd Platform value. -->
   <PropertyGroup Condition="'$(Platform)' != 'ARM64'">
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>

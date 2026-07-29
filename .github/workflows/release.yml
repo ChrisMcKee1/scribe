@@ -70,20 +70,31 @@ jobs:
 
           New-Item -ItemType Directory -Path releases -Force | Out-Null
           # Per channel, because each architecture builds its delta against its own history. A
-          # channel with no prior full package simply packs a full release, which is the expected
-          # path the first time an architecture ships, so a miss here is reported and not fatal.
+          # channel with no prior full package packs as a full release instead, which is the
+          # expected path the first time an architecture ships.
+          #
+          # Only that specific case is tolerated: an auth, network or API failure must still fail
+          # the job rather than silently shipping without a delta, so the miss is confirmed by
+          # asking whether the asset actually exists before swallowing the error.
           foreach ($channel in 'win-x64', 'win-arm64') {
               gh release download $previous.tagName `
                   --repo "${{ github.repository }}" `
                   --pattern "Scribe-*-$channel-full.nupkg" `
                   --dir releases
               if ($LASTEXITCODE -ne 0) {
+                  $global:LASTEXITCODE = 0
+                  $assets = gh release view $previous.tagName `
+                      --repo "${{ github.repository }}" `
+                      --json assets --jq '.assets[].name' 2>$null
+                  if ($LASTEXITCODE -ne 0) {
+                      throw "Could not inspect release $($previous.tagName) to confirm why the $channel download failed."
+                  }
+                  if ($assets -match "-$channel-full\.nupkg$") {
+                      throw "The $channel full package exists in $($previous.tagName) but could not be downloaded."
+                  }
                   Write-Host "No $channel package in $($previous.tagName); it will pack as a full release."
               }
           }
-          # gh sets a non-zero exit code for an empty pattern match, and the Actions pwsh shim exits
-          # with whatever LASTEXITCODE holds, so clear it after a tolerated miss.
-          $global:LASTEXITCODE = 0
 
       - name: Build release artifacts
         shell: pwsh

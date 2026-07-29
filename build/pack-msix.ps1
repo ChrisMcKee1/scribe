@@ -94,6 +94,13 @@ if ([string]::IsNullOrWhiteSpace($publisherDisplay)) {
 Write-Host "==> Scribe MSIX  v$msixVersion  ($Configuration)  architectures: $(($targets.Msix) -join ', ')" -ForegroundColor Cyan
 Write-Host "==> Identity: $IdentityName | Publisher: $Publisher | Publisher display: $publisherDisplay" -ForegroundColor Cyan
 
+# Drop any previous bundle for this version before building anything. Otherwise a run where x64
+# packs and arm64 then fails leaves the PREVIOUS run's bundle sitting beside fresh
+# single-architecture packages, where it still looks like a valid submission artifact despite no
+# longer matching what was just built.
+$bundlePath = Join-Path $outputDir "Scribe-$Version.msixbundle"
+if (Test-Path $bundlePath) { Remove-Item $bundlePath -Force }
+
 . (Join-Path $repoRoot 'scripts/Model-Manifest.ps1')
 . (Join-Path $repoRoot 'scripts/Payload-Architecture.ps1')
 
@@ -277,9 +284,6 @@ if ($packages.Count -gt 1) {
     if (Test-Path $bundleInput) { Remove-Item $bundleInput -Recurse -Force }
     New-Item -ItemType Directory -Path $bundleInput -Force | Out-Null
     foreach ($package in $packages) { Copy-Item $package $bundleInput }
-
-    $bundlePath = Join-Path $outputDir "Scribe-$Version.msixbundle"
-    if (Test-Path $bundlePath) { Remove-Item $bundlePath -Force }
 
     Write-Host '==> makeappx bundle...' -ForegroundColor Cyan
     & $makeAppx bundle /d $bundleInput /p $bundlePath /bv $msixVersion /o

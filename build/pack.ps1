@@ -178,6 +178,9 @@ function Invoke-ScribeArchitecture {
         '--mainExe', $mainExe,
         '--outputDir', $releaseDir,
         '--channel', $Runtime,
+        # Declare the target RID explicitly rather than letting vpk infer it from the build host:
+        # packing arm64 on an x64 runner (which is what CI does) must not stamp the release as x64.
+        '--runtime', $Runtime,
         # Brand the installer and the Add/Remove Programs entry. Without an explicit icon vpk ships a
         # generic Setup.exe, and the publisher falls back to the pack id instead of the real author.
         '--icon', $brandIcon,

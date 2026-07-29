@@ -24,6 +24,12 @@
     <ScribeNativeRid Condition="'$(ScribeNativeRid)' == ''">win-x64</ScribeNativeRid>
   </PropertyGroup>
 
+  <!-- Fails an unsupported RID with a clear message instead of quietly selecting no native package
+       and failing later with a missing-DLL error at runtime.
+       Scope note: this fires on build and publish, NOT on `dotnet restore -r <bad-rid>`. Restore
+       evaluates an isolated target graph that does not run project targets, so a bad-RID restore
+       still succeeds and the error surfaces on the following build. That is acceptable because
+       nothing ships from a restore; do not assume restore is validated. -->
   <Target Name="ScribeValidateNativeRid" BeforeTargets="ResolvePackageAssets">
     <Error Condition="'$(ScribeNativeRid)' != 'win-x64' and '$(ScribeNativeRid)' != 'win-arm64'"
            Text="Scribe supports win-x64 and win-arm64 only; the speech engine has no native runtime for '$(ScribeNativeRid)'." />

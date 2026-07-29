@@ -19,10 +19,13 @@
 #>
 
 # PE COFF machine constants (winnt.h IMAGE_FILE_MACHINE_*).
+# 0x014C (i386) is reported both by 32-bit x86 natives and by architecture-neutral managed
+# assemblies, so it is treated as "not an architecture violation" rather than "verified"; the
+# distinction needs the CLI header, which is more machinery than this check warrants.
 $script:ScribePeMachine = @{
     0x8664 = 'x64'
     0xAA64 = 'arm64'
-    0x014C = 'anycpu'   # managed assemblies and x86 natives both report i386 here
+    0x014C = 'anycpu'
 }
 
 function Get-ScribePeArchitecture {
@@ -66,7 +69,10 @@ function Test-ScribePayloadArchitecture {
     $offenders = [System.Collections.Generic.List[string]]::new()
     foreach ($file in Get-ChildItem $PublishDir -Recurse -File -Include *.exe, *.dll) {
         # anycpu/unknown are not architecture violations: managed assemblies are architecture
-        # neutral, and data files that happen to end in .dll are not our problem.
+        # neutral, and data files that happen to end in .dll are not our problem. Note this means
+        # a 32-bit x86 native would slip through, because it shares machine 0x014C with managed
+        # assemblies; nothing in the dependency graph ships one, and the Scribe.exe check below
+        # would still catch a wholesale wrong-architecture publish.
         if ((Get-ScribePeArchitecture -Path $file.FullName) -eq $wrong) {
             $offenders.Add($file.FullName.Substring($PublishDir.Length).TrimStart('\', '/'))
         }
