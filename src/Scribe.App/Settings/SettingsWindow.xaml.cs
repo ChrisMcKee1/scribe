@@ -3729,7 +3729,51 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    /// <summary>
+    /// Offers a blank profile or one of the built-in templates. Templates are added on request
+    /// rather than seeded on upgrade, so an existing user's dictation formatting never changes
+    /// without them asking. Presented as a menu on the existing Add button rather than a second
+    /// button, because the profile list column is too narrow for three.
+    /// </summary>
     private void ProfileAddButton_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = ProfileAddButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Top,
+        };
+
+        var blank = new MenuItem { Header = "Blank profile" };
+        blank.Click += (_, _) => AddBlankProfile();
+        menu.Items.Add(blank);
+        menu.Items.Add(new Separator());
+
+        foreach (var preset in ProfilePresets.All)
+        {
+            var existing = FindProfileRow(preset.Profile.Name);
+            var item = new MenuItem
+            {
+                Header = preset.Profile.Name,
+                ToolTip = preset.Description,
+
+                // Adding the same template twice is never useful: matching is first-wins, so the
+                // second copy would list the same processes and never apply. Point at the one
+                // already there instead.
+                IsEnabled = existing is null,
+            };
+
+            if (existing is null)
+            {
+                item.Click += (_, _) => AddPresetProfile(preset);
+            }
+
+            menu.Items.Add(item);
+        }
+
+        menu.IsOpen = true;
+    }
+
+    private void AddBlankProfile()
     {
         var row = new ProfileRow { Name = "New profile" };
         _profileRows.Add(row);
@@ -3738,6 +3782,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ProfileNameBox.Focus();
         ProfileNameBox.SelectAll();
     }
+
+    private void AddPresetProfile(ProfilePresets.Preset preset)
+    {
+        var profile = ProfilePresets.Instantiate(preset);
+        var row = new ProfileRow
+        {
+            Name = profile.Name,
+            Processes = string.Join(", ", profile.ProcessNames),
+            WritingStyle = profile.WritingStyle ?? string.Empty,
+            NewlineHandling = profile.NewlineHandling,
+        };
+
+        _profileRows.Add(row);
+        ProfileList.SelectedItem = row;
+        ProfileList.ScrollIntoView(row);
+    }
+
+    private ProfileRow? FindProfileRow(string name) =>
+        _profileRows.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase));
 
     private void ProfileDeleteButton_Click(object sender, RoutedEventArgs e)
     {

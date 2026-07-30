@@ -19,8 +19,18 @@ public sealed class VadService : IVadService
     private const float MinSpeechSeconds = 0.25f;
     private const float MaxSpeechSeconds = 20f;
 
-    // The detector's internal circular buffer; captures longer than this skip trimming.
-    private const float BufferSeconds = 60f;
+    // Sizes the detector's internal circular buffer. It bounds only the audio held between drains,
+    // NOT the total capture length: Trim drains after every window, so the detector never retains
+    // more than the segment currently in flight. Measured across 30 real captures of 57-250 s the
+    // high-water mark was 30.9 s (bounded by MaxSpeechSeconds plus the silence lookahead), so 60 s
+    // is roughly double the worst case observed. Overrunning it is not fatal either — sherpa-onnx
+    // grows the buffer and copies the existing data rather than dropping any.
+    //
+    // This was previously also used to SKIP trimming for captures longer than 60 s, which meant the
+    // captures most likely to hurt (the recogniser degrades on long buffers) were the only ones
+    // that kept all of their leading and trailing silence. Segment offsets are absolute and proved
+    // identical at 25 s, 60 s and whole-capture buffer sizes, so no such cap is warranted.
+    private const float DetectorBufferSeconds = 60f;
 
     private readonly ModelLocator _locator;
     private readonly ILogger<VadService> _logger;
@@ -77,7 +87,7 @@ public sealed class VadService : IVadService
             config.Provider = "cpu";
 
             var sw = Stopwatch.StartNew();
-            _vad = new VoiceActivityDetector(config, BufferSeconds);
+            _vad = new VoiceActivityDetector(config, DetectorBufferSeconds);
             _windowSize = config.SileroVad.WindowSize;
             sw.Stop();
 
@@ -100,7 +110,6 @@ public sealed class VadService : IVadService
         {
             if (!_available || _vad is null) return audio;          // model unavailable: pass through
             if (audio.SampleRate != RequiredSampleRate) return audio; // VAD model expects 16 kHz
-            if (audio.Duration.TotalSeconds > BufferSeconds) return audio; // too long to buffer safely
 
             var samples = audio.Samples;
             _vad.Reset();

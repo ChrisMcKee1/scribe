@@ -49,8 +49,8 @@ public sealed class HotkeyService : IHotkeyService
     private Timer? _watchdog;
     private uint _hookThreadId;
     private nint _hookId;
-    private long _lastCallbackTick;
-    private long _lastProbeTick;
+    private long _hookCallbackCount;
+    private readonly HookLivenessProbe _livenessProbe = new();
 
     public HotkeyService(ILogger<HotkeyService> logger)
     {
@@ -125,8 +125,8 @@ public sealed class HotkeyService : IHotkeyService
             // Windows silently removes a low-level hook whose callback misses the OS deadline
             // (documented: no notification of any kind). The watchdog probes liveness so a long
             // GC pause during ASR decode cannot permanently kill push-to-talk.
-            _lastCallbackTick = Environment.TickCount64;
-            _lastProbeTick = 0;
+            _hookCallbackCount = 0;
+            _livenessProbe.Disarm();
             _watchdog = new Timer(_ => WatchdogTick(), null, WatchdogPeriod, WatchdogPeriod);
 
             IsRunning = true;
@@ -309,9 +309,9 @@ public sealed class HotkeyService : IHotkeyService
 
     private nint HookCallback(int nCode, nint wParam, nint lParam)
     {
-        // The watchdog's liveness signal. Written before any filtering so the synthetic probe
+        // The watchdog's liveness signal. Incremented before any filtering so the synthetic probe
         // (which is marker-tagged and skipped below) still proves the hook is installed.
-        Volatile.Write(ref _lastCallbackTick, Environment.TickCount64);
+        Interlocked.Increment(ref _hookCallbackCount);
 
         if (nCode < 0)
         {
@@ -501,10 +501,10 @@ public sealed class HotkeyService : IHotkeyService
     });
 
     // Probe-based liveness: a marker-tagged key-up for the unassigned VK 0xFF is inert for every
-    // app but still traverses the hook. If the probe sent on the PREVIOUS tick never produced a
-    // callback, Windows silently removed the hook (documented behavior after a deadline miss) and
-    // push-to-talk is dead until it is reinstalled. Mouse-only activity cannot false-positive this
-    // check because the probe itself is keyboard input.
+    // app but still traverses the hook. If nothing at all reached the callback since the PREVIOUS
+    // probe was armed, Windows silently removed the hook (documented behavior after a deadline
+    // miss) and push-to-talk is dead until it is reinstalled. Mouse-only activity cannot
+    // false-positive this check because the probe itself is keyboard input.
     private void WatchdogTick()
     {
         try
@@ -522,13 +522,11 @@ public sealed class HotkeyService : IHotkeyService
                 // interactive desktop is back.
                 if (!NativeMethods.CanAccessInputDesktop())
                 {
-                    _lastProbeTick = 0;
+                    _livenessProbe.Disarm();
                     return;
                 }
 
-                var lastProbe = _lastProbeTick;
-                var lastCallback = Volatile.Read(ref _lastCallbackTick);
-                if (lastProbe != 0 && lastCallback < lastProbe)
+                if (_livenessProbe.IsHookDead(Interlocked.Read(ref _hookCallbackCount)))
                 {
                     _logger.LogWarning(
                         "The keyboard hook stopped receiving events (Windows removes low-level " +
@@ -536,11 +534,15 @@ public sealed class HotkeyService : IHotkeyService
                     ReinstallHookLocked();
                 }
 
+                // Baseline BEFORE sending. Injected input is dispatched into the hook chain while
+                // SendInput is still running, so a baseline taken afterwards would already include
+                // the callback this probe caused and the probe could never be answered.
+                _livenessProbe.Baseline(Interlocked.Read(ref _hookCallbackCount));
+
                 // Arm the next check only when the probe actually left the building; a rejected
                 // SendInput (UIPI, desktop switch mid-tick) must not read as a dead hook.
-                _lastProbeTick = NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true)
-                    ? Environment.TickCount64
-                    : 0;
+                _livenessProbe.Arm(
+                    NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true));
             }
         }
         catch (Exception ex)
@@ -553,6 +555,11 @@ public sealed class HotkeyService : IHotkeyService
     // and chord state survive. Callers hold _sync.
     private void ReinstallHookLocked()
     {
+        // A probe armed against the hook we are about to destroy must never be judged against its
+        // replacement: the new hook has raised no callbacks yet and would look dead on the next
+        // tick, reinstalling again in a loop.
+        _livenessProbe.Disarm();
+
         if (_hookThreadId != 0)
         {
             NativeMethods.PostThreadMessage(_hookThreadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);

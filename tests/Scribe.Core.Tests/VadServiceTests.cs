@@ -69,6 +69,44 @@ public sealed class VadServiceTests
             "Expected the bulk of the speech to be retained.");
     }
 
+    /// <summary>
+    /// The regression this release fixes. Trimming used to be skipped entirely above a 60 s
+    /// capture, so the long recordings that the recogniser handles worst were the only ones that
+    /// kept all of their silence. A capture well past that limit must now be trimmed like any
+    /// other, and the speech must survive intact.
+    /// </summary>
+    [Fact]
+    public void Trim_still_trims_captures_longer_than_the_detector_buffer_hint()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        var models = locator.Resolve();
+        if (!models.VadAvailable) return;
+
+        var wav = Path.Combine(models.Directory, "test_wavs", "en.wav");
+        if (!File.Exists(wav)) return;
+
+        var speech = LoadResampled16kMono(wav);
+        if (speech.Length == 0) return;
+
+        // 40 s of silence, the speech, then 40 s more: 80 s of padding puts the capture far past
+        // the old 60 s cut-off, which would previously have returned it untouched.
+        var pad = new float[RequiredSampleRate(40)];
+        var padded = new float[pad.Length + speech.Length + pad.Length];
+        Array.Copy(speech, 0, padded, pad.Length, speech.Length);
+
+        using var vad = new VadService(locator, NullLogger<VadService>.Instance);
+        var audio = new CapturedAudio(padded, 16000);
+        var result = vad.Trim(audio);
+
+        Assert.True(audio.Duration.TotalSeconds > 60, "Fixture must exceed the old bypass threshold.");
+        Assert.NotSame(audio, result);
+        Assert.False(result.IsEmpty);
+        Assert.True(result.Samples.Length < padded.Length / 2,
+            "Expected the 80 s of padding silence to be trimmed away.");
+        Assert.True(result.Samples.Length >= speech.Length / 2,
+            "Expected the bulk of the speech to be retained.");
+    }
+
     private static int RequiredSampleRate(int seconds) => 16000 * seconds;
 
     private static float[] LoadResampled16kMono(string wavPath)
