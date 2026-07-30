@@ -167,11 +167,14 @@ function New-ScribeMsix {
     if (-not $SkipPublish) {
         if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
         Write-Host "==> dotnet publish (self-contained, $Runtime)..." -ForegroundColor Cyan
-        dotnet publish $appProj -c $Configuration -r $Runtime --self-contained true -p:Version=$Version -o $publishDir
+        # Out-Host, not the pipeline: this function returns the package path, and anything an
+        # external command writes to stdout would otherwise be returned alongside it and end up
+        # being treated as a package to bundle.
+        dotnet publish $appProj -c $Configuration -r $Runtime --self-contained true -p:Version=$Version -o $publishDir | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $Runtime." }
 
         Write-Host "==> dotnet publish overlay (self-contained WinUI 3, $OverlayPlatform)..." -ForegroundColor Cyan
-        dotnet publish $overlayProj -c $Configuration -r $Runtime --self-contained true -p:Platform=$OverlayPlatform -p:Version=$Version -o (Join-Path $publishDir 'Overlay')
+        dotnet publish $overlayProj -c $Configuration -r $Runtime --self-contained true -p:Platform=$OverlayPlatform -p:Version=$Version -o (Join-Path $publishDir 'Overlay') | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "dotnet publish (overlay) failed for $Runtime." }
     }
 
@@ -262,7 +265,7 @@ function New-ScribeMsix {
     if (Test-Path $msixPath) { Remove-Item $msixPath -Force }
 
     Write-Host "==> makeappx pack ($MsixArchitecture)..." -ForegroundColor Cyan
-    & $makeAppx pack /d $stageDir /p $msixPath /o
+    & $makeAppx pack /d $stageDir /p $msixPath /o | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "makeappx pack failed for $Runtime." }
 
     $size = [Math]::Round((Get-Item $msixPath).Length / 1MB, 1)
@@ -273,6 +276,17 @@ function New-ScribeMsix {
 $packages = @(foreach ($target in $targets) {
     New-ScribeMsix -Runtime $target.Runtime -MsixArchitecture $target.Msix -OverlayPlatform $target.OverlayPlatform
 })
+
+# Fail loudly rather than handing makeappx something that is not a package. Stray stdout from a
+# build tool leaking into this list once produced a confusing "cannot find path" mid-bundle.
+foreach ($package in $packages) {
+    if (-not (Test-Path -LiteralPath $package -PathType Leaf) -or [IO.Path]::GetExtension($package) -ne '.msix') {
+        throw "Expected only .msix paths from the packaging step but got: $package"
+    }
+}
+if ($packages.Count -ne $targets.Count) {
+    throw "Expected $($targets.Count) package(s) but produced $($packages.Count)."
+}
 
 # --- 6. Bundle both architectures for a single Store submission ------------------------------------
 # Partner Center takes one bundle that serves every device, rather than a submission per
