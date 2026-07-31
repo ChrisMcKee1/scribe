@@ -498,6 +498,7 @@ public partial class App : Application
             services.GetRequiredService<ILogger<SettingsWindow>>(),
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ITranscriptionModelInstaller>(),
+            services.GetRequiredService<AppPaths>(),
             position => _overlay?.Preview(position),
             settings =>
             {

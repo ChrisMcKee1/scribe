@@ -1941,6 +1941,61 @@
                                     </Grid>
                                 </ui:Card>
 
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Where your data is stored" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
+                                                   Text="Scribe keeps its local data files in these locations. Copy a path to paste it elsewhere, or open the folder."/>
+
+                                        <TextBlock Text="Diagnostic logs" Style="{StaticResource SettingTitle}"
+                                                   FontSize="13" Margin="0,16,0,0"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                   Text="One file per day, recording app events, timings and errors. Logs are not designed to hold your audio or complete transcripts, but they do record the name of the focused app, your audio device, any endpoints you configured, and error details. Read one before sharing it."/>
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="AboutLogsPathBox" Grid.Column="0" IsReadOnly="True"
+                                                        Margin="0,0,8,0" VerticalContentAlignment="Center"
+                                                        FontFamily="Consolas"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <ui:Button x:Name="AboutCopyLogsButton" Content="Copy" MinWidth="76"
+                                                           Margin="0,0,8,0" Click="AboutCopyLogsPath_Click"
+                                                           ToolTip="Copy this path to the clipboard."/>
+                                                <ui:Button Content="Open" MinWidth="76"
+                                                           Click="AboutOpenLogsFolder_Click"
+                                                           ToolTip="Open this folder in File Explorer."/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <TextBlock Text="Scribe data file" Style="{StaticResource SettingTitle}"
+                                                   FontSize="13" Margin="0,18,0,0"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
+                                                   Text="One database holding your dictation history, dictionary, snippets, profiles and settings, plus stored audio. Turning off &quot;Keep audio with history&quot; stops new audio being saved; audio already saved stays until you delete those history entries."/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                                   Text="Never send or post this file. It contains everything you have dictated, and your saved API keys. To clear dictations use the History page instead, because deleting this file also erases your dictionary, snippets, profiles and settings."/>
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="AboutDatabasePathBox" Grid.Column="0" IsReadOnly="True"
+                                                        Margin="0,0,8,0" VerticalContentAlignment="Center"
+                                                        FontFamily="Consolas"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <ui:Button x:Name="AboutCopyDatabaseButton" Content="Copy" MinWidth="76"
+                                                           Margin="0,0,8,0" Click="AboutCopyDatabasePath_Click"
+                                                           ToolTip="Copy this path to the clipboard."/>
+                                                <ui:Button Content="Open" MinWidth="76"
+                                                           Click="AboutOpenDataFolder_Click"
+                                                           ToolTip="Open the containing folder in File Explorer."/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+
                                 <TextBlock Text="Scribe is open source under the MIT License."
                                            Style="{StaticResource SettingHint}" Margin="2,2,0,0"/>
                             </StackPanel>

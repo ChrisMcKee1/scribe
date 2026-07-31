@@ -17,6 +17,7 @@ using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -49,6 +50,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly AzureCliInstaller _azureCliInstaller;
     private readonly ICleanupFailureLog _failureLog;
     private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
+    private readonly AppPaths _paths;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action<bool> _setHotkeyCaptureMode;
@@ -112,6 +114,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ILogger<SettingsWindow> log,
         ICleanupFailureLog failureLog,
         ITranscriptionModelInstaller transcriptionModelInstaller,
+        AppPaths paths,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action<bool>? setHotkeyCaptureMode = null,
@@ -128,6 +131,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _azureCliInstaller = azureCliInstaller;
         _failureLog = failureLog;
         _transcriptionModelInstaller = transcriptionModelInstaller;
+        _paths = paths;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
@@ -169,6 +173,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
+        AboutLogsPathBox.Text = _paths.LogsDir;
+        AboutDatabasePathBox.Text = _paths.DatabasePath;
     }
 
     // --- Updates card (General) --------------------------------------------------------------
@@ -2386,6 +2392,70 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void GitHubSourceButton_Click(object sender, RoutedEventArgs e) =>
         OpenExternalLink(RepositoryUrl, "Could not open the Scribe source code.");
+
+    // --- About: where your data lives --------------------------------------------------------
+    // The paths come from AppPaths, the same object every writer uses, so what is shown here can
+    // never drift from where the files actually are. A portable profile (SCRIBE_DATA_DIR) or a
+    // Store install both resolve correctly for free.
+
+    private void AboutCopyLogsPath_Click(object sender, RoutedEventArgs e) =>
+        CopyPathToClipboard(_paths.LogsDir, "log folder path");
+
+    private void AboutCopyDatabasePath_Click(object sender, RoutedEventArgs e) =>
+        CopyPathToClipboard(_paths.DatabasePath, "data file path");
+
+    private void AboutOpenLogsFolder_Click(object sender, RoutedEventArgs e) =>
+        OpenFolder(_paths.LogsDir);
+
+    // Opens the containing folder rather than selecting scribe.db. Selecting a file invites
+    // dragging it straight into an email or issue, and that file holds every dictation the user
+    // has ever made plus their saved API keys.
+    private void AboutOpenDataFolder_Click(object sender, RoutedEventArgs e) =>
+        OpenFolder(_paths.RootDir);
+
+    private void CopyPathToClipboard(string path, string label)
+    {
+        try
+        {
+            Clipboard.SetText(path);
+            ShowInfo($"Copied the {label}.");
+        }
+        catch (Exception ex)
+        {
+            // Another process can hold the clipboard open; that is not worth a crash.
+            TryLog(ex, "Could not copy a path to the clipboard.");
+            ShowInfo($"Couldn't copy the {label}: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
+    }
+
+    /// <summary>
+    /// Opens a folder in File Explorer. The folder is never created: these directories are made at
+    /// startup by <see cref="AppPaths.EnsureCreated"/>, so if one is genuinely missing that is
+    /// worth saying rather than papering over with an empty folder the user would read as "my logs
+    /// were deleted".
+    /// </summary>
+    private void OpenFolder(string folder)
+    {
+        if (!Directory.Exists(folder))
+        {
+            ShowInfo($"That folder doesn't exist yet: {folder}", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            // Passed as a single argument rather than a command line, so a path containing spaces,
+            // quotes or commas cannot be re-parsed into extra Explorer arguments.
+            var startInfo = new System.Diagnostics.ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(folder);
+            System.Diagnostics.Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not open the folder.");
+            ShowInfo($"Couldn't open the folder: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
+    }
 
     private void OpenExternalLink(string url, string failureMessage)
     {
