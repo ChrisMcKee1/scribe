@@ -76,6 +76,31 @@ started from an empty row with no hint of what to type. **Add** now offers ready
 
 Nothing is added to your settings automatically. Upgrading changes none of your existing behaviour.
 
+## A failed dictation could vanish without telling you anything
+
+If the recogniser returned nothing for a recording that clearly contained speech, Scribe did
+nothing at all: no message, no sound, no mark in the log above routine information. The overlay
+simply closed and the dictation was gone. The only way to notice was to see that nothing had been
+typed. This happened 34 times over 22 days and was never once reported.
+
+Every other failure already announced itself, including a muted microphone, a disconnected
+microphone, a failed insertion, and a failed cleanup. This one path was missed because it only
+triggers when the microphone worked correctly and the recogniser still produced no words.
+
+It now records a warning and shows the failure on the overlay, so a lost dictation is something you
+see rather than something you discover later.
+
+## Recognition that collapses to a single word is now recorded
+
+Occasionally a recording of several seconds comes back as one word, most often "Yeah.". That is the
+same underlying recogniser failure as an empty result, except it reaches your document looking like
+a normal dictation. Scribe now measures the text against the amount of voice actually detected in
+the recording, ignoring pauses, and writes a warning when the result is implausibly short.
+
+Nothing is discarded and nothing is shown to you, because a short answer can be perfectly correct
+and the current measurement cannot yet tell the two apart with confidence. This release makes the
+occurrences findable so the behaviour can be pinned down properly.
+
 ## Both architectures
 
 x64 and Arm64 are built from the same source and shipped together, and the Arm64 payload is checked

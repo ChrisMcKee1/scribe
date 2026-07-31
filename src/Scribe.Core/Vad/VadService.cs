@@ -41,6 +41,7 @@ public sealed class VadService : IVadService
     private bool _available;
     private bool _initialized;
     private bool _disposed;
+    private double? _lastSpeechSeconds;
 
     public VadService(ModelLocator locator, ILogger<VadService> logger)
     {
@@ -51,6 +52,11 @@ public sealed class VadService : IVadService
     public bool IsAvailable
     {
         get { lock (_gate) { return _available; } }
+    }
+
+    public double? LastSpeechSeconds
+    {
+        get { lock (_gate) { return _lastSpeechSeconds; } }
     }
 
     public void Initialize() => EnsureInitialized();
@@ -108,6 +114,7 @@ public sealed class VadService : IVadService
 
         lock (_gate)
         {
+            _lastSpeechSeconds = null;
             if (!_available || _vad is null) return audio;          // model unavailable: pass through
             if (audio.SampleRate != RequiredSampleRate) return audio; // VAD model expects 16 kHz
 
@@ -117,6 +124,7 @@ public sealed class VadService : IVadService
             var minStart = int.MaxValue;
             var maxEnd = 0;
             var found = false;
+            var voicedSamples = 0L;
 
             var window = new float[_windowSize];
             var iterations = samples.Length / _windowSize;
@@ -124,11 +132,11 @@ public sealed class VadService : IVadService
             {
                 Array.Copy(samples, i * _windowSize, window, 0, _windowSize);
                 _vad.AcceptWaveform(window);
-                Drain(ref minStart, ref maxEnd, ref found);
+                Drain(ref minStart, ref maxEnd, ref found, ref voicedSamples);
             }
 
             _vad.Flush();
-            Drain(ref minStart, ref maxEnd, ref found);
+            Drain(ref minStart, ref maxEnd, ref found, ref voicedSamples);
 
             if (!found)
             {
@@ -142,6 +150,12 @@ public sealed class VadService : IVadService
 
             var length = maxEnd - minStart;
             if (length <= 0) return CapturedAudio.Empty;
+
+            // Summed voiced audio, which is what "how much did they actually say" means. The
+            // returned span is always at least this long and is usually longer, because every
+            // pause between the first and last word is inside it.
+            _lastSpeechSeconds = voicedSamples / (double)audio.SampleRate;
+
             if (length == samples.Length) return audio; // nothing to trim
 
             var trimmed = new float[length];
@@ -155,7 +169,7 @@ public sealed class VadService : IVadService
         }
     }
 
-    private void Drain(ref int minStart, ref int maxEnd, ref bool found)
+    private void Drain(ref int minStart, ref int maxEnd, ref bool found, ref long voicedSamples)
     {
         while (!_vad!.IsEmpty())
         {
@@ -164,6 +178,7 @@ public sealed class VadService : IVadService
             var end = segment.Start + segment.Samples.Length;
             if (start < minStart) minStart = start;
             if (end > maxEnd) maxEnd = end;
+            voicedSamples += segment.Samples.Length;
             found = true;
             _vad.Pop();
         }

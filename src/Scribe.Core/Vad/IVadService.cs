@@ -11,6 +11,18 @@ public interface IVadService : IDisposable
     /// <summary>True once the VAD model has been located and loaded.</summary>
     bool IsAvailable { get; }
 
+    /// <summary>
+    /// Total voiced audio the last <see cref="Trim"/> call detected, summed across every speech
+    /// segment, or null when the last call could not measure it (model unavailable, wrong sample
+    /// rate, or no speech found).
+    ///
+    /// This is deliberately not the duration of what <see cref="Trim"/> returns. Trim returns the
+    /// whole span from the first speech to the last, so a short utterance followed by ten seconds
+    /// of thinking is a ten second result containing one second of voice. Anything reasoning about
+    /// how much someone actually said has to use this instead.
+    /// </summary>
+    double? LastSpeechSeconds { get; }
+
     /// <summary>Loads the model if present. Idempotent; safe to call repeatedly.</summary>
     void Initialize();
 

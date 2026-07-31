@@ -524,14 +524,46 @@ internal sealed class DictationController : IDisposable
                     return;
                 }
 
-                _log.LogInformation("No speech recognized.");
+                // The capture carried real audio (the meter moved, VAD found speech) but the
+                // recogniser returned nothing. This was the one failure in the whole pipeline that
+                // told the user absolutely nothing: it logged at Information, and the only other
+                // signal, the pipeline report, goes solely to the Playground page in Settings,
+                // which is normally closed. The overlay simply vanished and the dictation was gone.
+                // Production logs show 34 of these across 22 days, none of them reported.
+                _log.LogWarning(
+                    "Speech recognition returned no text for a {Seconds:F2}s capture that was not " +
+                    "silent (peak audio was present). The dictation was lost.",
+                    audio.Duration.TotalSeconds);
                 report.Fail("Speech recognition", "No speech was recognized.");
                 RaisePipelineReport(report);
+                Error?.Invoke("nothing was recognised, try again");
                 return;
             }
 
             activity?.SetTag(ScribeTelemetry.TagDecodeChars, result.Text.Length);
             activity?.SetTag(ScribeTelemetry.TagRealTimeFactor, Math.Round(result.RealTimeFactor, 2));
+
+            // The recogniser's other degenerate mode: instead of returning nothing it returns a
+            // single filler token ("Yeah.") for several seconds of speech, which reaches the user's
+            // document as an ordinary success. Measured against summed VOICED audio, not the
+            // trimmed span, because the span still contains every thinking pause and a genuine
+            // "Yeah." followed by a long pause would otherwise look like a collapse.
+            //
+            // Log only, deliberately. The threshold was derived from unlabelled history rows using
+            // the same ratio it now tests, so it cannot yet distinguish a collapsed decode from a
+            // terse speaker, and the text is injected either way. Showing a failure indicator on
+            // that reasoning would cry wolf on correct dictations. This makes the occurrences
+            // findable so they can be labelled from retained audio before anything is surfaced.
+            var voicedSeconds = _vad.LastSpeechSeconds ?? audio.Duration.TotalSeconds;
+            if (TerseDecodeDetector.IsSuspiciouslyTerse(result.Text, voicedSeconds))
+            {
+                // Character count and ratio only: PRIVACY.md promises transcripts are never
+                // written to the diagnostic log.
+                _log.LogWarning(
+                    "Speech recognition returned only {Chars} characters for {Seconds:F2}s of " +
+                    "voiced audio ({Ratio:F1} chars/s); the decode may have collapsed.",
+                    result.Text.Length, voicedSeconds, result.Text.Length / Math.Max(voicedSeconds, 0.001));
+            }
 
             // Optional AI cleanup runs between raw decoding and dictionary canonicalization so the
             // post-processor always has the final say on casing of terms like ".NET" or "ReBAC".

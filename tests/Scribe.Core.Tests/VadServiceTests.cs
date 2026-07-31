@@ -107,6 +107,56 @@ public sealed class VadServiceTests
             "Expected the bulk of the speech to be retained.");
     }
 
+    /// <summary>
+    /// Voiced duration must be summed across speech segments, not taken from the trimmed span.
+    /// A short utterance followed by a long pause is the exact shape that would be misread as a
+    /// collapse, and the trimmed capture keeps that pause.
+    /// </summary>
+    [Fact]
+    public void Trim_reports_voiced_duration_excluding_internal_pauses()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        var models = locator.Resolve();
+        if (!models.VadAvailable) return;
+
+        var wav = Path.Combine(models.Directory, "test_wavs", "en.wav");
+        if (!File.Exists(wav)) return;
+
+        var speech = LoadResampled16kMono(wav);
+        if (speech.Length == 0) return;
+
+        // speech, 5 s of silence, speech again: the returned span covers all of it, but only the
+        // two speech runs are voiced.
+        var gap = new float[RequiredSampleRate(5)];
+        var buffer = new float[speech.Length + gap.Length + speech.Length];
+        Array.Copy(speech, 0, buffer, 0, speech.Length);
+        Array.Copy(speech, 0, buffer, speech.Length + gap.Length, speech.Length);
+
+        using var vad = new VadService(locator, NullLogger<VadService>.Instance);
+        var result = vad.Trim(new CapturedAudio(buffer, 16000));
+
+        Assert.False(result.IsEmpty);
+        var voiced = vad.LastSpeechSeconds;
+        Assert.NotNull(voiced);
+
+        // The pause is inside the returned span but must not count as voiced.
+        Assert.True(voiced!.Value < result.Duration.TotalSeconds - 3,
+            $"voiced {voiced:F2}s should exclude the 5 s pause inside the {result.Duration.TotalSeconds:F2}s span.");
+        Assert.True(voiced.Value > 0.5, "expected the two speech runs to be counted.");
+    }
+
+    [Fact]
+    public void LastSpeechSeconds_is_null_when_no_speech_is_found()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        if (!locator.Resolve().VadAvailable) return;
+
+        using var vad = new VadService(locator, NullLogger<VadService>.Instance);
+        vad.Trim(new CapturedAudio(new float[RequiredSampleRate(2)], 16000));
+
+        Assert.Null(vad.LastSpeechSeconds);
+    }
+
     private static int RequiredSampleRate(int seconds) => 16000 * seconds;
 
     private static float[] LoadResampled16kMono(string wavPath)
