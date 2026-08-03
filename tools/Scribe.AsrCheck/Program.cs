@@ -64,9 +64,18 @@ internal static class Program
             return 2;
         }
 
+        // The shipped app always decodes greedily, so a check that cannot select another method has
+        // no way to reproduce a decoder regression against real audio.
+        var decoding = ArgValue(args, "--decoding") ?? TranscriptionDecoding.Greedy;
+        Console.WriteLine($"  decoding={decoding}");
+
         using var service = new TranscriptionService(
             new ModelLocator(new AppPaths()),
-            Options.Create(new TranscriptionOptions()),
+            Options.Create(new TranscriptionOptions
+            {
+                DecodingMethod = decoding,
+                AllowUnsafeDecodingMethod = true,
+            }),
             NullLogger<TranscriptionService>.Instance);
 
         var load = Stopwatch.StartNew();

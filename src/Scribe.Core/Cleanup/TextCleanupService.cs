@@ -1,5 +1,7 @@
 using System.ClientModel;
+using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Azure.AI.Projects;
 using Azure.Identity;
@@ -65,6 +67,13 @@ internal sealed class TextCleanupService : ITextCleanupService
     // worst-case work for a pathologically long hold (20 * 2400 ≈ 48k chars ≈ ~1h of speech).
     private const int ChunkTargetChars = 2400;
     private const int MaxCleanupChunks = 20;
+
+    /// <summary>
+    /// Cap on how much of an endpoint's error text is echoed into a status pill or log line. Long
+    /// enough for the sentence that names the fault, short enough that a response body cannot flood
+    /// the shared log.
+    /// </summary>
+    private const int MaxServerMessageChars = 300;
     private const float CleanupTemperature = 0.1f;
     private const string AgentName = "ScribeCleanup";
 
@@ -129,6 +138,9 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Word tokens (letters/digits, inner apostrophes kept) for the terse-answer overlap check.
     private static readonly Regex WordToken =
         new(@"[\p{L}\p{Nd}]+(?:'[\p{L}\p{Nd}]+)*", RegexOptions.Compiled);
+
+    // Collapses an endpoint's multi-line error text into the single line a status pill can show.
+    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
 
     private readonly ILogger<TextCleanupService> _log;
     private readonly object _gate = new();
@@ -335,6 +347,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         var builder = new StringBuilder(text.Length + 16);
         var failures = 0;
         string? firstFailure = null;
+        var reloadBudget = new ReloadBudget();
 
         using var totalCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var totalTimeout = CleanupTotalTimeoutOverride ??
@@ -350,7 +363,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             string? error;
             try
             {
-                (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], totalCts.Token)
+                (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -488,7 +501,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // a human-readable error when the model call throws, times out, or returns nothing usable. Never
     // throws — a failed segment falls back to its raw text so dictation is never lost.
     private async Task<(string Text, string? Error)> CleanChunkAsync(
-        AIAgent agent, CleanupOptions options, string chunk, CancellationToken cancellationToken)
+        AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
         // reasoning model whose hidden thinking precedes the visible rewrite.
@@ -507,11 +520,40 @@ internal sealed class TextCleanupService : ITextCleanupService
             ? TimeSpan.FromSeconds(CloudFirstAttemptTimeoutSeconds)
             : budget;
 
-        var (text, error, stalled) = await RunChunkAttemptAsync(
+        var attempt = await RunChunkAttemptAsync(
             agent, options, chunk, firstAttempt, cancellationToken).ConfigureAwait(false);
-        if (!stalled || !retryOnStall)
+
+        // Foundry Local evicts a resident model under memory pressure, and any other model load on the
+        // machine evicts it too. The agent keeps working against a model id the runtime no longer has,
+        // so every dictation from then on fails with a 400 the user cannot act on. Reload it and retry
+        // rather than degrading for the rest of the session. Once per dictation: if the reload does not
+        // take, hammering the runtime for every remaining chunk only delays the raw-text fallback.
+        if (ShouldAttemptModelReload(attempt.Evicted, options.Provider, reload.Used))
         {
-            return (text, error);
+            reload.Used = true;
+            switch (await TryReloadEvictedModelAsync(options, cancellationToken).ConfigureAwait(false))
+            {
+                case ReloadOutcome.Reloaded:
+                    attempt = await RunChunkAttemptAsync(
+                        agent, options, chunk, budget, cancellationToken).ConfigureAwait(false);
+                    break;
+
+                // Loading a 12B model takes minutes, far longer than one dictation may wait, so this
+                // is the normal outcome for exactly the large models that get evicted. Saying the
+                // reload failed would be wrong and would send the user to Settings for nothing.
+                case ReloadOutcome.StillLoading:
+                    attempt = attempt with
+                    {
+                        Error = "The on-device cleanup model had been unloaded and is loading again. " +
+                                "This dictation used raw text; give it a moment and try again.",
+                    };
+                    break;
+            }
+        }
+
+        if (!attempt.Stalled || !retryOnStall)
+        {
+            return (attempt.Text, attempt.Error);
         }
 
         _log.LogWarning(
@@ -519,14 +561,78 @@ internal sealed class TextCleanupService : ITextCleanupService
             firstAttempt.TotalSeconds);
 
         var remaining = budget - firstAttempt;
-        var (retryText, retryError, _) = await RunChunkAttemptAsync(
+        var retry = await RunChunkAttemptAsync(
             agent, options, chunk, remaining, cancellationToken).ConfigureAwait(false);
-        return (retryText, retryError);
+        return (retry.Text, retry.Error);
+    }
+
+    /// <summary>
+    /// One reload attempt per dictation. A mutable holder rather than a parameter because the decision
+    /// spans every chunk of a single <see cref="CleanAsync"/> call.
+    /// </summary>
+    private sealed class ReloadBudget
+    {
+        public bool Used;
+    }
+
+    /// <summary>
+    /// Whether an evicted model should be reloaded and the chunk retried. Only Foundry Local can be
+    /// reloaded (a remote endpoint's residency is not ours to manage), and only once per dictation:
+    /// if the reload does not take, retrying it for every remaining chunk only delays the raw-text
+    /// fallback the user is waiting on.
+    /// </summary>
+    internal static bool ShouldAttemptModelReload(bool evicted, CleanupProvider provider, bool alreadyUsed) =>
+        evicted && provider == CleanupProvider.FoundryLocal && !alreadyUsed;
+
+    // Reloads the configured Foundry Local model after the runtime evicted it. The existing agent is
+    // still valid: it addresses the model by id, and the id is unchanged across a reload, so nothing
+    // has to be rebuilt.
+    private async Task<ReloadOutcome> TryReloadEvictedModelAsync(CleanupOptions options, CancellationToken ct)
+    {
+        _log.LogWarning(
+            "Foundry Local evicted the cleanup model {Alias}; reloading it before falling back to raw text.",
+            options.FoundryModelAlias);
+
+        var reloaded = await LoadFoundryModelAsync(options.FoundryModelAlias, progress: null, ct)
+            .ConfigureAwait(false);
+        if (reloaded)
+        {
+            _log.LogInformation("Reloaded the cleanup model {Alias}.", options.FoundryModelAlias);
+            return ReloadOutcome.Reloaded;
+        }
+
+        // A cancelled reload is not a failed one: the dictation's own deadline can expire while a
+        // multi-gigabyte model is still loading, and the load usually completes moments later. Marking
+        // cleanup Unavailable there would switch the feature off for a model that is about to be ready.
+        if (ct.IsCancellationRequested)
+        {
+            _log.LogInformation(
+                "Reloading {Alias} did not finish within this dictation; leaving cleanup enabled.",
+                options.FoundryModelAlias);
+            return ReloadOutcome.StillLoading;
+        }
+
+        // A genuine failure: drop the stale Ready status so Settings stops claiming cleanup works.
+        SetStatus(
+            CleanupStatus.Unavailable,
+            $"The on-device model '{options.FoundryModelAlias}' was unloaded and could not be reloaded.");
+        return ReloadOutcome.Failed;
+    }
+
+    private enum ReloadOutcome
+    {
+        Reloaded,
+
+        /// <summary>The load outlived this dictation's deadline; the model is likely ready shortly.</summary>
+        StillLoading,
+
+        Failed,
     }
 
     // One model call. Stalled is true only when this attempt's own budget expired, which is the
-    // recoverable case; a caller cancellation still propagates.
-    private async Task<(string Text, string? Error, bool Stalled)> RunChunkAttemptAsync(
+    // recoverable case; a caller cancellation still propagates. Evicted is true when the endpoint
+    // reported the model is no longer loaded, which a reload can fix.
+    private async Task<ChunkAttempt> RunChunkAttemptAsync(
         AIAgent agent,
         CleanupOptions options,
         string chunk,
@@ -552,7 +658,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (string.IsNullOrWhiteSpace(result.Text))
             {
-                return (chunk, "AI cleanup returned no text.", false);
+                return new ChunkAttempt(chunk, "AI cleanup returned no text.", false, false);
             }
 
             // A non-empty answer can still be unusable (only a think-block, an empty fence, or an
@@ -564,10 +670,10 @@ internal sealed class TextCleanupService : ITextCleanupService
                 var reason = LooksLikeRefusal(result.Text)
                     ? "AI cleanup was declined by the model; used raw text."
                     : "AI cleanup returned unusable output.";
-                return (chunk, reason, false);
+                return new ChunkAttempt(chunk, reason, false, false);
             }
 
-            return (cleaned, null, false);
+            return new ChunkAttempt(cleaned, null, false, false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -578,14 +684,16 @@ internal sealed class TextCleanupService : ITextCleanupService
         catch (OperationCanceledException ex)
         {
             _log.LogDebug(ex, "AI cleanup timed out for a segment.");
-            return (chunk, DescribeFailure(ex), true);
+            return new ChunkAttempt(chunk, DescribeFailure(ex, options.Provider), true, false);
         }
         catch (Exception ex)
         {
             _log.LogDebug(ex, "AI cleanup failed for a segment; using raw text.");
-            return (chunk, DescribeFailure(ex), false);
+            return new ChunkAttempt(chunk, DescribeFailure(ex, options.Provider), false, IsModelNotLoaded(ex));
         }
     }
+
+    private readonly record struct ChunkAttempt(string Text, string? Error, bool Stalled, bool Evicted);
 
     // Splits text into chunks no longer than <paramref name="targetChars"/>, breaking on the last
     // sentence-ending punctuation in the back of each window when possible, else the last whitespace,
@@ -663,11 +771,180 @@ internal sealed class TextCleanupService : ITextCleanupService
         return -1;
     }
 
-    private static string DescribeFailure(Exception ex) => ex switch
+    /// <summary>
+    /// Turns a per-chunk cleanup failure into a message that names the actual fault. A user on the
+    /// Store build spent a week on "AI cleanup error: ClientResultException", which is the exception
+    /// type and nothing else: no status, and none of the server's own explanation. The HTTP status and
+    /// the endpoint's message are the highest-signal things we have, so they drive the text.
+    /// </summary>
+    internal static string DescribeFailure(Exception ex, CleanupProvider provider)
     {
-        OperationCanceledException or TimeoutException => "AI cleanup timed out.",
-        _ => $"AI cleanup error: {ex.GetType().Name}.",
-    };
+        if (ex is OperationCanceledException or TimeoutException)
+        {
+            return "AI cleanup timed out.";
+        }
+
+        var status = ExtractHttpStatus(ex);
+        var detail = DescribeServerMessage(ex);
+
+        if (IsModelNotLoaded(ex))
+        {
+            return provider == CleanupProvider.FoundryLocal
+                ? "The on-device cleanup model is no longer loaded in Foundry Local, and reloading it " +
+                  "failed. Something else likely evicted it (another app, or a model loaded from the " +
+                  "foundry CLI). Reopen Settings and load the model again."
+                : $"The endpoint reports that model is not loaded ({status}). {detail}".TrimEnd();
+        }
+
+        // The endpoint's own message is appended where it adds something; it is empty often enough
+        // (a transport failure has no response body) that every branch has to survive without it.
+        var described = status switch
+        {
+            400 => $"The AI endpoint rejected the request (400). {detail}",
+
+            401 or 403 => provider == CleanupProvider.FoundryLocal
+                ? $"Foundry Local refused the request ({status}). {detail}"
+                : $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again.",
+
+            404 => provider == CleanupProvider.FoundryLocal
+                ? "Foundry Local no longer recognises the cleanup model (404). Reopen Settings and " +
+                  "pick the model again."
+                : $"The AI endpoint could not find that model (404). Check the model name. {detail}",
+
+            429 => "The AI endpoint is throttling requests (429). Wait a moment and try again.",
+
+            >= 500 => $"The AI endpoint returned a server error ({status}). This is usually transient. {detail}",
+
+            _ when IsConnectivityFailure(ex) => provider == CleanupProvider.FoundryLocal
+                ? "Couldn't reach Foundry Local. Make sure it is installed and running."
+                : "Couldn't reach the AI endpoint. Check the endpoint URL and your network.",
+
+            _ when status > 0 => $"The AI endpoint returned {status}. {detail}",
+
+            // Last resort. Still better than the bare type name: the message usually names the fault.
+            _ => $"AI cleanup error: {ex.GetType().Name}. {detail}",
+        };
+
+        return described.TrimEnd();
+    }
+
+    /// <summary>
+    /// True when the failure is Foundry Local's "Model '&lt;id&gt;' is not loaded" 400, which it returns
+    /// after evicting a resident model. Matched on the text because the endpoint reports it with a
+    /// null error code, so the status alone cannot distinguish it from a malformed request. The raw
+    /// response body is checked as well as the message: the message shape is a client-library detail,
+    /// and losing this signal costs the reload that makes cleanup self-heal.
+    /// </summary>
+    internal static bool IsModelNotLoaded(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (MentionsUnloadedModel(current.Message) || MentionsUnloadedModel(ReadResponseBody(current)))
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate &&
+                aggregate.InnerExceptions.Any(inner => IsModelNotLoaded(inner)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MentionsUnloadedModel(string? text) =>
+        text?.Contains("is not loaded", StringComparison.OrdinalIgnoreCase) == true;
+
+    // Never throws: reading a raw response can fail on a non-buffered or already-disposed response, and
+    // a diagnostics helper that takes down the cleanup path would be worse than the missing detail.
+    private static string? ReadResponseBody(Exception ex)
+    {
+        if (ex is not ClientResultException client)
+        {
+            return null;
+        }
+
+        try
+        {
+            return client.GetRawResponse()?.Content?.ToString();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsConnectivityFailure(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException or SocketException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The endpoint's own explanation, flattened to one short line so it fits a status pill and a log
+    /// entry. Trimmed hard because a client exception message can carry a whole response body.
+    /// </summary>
+    private static string DescribeServerMessage(Exception ex)
+    {
+        // Prefer the endpoint's own error envelope: it is authoritative and states the fault directly
+        // ("Model '...' is not loaded. Please load the model before getting a ChatClient."). The client's
+        // exception message is the fallback, since its shape is a library detail that can change.
+        var line = ExtractErrorMessage(ReadResponseBody(ex));
+
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            // The OpenAI client formats its message as "HTTP 400 (type: code)\n\n<server message>", so
+            // the final non-header line is the part worth showing; the status is reported separately.
+            line = ex.Message
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault(l => !l.StartsWith("HTTP ", StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return string.Empty;
+        }
+
+        // One line: this text lands in a status pill and in a single shared-log entry.
+        line = WhitespaceRun.Replace(line, " ").Trim();
+        return line.Length <= MaxServerMessageChars ? line : line[..MaxServerMessageChars].TrimEnd() + "…";
+    }
+
+    // Pulls error.message out of the standard OpenAI error envelope, falling back to the raw body.
+    // Non-throwing: this only runs while already reporting a failure.
+    private static string? ExtractErrorMessage(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("error", out var error) &&
+                error.TryGetProperty("message", out var message) &&
+                message.GetString() is { Length: > 0 } text)
+            {
+                return text;
+            }
+        }
+        catch (Exception)
+        {
+            // Not JSON, or not the envelope we know; the raw body below is still better than nothing.
+        }
+
+        return body;
+    }
 
     public async Task<bool> ProbeAsync(CancellationToken cancellationToken = default)
     {

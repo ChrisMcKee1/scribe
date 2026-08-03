@@ -652,7 +652,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
-            BeamSearchCheck.IsChecked = _settings.UseHighAccuracyDecoding;
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
             InjectionCombo.SelectedItem =
@@ -3523,7 +3522,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
-            _settings.UseHighAccuracyDecoding = BeamSearchCheck.IsChecked == true;
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =

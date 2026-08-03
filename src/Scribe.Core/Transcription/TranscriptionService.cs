@@ -68,14 +68,21 @@ public sealed class TranscriptionService : ITranscriptionService
             }
             var threads = ResolveThreadCount(_options.NumThreads);
 
+            var decoding = TranscriptionDecoding.Resolve(
+                _options.DecodingMethod, model.Architecture, _options.AllowUnsafeDecodingMethod);
+            if (decoding.Overridden)
+            {
+                _logger.LogWarning(
+                    "Decoding method {Requested} is not safe for {Model}; decoding greedily instead.",
+                    _options.DecodingMethod, model.DisplayName);
+            }
+
             var config = new OfflineRecognizerConfig();
             config.ModelConfig.Tokens = models.TokensPath;
             ConfigureModel(ref config, model, models);
             config.ModelConfig.NumThreads = threads;
             config.ModelConfig.Provider = "cpu";
-            config.DecodingMethod = model.Architecture == TranscriptionModelArchitecture.NemoTransducer
-                ? ResolveDecodingMethod(_options.DecodingMethod)
-                : "greedy_search";
+            config.DecodingMethod = decoding.Method;
             config.MaxActivePaths = Math.Max(1, _options.MaxActivePaths);
 
             // Parakeet TDT is trained on 128 mel bins, not the sherpa-onnx default of 80. The
@@ -189,13 +196,6 @@ public sealed class TranscriptionService : ITranscriptionService
         if (configured > 0) return configured;
         return Math.Clamp(Environment.ProcessorCount / 2, 1, MaxAutoThreads);
     }
-
-    // Only the two methods sherpa-onnx supports for an offline transducer are accepted; anything
-    // else (including null/empty) decodes greedily so a bad setting can never wedge the engine.
-    private static string ResolveDecodingMethod(string? configured) =>
-        string.Equals(configured, "modified_beam_search", StringComparison.OrdinalIgnoreCase)
-            ? "modified_beam_search"
-            : "greedy_search";
 
     public void Dispose()
     {

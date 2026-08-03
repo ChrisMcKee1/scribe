@@ -6,6 +6,7 @@ using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -886,17 +887,11 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void Raise(DictationState state)
-    {
-        try
-        {
-            StateChanged?.Invoke(state);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "A StateChanged handler threw.");
-        }
-    }
+    private void Raise(DictationState state) =>
+        ResilientEvent.InvokeAll(
+            StateChanged,
+            state,
+            ex => _log.LogWarning(ex, "A StateChanged handler threw."));
 
     private static string? ProcessNameForWindow(nint handle)
     {

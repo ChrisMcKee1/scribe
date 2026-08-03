@@ -21,6 +21,7 @@ internal sealed class TrayIconHost : IDisposable
     // The icon currently assigned to the tray. Held so its handle can be released once it has been
     // replaced; H.NotifyIcon owns nothing beyond the instance it is showing.
     private System.Drawing.Icon? _currentIcon;
+    private System.Drawing.Icon? _retiredIcon;
 
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
@@ -138,10 +139,7 @@ internal sealed class TrayIconHost : IDisposable
         _icon.Icon = icon;
         _icon.ToolTipText = tooltip;
 
-        // Release the icon we just replaced. H.NotifyIcon may already have disposed it, and Icon
-        // tolerates a second dispose, so this only guarantees the handle is not leaked once the
-        // tray has stopped referencing it.
-        previous?.Dispose();
+        RetireIcon(previous);
 
         _pauseItem.IsChecked = state == DictationState.Paused;
     });
@@ -206,6 +204,27 @@ internal sealed class TrayIconHost : IDisposable
         }
     }
 
+    /// <summary>
+    /// Releases the icon replaced one update ago, rather than the one replaced just now.
+    ///
+    /// Assigning <see cref="TaskbarIcon.Icon"/> ends in a Shell_NotifyIcon call that pumps
+    /// messages, so a state change dispatched from a background thread can run re-entrantly while
+    /// the outer assignment is still reading the icon handle it was given. Disposing inline
+    /// therefore raced the tray and threw ObjectDisposedException out of the state notification.
+    /// Deferring by one generation guarantees the icon being freed is no longer the one any
+    /// in-flight update is reading, and still frees every handle.
+    /// </summary>
+    private void RetireIcon(System.Drawing.Icon? replaced)
+    {
+        var due = _retiredIcon;
+        _retiredIcon = replaced;
+
+        if (!ReferenceEquals(due, _currentIcon))
+        {
+            due?.Dispose();
+        }
+    }
+
     private static void Dispatch(Action action)
     {
         var app = Application.Current;
@@ -222,6 +241,8 @@ internal sealed class TrayIconHost : IDisposable
     public void Dispose()
     {
         _icon.Dispose();
+        _retiredIcon?.Dispose();
+        _retiredIcon = null;
         _currentIcon?.Dispose();
         _currentIcon = null;
     }

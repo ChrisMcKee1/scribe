@@ -38,9 +38,6 @@ public static class CoreServiceCollectionExtensions
                 var loaded = settings.Load();
                 options.ModelId = loaded.TranscriptionModelId;
                 options.NumThreads = loaded.DecodeThreads;
-                options.DecodingMethod = loaded.UseHighAccuracyDecoding
-                    ? "modified_beam_search"
-                    : "greedy_search";
             });
         services.AddSingleton<ITranscriptionService, TranscriptionService>();
 

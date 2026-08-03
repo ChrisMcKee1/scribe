@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 
 namespace Scribe.App.Overlay;
@@ -518,13 +519,28 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             if (Directory.Exists(overlayBin))
             {
                 var matches = Directory.GetFiles(overlayBin, "Scribe.Overlay.exe", SearchOption.AllDirectories);
-                var marker = $"{Path.DirectorySeparatorChar}{BuildConfig}{Path.DirectorySeparatorChar}";
-                var best = Array.Find(matches, p => p.Contains(marker, StringComparison.OrdinalIgnoreCase))
-                           ?? (matches.Length > 0 ? matches[0] : null);
+                var arch = RuntimeInformation.ProcessArchitecture;
+                var best = OverlayExecutableSelector.Select(matches, BuildConfig, arch);
                 if (best is not null)
                 {
-                    _log?.LogInformation("Overlay exe via dev fallback ({Config}): {Path}", BuildConfig, best);
+                    _log?.LogInformation(
+                        "Overlay exe via dev fallback ({Config}/{Arch}): {Path}", BuildConfig, arch, best);
                     return best;
+                }
+
+                if (matches.Length > 0 && !_loggedMissing)
+                {
+                    _loggedMissing = true;
+                    _log?.LogError(
+                        "Found {Count} overlay build(s) under {Bin} but none targets {Arch}; the recording pill is " +
+                        "disabled. Build it with: dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c {Config} " +
+                        "-p:Platform={Platform}",
+                        matches.Length,
+                        overlayBin,
+                        arch,
+                        BuildConfig,
+                        arch == Architecture.Arm64 ? "ARM64" : "x64");
+                    return null;
                 }
             }
         }

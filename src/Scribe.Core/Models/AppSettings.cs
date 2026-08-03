@@ -38,13 +38,6 @@ public sealed class AppSettings
     /// <summary>Id of the offline speech-recognition model to load after the next restart.</summary>
     public string TranscriptionModelId { get; set; } = Transcription.TranscriptionModelCatalog.DefaultId;
 
-    /// <summary>
-    /// Use beam-search decoding (<c>modified_beam_search</c>) instead of greedy. Slightly more
-    /// accurate on hard audio at a latency cost. Takes effect after restarting Scribe because the
-    /// recognizer is warm-loaded once.
-    /// </summary>
-    public bool UseHighAccuracyDecoding { get; set; }
-
     /// <summary>Trim leading/trailing silence and reject no-speech captures using VAD.</summary>
     public bool UseVoiceActivityDetection { get; set; } = true;
 
