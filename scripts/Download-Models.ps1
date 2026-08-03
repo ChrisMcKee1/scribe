@@ -13,7 +13,7 @@
       * SHA-256 is verified for the large ONNX files; mismatches abort with guidance.
 
     Total download is ~640 MB. Models are written under -ModelsDir
-    (default: ../src/Scribe.App/models — copied to the app's output at build time).
+    (default: ../src/Scribe.App/models, copied to the app's output at build time).
 
 .PARAMETER ModelsDir
     Destination directory. Defaults to the app's 'src/Scribe.App/models' folder, where the build

@@ -35,7 +35,7 @@ public static class DefaultVocabulary
         DictionaryEntry.New("silero", "Silero"),
         DictionaryEntry.New("sherpa onnx", "sherpa-onnx"),
 
-        // ".NET" — only the spoken two-word form, so the "dotnet" CLI name is left intact.
+        // ".NET": only the spoken two-word form, so the "dotnet" CLI name is left intact.
         DictionaryEntry.New("dot net", ".NET"),
     ];
 }

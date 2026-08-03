@@ -8,7 +8,7 @@ namespace Scribe.Evals;
 /// <see cref="EvalScenarios.RawTranscript"/> so a style swap is the only variable (the suite doubles
 /// as a prompt hot-swap proof); condensation scenarios supply their own <see cref="Transcript"/>
 /// because the disfluency under test must exist in the input. <see cref="ForbiddenPatterns"/> are
-/// regexes that must NOT match the output — e.g. the discarded half of a spoken self-correction.
+/// regexes that must NOT match the output (e.g. the discarded half of a spoken self-correction).
 /// </summary>
 internal sealed record EvalScenario(
     string Name,

@@ -45,6 +45,84 @@ public sealed class LastTranscriptStore
         }
     }
 
+    /// <summary>
+    /// Rewrites the retained transcripts that exactly match <paramref name="original"/>.
+    ///
+    /// Keyed by content rather than by position on purpose: a dictation finishing while the quick
+    /// add popup is open shifts every index in the ring, and an index-based update would then
+    /// silently overwrite somebody else's transcript. If the original has already been evicted,
+    /// nothing happens.
+    ///
+    /// Every match is rewritten, not just the first. The ring can legitimately hold the same text
+    /// twice (Set only collapses an immediate repeat), and identical text deserves an identical
+    /// correction, so rewriting one and leaving its twin stale would just look broken.
+    ///
+    /// This is deliberately an update rather than an insert, and it never removes an entry. Pushing
+    /// the corrected text on as a new entry, or dropping one that a correction made redundant, would
+    /// cost the user a recovery slot as the price of a spelling fix.
+    /// </summary>
+    /// <returns>True when at least one transcript was rewritten.</returns>
+    public bool Update(string? original, string? updated)
+    {
+        // An entirely emptied transcript is rejected rather than stored: there would be nothing left
+        // to recover, and removing the slot instead would break the no-eviction guarantee above.
+        if (string.IsNullOrWhiteSpace(original)
+            || string.IsNullOrWhiteSpace(updated)
+            || string.Equals(original, updated, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            var changed = false;
+            for (var i = 0; i < _entries.Count; i++)
+            {
+                if (string.Equals(_entries[i], original, StringComparison.Ordinal))
+                {
+                    _entries[i] = updated;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+    }
+
+    /// <summary>
+    /// Fills an empty ring from durable history so the transcripts a user can act on are the same
+    /// ones that can be repaired. Without this, everything shown after a restart comes from history
+    /// while <see cref="Update"/> searches an empty ring, so a correction would appear to save and
+    /// then quietly fail to fix the dictation it came from.
+    ///
+    /// Only ever fills a ring that is empty, so it can never displace live dictations.
+    /// </summary>
+    public void Seed(IEnumerable<string>? transcripts)
+    {
+        if (transcripts is null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (_entries.Count > 0)
+            {
+                return;
+            }
+
+            foreach (var text in transcripts)
+            {
+                if (string.IsNullOrWhiteSpace(text) || _entries.Count >= Capacity)
+                {
+                    continue;
+                }
+
+                _entries.Add(text);
+            }
+        }
+    }
+
     public string? Get(IEnumerable<HistoryEntry>? fallbackHistory = null)
     {
         lock (_gate)

@@ -6,7 +6,7 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// Proves the long-buffer chunking (Feature B) splits arbitrarily long dictation into bounded
 /// segments on sentence/word boundaries, never loses or duplicates text, and degrades gracefully
-/// for unpunctuated speech — so a long hold is polished rather than skipped or truncated.
+/// for unpunctuated speech, so a long hold is polished rather than skipped or truncated.
 /// </summary>
 public sealed class TextChunkingTests
 {
@@ -40,7 +40,7 @@ public sealed class TextChunkingTests
         var chunks = TextCleanupService.ChunkForCleanup(text, 2400);
         var rejoined = string.Join(' ', chunks);
 
-        // Word sequence is identical once whitespace is normalised — nothing dropped or reordered.
+        // Word sequence is identical once whitespace is normalised; nothing dropped or reordered.
         Assert.Equal(Words(text), Words(rejoined));
     }
 
@@ -63,7 +63,7 @@ public sealed class TextChunkingTests
     [Fact]
     public void Unpunctuated_speech_still_splits_on_whitespace_without_breaking_words()
     {
-        // Raw ASR with no sentence punctuation — the whitespace fallback must still bound the chunks.
+        // Raw ASR with no sentence punctuation; the whitespace fallback must still bound the chunks.
         var text = string.Join(' ', System.Linq.Enumerable.Repeat("word", 2000)); // ~9999 chars
 
         var chunks = TextCleanupService.ChunkForCleanup(text, 2400);

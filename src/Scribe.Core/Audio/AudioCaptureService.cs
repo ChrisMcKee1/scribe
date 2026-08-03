@@ -11,7 +11,7 @@ namespace Scribe.Core.Audio;
 /// <summary>
 /// WASAPI shared-mode microphone capture. Records in the device's native mix format
 /// (commonly 32-bit float, 44.1/48 kHz, 1-2 channels), then on stop downmixes to mono and
-/// resamples to 16 kHz using the managed WDL resampler — no MediaFoundation dependency.
+/// resamples to 16 kHz using the managed WDL resampler; no MediaFoundation dependency.
 /// </summary>
 public sealed class AudioCaptureService : IAudioCaptureService
 {

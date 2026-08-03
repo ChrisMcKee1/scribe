@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,6 +46,7 @@ public partial class App : Application
     private IOverlayController? _overlay;
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
+    private QuickAdd.QuickAddWindow? _quickAddWindow;
     private UpdateService? _updates;
     private int _learningFromHistory;
 
@@ -116,6 +117,7 @@ public partial class App : Application
             ? []
             : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent();
         _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
+        _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
 
@@ -191,7 +193,7 @@ public partial class App : Application
             catch (Exception ex)
             {
                 log.LogError(ex, "Failed to warm-load the transcription engine.");
-                _tray!.ShowError("model failed to load — see logs");
+                _tray!.ShowError("model failed to load, see logs");
             }
         });
 
@@ -243,10 +245,10 @@ public partial class App : Application
         }
 
         // The dictionary seed above forced database initialization, so a corruption repair (if any)
-        // already ran — tell the user now rather than let them discover missing history on their own.
+        // already ran; tell the user now rather than let them discover missing history on their own.
         if (services.GetRequiredService<ScribeDatabase>().RepairedAtStartup)
         {
-            _tray.ShowInfo("Scribe repaired its database — settings and dictionary were recovered; some history may be missing.");
+            _tray.ShowInfo("Scribe repaired its database. Settings and dictionary were recovered; some history may be missing.");
         }
 
         // --- Onboarding (first-run welcome) -------------------------------------------------
@@ -265,7 +267,7 @@ public partial class App : Application
             }
             else
             {
-                _tray.ShowError("settings were recovered — review and save them in Settings");
+                _tray.ShowError("settings were recovered, review and save them in Settings");
             }
         }
         // --- End onboarding -----------------------------------------------------------------
@@ -644,6 +646,165 @@ public partial class App : Application
         _welcomeWindow.Show();
         _welcomeWindow.Activate();
     });
+
+    /// <summary>
+    /// Shows the tray's quick "Add to dictionary" popup (or focuses it if already open).
+    ///
+    /// Both the duplicate check and the write are passed in as delegates that re-resolve the
+    /// settings window every time they run. That is deliberate: the settings window can open or
+    /// close while this popup sits on screen, and <see cref="IDictionaryRepository.SaveAll"/>
+    /// deletes stored rows the open grid does not know about, so a write that ignored the grid
+    /// would be silently undone by the user's next Save in that window.
+    /// </summary>
+    private void ShowQuickAdd() => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        if (_quickAddWindow is not null)
+        {
+            _quickAddWindow.Activate();
+            return;
+        }
+
+        try
+        {
+            var services = _host.Services;
+            var store = services.GetRequiredService<LastTranscriptStore>();
+            var recent = store.GetRecent();
+            if (recent.Count == 0)
+            {
+                // Same idea as CopyLastDictation: the in-memory ring is empty on a fresh start, but
+                // history still holds what was dictated before the last restart.
+                recent = services.GetRequiredService<IHistoryRepository>()
+                    .GetRecent(LastTranscriptStore.Capacity)
+                    .Select(h => h.Text)
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .ToList();
+
+                // Seed rather than just display. A correction saved against a transcript that only
+                // exists in history would otherwise find nothing to repair in the ring, so the fix
+                // would look like it worked while "copy last dictation" still returned the mistake.
+                store.Seed(recent);
+            }
+
+            var window = new QuickAdd.QuickAddWindow(
+                recent,
+                loadExisting: () =>
+                {
+                    var baseEntries = _settingsWindow is { } settings
+                        ? settings.CurrentDictionaryEntries()
+                        : services.GetRequiredService<IDictionaryRepository>().GetAll();
+
+                    // Compose in the enabled libraries. The popup shows finished text, so the term a
+                    // user reaches for is often a shipped library's output; without these the
+                    // single-pass conflict check misses the very case that is easiest to walk into.
+                    try
+                    {
+                        return DictionaryLibraryComposer.Merge(
+                            baseEntries,
+                            services.GetRequiredService<IDictionaryLibraryService>().GetEnabledLibraryEntries());
+                    }
+                    catch
+                    {
+                        return baseEntries; // libraries are best-effort, never worth blocking a fix
+                    }
+                },
+                persist: entry =>
+                {
+                    if (_settingsWindow is { } settings)
+                    {
+                        return settings.ApplyQuickDictionaryEntry(entry);
+                    }
+
+                    var dictionary = services.GetRequiredService<IDictionaryRepository>();
+                    if (entry.Id == 0)
+                    {
+                        return dictionary.Add(entry);
+                    }
+
+                    dictionary.Update(entry);
+                    return entry;
+                },
+                logger: services.GetService<ILoggerFactory>()?.CreateLogger<QuickAdd.QuickAddWindow>());
+
+            window.Saved += OnQuickAddSaved;
+            window.Closed += (_, _) =>
+            {
+                window.Saved -= OnQuickAddSaved;
+                _quickAddWindow = null;
+            };
+
+            _quickAddWindow = window;
+            window.Show();
+            window.Activate();
+        }
+        catch (Exception ex)
+        {
+            _quickAddWindow = null;
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogError(ex, "Failed to open the quick dictionary add window.");
+            _tray.ShowNotification("Couldn't open the quick add window.", isError: true);
+        }
+    });
+
+    /// <summary>
+    /// Activates a freshly quick-added rule. Without the reload the entry sits in the database and
+    /// changes nothing until the next settings save, which reads as the feature being broken.
+    ///
+    /// Also repairs the retained copy of the dictation the correction came from, so the tray's
+    /// "copy last dictation" hands back the fixed wording instead of the mistake the user just
+    /// taught Scribe to stop making.
+    /// </summary>
+    private async void OnQuickAddSaved(QuickAdd.QuickAddWindow.QuickAddResult result)
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        var entry = result.Entry;
+
+        // Before the await: the repair is a plain in-memory swap, and doing it first means a failure
+        // to reload the post-processor cannot leave the user with a stale transcript as well.
+        var repaired = false;
+        if (result.CorrectedTranscript is not null)
+        {
+            try
+            {
+                repaired = _host.Services.GetRequiredService<LastTranscriptStore>()
+                    .Update(result.SourceTranscript, result.CorrectedTranscript);
+            }
+            catch (Exception ex)
+            {
+                // Never surfaced: the rule is saved and working, and a stale recovery copy is a far
+                // smaller problem than an error toast implying the save failed.
+                _host.Services.GetRequiredService<ILogger<App>>()
+                    .LogWarning(ex, "Failed to repair the retained transcript after a quick dictionary add.");
+            }
+        }
+
+        try
+        {
+            var services = _host.Services;
+            await Task.Run(() => services.GetRequiredService<ITextPostProcessor>().Reload());
+
+            _tray.ShowNotification(entry.Replacement.Length == 0
+                ? $"\"{entry.Pattern}\" will now be left out of what you dictate."
+                    + (repaired ? " Your last dictation was corrected to match." : string.Empty)
+                : $"\"{entry.Pattern}\" will now be written as \"{entry.Replacement}\"."
+                    + (repaired ? " Your last dictation was corrected to match." : string.Empty));
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogError(ex, "Failed to reload the post-processor after a quick dictionary add.");
+            _tray.ShowNotification(
+                "Saved the rule, but it won't apply until Scribe restarts.", isError: true);
+        }
+    }
 
     protected override void OnExit(ExitEventArgs e)
     {

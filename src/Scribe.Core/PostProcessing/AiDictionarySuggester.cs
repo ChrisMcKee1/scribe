@@ -12,7 +12,9 @@ namespace Scribe.Core.PostProcessing;
 /// versus how it should be <i>written</i> (acronyms said letter by letter, phonetic mishears,
 /// casing), which is exactly what a spoken-form to written-form dictionary needs. Prompt building
 /// and response parsing are pure and testable; the model call itself is made by the caller through
-/// <c>ITextCleanupService.CompleteAsync</c>.
+/// <c>ITextCleanupService.CompleteAsync</c>, which dash-normalizes its answer before returning, so
+/// suggested written forms arrive free of em/en dashes. That only ever rewrites the value inside a
+/// JSON string, never a structural character, so parsing here is unaffected.
 /// </summary>
 public static class AiDictionarySuggester
 {
@@ -234,7 +236,7 @@ public static class AiDictionarySuggester
     }
 
     // Flattens control characters (which could smuggle extra lines) to spaces, collapses runs of
-    // whitespace, and trims — dictionary data, never prompt instructions.
+    // whitespace, and trims; dictionary data, never prompt instructions.
     private static string Normalize(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))

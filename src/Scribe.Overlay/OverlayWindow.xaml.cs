@@ -25,7 +25,7 @@ public sealed partial class OverlayWindow : Window
 
     // The red "intelligence failed" flash holds the pill on screen briefly so the user can read it,
     // then hides itself. A Hide that arrives during the hold (the Idle-state hide right after
-    // processing) is ignored until the hold elapses — ported from the WPF overlay's behaviour.
+    // processing) is ignored until the hold elapses; ported from the WPF overlay's behaviour.
     private static readonly TimeSpan FailedHold = TimeSpan.FromMilliseconds(1300);
     private static readonly TimeSpan RecordingWarningHold = TimeSpan.FromMilliseconds(1800);
 
@@ -60,7 +60,7 @@ public sealed partial class OverlayWindow : Window
 
         SizeAndPosition();
 
-        // Lifecycle tracing — the whole point of the rebuild is to see every transition.
+        // Lifecycle tracing: the whole point of the rebuild is to see every transition.
         Activated += OnActivated;
         Closed += OnClosed;
         VisibilityChanged += OnVisibilityChanged;
@@ -83,7 +83,7 @@ public sealed partial class OverlayWindow : Window
             presenter.IsResizable = false;
             presenter.IsMaximizable = false;
             presenter.IsMinimizable = false;
-            // NOTE: deliberately NOT using presenter.IsAlwaysOnTop — it is known to break
+            // NOTE: deliberately NOT using presenter.IsAlwaysOnTop; it is known to break
             // WS_EX_TRANSPARENT click-through. Top-most is asserted via SetWindowPos instead.
             OverlayLog.Write("OverlayWindow.ConfigurePresenter borderless overlapped presenter applied");
         }
@@ -108,7 +108,7 @@ public sealed partial class OverlayWindow : Window
     }
 
     // Windows 11's compositor draws a 1px non-client border and rounded corners on every top-level
-    // window, even borderless ones — the visible rectangle around the otherwise transparent pill.
+    // window, even borderless ones; the visible rectangle around the otherwise transparent pill.
     // Suppress both so only the XAML card is ever visible. Best-effort: on Windows 10 (or if DWM
     // rejects the attributes) the calls fail with an HRESULT and the pill simply keeps the frame.
     private void RemoveDwmFrame()
@@ -447,7 +447,7 @@ public sealed partial class OverlayWindow : Window
         OverlayLog.Write("OverlayWindow.Closed");
     }
 
-    /// <summary>One-line snapshot of the window's true state — the core diagnostic signal.</summary>
+    /// <summary>One-line snapshot of the window's true state: the core diagnostic signal.</summary>
     private void LogState(string phase)
     {
         try

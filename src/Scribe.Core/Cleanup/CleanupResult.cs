@@ -29,7 +29,7 @@ public enum CleanupOutcome
 /// safe to inject: on <see cref="CleanupOutcome.Failed"/> it is the original raw input, so dictation is
 /// never lost. <see cref="FailureReason"/> is set on <see cref="CleanupOutcome.Failed"/> and may also be
 /// set on a successful <see cref="CleanupOutcome.Cleaned"/> result to flag a *partial* failure (some
-/// segments of a long, chunked dictation failed while others succeeded) — in that case the text is still
+/// segments of a long, chunked dictation failed while others succeeded); in that case the text is still
 /// the best available cleaned output and no hard failure is signalled.
 /// </summary>
 /// <param name="Text">The text to inject (cleaned, unchanged, or the raw fallback).</param>

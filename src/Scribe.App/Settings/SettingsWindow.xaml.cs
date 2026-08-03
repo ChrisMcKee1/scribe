@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
@@ -207,8 +207,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         UpdateStatusText.Text = _updates?.PendingVersion is { } pending
-            ? $"Scribe {UpdateService.RunningVersion} — {pending} is downloaded and ready to install."
-            : $"Scribe {UpdateService.RunningVersion} — use Check for updates when you want to connect.";
+            ? $"Scribe {UpdateService.RunningVersion}. {pending} is downloaded and ready to install."
+            : $"Scribe {UpdateService.RunningVersion}. Use Check for updates when you want to connect.";
         UpdateApplyButton.Visibility = _updates?.PendingVersion is null ? Visibility.Collapsed : Visibility.Visible;
         if (_updates is not null)
         {
@@ -263,6 +263,81 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return persisted;
     }
 
+    /// <summary>
+    /// Persists one entry from the tray's quick-add popup and mirrors it into this open grid.
+    ///
+    /// This has to exist because <see cref="IDictionaryRepository.SaveAll"/> deletes stored rows
+    /// that are missing from the grid: an entry written straight to the repository while this
+    /// window is open would be silently destroyed the next time the user pressed Save here. That is
+    /// the same hazard <see cref="PersistLearnedDictionaryEntries"/> guards against.
+    ///
+    /// Identity is the spoken form rather than the id, because the grid can hold a matching row
+    /// that has never been saved (id 0). Keying off the id would insert a second row for a spoken
+    /// form that already has one, which the save-time duplicate check then rejects.
+    /// </summary>
+    public DictionaryEntry ApplyQuickDictionaryEntry(DictionaryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        var wasDirty = DictionarySignature() != _dictionarySnapshot;
+
+        var row = _rows.FirstOrDefault(r =>
+            string.Equals(r.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase));
+
+        DictionaryEntry persisted;
+        if (row is null)
+        {
+            persisted = _dictionary.Add(entry with { Id = 0 });
+            _rows.Add(new DictionaryRow
+            {
+                Id = persisted.Id,
+                Pattern = persisted.Pattern,
+                Replacement = persisted.Replacement,
+                WholeWord = persisted.WholeWord,
+                Enabled = persisted.Enabled,
+            });
+        }
+        else
+        {
+            // An unsaved grid row has no database identity yet, so it is inserted and the row is
+            // given the new id. Leaving it at 0 would make the grid's next save insert it a second
+            // time, on top of the row the popup just created.
+            persisted = row.Id == 0
+                ? _dictionary.Add(entry with { Id = 0 })
+                : entry with { Id = row.Id };
+
+            if (row.Id != 0)
+            {
+                _dictionary.Update(persisted);
+            }
+
+            row.Id = persisted.Id;
+            row.Pattern = persisted.Pattern;
+            row.Replacement = persisted.Replacement;
+            row.WholeWord = persisted.WholeWord;
+            row.Enabled = persisted.Enabled;
+        }
+
+        // A quick add must not turn an otherwise untouched window dirty and start prompting the
+        // user to save edits they never made.
+        if (!wasDirty)
+        {
+            _dictionarySnapshot = DictionarySignature();
+        }
+
+        return persisted;
+    }
+
+    /// <summary>
+    /// The dictionary as the user currently sees it, including edits that have not been saved yet.
+    /// The quick-add popup checks duplicates against this rather than the database so it agrees
+    /// with what is on screen.
+    /// </summary>
+    public IReadOnlyList<DictionaryEntry> CurrentDictionaryEntries() => _rows
+        .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+        .Select(r => new DictionaryEntry(
+            r.Id, r.Pattern.Trim(), r.Replacement.Trim(), r.WholeWord, r.Enabled))
+        .ToList();
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {
         if (_updates?.IsStoreManaged == true)
@@ -273,7 +348,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (_updates is null)
         {
-            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build — updates apply to installed builds only).";
+            UpdateStatusText.Text = $"Scribe {UpdateService.RunningVersion} (dev build, updates apply to installed builds only).";
             return;
         }
 
@@ -323,11 +398,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // On success this never returns — the process exits, the update applies, and Scribe
+        // On success this never returns; the process exits, the update applies, and Scribe
         // relaunches on the new version.
         if (_updates is null || !_updates.ApplyNowAndRestart())
         {
-            UpdateStatusText.Text = "Couldn't restart into the update — it will install when you quit Scribe.";
+            UpdateStatusText.Text = "Couldn't restart into the update. It will install when you quit Scribe.";
         }
     }
 
@@ -586,7 +661,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             foreach (var device in _audio.GetInputDevices())
             {
-                var label = device.IsDefault ? $"{device.Name} — default" : device.Name;
+                var label = device.IsDefault ? $"{device.Name} (default)" : device.Name;
                 choices.Add(new DeviceChoice(device.Id, label));
             }
         }
@@ -600,7 +675,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             choices.Add(new DeviceChoice(
                 _settings.InputDeviceId,
-                $"Unavailable — {_settings.InputDeviceName ?? "saved microphone"}",
+                $"Unavailable: {_settings.InputDeviceName ?? "saved microphone"}",
                 _settings.InputDeviceName));
         }
 
@@ -625,8 +700,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
         NewlineCombo.ItemsSource = new[]
         {
-            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals (recommended)"),
-            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart: one line in terminals (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line, never send Enter"),
             new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
         };
     }
@@ -682,9 +757,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiProviderCombo.DisplayMemberPath = nameof(ProviderChoice.Label);
         AiProviderCombo.ItemsSource = new[]
         {
-            new ProviderChoice(CleanupProvider.FoundryLocal, "On-device — Foundry Local"),
-            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry — your Azure sign-in"),
-            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Custom endpoint — Ollama, LM Studio, OpenRouter…"),
+            new ProviderChoice(CleanupProvider.FoundryLocal, "On-device (Foundry Local)"),
+            new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry (your Azure sign-in)"),
+            new ProviderChoice(CleanupProvider.OpenAiCompatible, "Custom endpoint (Ollama, LM Studio, OpenRouter)"),
         };
 
         // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
@@ -1246,6 +1321,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _dictionarySnapshot = string.Empty;
     private string _snippetSnapshot = string.Empty;
 
+    /// <summary>
+    /// Which libraries are on. Used to detect a change made while an asynchronous scan was running,
+    /// since a library toggled mid-scan silently changes which terms the verdict applies to.
+    /// </summary>
+    private string LibrarySignature() => string.Join(
+        "", _libraryRows.Select(r => $"{r.Id}|{r.Enabled}"));
+
+    /// <summary>Set once the window has closed, so async continuations know not to touch its controls.</summary>
+    private bool _closed;
+
     private void LoadSystemCapability()
     {
         try
@@ -1695,7 +1780,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // --- Filterable model dropdowns --------------------------------------------------------
     // The pickers are editable ComboBoxes doing double duty: click the chevron to browse every
     // discovered model, or type to quick-filter the open list. Users shouldn't need to know a
-    // deployment's name up front — browsing is the primary path, search the accelerator.
+    // deployment's name up front; browsing is the primary path, search the accelerator.
 
     private bool _suppressComboFilter;
 
@@ -1823,7 +1908,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
             AiStatusText.Text = available
-                ? "Foundry Local is available. The selected model downloads on first use (about 1–2 GB)."
+                ? "Foundry Local is available. The selected model downloads on first use (about 1 to 2 GB)."
                 : "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
 
             if (available)
@@ -2949,7 +3034,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         else if (string.IsNullOrWhiteSpace(preferEndpoint) && string.IsNullOrWhiteSpace(preferDeployment)
                  && items.Count > 0)
         {
-            // Nothing entered yet — pick the first discovered deployment and let it autofill the fields.
+            // Nothing entered yet; pick the first discovered deployment and let it autofill the fields.
             AzureModelBox.Text = items[0];
             ApplyAzureSelection(items[0]);
         }
@@ -2979,11 +3064,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (_azureModelMap.ContainsKey(label))
             {
                 // Same deployment name in the same-named account: fall back to the subscription.
-                label = $"{baseLabel}  —  {deployment.SubscriptionName}";
+                label = $"{baseLabel}  in  {deployment.SubscriptionName}";
                 var i = 2;
                 while (_azureModelMap.ContainsKey(label))
                 {
-                    label = $"{baseLabel}  —  {deployment.SubscriptionName} ({i++})";
+                    label = $"{baseLabel}  in  {deployment.SubscriptionName} ({i++})";
                 }
             }
 
@@ -3163,6 +3248,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // Async handlers that await a background scan resume after this point. Touching a control,
+        // or owning a dialog with a closed window, throws from an async void continuation, which
+        // takes the process down rather than surfacing anywhere useful.
+        _closed = true;
+
         // Closing mid-capture must never leave the global hook in pass-through, or the
         // push-to-talk key would stay dead until the app restarts.
         if (_capturing)
@@ -3419,7 +3509,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Validate the dictionary before touching anything: a duplicate spoken form would violate
         // the unique index, and the user deserves a pointer to the offending row rather than a
         // database error after half the settings were applied. Jump to the section that owns the
-        // problem first — the dialog is meaningless while another page is showing.
+        // problem first; the dialog is meaningless while another page is showing.
         List<DictionaryEntry>? entries = null;
         DictionaryRow? duplicateRow = null;
         if (dictionaryDirty)
@@ -3603,14 +3693,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
-            // no-op — important now that Save keeps the window open for page-by-page editing.
+            // no-op; important now that Save keeps the window open for page-by-page editing.
             _dictionarySnapshot = DictionarySignature();
             _snippetSnapshot = SnippetSignature();
             return true;
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            // Constraint safety net for anything grid validation didn't anticipate — still phrased
+            // Constraint safety net for anything grid validation didn't anticipate; still phrased
             // for a person, not a stack trace.
             ShowSection(SectionDictionary);
             ShowThemedMessage(
@@ -3750,8 +3840,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ProfileNewlineCombo.ItemsSource = new[]
         {
             new ProfileNewlineChoice(null, "Use the global setting"),
-            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart — one line in terminals"),
-            new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line — never send Enter"),
+            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Smart: one line in terminals"),
+            new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line, never send Enter"),
             new ProfileNewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks exactly as dictated"),
         };
 
@@ -3916,7 +4006,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _profileRows.Select(r => new ProfileBuilder.Row(
                 r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
 
-    private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label);
+    private sealed record ProfileNewlineChoice(NewlineInjectionMode? Mode, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     // --- Overlay position picker -----------------------------------------------------------
 
@@ -4099,6 +4192,249 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    // --- Dictionary cleanup ---------------------------------------------------------------
+
+    /// <summary>
+    /// Scans dictation history for terms that have never earned their place and offers to retire
+    /// them. Dead terms are not free: the enabled dictionary is rendered into the AI cleanup prompt
+    /// on every dictation, capped at <see cref="CleanupPrompt.MaxGlossaryTermsLocal"/> terms for
+    /// on-device models, so entries the user never says displace the ones they do.
+    /// </summary>
+    private async void DictionaryCleanupButton_Click(object sender, RoutedEventArgs e)
+    {
+        DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+        LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+
+        // The grid is the live truth, as it is for "Learn from history". Judging the saved rows
+        // instead would offer to delete an entry the user added thirty seconds ago.
+        var current = _rows
+            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+            .Select(r => new DictionaryEntry(
+                r.Id,
+                r.Pattern.Trim(),
+                (r.Replacement ?? string.Empty).Trim(),
+                r.WholeWord,
+                r.Enabled))
+            .ToList();
+
+        // Likewise for libraries: a library toggled on in this session but not yet saved is part of
+        // the effective dictionary the moment the user saves, so it belongs in the scan.
+        var enabledIds = new HashSet<string>(
+            _libraryRows.Where(r => r.Enabled).Select(r => r.Id),
+            StringComparer.OrdinalIgnoreCase);
+        var enabledLibraries = _loadedLibraries.Where(l => enabledIds.Contains(l.Id)).ToList();
+
+        // The scan is asynchronous and its findings name specific rows, so anything the user changes
+        // while it runs invalidates the result. Applying a stale verdict could turn off a rule they
+        // had just edited or re-enabled.
+        var dictionaryBefore = DictionarySignature();
+        var librariesBefore = LibrarySignature();
+
+        DictionaryCleanupButton.IsEnabled = false;
+        DictionaryCleanupBusy.Visibility = Visibility.Visible;
+        DictionaryUsageReport report;
+        try
+        {
+            // Off the UI thread: this reads up to a thousand transcripts and runs a regex per term
+            // across the lot, which is quick but not instant on a large dictionary.
+            var transcripts = await Task.Run(
+                () => _history.GetRecent(1000).Select(h => h.Text).ToList());
+            report = await Task.Run(
+                () => DictionaryUsageAnalyzer.Analyze(transcripts, current, enabledLibraries));
+        }
+        catch (Exception ex)
+        {
+            if (!_closed)
+            {
+                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+            }
+
+            return;
+        }
+        finally
+        {
+            if (!_closed)
+            {
+                DictionaryCleanupButton.IsEnabled = true;
+                DictionaryCleanupBusy.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        // Showing a dialog owned by a closed window throws, and this handler is async void, so the
+        // exception would take the process down rather than surfacing anywhere useful.
+        if (_closed)
+        {
+            return;
+        }
+
+        if (DictionarySignature() != dictionaryBefore || LibrarySignature() != librariesBefore)
+        {
+            ShowInfo(
+                "Your dictionary changed while the scan was running, so the results are out of date. "
+                + "Run the cleanup again.",
+                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!report.HasEnoughEvidence || !report.HasFindings)
+        {
+            ShowThemedMessage("Clean up unused terms", report.Summary);
+            return;
+        }
+
+        var choice = DictionaryCleanupWindow.Show(this, report);
+        if (choice is null)
+        {
+            return;
+        }
+
+        await ApplyCleanupAsync(choice);
+    }
+
+    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice)
+    {
+        // Match back by spoken form rather than id: the grid can hold a row that has never been
+        // saved (id 0), and two of those would be indistinguishable by id.
+        var patterns = new HashSet<string>(
+            choice.Entries.Select(en => en.Pattern.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        var targets = _rows
+            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern) && patterns.Contains(r.Pattern.Trim()))
+            .ToList();
+
+        var libraryTargets = choice.Libraries
+            .Select(usage => (Usage: usage, Row: _libraryRows.FirstOrDefault(
+                r => string.Equals(r.Id, usage.Id, StringComparison.OrdinalIgnoreCase))))
+            .Where(t => t.Row is { Enabled: true })
+            .ToList();
+
+        if (choice.Delete && targets.Count > 0 && !await ConfirmAsync(
+                "Delete these entries?",
+                $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
+                + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
+                + "keeps them in the list so you can switch them back on later."
+                + (libraryTargets.Count > 0
+                    ? $" The {libraryTargets.Count} selected "
+                        + $"{(libraryTargets.Count == 1 ? "library is" : "libraries are")} switched off "
+                        + "rather than deleted, because their terms are not stored in your dictionary."
+                    : string.Empty),
+                "Delete"))
+        {
+            return;
+        }
+
+        if (choice.Delete)
+        {
+            foreach (var row in targets)
+            {
+                _rows.Remove(row);
+            }
+        }
+        else
+        {
+            foreach (var row in targets)
+            {
+                row.Enabled = false;
+            }
+        }
+
+        // A library is all or nothing, so switching one off to shed its dead weight would take its
+        // working terms with it. Copying those into the user's own dictionary first is what makes a
+        // partly used library actionable at all, which is the common case for a shipped pack.
+        var existing = new HashSet<string>(
+            _rows.Where(r => !string.IsNullOrWhiteSpace(r.Pattern)).Select(r => r.Pattern.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        var preserved = 0;
+        var collided = 0;
+        foreach (var (usage, row) in libraryTargets)
+        {
+            row!.Enabled = false;
+
+            foreach (var term in usage.KeepTerms)
+            {
+                var pattern = term.Pattern.Trim();
+                if (pattern.Length == 0)
+                {
+                    continue;
+                }
+
+                // A duplicate spoken form blocks the whole save, so a colliding term can never be
+                // copied in. Usually the existing row already does the same job, but if it is
+                // switched off it does not, and the user has to be told rather than quietly losing
+                // a rule that works today.
+                if (!existing.Add(pattern))
+                {
+                    if (!_rows.Any(r => r.Enabled
+                        && !string.IsNullOrWhiteSpace(r.Pattern)
+                        && string.Equals(r.Pattern.Trim(), pattern, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        collided++;
+                    }
+
+                    continue;
+                }
+
+                _rows.Add(new DictionaryRow
+                {
+                    Id = 0,
+                    Pattern = pattern,
+                    Replacement = term.Replacement,
+                    WholeWord = term.WholeWord,
+                    Enabled = true,
+                });
+                preserved++;
+            }
+        }
+
+        // LibraryRow raises no change notification, so the grid keeps painting the old tick until it
+        // is told to re-read. Committing first because refreshing mid-edit throws.
+        if (libraryTargets.Count > 0)
+        {
+            LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+            LibraryGrid.Items.Refresh();
+        }
+
+        RefreshDictionaryStatus();
+
+        var parts = new List<string>();
+        if (targets.Count > 0)
+        {
+            parts.Add($"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} "
+                + (choice.Delete ? "removed" : "turned off"));
+        }
+
+        if (libraryTargets.Count > 0)
+        {
+            parts.Add($"{libraryTargets.Count} "
+                + $"{(libraryTargets.Count == 1 ? "library" : "libraries")} turned off");
+        }
+
+        if (preserved > 0)
+        {
+            parts.Add($"{preserved} still-used {(preserved == 1 ? "term" : "terms")} kept in your dictionary");
+        }
+
+        if (parts.Count == 0)
+        {
+            return;
+        }
+
+        var message = $"{string.Join(", ", parts)}. Review the change, then save to apply it.";
+        if (collided > 0)
+        {
+            ShowInfo(
+                message + $" {collided} {(collided == 1 ? "term was" : "terms were")} not copied across "
+                + "because you already have an entry with the same wording that is switched off. Turn "
+                + "it back on if you still want it.",
+                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            return;
+        }
+
+        ShowInfo(message);
+    }
+
     // --- History --------------------------------------------------------------------------
 
     private void LoadHistory()
@@ -4132,7 +4468,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         const int historyLimit = 5000;
         var loadVersion = Interlocked.Increment(ref _usageLoadVersion);
         var period = UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1];
-        UsageCoverageText.Text = "Calculating from local history...";
+        UsageCoverageText.Text = "Calculating from local history…";
 
         try
         {
@@ -4285,7 +4621,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         _usageInsightRunning = true;
         RefreshUsageInsightAvailability();
-        UsageInsightText.Text = "Generating insight...";
+        UsageInsightText.Text = "Generating insight…";
         try
         {
             var response = await _cleanup.CompleteAsync(
@@ -4508,7 +4844,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     /// <summary>
-    /// Merges imported entries into the grid (not the database — the save button owns persistence,
+    /// Merges imported entries into the grid (not the database; the save button owns persistence,
     /// so an import can still be cancelled). Matching is by spoken form, case-insensitive, mirroring
     /// the duplicate rule the save validation enforces.
     /// </summary>
@@ -4551,7 +4887,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private static string StripDefaultSuffix(string name)
     {
-        const string suffix = " — default";
+        const string suffix = " (default)";
         return name.EndsWith(suffix, StringComparison.Ordinal)
             ? name[..^suffix.Length]
             : name;
@@ -4562,16 +4898,39 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
 
-    private sealed record DeviceChoice(string? Id, string Name, string? PersistedName = null);
+    // These records back ComboBoxes that use DisplayMemberPath, which sets what is drawn but not
+    // what is announced: without a ToString override a screen reader reads the record's default
+    // representation ("ProviderChoice { Provider = FoundryLocal, Label = ... }") instead of the
+    // option, so the lists are unusable by ear.
+    private sealed record DeviceChoice(string? Id, string Name, string? PersistedName = null)
+    {
+        public override string ToString() => Name;
+    }
 
-    private sealed record InjectionChoice(InjectionMethod Method, string Label);
+    private sealed record InjectionChoice(InjectionMethod Method, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
-    private sealed record NewlineChoice(NewlineInjectionMode Mode, string Label);
+    private sealed record NewlineChoice(NewlineInjectionMode Mode, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
-    private sealed record ProviderChoice(CleanupProvider Provider, string Label);
-    private sealed record PromptStyleChoice(CleanupPromptStyle Style, string Label);
+    private sealed record ProviderChoice(CleanupProvider Provider, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record PromptStyleChoice(CleanupPromptStyle Style, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     private sealed record UsagePeriodChoice(int? Days, string Label)
     {
+        public override string ToString() => Label;
+
         public static IReadOnlyList<UsagePeriodChoice> All { get; } =
         [
             new(7, "Last 7 days"),
@@ -4759,6 +5118,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Template { get; set; } = string.Empty;
         public bool Enabled { get; set; } = true;
 
+        // The ListBox draws Phrase via DisplayMemberPath, but UI Automation falls back to
+        // ToString(), so without this the list reads out as a column of identical type names.
+        public override string ToString() => Phrase;
+
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
@@ -4783,6 +5146,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Processes { get; set; } = string.Empty;
         public string WritingStyle { get; set; } = string.Empty;
         public NewlineInjectionMode? NewlineHandling { get; set; }
+
+        public override string ToString() => Name;
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }

@@ -9,12 +9,12 @@ public enum OverlayState
     /// <summary>Hidden / parked (no pill visible).</summary>
     Hidden,
 
-    /// <summary>Capturing microphone input — pulsing red dot + live level meter.</summary>
+    /// <summary>Capturing microphone input: pulsing red dot and live level meter.</summary>
     Listening,
 
-    /// <summary>Transcribing or AI-polishing — bouncing dots.</summary>
+    /// <summary>Transcribing or AI-polishing: bouncing dots.</summary>
     Processing,
 
-    /// <summary>AI cleanup failed at runtime — brief red notice while falling back to raw text.</summary>
+    /// <summary>AI cleanup failed at runtime; brief red notice while falling back to raw text.</summary>
     Failed,
 }

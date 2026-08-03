@@ -4,7 +4,7 @@ namespace Scribe.Core.Persistence;
 
 /// <summary>
 /// Stores AI cleanup runtime failures so Settings can surface them, with explicit clear and a
-/// rolling prune. Distinct from the general history log — these are diagnostic, user-clearable, and
+/// rolling prune. Distinct from the general history log; these are diagnostic, user-clearable, and
 /// short-lived by design.
 /// </summary>
 public interface ICleanupFailureLog

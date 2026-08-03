@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.PostProcessing;
@@ -54,7 +54,7 @@ public static class DictionaryLibraryCsv
                     continue; // tolerate blank lines before the header
                 }
 
-                break; // reached the header/data — metadata only lives at the top
+                break; // reached the header/data; metadata only lives at the top
             }
         }
 

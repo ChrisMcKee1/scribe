@@ -119,7 +119,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         CancelPreview();
         _position = position;
-        // Don't launch the helper just to move it — a relaunch replays the anchor from _position.
+        // Don't launch the helper just to move it; a relaunch replays the anchor from _position.
         Enqueue("POSITION " + position, ensureAlive: false);
         Enqueue(_desiredState, ensureAlive: false);
     }
@@ -207,7 +207,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
         catch (InvalidOperationException)
         {
-            // queue completed between the guard and the add — overlay is shutting down
+            // queue completed between the guard and the add; overlay is shutting down
         }
     }
 
@@ -284,7 +284,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         // Clean up any half-dead state (crashed process, broken pipe) before relaunching.
         KillProcess();
 
-        // A previously-resolved path can vanish if a dev rebuild moves the overlay's output — drop it
+        // A previously-resolved path can vanish if a dev rebuild moves the overlay's output; drop it
         // so we re-resolve rather than relaunch-looping against a dead path.
         if (_exePath is not null && !File.Exists(_exePath))
         {
@@ -334,12 +334,12 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
         catch (Exception ex)
         {
-            // Only genuine launch/connect I/O is inside the try — and logging here is non-throwing — so
+            // Only genuine launch/connect I/O is inside the try, and logging here is non-throwing, so
             // this catch reliably means the overlay really failed to start.
             TryLog(LogLevel.Error, ex, "Failed to launch/connect the overlay process at {Exe}.", _exePath);
             if (_exePath is not null && !File.Exists(_exePath))
             {
-                _exePath = null; // the exe vanished mid-flight — force re-resolution next time
+                _exePath = null; // the exe vanished mid-flight, so force re-resolution next time
             }
 
             KillProcess();
@@ -348,7 +348,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         // Logged only after a confirmed-good launch, and via a non-throwing helper. Previously this sat
         // INSIDE the try above, so a transient log-file lock threw here, was caught as a "launch
-        // failure", and KillProcess() tore down a perfectly healthy overlay — a root cause of the
+        // failure", and KillProcess() tore down a perfectly healthy overlay; this was a root cause of the
         // intermittent "pill disappears" regressions.
         TryLog(
             LogLevel.Information, null,
@@ -495,7 +495,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private string? ResolveOverlayExe()
     {
-        // (1) Explicit override — handy for testing a specific overlay build.
+        // (1) Explicit override, handy for testing a specific overlay build.
         var env = Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_EXE");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env))
         {
@@ -578,8 +578,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     /// <summary>
     /// A process-wide Win32 job object configured with <c>KILL_ON_JOB_CLOSE</c>. The overlay process is
-    /// assigned to it at launch, so when this (the engine) process exits for any reason — clean shutdown,
-    /// crash, or external force-kill — the OS tears down the job and kills the overlay with it. This is the
+    /// assigned to it at launch, so when this (the engine) process exits for any reason (clean shutdown,
+    /// crash, or external force-kill) the OS tears down the job and kills the overlay with it. This is the
     /// authoritative guard against orphaning, independent of the pipe and of any managed teardown running.
     /// The job handle is intentionally never closed; it is released by the OS as our process dies, which is
     /// exactly the moment the kill should fire.

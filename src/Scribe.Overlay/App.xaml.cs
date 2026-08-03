@@ -23,7 +23,7 @@ public partial class App : Application
         OverlayLog.Write("App.ctor enter (process start)");
         InitializeComponent();
 
-        // Surface any unhandled XAML-thread exception into the log instead of dying silently —
+        // Surface any unhandled XAML-thread exception into the log instead of dying silently;
         // a silent exit is exactly how the old overlay hid its failures.
         UnhandledException += (_, e) =>
         {
@@ -92,10 +92,10 @@ public partial class App : Application
         OverlayLog.Write($"App.OnLaunched exit (standalone, initial state={initial})");
     }
 
-    /// <summary>The engine closed the pipe (it exited or crashed) — exit so we never orphan ourselves.</summary>
+    /// <summary>The engine closed the pipe (it exited or crashed); exit so we never orphan ourselves.</summary>
     private void OnPipeDisconnected()
     {
-        OverlayLog.Write("App.OnPipeDisconnected — exiting overlay process");
+        OverlayLog.Write("App.OnPipeDisconnected: exiting overlay process");
         var queue = _window?.DispatcherQueue;
         if (queue is not null)
         {
@@ -152,8 +152,8 @@ public partial class App : Application
         }
         catch (ArgumentException)
         {
-            // Parent already exited before we even looked — nothing to drive this overlay; exit now.
-            OverlayLog.Write($"Parent pid={parentPid} not found at startup — overlay self-terminating");
+            // Parent already exited before we even looked; nothing to drive this overlay, so exit now.
+            OverlayLog.Write($"Parent pid={parentPid} not found at startup, overlay self-terminating");
             Environment.Exit(0);
             return;
         }
@@ -176,7 +176,7 @@ public partial class App : Application
                 return;
             }
 
-            OverlayLog.Write($"Parent process {parentPid} exited — overlay self-terminating");
+            OverlayLog.Write($"Parent process {parentPid} exited, overlay self-terminating");
             Environment.Exit(0);
         })
         {

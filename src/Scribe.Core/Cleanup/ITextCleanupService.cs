@@ -28,7 +28,7 @@ public interface ITextCleanupService : IAsyncDisposable
 
     /// <summary>
     /// Cleans a single transcription. The returned <see cref="CleanupResult.Text"/> is always safe to
-    /// inject — on a skip or a runtime failure it is the original input — and the
+    /// inject; on a skip or a runtime failure it is the original input, and the
     /// <see cref="CleanupResult.Outcome"/> tells the caller whether the model ran, was skipped (disabled,
     /// not ready, or empty input), or failed at runtime. Never throws.
     /// <para>

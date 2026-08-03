@@ -33,8 +33,8 @@ public interface IOverlayController
     void SetPosition(OverlayPosition position);
 
     /// <summary>
-    /// Briefly shows the pill at a candidate position — with a synthetic level-meter sweep so it
-    /// looks alive — then hides it and restores the applied position. Lets the settings window
+    /// Briefly shows the pill at a candidate position, with a synthetic level-meter sweep so it
+    /// looks alive, then hides it and restores the applied position. Lets the settings window
     /// demonstrate a position before the user saves it.
     /// </summary>
     void Preview(OverlayPosition position);

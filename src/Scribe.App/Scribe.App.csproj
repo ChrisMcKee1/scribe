@@ -34,7 +34,7 @@
   <!-- The offline speech models are a hard runtime dependency. They live in source under .\models
        (fetched by scripts/Download-Models.ps1, gitignored) and are copied next to the executable so
        ModelLocator finds them exe-local during development AND they ship inside the published /
-       Velopack installer — giving a fully-offline first run with no parent-directory probing. -->
+       Velopack installer, giving a fully-offline first run with no parent-directory probing. -->
   <ItemGroup>
     <None Remove="models\**" />
     <None Include="models\**" CopyToOutputDirectory="PreserveNewest" />

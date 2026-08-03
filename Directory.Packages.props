@@ -6,7 +6,7 @@
   <ItemGroup>
     <!-- WinUI 3 / Windows App SDK 2.2.0 (latest stable) powers the standalone Scribe.Overlay
          recording pill. 2.0 introduced SystemBackdropElement (clipped Acrylic/Mica anywhere in the
-         tree with a CornerRadius) — the supported floating-glass-pill recipe. The pill runs as its
+         tree with a CornerRadius), the supported floating-glass-pill recipe. The pill runs as its
          own kept-warm, unpackaged self-contained process driven by the WPF app over a named pipe,
          which sidesteps the .NET 10 WPF AllowsTransparency/UpdateLayeredWindow "black box" failure
          (dotnet/wpf #11321) by rendering through DWM composition instead of the legacy layered path. -->
@@ -57,14 +57,14 @@
          GetResponsesClient().AsAIAgent (the Responses API), and Foundry Local uses
          GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
          into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
-         Azure.AI.Projects' AIProjectClient — the framework's native Foundry path, no server-side agent. -->
+         Azure.AI.Projects' AIProjectClient, the framework's native Foundry path, no server-side agent. -->
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.13.0" />
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.13.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
-         user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens — no key stored). -->
+         user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored). -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.5.2" />
     <!-- Azure Resource Graph powers a single tenant-wide KQL query to enumerate every chat

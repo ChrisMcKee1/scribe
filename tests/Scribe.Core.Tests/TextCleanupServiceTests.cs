@@ -28,8 +28,8 @@ public sealed class TextCleanupServiceTests
     {
         await using var svc = new TextCleanupService(NullLogger<TextCleanupService>.Instance);
 
-        // "Uncheck" the box. Configure with a disabled snapshot flips the status synchronously — there
-        // is no background work and no relaunch — so the next dictation passes raw text straight through.
+        // "Uncheck" the box. Configure with a disabled snapshot flips the status synchronously; there
+        // is no background work and no relaunch, so the next dictation passes raw text straight through.
         svc.Configure(CleanupOptions.Disabled);
 
         Assert.Equal(CleanupStatus.Disabled, svc.Status);
@@ -47,7 +47,7 @@ public sealed class TextCleanupServiceTests
 
         // "Check" the box. An Azure provider with no endpoint configured yet is enabled but not
         // actionable, so the engine reacts synchronously (leaves Disabled for Unavailable) without
-        // spawning a real model or a network call. The point is that it reacts at all — immediately,
+        // spawning a real model or a network call. The point is that it reacts at all: immediately,
         // rather than waiting for a relaunch.
         svc.Configure(CleanupOptions.Disabled with { Enabled = true, Provider = CleanupProvider.AzureFoundry });
         Assert.NotEqual(CleanupStatus.Disabled, svc.Status);

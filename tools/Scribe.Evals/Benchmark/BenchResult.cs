@@ -1,6 +1,6 @@
 namespace Scribe.Evals.Benchmark;
 
-/// <summary>Per-dimension judge scores (0–100). Null when the model produced no gradable output.</summary>
+/// <summary>Per-dimension judge scores (0 to 100). Null when the model produced no gradable output.</summary>
 internal sealed record BenchDimensions(int Mechanics, int Fidelity, int Disfluency, int Instruction);
 
 /// <summary>Token usage for one timed cleanup request.</summary>
@@ -47,7 +47,7 @@ internal sealed record BenchResult
     public int Runs { get; init; }
     public double[] AllMs { get; init; } = [];
 
-    public int? Quality { get; init; }                     // judge overall 0–100
+    public int? Quality { get; init; }                     // judge overall 0 to 100
     public string? Grade { get; init; }                    // derived from Quality
     public BenchDimensions? Dims { get; init; }
     public string[] Flags { get; init; } = [];
@@ -62,7 +62,7 @@ internal sealed record BenchResult
     public required string LoadedAtUtc { get; init; }
     public double LoadSeconds { get; init; }               // time from Configure to Ready (download+load)
 
-    /// <summary>Letter grade from a 0–100 score using a conventional US scale.</summary>
+    /// <summary>Letter grade from a 0 to 100 score using a conventional US scale.</summary>
     public static string GradeFor(int score) => score switch
     {
         >= 97 => "A+",

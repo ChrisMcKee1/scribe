@@ -28,8 +28,8 @@ public interface IDictionaryLibraryService
     DictionaryLibrary Import(string csv, string? suggestedName);
 
     /// <summary>
-    /// Removes a custom library by id (deletes its file). Built-in libraries cannot be removed — turn
-    /// them off in settings instead — and attempting to throws.
+    /// Removes a custom library by id (deletes its file). Built-in libraries cannot be removed; turn
+    /// them off in settings instead, and attempting to throws.
     /// </summary>
     void Remove(string id);
 }

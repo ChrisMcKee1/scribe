@@ -130,7 +130,7 @@ internal static class BenchmarkInput
         return cases;
     }
 
-    // Windows SAPI via late-bound COM — no extra NuGet dependency. Writes 22 kHz 16-bit mono PCM.
+    // Windows SAPI via late-bound COM; no extra NuGet dependency. Writes 22 kHz 16-bit mono PCM.
     private static void SynthesizeWav(string text, string? speechMarkup, string wavPath)
     {
         var voiceType = Type.GetTypeFromProgID("SAPI.SpVoice")

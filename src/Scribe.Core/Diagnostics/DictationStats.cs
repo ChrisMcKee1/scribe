@@ -114,7 +114,7 @@ public static class DictationStats
 
     /// <summary>
     /// Linear-interpolation percentile over an ascending-sorted list (the R-7 / Excel method). With
-    /// a handful of samples this reads sensibly — the P95 of 3 dictations is near the max, not an
+    /// a handful of samples this reads sensibly; the P95 of 3 dictations is near the max, not an
     /// arbitrary bucket edge.
     /// </summary>
     internal static double Percentile(IReadOnlyList<double> sortedAscending, double p)

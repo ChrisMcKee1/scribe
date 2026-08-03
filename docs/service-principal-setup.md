@@ -114,7 +114,7 @@ Microsoft's Foundry RBAC guidance is explicit:
 > Machine Learning workspaces and Foundry hubs, not to Foundry projects or Foundry hosted agents. For
 > Foundry project access, use **Foundry User** or **Foundry Owner** instead.
 >
-> — [Role-based access control for Microsoft Foundry](https://learn.microsoft.com/azure/foundry/concepts/rbac-foundry)
+> Source: [Role-based access control for Microsoft Foundry](https://learn.microsoft.com/azure/foundry/concepts/rbac-foundry)
 
 `Cognitive Services User` may currently still work against a Foundry endpoint, but it is not the
 supported path and it is not what to build on. **Foundry User** is the least-privilege Foundry role

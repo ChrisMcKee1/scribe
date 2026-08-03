@@ -4,7 +4,7 @@ using Scribe.Core.Models;
 namespace Scribe.Core.PostProcessing;
 
 /// <summary>
-/// Mines recent dictation history for recurring jargon worth adding to the user dictionary — the
+/// Mines recent dictation history for recurring jargon worth adding to the user dictionary: the
 /// pragmatic version of "auto-learning": Scribe never sees the user's manual corrections after
 /// injection, but it can spot the technical terms they keep saying and offer to lock their
 /// spelling in. Deliberately high-precision patterns only (acronyms, CamelCase, digit-words like

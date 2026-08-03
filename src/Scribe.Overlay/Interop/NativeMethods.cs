@@ -41,13 +41,13 @@ internal static class NativeMethods
     internal static extern uint GetDpiForWindow(IntPtr hWnd);
 
     // DwmSetWindowAttribute attributes (Windows 11 build 22000+). Windows 11 paints a 1px
-    // non-client border and rounds the corners of every top-level window — including a borderless
-    // OverlappedPresenter — which shows up as a faint rectangle at the edge of the otherwise
+    // non-client border and rounds the corners of every top-level window, including a borderless
+    // OverlappedPresenter, which shows up as a faint rectangle at the edge of the otherwise
     // transparent pill window. Both attributes fail harmlessly (E_INVALIDARG) on Windows 10.
     internal const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     internal const uint DWMWA_BORDER_COLOR = 34;
 
-    // DWM_WINDOW_CORNER_PREFERENCE: never round — the pill draws its own corners in XAML.
+    // DWM_WINDOW_CORNER_PREFERENCE: never round; the pill draws its own corners in XAML.
     internal const int DWMWCP_DONOTROUND = 1;
 
     // Special COLORREF for DWMWA_BORDER_COLOR: suppress the border entirely.

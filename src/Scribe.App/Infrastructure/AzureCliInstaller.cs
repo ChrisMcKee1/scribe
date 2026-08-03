@@ -60,7 +60,7 @@ public sealed class AzureCliInstaller
 
     /// <summary>
     /// Installs the Azure CLI if absent, or upgrades it if present. Returns a user-facing message and
-    /// whether the operation succeeded. Never throws — winget/elevation problems degrade to guidance.
+    /// whether the operation succeeded. Never throws; winget/elevation problems degrade to guidance.
     /// </summary>
     public async Task<(bool Ok, string Message)> InstallOrUpdateAsync(CancellationToken ct = default)
     {
@@ -364,7 +364,7 @@ public sealed class AzureCliInstaller
         catch (OperationCanceledException)
         {
             // The caller's timeout (or an explicit cancel) fired. winget often spawns a separate
-            // installer child, so terminate the whole tree — otherwise the install keeps running in
+            // installer child, so terminate the whole tree; otherwise the install keeps running in
             // the background after we've reported a timeout, and a retry would overlap a live install.
             try
             {
@@ -377,7 +377,7 @@ public sealed class AzureCliInstaller
             }
             catch
             {
-                // Already exited or the kill raced its shutdown — nothing left to clean up.
+                // Already exited or the kill raced its shutdown; nothing left to clean up.
             }
 
             throw;

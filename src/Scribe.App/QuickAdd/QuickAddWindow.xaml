@@ -1,0 +1,195 @@
+<ui:FluentWindow x:Class="Scribe.App.QuickAdd.QuickAddWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="Add to dictionary"
+        Width="560" Height="620" MinWidth="480" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        WindowCornerPreference="Round">
+    <ui:FluentWindow.Resources>
+        <Style TargetType="TextBlock" x:Key="FieldLabel">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="Margin" Value="2,0,0,4"/>
+        </Style>
+
+        <!-- A word chip. Deliberately not a plain button: the selected state has to be obvious at a
+             glance, because it is the only confirmation that the pattern matches what Scribe heard. -->
+        <Style TargetType="ToggleButton" x:Key="WordChip">
+            <Setter Property="Margin" Value="0,0,4,4"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
+            <!-- A transcript with no whitespace tokenizes to one enormous chip. The panel wraps
+                 between chips, not inside one, so without a cap that chip is clipped off the edge
+                 with no way to scroll to it. -->
+            <Setter Property="MaxWidth" Value="320"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Chip"
+                                CornerRadius="5"
+                                Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center">
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chip" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chip" Property="Background"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="Chip" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorSecondaryBrush}"/>
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Add to dictionary">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="BookAdd24"/>
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <Grid Grid.Row="1" Margin="24,4,24,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" x:Name="SourcePanel">
+                <TextBlock Style="{StaticResource FieldLabel}" Text="FROM A RECENT DICTATION"/>
+                <ComboBox x:Name="RecentPicker"
+                          HorizontalAlignment="Stretch"
+                          AutomationProperties.Name="Recent dictation to correct"
+                          SelectionChanged="RecentPicker_SelectionChanged"/>
+                <TextBlock Margin="2,8,0,0"
+                           FontSize="12"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                           Text="Click the word Scribe got wrong. Drag or shift-click across several for a phrase, or just type it below."/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Margin="0,8,0,0"
+                    MinHeight="88"
+                    CornerRadius="6"
+                    Background="{DynamicResource ControlFillColorDefaultBrush}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Grid>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10,10,10,6">
+                        <ItemsControl x:Name="Chips">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- IsChecked is TwoWay so that a toggle arriving from assistive
+                                         technology writes back to the chip model instead of clobbering
+                                         the binding. A local set on a OneWay binding removes it, which
+                                         left the chip stuck highlighted while the phrase below it never
+                                         changed, so the window showed a selection it would not save. -->
+                                    <ToggleButton Style="{StaticResource WordChip}"
+                                                  Content="{Binding Text}"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  Tag="{Binding Index}"
+                                                  AutomationProperties.Name="{Binding Text}"
+                                                  Focusable="False"
+                                                  IsTabStop="False"
+                                                  PreviewMouseLeftButtonDown="Chip_MouseDown"
+                                                  MouseEnter="Chip_MouseEnter"
+                                                  Checked="Chip_Toggled"
+                                                  Unchecked="Chip_Toggled"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <TextBlock x:Name="NoTranscriptHint"
+                               Visibility="Collapsed"
+                               Margin="12"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="No recent dictation to pick from. Type the words below instead."/>
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Row="2" Margin="0,14,0,0">
+                <TextBlock Style="{StaticResource FieldLabel}" Text="WHAT SCRIBE WROTE"/>
+                <ui:TextBox x:Name="HeardBox"
+                            PlaceholderText="cloud pilot"
+                            AutomationProperties.Name="What Scribe wrote"
+                            TextChanged="Field_Changed"/>
+
+                <ui:SymbolIcon Symbol="ArrowDown24"
+                               HorizontalAlignment="Center"
+                               Margin="0,6,0,2"
+                               FontSize="14"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                <TextBlock Style="{StaticResource FieldLabel}" Text="WHAT IT SHOULD SAY"/>
+                <ui:TextBox x:Name="ShouldBeBox"
+                            PlaceholderText="Copilot"
+                            AutomationProperties.Name="What it should say. Leave empty to keep this out of what you dictate."
+                            TextChanged="Field_Changed"/>
+
+                <CheckBox x:Name="WholeWordBox"
+                          Margin="0,10,0,0"
+                          IsChecked="True"
+                          Content="Match whole words only"
+                          Checked="Field_Changed"
+                          Unchecked="Field_Changed"/>
+
+                <TextBlock x:Name="StatusText"
+                           Margin="2,10,0,0"
+                           MinHeight="32"
+                           FontSize="12"
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+        </Grid>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="24,4,24,18">
+            <ui:Button Content="Cancel" MinWidth="100" Margin="0,0,8,0" IsCancel="True"
+                       Click="CancelButton_Click"/>
+            <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary" MinWidth="120"
+                       IsDefault="True" Click="SaveButton_Click"/>
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>

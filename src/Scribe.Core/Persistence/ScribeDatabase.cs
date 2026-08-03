@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
@@ -162,7 +162,7 @@ public sealed class ScribeDatabase : IDisposable
 
     // Startup corruption check for the file database. quick_check walks the tree structure of every
     // table; a healthy database answers "ok". A damaged one either answers with the first problem or
-    // throws outright — both trigger a rebuild that salvages every readable row into a fresh file.
+    // throws outright; both trigger a rebuild that salvages every readable row into a fresh file.
     // The check runs on a throwaway connection so a rebuild never races the keep-alive.
     private void EnsureFileDatabaseHealthy()
     {
@@ -201,7 +201,7 @@ public sealed class ScribeDatabase : IDisposable
         catch (Exception ex)
         {
             // Salvage is best-effort: if even the rebuild fails, get the damaged file out of the way
-            // so a completely fresh database can be created — the aside copy remains for manual
+            // so a completely fresh database can be created; the aside copy remains for manual
             // recovery. Losing data is bad; failing to start at all is worse.
             _logger.LogError(ex, "Database salvage failed; starting fresh. The damaged file is kept alongside.");
             TryMoveDamagedAside();
@@ -283,7 +283,7 @@ public sealed class ScribeDatabase : IDisposable
         }
 
         _logger.LogWarning(
-            "Database rebuilt after corruption. Rows recovered — {Salvaged}. The damaged original was kept at {Aside}.",
+            "Database rebuilt after corruption. Rows recovered: {Salvaged}. The damaged original was kept at {Aside}.",
             string.Join(", ", salvaged), asidePath);
     }
 
@@ -485,7 +485,7 @@ public sealed class ScribeDatabase : IDisposable
             if (_keepAlive is not null && !_isMemory)
             {
                 // Fold the WAL back into the main file on clean shutdown so scribe.db alone is a
-                // complete, consistent snapshot — anything that copies or backs up just the main
+                // complete, consistent snapshot; anything that copies or backs up just the main
                 // file (migrations, user backups) then can't capture a torn state.
                 try { Execute(_keepAlive, "PRAGMA wal_checkpoint(TRUNCATE);"); }
                 catch { /* best effort */ }
@@ -549,7 +549,7 @@ public sealed class ScribeDatabase : IDisposable
         CREATE INDEX ix_cleanup_failures_timestamp ON cleanup_failures (timestamp_utc DESC);
         """;
 
-    // v3: voice snippets — a spoken trigger phrase expands to a saved (possibly multi-line)
+    // v3: voice snippets: a spoken trigger phrase expands to a saved (possibly multi-line)
     // template during post-processing. Separate from `dictionary` because templates are long,
     // matched as whole phrases, and never fed to the AI glossary. ("phrase" not "trigger": TRIGGER
     // is a reserved word in SQLite.)

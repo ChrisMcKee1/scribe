@@ -23,7 +23,7 @@ public sealed class VadService : IVadService
     // NOT the total capture length: Trim drains after every window, so the detector never retains
     // more than the segment currently in flight. Measured across 30 real captures of 57-250 s the
     // high-water mark was 30.9 s (bounded by MaxSpeechSeconds plus the silence lookahead), so 60 s
-    // is roughly double the worst case observed. Overrunning it is not fatal either — sherpa-onnx
+    // is roughly double the worst case observed. Overrunning it is not fatal either; sherpa-onnx
     // grows the buffer and copies the existing data rather than dropping any.
     //
     // This was previously also used to SKIP trimming for captures longer than 60 s, which meant the
