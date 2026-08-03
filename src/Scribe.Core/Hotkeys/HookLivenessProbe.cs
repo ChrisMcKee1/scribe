@@ -54,4 +54,31 @@ internal sealed class HookLivenessProbe
     /// a reinstall, so a probe armed against the previous hook is never judged against the new one.
     /// </summary>
     public void Disarm() => _armed = false;
+
+    /// <summary>
+    /// True when this tick must not send its probe keystroke because nobody is at the keyboard.
+    ///
+    /// The probe is genuine injected input, so Windows resets the system idle timer for it exactly
+    /// as it does for a real keypress. A probe every watchdog period is therefore the same
+    /// mechanism a "keep awake" utility uses (Caffeine injects F15 on a timer for precisely this
+    /// effect), and it stopped machines from ever reaching their sleep or display timeout for as
+    /// long as Scribe was running. Withholding the probe once the system has been idle for a full
+    /// period restores normal sleep: the injections stop, the idle timer grows, and the machine
+    /// suspends.
+    ///
+    /// Liveness detection loses nothing that matters. Windows removes a low-level hook whose
+    /// callback misses the OS deadline, which is a load-induced failure (a GC pause during ASR
+    /// decode), so it happens while the user is dictating rather than while they are away. And a
+    /// dead hook only has a victim when somebody is present to press push-to-talk. Real input
+    /// re-enables probing on the very next tick, so detection resumes as soon as there is anyone
+    /// to detect it for.
+    ///
+    /// Because the probe resets the idle clock itself, exactly one further probe fires after the
+    /// user stops touching the machine; that caps the added wake time at a single watchdog period.
+    ///
+    /// <paramref name="systemIdle"/> is null when the idle time could not be read. Probe in that
+    /// case: an unreadable clock must not silently disable liveness detection.
+    /// </summary>
+    public static bool ShouldWithholdProbe(TimeSpan? systemIdle, TimeSpan watchdogPeriod) =>
+        systemIdle is { } idle && idle >= watchdogPeriod;
 }

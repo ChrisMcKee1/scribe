@@ -505,6 +505,10 @@ public sealed class HotkeyService : IHotkeyService
     // probe was armed, Windows silently removed the hook (documented behavior after a deadline
     // miss) and push-to-talk is dead until it is reinstalled. Mouse-only activity cannot
     // false-positive this check because the probe itself is keyboard input.
+    //
+    // The probe is withheld while the system is idle: injected input resets the power manager's
+    // idle timer, so an unconditional probe every period stopped the machine from ever sleeping.
+    // See HookLivenessProbe.ShouldWithholdProbe.
     private void WatchdogTick()
     {
         try
@@ -532,6 +536,17 @@ public sealed class HotkeyService : IHotkeyService
                         "The keyboard hook stopped receiving events (Windows removes low-level " +
                         "hooks that miss the callback deadline, without notification). Reinstalling.");
                     ReinstallHookLocked();
+                }
+
+                // The probe is injected input, so Windows counts it as user activity and resets the
+                // idle timer the power manager sleeps against. Sending one every period regardless
+                // of presence kept machines awake for as long as Scribe ran. Judge the outstanding
+                // probe first (above), then go quiet once the system is genuinely idle.
+                if (HookLivenessProbe.ShouldWithholdProbe(
+                        NativeMethods.TryGetSystemIdleTime(), WatchdogPeriod))
+                {
+                    _livenessProbe.Disarm();
+                    return;
                 }
 
                 // Baseline BEFORE sending. Injected input is dispatched into the hook chain while

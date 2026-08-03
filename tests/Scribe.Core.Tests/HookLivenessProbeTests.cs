@@ -146,4 +146,83 @@ public sealed class HookLivenessProbeTests
             probe.Arm(sendSucceeded: true);
         }
     }
+
+    // --- Idle gate: the probe must not keep the machine awake ---------------------------------
+    //
+    // The probe is real injected input, so Windows resets the power manager's idle timer for it.
+    // Sending one every 30 s regardless of presence is exactly what a "keep awake" utility does,
+    // and it stopped machines from ever sleeping while Scribe ran.
+
+    private static readonly TimeSpan Period = TimeSpan.FromSeconds(30);
+
+    [Fact]
+    public void Probe_is_sent_while_the_user_is_active()
+    {
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.Zero, Period));
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromSeconds(5), Period));
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromSeconds(29.9), Period));
+    }
+
+    [Fact]
+    public void Probe_is_withheld_once_the_system_has_been_idle_for_a_full_period()
+    {
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(Period, Period));
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromMinutes(5), Period));
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromHours(9), Period));
+    }
+
+    /// <summary>
+    /// An unreadable idle clock must not silently disable liveness detection; probing is the
+    /// safe default because a missed probe only ever costs sleep, never push-to-talk.
+    /// </summary>
+    [Fact]
+    public void Unknown_idle_time_still_probes()
+    {
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(null, Period));
+    }
+
+    /// <summary>
+    /// The probe resets the idle clock itself, so a tick that lands soon after the user walks away
+    /// still sees a short idle time and probes once more. This pins the cost of that at a single
+    /// extra probe, whenever in the watchdog cycle the user happens to stop: by the following tick
+    /// the idle time has reached a full period and the injections stop for good. The machine is
+    /// therefore held awake for at most one watchdog period beyond real user activity.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(10)]
+    [InlineData(29)]
+    [InlineData(29.999)]
+    public void Injections_stop_within_one_period_of_the_user_leaving(double secondsBeforeFirstTick)
+    {
+        // The user's final real keypress lands this far before the next watchdog tick.
+        var lastInput = Period - TimeSpan.FromSeconds(secondsBeforeFirstTick);
+        var now = Period;
+        var probes = 0;
+
+        for (var tick = 0; tick < 120; tick++, now += Period)   // an hour with nobody present
+        {
+            if (HookLivenessProbe.ShouldWithholdProbe(now - lastInput, Period))
+            {
+                continue;
+            }
+
+            probes++;
+            lastInput = now;                // the injected probe resets the idle timer
+        }
+
+        Assert.True(probes <= 1, $"Expected at most one trailing probe but sent {probes}.");
+    }
+
+    /// <summary>
+    /// Coming back to the machine must re-enable probing immediately, so a hook that died while
+    /// the user was away is still caught once there is somebody to catch it for.
+    /// </summary>
+    [Fact]
+    public void Real_input_re_enables_probing_on_the_next_tick()
+    {
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromHours(8), Period));
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromSeconds(1), Period));
+    }
 }

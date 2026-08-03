@@ -122,6 +122,37 @@ internal static partial class NativeMethods
         return true;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LASTINPUTINFO
+    {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    /// <summary>
+    /// Time since the last keyboard or mouse input in this session, or null when Windows declines
+    /// to report it. This is the same clock the power manager idles against, so it is how the
+    /// watchdog tells "someone is at the keyboard" from "the machine is trying to go to sleep".
+    /// </summary>
+    internal static TimeSpan? TryGetSystemIdleTime()
+    {
+        var info = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+        if (!GetLastInputInfo(ref info))
+        {
+            return null;
+        }
+
+        // dwTime is a 32-bit GetTickCount stamp that wraps every ~49.7 days. Subtracting in
+        // unsigned arithmetic makes the wrap cancel out; a signed compare would read as negative
+        // idle for the ~49 days after each rollover.
+        uint elapsed = unchecked((uint)Environment.TickCount - info.dwTime);
+        return TimeSpan.FromMilliseconds(elapsed);
+    }
+
     // --- Synthetic input (leak release + hook liveness probe) --------------------------------
 
     internal const uint INPUT_KEYBOARD = 1;
