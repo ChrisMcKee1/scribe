@@ -1,4 +1,4 @@
-using System.ClientModel;
+﻿using System.ClientModel;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -24,10 +24,10 @@ namespace Scribe.Core.Cleanup;
 /// regardless of where the model runs and a different backend swaps in with no change to cleanup
 /// logic:
 /// <list type="bullet">
-/// <item><b>Foundry Local</b> — a small instruct model running on this PC via Foundry's local
+/// <item><b>Foundry Local</b>: a small instruct model running on this PC via Foundry's local
 /// OpenAI-compatible web service, wrapped as an agent with <see cref="ChatClientAgent"/>. Everything
-/// stays offline; the ~1–2 GB model downloads on first use.</item>
-/// <item><b>Microsoft Foundry</b> — a model the user has already deployed in Azure. A Microsoft
+/// stays offline; the ~1 to 2 GB model downloads on first use.</item>
+/// <item><b>Microsoft Foundry</b>: a model the user has already deployed in Azure. A Microsoft
 /// Foundry <i>project</i> endpoint (<c>…/api/projects/…</c>) is turned into an agent directly with
 /// the framework's native <c>AIProjectClient.AsAIAgent</c>; a classic Azure OpenAI account endpoint
 /// uses the unified OpenAI v1 endpoint and is wrapped with <see cref="ChatClientAgent"/>.
@@ -47,7 +47,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // slow model can never stall the inject path. On any timeout we return the raw text. Azure gets a
     // longer budget than Foundry Local: a cloud round-trip plus a reasoning model's hidden thinking
     // step is slower than a warm on-device model. The Azure ceiling is generous enough for a reasoning
-    // ("pro"/o-series) model to finish a real rewrite — fast chat models (e.g. gpt-5.x-mini) return in
+    // ("pro"/o-series) model to finish a real rewrite; fast chat models (e.g. gpt-5.x-mini) return in
     // a couple of seconds regardless, so the cap only ever bites a genuinely slow model.
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
@@ -86,7 +86,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // The transcript is delimited inside the user message so the model reads it as data to rewrite
     // rather than a message addressed to it. Without this, dictation phrased as a request ("hey, can
     // you make sure X is installed") is routinely *answered* ("Sure, I can help with that") instead
-    // of cleaned — the raw text alone in the user turn is indistinguishable from a chat message.
+    // of cleaned; the raw text alone in the user turn is indistinguishable from a chat message.
     internal const string TranscriptOpenTag = "<transcript>";
     internal const string TranscriptCloseTag = "</transcript>";
 
@@ -96,7 +96,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // A model sometimes declines the rewrite and answers with a canned safety refusal ("I'm sorry, but
     // I cannot assist with that request.") instead of the cleaned text. Two intent families detect it:
     // an apology / AI-identity preamble at the very start, or an inability verb paired with a help
-    // object anywhere. See LooksLikeRefusal / TrySanitize — a match is only acted on when the raw input
+    // object anywhere. See LooksLikeRefusal / TrySanitize; a match is only acted on when the raw input
     // isn't phrased the same way, so genuine dictation of these words is preserved.
     private static readonly Regex RefusalPreamble =
         new(@"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|as a language model\b)",
@@ -106,8 +106,8 @@ internal sealed class TextCleanupService : ITextCleanupService
         new(@"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // Reply/answer guards (siblings of the refusal guards). A weaker model — a small Foundry Local
-    // model especially — sometimes REPLIES to the transcript (answers a dictated question, acknowledges
+    // Reply/answer guards (siblings of the refusal guards). A weaker model, a small Foundry Local
+    // model especially, sometimes REPLIES to the transcript (answers a dictated question, acknowledges
     // a request, or offers help) instead of editing it. Such replies are short and non-empty, so they
     // slip past the empty/ramble/refusal guards; injected, they overwrite the user's words with the
     // model's answer. This is the defect behind "Can you hear me now?" producing "Yeah." A strong model
@@ -177,7 +177,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Benchmark-only escape hatch (Scribe.Evals, via InternalsVisibleTo): when set, replaces the
     // per-provider per-call cleanup timeout so the eval harness can measure a model's *true* rewrite
     // latency uncapped, then judge real output, instead of every slow model degrading to raw text at
-    // the 12 s/45 s production ceiling. Never set in the shipping app — production keeps the caps.
+    // the 12 s/45 s production ceiling. Never set in the shipping app; production keeps the caps.
     internal TimeSpan? CleanupTimeoutOverride { get; set; }
 
     // Test-only override for the whole multi-chunk operation. Production has one deadline across all
@@ -323,7 +323,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             {
                 if (!_styleAgents.TryGetValue(style, out var styled))
                 {
-                    // Pure object construction against the already-initialized client — no I/O.
+                    // Pure object construction against the already-initialized client; no I/O.
                     styled = factory(BuildSystemPrompt(options with { WritingStyle = style }));
                     _styleAgents[style] = styled;
                 }
@@ -397,7 +397,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             builder.Append(cleanedChunk);
         }
 
-        // Every cleaned segment failed — the user effectively got raw text back (any overflow tail is
+        // Every cleaned segment failed; the user effectively got raw text back (any overflow tail is
         // raw too), so this is a hard failure that drives the visible "intelligence failed" feedback
         // and is recorded to the failure log. This must take precedence over the partial/overflow
         // classification below; otherwise a total failure on an over-length capture would be silently
@@ -484,7 +484,11 @@ internal sealed class TextCleanupService : ITextCleanupService
             var result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
 
-            return string.IsNullOrWhiteSpace(result.Text) ? null : result.Text;
+            // Normalize here too: this is the path for the AI usage insight and AI dictionary
+            // suggestions, both of which surface free-form model prose in Settings. Cleanup output is
+            // covered by TrySanitize, which this path deliberately skips (it has no raw transcript to
+            // compare against), so without this the house style would hold for dictation but not here.
+            return string.IsNullOrWhiteSpace(result.Text) ? null : DashNormalizer.Normalize(result.Text);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -499,7 +503,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     // Cleans a single chunk. Returns the cleaned text and a null error on success, or the raw chunk and
     // a human-readable error when the model call throws, times out, or returns nothing usable. Never
-    // throws — a failed segment falls back to its raw text so dictation is never lost.
+    // throws; a failed segment falls back to its raw text so dictation is never lost.
     private async Task<(string Text, string? Error)> CleanChunkAsync(
         AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
     {
@@ -645,7 +649,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         try
         {
             // The system prompt is baked into the agent at creation, so we only send the delimited
-            // transcript and run statelessly (no thread) — each dictation is independent, with no
+            // transcript and run statelessly (no thread); each dictation is independent, with no
             // history to grow.
             var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, chunk));
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
@@ -678,7 +682,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // A real caller cancellation (e.g. app shutdown) must propagate, not be treated as a
-            // per-segment timeout — otherwise we'd keep calling the model after the user gave up.
+            // per-segment timeout; otherwise we'd keep calling the model after the user gave up.
             throw;
         }
         catch (OperationCanceledException ex)
@@ -734,7 +738,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (breakAt < minBreak)
             {
-                // No sentence or word boundary in range (e.g. one very long run) — hard split.
+                // No sentence or word boundary in range (e.g. one very long run); hard split.
                 breakAt = targetChars - 1;
             }
 
@@ -981,7 +985,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try
         {
-            // Listing only reads the catalog, so it deliberately does not take the init lock — that
+            // Listing only reads the catalog, so it deliberately does not take the init lock; that
             // way the picker stays responsive even while a model is downloading under InitializeAsync.
             await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
             if (_catalog is null)
@@ -1011,7 +1015,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     loadedAliases.Contains(model.Alias)));
             }
 
-            // Loaded first, then downloaded, then the rest — alphabetical within each tier.
+            // Loaded first, then downloaded, then the rest; alphabetical within each tier.
             return options
                 .OrderByDescending(o => o.Loaded)
                 .ThenByDescending(o => o.Cached)
@@ -1239,7 +1243,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     // After a manual load/unload changes which Foundry Local model is resident, keep the cleanup agent
     // honest: drop it (and surface a clear status) when its configured model was just evicted so
     // CleanAsync can't call an unloaded model, and rebuild it when the configured model is loaded back
-    // in — all without forcing a settings save. No-op for Azure or disabled cleanup. Must be called
+    // in, all without forcing a settings save. No-op for Azure or disabled cleanup. Must be called
     // WITHOUT holding _initLock, because a rebuild starts a background InitializeAsync that takes it.
     private void ReconcileCleanupAfterResidentChange(string? loadedAlias, string? unloadedAlias, bool unloadedAll)
     {
@@ -1289,7 +1293,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         if (invalidate)
         {
             SetStatus(CleanupStatus.Unavailable,
-                "The on-device cleanup model was unloaded — reload it to turn cleanup back on.");
+                "The on-device cleanup model was unloaded. Reload it to turn cleanup back on.");
             _log.LogInformation("Cleanup paused: its Foundry Local model is no longer resident.");
         }
         else if (rebuild)
@@ -1345,7 +1349,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "AI cleanup initialization failed ({Provider}).", options.Provider);
-            SetStatus(CleanupStatus.Unavailable, "AI cleanup could not start — dictation continues with raw text.");
+            SetStatus(CleanupStatus.Unavailable, "AI cleanup could not start. Dictation continues with raw text.");
         }
         finally
         {
@@ -1401,7 +1405,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// <summary>
     /// Bring-your-own-endpoint: any server speaking the OpenAI chat protocol (Ollama, LM Studio,
     /// vLLM, OpenRouter, or api.openai.com itself). The API key is optional because local servers
-    /// don't check it — a placeholder is sent when blank, mirroring the Foundry Local client.
+    /// don't check it; a placeholder is sent when blank, mirroring the Foundry Local client.
     /// </summary>
     private async Task<AIAgent?> InitOpenAiCompatibleAsync(CleanupOptions options, CancellationToken ct)
     {
@@ -1480,7 +1484,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         if (isProject && !useKey)
         {
             // Native Foundry path: the project client turns the endpoint + deployment into an agent
-            // directly (a code-first "responses" agent — no server-side agent resource is created).
+            // directly (a code-first "responses" agent; no server-side agent resource is created).
             // The project data-plane requires an AAD token, so this path is AAD-only.
             var credential = AzureCredentialFactory.Create(new AzureCredentialRequest(
                 options.AzureAuthMode,
@@ -1510,7 +1514,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             // Route cleanup through the Azure OpenAI **Responses API** rather than Chat Completions.
             // Responses is the forward-looking surface and is the only one that serves the newest
-            // reasoning models (e.g. gpt-5.x "pro"/o-series) — Chat Completions returns HTTP 400
+            // reasoning models (e.g. gpt-5.x "pro"/o-series); Chat Completions returns HTTP 400
             // "operation unsupported" for those. The unified v1 endpoint lets the current OpenAI
             // client handle Azure directly while preserving API-key and Microsoft Entra auth.
 #pragma warning disable OPENAI001
@@ -1859,7 +1863,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         // A low temperature keeps Foundry Local instruct models deterministic for a faithful edit.
         // Azure cleanup commonly targets gpt-5-class reasoning models, which run at a fixed internal
-        // temperature and can reject or ignore an override — so we leave it unset and trust the model.
+        // temperature and can reject or ignore an override; so we leave it unset and trust the model.
         if (options.Provider == CleanupProvider.FoundryLocal)
         {
             chatOptions.Temperature = CleanupTemperature;
@@ -1883,7 +1887,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         // Foundry Local output also has to cover translation/format expansion and any hidden reasoning
         // tokens (e.g. qwen3). Long dictation is chunked before it reaches here, so each call is bounded
-        // and this ceiling is only a safety net — keep it roomy so a chunk is never truncated. The
+        // and this ceiling is only a safety net; keep it roomy so a chunk is never truncated. The
         // per-call timeout still bounds runaway generation.
         var estimate = (int)(words * 2.5) + 128;
         return Math.Clamp(estimate, 64, 4096);
@@ -1891,7 +1895,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     // Cleans up a model's raw answer and reports whether it is usable. Returns false (and yields the
     // original text) when the output is empty after stripping think-blocks/fences/quotes, or is an
-    // over-long ramble — so a caller cleaning a single chunk can treat a rejected answer as a failure
+    // over-long ramble; so a caller cleaning a single chunk can treat a rejected answer as a failure
     // and surface it, rather than silently logging it as an unchanged success.
     internal static bool TrySanitize(string? candidate, string original, out string text)
     {
@@ -1973,7 +1977,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             return false;
         }
 
-        text = cleaned;
+        // Last, because the guards above compare against the raw answer: strip the em/en dashes the
+        // writing style forbids but models still emit. Applied here rather than downstream so it only
+        // ever touches the model's prose, never the user's dictionary replacements or snippets.
+        text = DashNormalizer.Normalize(cleaned);
         return true;
     }
 

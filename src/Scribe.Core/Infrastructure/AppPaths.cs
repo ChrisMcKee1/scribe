@@ -19,7 +19,7 @@ public sealed class AppPaths
     /// <summary>Writable data folder name (sibling of the Velopack install root).</summary>
     public const string AppFolderName = "ScribeData";
 
-    /// <summary>Legacy data folder name — the Velopack install root that data used to share.</summary>
+    /// <summary>Legacy data folder name: the Velopack install root that data used to share.</summary>
     public const string LegacyAppFolderName = "Scribe";
 
     public AppPaths(string? rootOverride = null)

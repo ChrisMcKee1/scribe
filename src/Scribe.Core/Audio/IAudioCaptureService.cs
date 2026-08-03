@@ -3,7 +3,7 @@ using Scribe.Core.Models;
 namespace Scribe.Core.Audio;
 
 /// <summary>
-/// Captures microphone audio via WASAPI and returns it normalized to 16 kHz mono float —
+/// Captures microphone audio via WASAPI and returns it normalized to 16 kHz mono float,
 /// the format the VAD and recognizer consume. Raises <see cref="LevelChanged"/> while
 /// recording so the overlay can render an input meter.
 /// </summary>

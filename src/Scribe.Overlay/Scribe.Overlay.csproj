@@ -3,7 +3,7 @@
   <!-- Standalone WinUI 3 recording pill. Built as an UNPACKAGED, SELF-CONTAINED exe so it
        ships inside the Velopack payload next to Scribe.exe with no MSIX and no dependency on a
        machine-wide Windows App SDK runtime (an unpackaged WinUI app silently fails to start if the
-       runtime is missing — self-contained bundles it, ~+150 MB, but is reliable). The WPF app
+       runtime is missing; self-contained bundles it, ~+150 MB, but is reliable). The WPF app
        launches and keeps this process warm and drives its state over a named pipe.
 
        WinUI tooling requires an explicit Platform (it has no AnyCPU story), so both x64 and ARM64

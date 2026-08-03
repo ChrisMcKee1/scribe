@@ -227,8 +227,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureClientSecret);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
-    // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied —
-    // i.e. right after the dictionary editor saves — and so the value lives on the value-equality
+    // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied,
+    // i.e. right after the dictionary editor saves, and so the value lives on the value-equality
     // CleanupOptions record, which lets the service detect the change and rebuild its agent. Enabled
     // dictionary libraries are layered on top of the base dictionary, the base winning on conflict.
     //
@@ -449,7 +449,7 @@ internal sealed class DictationController : IDisposable
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.EmptyCapture);
 
                 // Zero samples from a capture that started without error means the endpoint is not
-                // delivering audio at all — classically a Bluetooth headset whose hands-free mic
+                // delivering audio at all: classically a Bluetooth headset whose hands-free mic
                 // never engaged (seen with AirPods Max: the endpoint opens but streams nothing).
                 // This must be loud: a silent return here looks to the user like dictation died.
                 var device = _audio.LastDeviceName;
@@ -457,8 +457,8 @@ internal sealed class DictationController : IDisposable
                 report.Fail("Audio capture", "The microphone produced no audio.");
                 RaisePipelineReport(report);
                 Error?.Invoke(device is null
-                    ? "no audio captured — check your microphone in Settings"
-                    : $"no audio from '{device}' — pick a different microphone in Settings");
+                    ? "no audio captured. Check your microphone in Settings"
+                    : $"no audio from '{device}'. Pick a different microphone in Settings");
                 return;
             }
 
@@ -602,7 +602,7 @@ internal sealed class DictationController : IDisposable
                     // so the overlay flashes red immediately, then persist the failure on a background
                     // thread. The failure log opens its own SQLite connection per call, so a busy
                     // timeout there must never sit in front of raising the flash or injecting the raw
-                    // text. Cleanup stays enabled — the very next dictation tries again.
+                    // text. Cleanup stays enabled; the very next dictation tries again.
                     var reason = cleanup.FailureReason ?? "Intelligence failed.";
                     _log.LogWarning("AI cleanup failed ({Reason}); using raw transcription.", reason);
                     RaiseCleanupFailed(reason);
@@ -619,7 +619,7 @@ internal sealed class DictationController : IDisposable
                     recognized = cleanup.Text;
 
                     // A partial degradation (some segments failed, or a very long tail was left raw)
-                    // is recorded for the Settings log but does not flash red — the user still got
+                    // is recorded for the Settings log but does not flash red; the user still got
                     // usable cleaned text back. Persist off the dictation path so the DB write never
                     // sits in front of text injection.
                     if (cleanup.FailureReason is not null)
@@ -693,7 +693,7 @@ internal sealed class DictationController : IDisposable
                 _log.LogWarning(
                     "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
                 Error?.Invoke(injection.Error == "The focused window changed while processing."
-                    ? "focus changed — dictation was not inserted"
+                    ? "focus changed, so the dictation was not inserted"
                     : "text could not be inserted completely");
 
                 // The transcript was stored just above, so close the loop: without a hint the

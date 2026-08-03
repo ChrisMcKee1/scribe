@@ -26,11 +26,14 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "Quit" from the tray menu.</summary>
     public event Action? QuitRequested;
 
-    /// <summary>Raised when the user picks "Settings…" from the tray menu.</summary>
+    /// <summary>Raised when the user picks "Settings" from the tray menu.</summary>
     public event Action? SettingsRequested;
 
     /// <summary>Raised when the user picks "Learn from history" from the tray menu.</summary>
     public event Action? LearnFromHistoryRequested;
+
+    /// <summary>Raised when the user picks "Add to dictionary" from the tray menu.</summary>
+    public event Action? AddToDictionaryRequested;
 
     /// <summary>Raised when the user explicitly asks to copy the last finalized dictation.</summary>
     public event Action? CopyLastDictationRequested;
@@ -60,7 +63,7 @@ internal sealed class TrayIconHost : IDisposable
     {
         var menu = new ContextMenu();
 
-        // Header: the app name + version, bold and clickable (opens settings) — a live entry
+        // Header: the app name + version, bold and clickable (opens settings); a live entry
         // point rather than a greyed-out label that looks like a broken button.
         var version = typeof(TrayIconHost).Assembly.GetName().Version;
         var header = new MenuItem
@@ -72,9 +75,13 @@ internal sealed class TrayIconHost : IDisposable
         menu.Items.Add(header);
         menu.Items.Add(new Separator());
 
-        var settings = new MenuItem { Header = "Settings…" };
+        var settings = new MenuItem { Header = "Settings" };
         settings.Click += (_, _) => SettingsRequested?.Invoke();
         menu.Items.Add(settings);
+
+        var addToDictionary = new MenuItem { Header = "Add to dictionary" };
+        addToDictionary.Click += (_, _) => AddToDictionaryRequested?.Invoke();
+        menu.Items.Add(addToDictionary);
 
         var learnFromHistory = new MenuItem { Header = "Learn from history" };
         learnFromHistory.Click += (_, _) => LearnFromHistoryRequested?.Invoke();
@@ -115,7 +122,7 @@ internal sealed class TrayIconHost : IDisposable
         _currentIcon = TrayIcons.CreateIdle();
         _icon = new TaskbarIcon
         {
-            ToolTipText = "Scribe — ready",
+            ToolTipText = "Scribe: ready",
             Icon = _currentIcon,
             ContextMenu = menu,
             MenuActivation = PopupActivationMode.RightClick,
@@ -128,10 +135,10 @@ internal sealed class TrayIconHost : IDisposable
     {
         var (icon, tooltip) = state switch
         {
-            DictationState.Recording => (TrayIcons.CreateRecording(), "Scribe — recording…"),
-            DictationState.Processing => (TrayIcons.CreateProcessing(), "Scribe — transcribing…"),
-            DictationState.Paused => (TrayIcons.CreatePaused(), "Scribe — paused"),
-            _ => (TrayIcons.CreateIdle(), "Scribe — ready"),
+            DictationState.Recording => (TrayIcons.CreateRecording(), "Scribe: recording…"),
+            DictationState.Processing => (TrayIcons.CreateProcessing(), "Scribe: transcribing…"),
+            DictationState.Paused => (TrayIcons.CreatePaused(), "Scribe: paused"),
+            _ => (TrayIcons.CreateIdle(), "Scribe: ready"),
         };
 
         var previous = _currentIcon;
@@ -149,11 +156,11 @@ internal sealed class TrayIconHost : IDisposable
 
     /// <summary>Surfaces a transient error to the user via the tray tooltip.</summary>
     public void ShowError(string message) => Dispatch(() =>
-        _icon.ToolTipText = $"Scribe — {message}");
+        _icon.ToolTipText = $"Scribe: {message}");
 
     /// <summary>Surfaces a transient, non-error status (e.g. an update is ready) via the tooltip.</summary>
     public void ShowInfo(string message) => Dispatch(() =>
-        _icon.ToolTipText = $"Scribe — {message}");
+        _icon.ToolTipText = $"Scribe: {message}");
 
     /// <summary>Shows a transient Windows notification for a completed user action.</summary>
     public void ShowNotification(string message, bool isError = false) => Dispatch(() =>

@@ -76,7 +76,7 @@ public sealed class DictionarySuggestionMinerTests
 
         var suggestions = DictionarySuggestionMiner.Mine(history, [], minDictations: 3);
 
-        // "github" (lowercase) isn't jargon-shaped, so only the cased form is counted anyway —
+        // "github" (lowercase) isn't jargon-shaped, so only the cased form is counted anyway,
         // and the suggestion carries the shape that actually appeared.
         var term = Assert.Single(suggestions);
         Assert.Equal("GitHub", term.Term);

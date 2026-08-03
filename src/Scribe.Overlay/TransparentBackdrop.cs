@@ -12,7 +12,7 @@ namespace Scribe.Overlay;
 /// <summary>
 /// A custom <see cref="SystemBackdrop"/> that makes the window background fully transparent by
 /// filling the system-backdrop region with an alpha-0 composition color brush. This is the modern,
-/// DWM-composition transparency path for WinUI 3 (Windows App SDK 2.x) — deliberately NOT the WPF
+/// DWM-composition transparency path for WinUI 3 (Windows App SDK 2.x); deliberately NOT the WPF
 /// AllowsTransparency / UpdateLayeredWindow path that produced the recurring black box.
 ///
 /// The <c>ICompositionSupportsSystemBackdrop.SystemBackdrop</c> property is a

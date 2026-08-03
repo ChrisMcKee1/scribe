@@ -201,6 +201,39 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         return text.Trim();
     }
 
+    /// <summary>
+    /// Runs one dictionary rule over already-finalized text, using the exact pipeline a live
+    /// dictation would take: the same normalization, the same compiled matcher, and the same
+    /// single-pass application including its double-expansion guard.
+    ///
+    /// This exists so the quick add popup can repair the transcript a correction came from. It
+    /// deliberately calls the real implementation rather than reproducing it, because a private copy
+    /// of the matcher drifts silently: it would hand the user a "corrected" transcript that disagrees
+    /// with what their very next dictation actually produces, which is worse than not repairing at
+    /// all. Only the one rule is applied, since the text has already been through every other rule.
+    /// </summary>
+    public static string ApplyRule(string? text, DictionaryEntry? entry)
+    {
+        if (string.IsNullOrEmpty(text) || entry is null || string.IsNullOrWhiteSpace(entry.Pattern))
+        {
+            return text ?? string.Empty;
+        }
+
+        CompiledRule rule;
+        try
+        {
+            rule = new CompiledRule(entry with { Pattern = entry.Pattern.Trim() });
+        }
+        catch (ArgumentException)
+        {
+            // Mirrors BuildRules: an entry the matcher refuses to compile simply never applies.
+            return text;
+        }
+
+        var normalized = NormalizeWhitespace(text);
+        return ApplySinglePass(normalized, rule.Find(normalized, 0));
+    }
+
     [GeneratedRegex(@"[ \t\f\v]+")]
     private static partial Regex HorizontalWhitespace();
 
@@ -314,8 +347,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         string Original);
 
     /// <summary>
-    /// A voice-snippet expansion: the spoken trigger phrase — matched whole, case-insensitively,
-    /// and tolerant of the trailing punctuation AI cleanup adds ("Insert my standup update.") —
+    /// A voice-snippet expansion: the spoken trigger phrase, matched whole, case-insensitively,
+    /// and tolerant of the trailing punctuation AI cleanup adds ("Insert my standup update."),
     /// is replaced by the saved template. A MatchEvaluator supplies the template so user text
     /// can never trigger $-substitution.
     /// </summary>
@@ -359,7 +392,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             // Only an expansion whose replacement is strictly longer than its pattern AND embeds that
             // pattern (e.g. "york" -> "New York") can double-fire: when AI cleanup is enabled the
             // glossary biases the model to emit the canonical form first, then this deterministic
-            // stage — which always runs last — would expand the embedded pattern again ("New York" ->
+            // stage, which always runs last, would expand the embedded pattern again ("New York" ->
             // "New New York"). A same-length entry is a pure casing/punctuation fix ("azure" ->
             // "Azure", "sherpa onnx" -> "sherpa-onnx"); it must keep the plain fast-path replace so the
             // fix actually applies, so the length guard is essential here, not just an optimization.

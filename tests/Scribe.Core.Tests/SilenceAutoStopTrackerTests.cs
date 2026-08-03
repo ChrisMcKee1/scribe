@@ -13,10 +13,10 @@ public sealed class SilenceAutoStopTrackerTests
     {
         var tracker = new SilenceAutoStopTracker(startedMs: 0, silenceHoldMs: 4_000);
 
-        Assert.False(tracker.Update(Voice, 500));    // speaking — the window measures from here
+        Assert.False(tracker.Update(Voice, 500));    // speaking; the window measures from here
         Assert.False(tracker.Update(Quiet, 1_000));  // silence begins
-        Assert.False(tracker.Update(Quiet, 4_400));  // 3.9s since the last voice — not yet
-        Assert.True(tracker.Update(Quiet, 4_500));   // 4.0s — stop
+        Assert.False(tracker.Update(Quiet, 4_400));  // 3.9s since the last voice; not yet
+        Assert.True(tracker.Update(Quiet, 4_500));   // 4.0s; stop
     }
 
     [Fact]
@@ -26,7 +26,7 @@ public sealed class SilenceAutoStopTrackerTests
 
         tracker.Update(Voice, 500);
         tracker.Update(Quiet, 3_000);
-        Assert.False(tracker.Update(Voice, 4_000));  // spoke again — window restarts
+        Assert.False(tracker.Update(Voice, 4_000));  // spoke again; window restarts
         Assert.False(tracker.Update(Quiet, 7_900));
         Assert.True(tracker.Update(Quiet, 8_000));
     }
@@ -58,7 +58,7 @@ public sealed class SilenceAutoStopTrackerTests
         // hold window; only the lead-in limit applies until speech is heard.
         var tracker = new SilenceAutoStopTracker(startedMs: 0, silenceHoldMs: 4_000, leadInLimitMs: 10_000);
 
-        Assert.False(tracker.Update(Quiet, 5_000));  // 5s of thinking silence — still recording
+        Assert.False(tracker.Update(Quiet, 5_000));  // 5s of thinking silence; still recording
         Assert.False(tracker.Update(Voice, 6_000));  // first words arrive
         Assert.False(tracker.Update(Quiet, 9_900));
         Assert.True(tracker.Update(Quiet, 10_000));  // 4s after the last word

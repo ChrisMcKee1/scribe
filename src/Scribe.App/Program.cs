@@ -26,7 +26,7 @@ internal static class Program
         }
         catch
         {
-            // Not packaged with Velopack (e.g. a plain dev build) — ignore and start the app.
+            // Not packaged with Velopack (e.g. a plain dev build); ignore and start the app.
         }
 
         var app = new App();

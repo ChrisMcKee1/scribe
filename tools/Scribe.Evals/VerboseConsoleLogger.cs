@@ -4,8 +4,8 @@ namespace Scribe.Evals;
 
 /// <summary>
 /// Minimal <see cref="ILogger{T}"/> that writes to stderr, enabled by <c>--verbose</c>. It surfaces the
-/// init/cleanup diagnostics <see cref="Scribe.Core.Cleanup.TextCleanupService"/> logs — which are
-/// otherwise swallowed by <see cref="Microsoft.Extensions.Logging.Abstractions.NullLogger{T}"/> — so a
+/// init/cleanup diagnostics <see cref="Scribe.Core.Cleanup.TextCleanupService"/> logs, which are
+/// otherwise swallowed by <see cref="Microsoft.Extensions.Logging.Abstractions.NullLogger{T}"/>, so a
 /// failure such as a Foundry Local startup exception is visible (with its stack trace) when triaging an
 /// eval run instead of collapsing to a bare "Unavailable" status.
 /// </summary>

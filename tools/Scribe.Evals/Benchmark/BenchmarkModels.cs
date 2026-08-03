@@ -37,7 +37,7 @@ internal static class BenchmarkModels
         ("qwen3-14b", "reasoning"),
     ];
 
-    // Cloud model families that "think" before answering — generous latency expected, and a real risk
+    // Cloud model families that "think" before answering; generous latency expected, and a real risk
     // of answering/executing the dictation instead of editing it.
     private static readonly string[] CloudReasoning =
         ["gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"];

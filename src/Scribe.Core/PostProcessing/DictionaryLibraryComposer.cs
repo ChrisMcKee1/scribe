@@ -5,7 +5,7 @@ namespace Scribe.Core.PostProcessing;
 /// <summary>
 /// Pure composition of the effective dictionary from the user's base entries plus any enabled
 /// libraries. De-duplicates by spoken form (trimmed, case-insensitive) so a term defined in more
-/// than one place resolves to a single rule — mirroring the unique-pattern rule the base dictionary
+/// than one place resolves to a single rule, mirroring the unique-pattern rule the base dictionary
 /// enforces in the database. The first occurrence wins, and callers pass the base dictionary first
 /// so the user's own entries always take precedence over a library's.
 /// </summary>

@@ -1,4 +1,4 @@
-# AGENTS.md — Scribe
+# AGENTS.md: Scribe
 
 > Context for AI coding agents working on **Scribe**. Read this first when you pick up
 > fresh work; it captures the durable facts, commands, architecture, and hard‑won gotchas
@@ -8,7 +8,7 @@
 ## What Scribe is
 
 Private, **fully offline** push‑to‑talk voice dictation for **Windows 11**. Hold a key,
-speak, release — punctuated text is typed into whatever app has focus. Audio is captured,
+speak, release: punctuated text is typed into whatever app has focus. Audio is captured,
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint (sends the *transcribed text only*, never audio, and is strictly opt‑in).
@@ -23,9 +23,12 @@ any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence au
 replacement highlights, and per-step timings across the full pipeline;
 **diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
 (local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
-insight sends aggregate totals + dictionary-covered term labels ONLY — novel mined terms never
+insight sends aggregate totals + dictionary-covered term labels ONLY; novel mined terms never
 leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu, injection
-failure raises a recovery notification); tray quick toggles (AI cleanup on/off, pause) and a
+failure raises a recovery notification); **tray quick add to dictionary** (chip-style word picker
+over a recent dictation that saves the fix and repairs that transcript in place); **dictionary
+cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
+disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause) and a
 first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
@@ -36,26 +39,26 @@ European languages out of the box. It is a **transducer** with the vocabulary ba
 there is **no runtime language parameter**, so do NOT build a "language picker" setting; the
 model auto‑handles whatever is spoken. (Whisper takes a language hint; this does not.)
 
-## Tech stack (be specific — versions matter)
+## Tech stack (be specific, versions matter)
 
 - **Language / runtime:** C# / **.NET 10** (`net10.0-windows`), **.NET 10 SDK 10.0.301+**.
 - **App shell:** **WPF** tray app (`src/Scribe.App`), **`win-x64` and `win-arm64`**, self-contained.
 - **Recording overlay:** **WinUI 3 / Windows App SDK 2.2.0** as a *separate* unpackaged,
   self-contained process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`), built for the same
   architecture as the app. See
-  [Overlay architecture](#overlay-architecture-read-before-touching-the-pill) — it is not
+  [Overlay architecture](#overlay-architecture-read-before-touching-the-pill); it is not
   a normal window.
 - **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.4**
   (Apache‑2.0) on CPU. **VAD:** Silero (MIT). Native runtime is per-architecture; see
   [Architecture support](#architecture-support-x64-and-arm64).
-- **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`) — one code path for on‑device
+- **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
   in `Directory.Build.props`. Read `<VersionPrefix>` from that file rather than trusting a
   number quoted here; a version pinned in prose is stale the next time anyone ships.
 
-## Commands (run these — include the flags)
+## Commands (run these, including the flags)
 
 ```powershell
 # One-time: download ASR + VAD models (~670 MB) into src/Scribe.App/models (gitignored)
@@ -64,13 +67,13 @@ pwsh ./scripts/Download-Models.ps1
 # Build the whole solution (8 projects: Core, App, Overlay, tests, and four tools)
 dotnet build Scribe.slnx -c Debug
 
-# Run the app — Scribe appears in the system tray
+# Run the app (Scribe appears in the system tray)
 dotnet run --project src/Scribe.App
 
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows, 739 as of 0.3.4)
+# Run the unit tests (must stay green; the count only ever grows, 832 as of 0.3.5)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -104,13 +107,13 @@ dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 ```
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
-Target 0 warnings / 0 errors — warnings are treated seriously.
+Target 0 warnings / 0 errors; warnings are treated seriously.
 
 ## Project structure
 
 ```
 Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools)
-  src/Scribe.Core/                  services + domain — UNIT-TESTABLE, no UI
+  src/Scribe.Core/                  services + domain (UNIT-TESTABLE, no UI)
     Audio/ Vad/ Transcription/      capture → 16 kHz mono, Silero VAD, Parakeet ASR
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework)
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
@@ -122,7 +125,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Settings/                       the nav-rail settings window (adapters call Core builders)
     Onboarding/                     WelcomeWindow (one-time first-run intro)
     Tray/ History/ Overlay/         tray menu + quick actions; history data/UI; OverlayProcessClient
-    Infrastructure/                 FileLoggerProvider (shared daily log — see Logging mandate)
+    Infrastructure/                 FileLoggerProvider (shared daily log; see Logging mandate)
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
@@ -137,7 +140,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
   Directory.Build.props             single source of version truth (<VersionPrefix>)
-  Directory.Packages.props          central NuGet version management — add versions HERE
+  Directory.Packages.props          central NuGet version management; add versions HERE
 ```
 
 **Architectural rule:** most logic lives in **Scribe.Core** so it is testable without a UI.
@@ -150,9 +153,20 @@ back into the code-behind; that is a recurring smell.
 
 - Honor `.editorconfig`. Keep the build warning‑clean.
 - **Comment the *why*, not the *what*.** Only annotate genuinely non‑obvious decisions.
-- **No em dashes or en dashes in user‑facing prose** (README, marketing, UI strings shown to
-  users): rewrite with commas, colons, periods, or "to" for ranges. House style. (This dev doc
-  predates the rule and still has some; don't add new ones.)
+- **No em dashes or en dashes anywhere in the repo**, including code comments: rewrite with
+  commas, colons, periods, or "to" for ranges. Ordinary ASCII hyphens are fine. Enforced in three
+  layers, because a prompt instruction alone is advisory and models ignore it:
+  1. Source prose and UI strings are dash-free (swept as of 0.3.5; the only deliberate exceptions
+     are `Win32ClipboardTests` and `Scribe.InjectionLab`, which round-trip an em dash on purpose to
+     prove Unicode survives the clipboard and injection paths).
+  2. `CleanupPrompt.DefaultWritingStyle` / `DefaultFrontierPrompt` contain no dashes themselves.
+     This matters more than it looks: the prompt is *shown to the model on every dictation*, so
+     dashes in it were teaching the model to imitate the style straight into the user's text.
+  3. `Scribe.Core/Cleanup/DashNormalizer` deterministically rewrites U+2014/U+2013 out of model
+     output in `TextCleanupService.TrySanitize` and `CompleteAsync`. This is the only actual
+     guarantee. It runs **after** the ramble/refusal guards (they compare the model's answer to the
+     raw transcript, so mutating first could flip a borderline detection) and **only** on model
+     output, never on dictionary entries or snippet templates, which are user-authored.
 - Add NuGet versions to `Directory.Packages.props` (central management is on). Prefer
   current **stable** releases; justify any prerelease in the PR.
 - Example of the expected style (descriptive names, real error handling, `why` comment):
@@ -171,14 +185,14 @@ private static void Append(string path, string line)
             w.WriteLine(line);
             return;
         }
-        catch (IOException) { Thread.Sleep(15); } // transient lock — retry, never propagate
+        catch (IOException) { Thread.Sleep(15); } // transient lock, retry, never propagate
     }
 }
 ```
 
 ## Logging mandate (non‑negotiable)
 
-Logging is how we debug the hard, intermittent bugs in this app — **it must never be the
+Logging is how we debug the hard, intermittent bugs in this app: **it must never be the
 cause of one.**
 
 - Both processes append to the **same** daily file:
@@ -186,7 +200,7 @@ cause of one.**
   interleave on one timeline).
 - All log writers open with **`FileShare.ReadWrite` + retry + swallow** and are
   **fully non‑throwing** end to end (`FileLoggerProvider` on the app side, `OverlayLog` on
-  the overlay side). A throwing logger once tore down a healthy overlay — see below.
+  the overlay side). A throwing logger once tore down a healthy overlay (see below).
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.
@@ -204,7 +218,7 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   hide/exit).
 - The pill's screen anchor is set with the `POSITION <name>` pipe command. The wire tokens are the
   value names of **two enums kept in sync by name**: `Scribe.Core.Models.OverlayPosition` (engine)
-  and `Scribe.Overlay.OverlayAnchor` (overlay — it deliberately has no Scribe.Core reference).
+  and `Scribe.Overlay.OverlayAnchor` (overlay, which deliberately has no Scribe.Core reference).
   Add/rename values in BOTH or the overlay silently ignores the command. The client replays the
   applied position right after every pipe (re)connect, so relaunches keep the user's anchor.
 - `Scribe.Overlay.exe` is resolved in this order: `SCRIBE_OVERLAY_EXE` env →
@@ -293,7 +307,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
 - `vpk` **refuses to pack an equal/greater version that already exists** in `releases\`.
   To repack the same version, delete that version's `*-full.nupkg`, `*-delta.nupkg`,
   `Scribe-win-<arch>-Setup.exe`, `Scribe-win-<arch>-Portable.zip`, and `releases.win-<arch>.json`
-  — but **keep the older `*-full.nupkg`s** so the delta can build.
+  but keep the older `*-full.nupkg`s so the delta can build.
 - One Velopack channel per architecture, `win-x64` and `win-arm64`, so an install only ever
   receives updates built for its own silicon. The full nupkg is large (~650 MB, the overlay adds
   ~90 MB self‑contained); the delta is small (~86 MB).
@@ -441,7 +455,7 @@ mechanically rather than by review.
   the effective RID and selects one; referencing both drops two different-architecture
   `onnxruntime.dll`s into the same folder. An unsupported RID fails the build with an explicit error
   rather than silently producing a payload with no native engine.
-- **`RuntimeIdentifier` is never empty in practice** — the SDK defaults it to
+- **`RuntimeIdentifier` is never empty in practice**: the SDK defaults it to
   `NETCoreSdkRuntimeIdentifier` (the host). So a plain `dotnet build` on an ARM64 box is already an
   ARM64 build; that is what makes CI on `windows-11-arm` work with no special casing.
 - **The overlay must match the app's architecture.** It is a separate process, so an x64 pill beside
@@ -467,7 +481,7 @@ vendor registers into. **An empty result is the normal answer on most PCs and is
 
 Decoding stays on the CPU on every machine, and that is a measured decision, not an omission.
 A Hexagon HTP port of our exact model exists (`trsdn/parakeet-tdt-0.6b-v3-htp-int8-16s`) and
-benchmarks at **23-26x realtime for short audio versus ~25x for CPU INT8 on the same chip** — no
+benchmarks at **23-26x realtime for short audio versus ~25x for CPU INT8 on the same chip**, and no
 faster for push-to-talk. It only wins on long audio via chunking. The cost to adopt it would be:
 encoder only (decoder and mel preprocessing stay on CPU), a 631 MB context binary on top of what we
 ship, a fixed 16 s window forcing chunk-and-stitch, six helper DLLs where a missing one crashes with
@@ -489,13 +503,13 @@ Arm64 build.
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 
-- Run build + tests green before committing. `releases/` and `publish/` are gitignored —
+- Run build + tests green before committing. `releases/` and `publish/` are gitignored;
   never commit build artifacts or the downloaded models.
 
 ## Boundaries
 
 **Always:**
-- Keep the **offline‑first promise** intact — the core dictation path must never require a
+- Keep the **offline‑first promise** intact: the core dictation path must never require a
   network. Online features (Azure/Foundry cleanup) are strictly opt‑in.
 - Put new logic in `Scribe.Core` with a test; keep the build warning‑clean.
 - Keep all logging non‑throwing and use `FileShare.ReadWrite` + retry on the shared log.
@@ -515,7 +529,7 @@ Arm64 build.
 - Remove the SQLite pin: `SQLitePCLRaw.bundle_e_sqlite3 3.0.3` overrides a transitive build
   affected by **CVE‑2025‑6965** (pulls patched `e_sqlite3` 3.50.4). Don't remove without an
   equivalent fix.
-- Reintroduce a WPF transparent/layered‑window pill, or revert the overlay to in‑process —
+- Reintroduce a WPF transparent/layered‑window pill, or revert the overlay to in‑process;
   that bug is solved by the out‑of‑process WinUI 3 design.
 - Let a logging failure reach a destructive catch (process kill, teardown).
 - Send audio anywhere off the device.

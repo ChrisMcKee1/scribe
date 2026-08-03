@@ -99,7 +99,7 @@ internal sealed class FileLoggerProvider : ILoggerProvider
             // Logging must NEVER throw into the caller. Formatting, file I/O, or even a thread
             // interrupt here once propagated through Microsoft.Extensions.Logging and tore down the
             // recording overlay (a transient log-file lock was misread as an overlay launch failure).
-            // Any failure to record a line is swallowed — diagnostics are strictly best-effort.
+            // Any failure to record a line is swallowed; diagnostics are strictly best-effort.
             try
             {
                 var shortCategory = category.Contains('.') ? category[(category.LastIndexOf('.') + 1)..] : category;

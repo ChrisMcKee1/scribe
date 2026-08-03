@@ -261,7 +261,7 @@ public sealed class PostProcessorTests
     public void Process_expands_only_the_raw_occurrence_in_mixed_text()
     {
         // A canonical occurrence and a raw one in the same input: leave the canonical alone, expand
-        // the raw one — never compounding to "New New York".
+        // the raw one; never compounding to "New New York".
         var (processor, _, db) = Create(DictionaryEntry.New("york", "New York"));
         using (db)
         {

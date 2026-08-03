@@ -4,7 +4,7 @@ namespace Scribe.Core.Tests;
 
 /// <summary>
 /// The offline speech models now live next to the app that ships them
-/// (<c>src/Scribe.App/models</c>), which is outside this test project's parent chain — so
+/// (<c>src/Scribe.App/models</c>), which is outside this test project's parent chain, so
 /// <see cref="Scribe.Core.Infrastructure.ModelLocator"/>'s ancestor walk no longer reaches them.
 /// Point the locator at the source folder via its <c>SCRIBE_MODELS_DIR</c> override (honoured
 /// first) when it is present, so the engine smoke tests keep running locally. When the models are

@@ -121,7 +121,7 @@ public sealed class TextInjector : ITextInjector
         activity.SetTag(ScribeTelemetry.TagInjectComplete, complete);
         activity.SetTag(ScribeTelemetry.TagInjectFallback, fallback);
 
-        // A partial SendInput is the smoking gun for "I spoke but nothing (or only part) appeared" —
+        // A partial SendInput is the smoking gun for "I spoke but nothing (or only part) appeared";
         // mark the span as an error so it stands out in the log and any OTLP backend.
         if (!complete)
         {
@@ -140,7 +140,7 @@ public sealed class TextInjector : ITextInjector
 
         // An image, copied files or other non-text content can't be saved and restored by
         // Win32Clipboard (text-only by design), so pasting would silently destroy it. Fall back to
-        // typing — slower, but the user's screenshot or file copy survives the dictation.
+        // typing; slower, but the user's screenshot or file copy survives the dictation.
         if (Win32Clipboard.HasNonTextContent())
         {
             _logger.LogInformation("Clipboard holds non-text content; typing instead of pasting to preserve it.");
@@ -298,7 +298,7 @@ public sealed class TextInjector : ITextInjector
         }
 
         // Windows silently drops synthetic keystrokes when a single SendInput batch is larger than the
-        // focused app's input queue can drain — which is why a short dictation types fine but a long
+        // focused app's input queue can drain; this is why a short dictation types fine but a long
         // one appears partially or not at all. Type in small chunks with a brief settle between them,
         // and resend the unsent remainder of a chunk before giving up. The values favour reliability
         // over raw speed: a few hundred milliseconds on a rare long paragraph is imperceptible next to
@@ -430,7 +430,7 @@ public sealed class TextInjector : ITextInjector
     //
     // It is shifted by default because chat apps (Teams, Slack, Discord, and the web clients of all
     // three) bind a bare Enter to "send". AI cleanup is what introduces paragraph breaks in the first
-    // place — raw ASR output has none — so a polished two-paragraph dictation typed into a chat box
+    // place; raw ASR output has none, so a polished two-paragraph dictation typed into a chat box
     // fired the message on the first break and typed the rest into an empty composer. Shift+Enter is
     // the soft-newline chord in every one of those apps, and in a plain edit control, textarea or
     // RichEdit it is indistinguishable from Enter, so the shifted form is safe or strictly better

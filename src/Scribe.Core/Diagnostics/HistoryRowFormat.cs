@@ -1,4 +1,4 @@
-namespace Scribe.Core.Diagnostics;
+﻿namespace Scribe.Core.Diagnostics;
 
 /// <summary>
 /// Formats the derived columns of the history grid. Pure and UI-free so the rules below are
@@ -13,7 +13,7 @@ namespace Scribe.Core.Diagnostics;
 public static class HistoryRowFormat
 {
     /// <summary>Shown when a value does not apply, matching the target-app column's convention.</summary>
-    public const string NotApplicable = "—";
+    public const string NotApplicable = "n/a";
 
     /// <summary>
     /// Spoken length, in seconds to one decimal. Sub-100 ms clips would render as "0.0 s", so they

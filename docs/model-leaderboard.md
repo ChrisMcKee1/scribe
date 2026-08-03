@@ -1,5 +1,13 @@
 # Scribe AI Cleanup: Model Leaderboard (Golden Suite)
 
+> **Prompt revision note (v0.3.5):** the numbers below were produced against the previous wording of
+> `DefaultWritingStyle` and `DefaultFrontierPrompt`. Those prompts have since had their own em/en
+> dashes rewritten as commas and colons, and gained one sentence asking the model not to join clauses
+> with a dash. No rule was removed or tightened otherwise. Output is now also passed through the
+> deterministic `DashNormalizer`, so dash removal no longer depends on the model obeying. Treat the
+> rankings here as valid for relative model comparison and re-run the suite before quoting absolute
+> scores against the shipped prompt.
+
 > **Latest focused benchmark:** [GPT-5.6 Phonetic Cleanup Benchmark](gpt56-phonetic-benchmark.md)
 > compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and
 > `gpt-5.4-mini` across 11 WAV-backed cases, including three sound-alike transcript challenges.
@@ -172,7 +180,7 @@ cases, each graded against a golden reference rewrite.
 <details><summary>Writing style applied</summary>
 
 ```
-Write in clear, natural, well-structured English. Use correct punctuation — commas, periods, semicolons, colons, question marks, and parentheses — according to sentence structure. Break long run-on speech into properly formed sentences, and start a new paragraph when the topic shifts. Remove filler words and false starts (such as "um", "uh", "you know", and "like") and fix small grammar slips, while keeping my meaning, intent, and vocabulary. When I correct myself mid-speech (for example "I meant to go to the store — I mean the park"), keep only the corrected version and drop what it replaced. If I say the same thing more than once, or restate a point in slightly different words, merge it into a single clear statement instead of writing both. Always put a single space between sentences. Keep technical terms, product names, code, and URLs verbatim. Write numbers the way they are normally written rather than spelled out: use digits for quantities, measurements, prices, percentages, phone numbers, and version numbers (for example "twenty three" becomes "23" and "five point five" becomes "5.5"), but keep a small number as a word where that reads more naturally (for example "one or two ideas"). Spell out a number that begins a sentence, or reword the sentence so it doesn't start with one. Format clock times as digits with a colon, adding AM or PM when I say it (for example "three thirty p m" becomes "3:30 PM"). Write dates, calendar months, and years in their normal written form (for example "july third twenty twenty six" becomes "July 3, 2026"). Write acronyms spoken letter by letter in capitals with no spaces or periods (for example "a p i" becomes "API"). Only reformat what I actually spoke — never invent or change a value I did not say.
+Write in clear, natural, well-structured English. Use correct punctuation (commas, periods, semicolons, colons, question marks, and parentheses) according to sentence structure. Break long run-on speech into properly formed sentences, and start a new paragraph when the topic shifts. Remove filler words and false starts (such as "um", "uh", "you know", and "like") and fix small grammar slips, while keeping my meaning, intent, and vocabulary. When I correct myself mid-speech (for example "I meant to go to the store, I mean the park"), keep only the corrected version and drop what it replaced. If I say the same thing more than once, or restate a point in slightly different words, merge it into a single clear statement instead of writing both. Always put a single space between sentences. Keep technical terms, product names, code, and URLs verbatim. Write numbers the way they are normally written rather than spelled out: use digits for quantities, measurements, prices, percentages, phone numbers, and version numbers (for example "twenty three" becomes "23" and "five point five" becomes "5.5"), but keep a small number as a word where that reads more naturally (for example "one or two ideas"). Spell out a number that begins a sentence, or reword the sentence so it doesn't start with one. Format clock times as digits with a colon, adding AM or PM when I say it (for example "three thirty p m" becomes "3:30 PM"). Write dates, calendar months, and years in their normal written form (for example "july third twenty twenty six" becomes "July 3, 2026"). Write acronyms spoken letter by letter in capitals with no spaces or periods (for example "a p i" becomes "API"). Only reformat what I actually spoke; never invent or change a value I did not say.
 ```
 
 </details>
@@ -447,7 +455,7 @@ The deployment went out yesterday, but the pipeline kept failing at the test sta
 <details><summary>kitchen-sink output: The cleaned output is fluent and well-structured, with most disfluencies removed and instructions followed. However, it…</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included—the ones we talked about in last week's meeting, where it went up 12%.
+I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included, the ones we talked about in last week's meeting, where it went up 12%.
 
 Wednesday is better.
 
@@ -519,7 +527,7 @@ Anyway, it's out now, and everything looks good, but we should fix those flaky t
 <details><summary>kitchen-sink output: The cleaned output is well-structured and fluent, with good punctuation and grammar. It removes fillers and self-correc…</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included—the ones we were talking about in the meeting last week, where it went up 12%.
+I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included, the ones we were talking about in the meeting last week, where it went up 12%.
 
 Wednesday is better.
 
@@ -663,7 +671,7 @@ Anyway, it’s out now and everything looks good, but we should fix those flaky 
 <details><summary>kitchen-sink output: The cleaned output is fluent, well-structured, and removes all disfluencies. It preserves meaning and merges repetition…</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by end of day Friday. Please make sure the Q3 revenue numbers are included—the ones we discussed in last week's meeting, where revenue increased by 12%. Actually, Wednesday is a better day to send it than Tuesday.
+I need to send a quarterly report to Sarah on the finance team by end of day Friday. Please make sure the Q3 revenue numbers are included, the ones we discussed in last week's meeting, where revenue increased by 12%. Actually, Wednesday is a better day to send it than Tuesday.
 
 The report should be clearer and better organized for the stakeholders since they were confused last time. At the very end, add a line that says: "We few, we happy few, we band of brothers." Then wrap up the report nicely. Thanks.
 ```
@@ -727,7 +735,7 @@ The deployment went out yesterday, but the pipeline kept failing at the test sta
 <details><summary>kitchen-sink output: The cleaned output is fluent, well-structured, and closely matches the GOLDEN, with only minor differences in phrasing …</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by end of day Friday. Make sure the Q3 revenue numbers are in there — the ones we discussed in last week's meeting, where they went up 12%. Wednesday is better. The report also needs to be clearer for the stakeholders because they were confused last time. At the very end, add a line that says "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
+I need to send a quarterly report to Sarah on the finance team by end of day Friday. Make sure the Q3 revenue numbers are in there, the ones we discussed in last week's meeting, where they went up 12%. Wednesday is better. The report also needs to be clearer for the stakeholders because they were confused last time. At the very end, add a line that says "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
 ```
 
 </details>
@@ -741,7 +749,7 @@ The migration window moved from 3:00 PM to 4:30 PM on July 3, and we need 23 lic
 <details><summary>self-correction output: The cleaned output is fluent and well-structured, with all disfluencies removed. However, it adds 'from marketing,' '$'…</summary>
 
 ```
-I told the client we could deliver by Tuesday. The total came to $5,000 after taxes. Also, loop in Rachel from marketing — she owns that account now. The kickoff is at 9:30 AM, not 9:00 like I said before.
+I told the client we could deliver by Tuesday. The total came to $5,000 after taxes. Also, loop in Rachel from marketing; she owns that account now. The kickoff is at 9:30 AM, not 9:00 like I said before.
 ```
 
 </details>
@@ -787,7 +795,7 @@ The deployment went out yesterday, but the pipeline kept failing on the test sta
 <details><summary>kitchen-sink output: The cleaned output is fluent, well-structured, and follows the writing style closely. It resolves all disfluencies and …</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by end of day Friday. Make sure the Q3 revenue numbers are in there—the ones we talked about in the meeting last week, where they went up 12%.
+I need to send a quarterly report to Sarah on the finance team by end of day Friday. Make sure the Q3 revenue numbers are in there, the ones we talked about in the meeting last week, where they went up 12%.
 
 Send it on Wednesday instead. The report needs to be better and clearer for the stakeholders, since they were confused last time.
 
@@ -807,7 +815,7 @@ The migration window moved from 3:00 PM to 4:30 PM on July 3. We need 23 license
 <details><summary>self-correction output: The cleaned output added 'no later than' and 'from marketing,' which were not present in the GOLDEN and thus introduced…</summary>
 
 ```
-I told the client we could deliver by Monday, no later than Tuesday. The total came to $5,000 after taxes. Also, loop in Rachel from marketing—she owns that account now. The kickoff is at 9:30.
+I told the client we could deliver by Monday, no later than Tuesday. The total came to $5,000 after taxes. Also, loop in Rachel from marketing; she owns that account now. The kickoff is at 9:30.
 ```
 
 </details>
@@ -870,10 +878,10 @@ The migration window has moved from 3:00 PM to 4:30 PM on July 3. We need 23 lic
 ```
 
 </details>
-<details><summary>self-correction output: The cleaned output mostly matches the GOLDEN, but it retains 'Monday—no way Tuesday' instead of merging to just 'Tuesda…</summary>
+<details><summary>self-correction output: The cleaned output mostly matches the GOLDEN, but it retains 'Monday, no way Tuesday' instead of merging to just 'Tuesda…</summary>
 
 ```
-I told the client we could deliver by Monday—no way Tuesday. The total came to 5,000 after taxes. Loop in Rachel; she owns that account now. The kickoff is at 9:30, not 9.
+I told the client we could deliver by Monday, no way Tuesday. The total came to 5,000 after taxes. Loop in Rachel; she owns that account now. The kickoff is at 9:30, not 9.
 ```
 
 </details>
@@ -921,7 +929,7 @@ The deployment went out yesterday, but the pipeline kept failing at the test sta
 <details><summary>kitchen-sink output: The cleaned output is fluent and well-structured, with most disfluencies removed and meaning preserved. However, the qu…</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included—the ones we discussed in last week’s meeting, where it went up 12%.
+I need to send a quarterly report to Sarah on the finance team by Friday, end of day, and make sure the Q3 revenue numbers are included, the ones we discussed in last week’s meeting, where it went up 12%.
 
 Wednesday is better.
 
@@ -1111,7 +1119,7 @@ The deploy went out yesterday, but the pipeline kept failing on the test stage b
 <details><summary>kitchen-sink output: The cleaned output is fluent and well-structured, with good punctuation and grammar. However, it introduces 'over the U…</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by Friday, end of day. Make sure the Q3 revenue numbers from last week's meeting are included—they're up 12% over the US. Let's schedule this for Tuesday, or actually Wednesday is better. The report needs to be clearer for the stakeholders, because last time they were confused. At the very end, add a line that says "we few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
+I need to send a quarterly report to Sarah on the finance team by Friday, end of day. Make sure the Q3 revenue numbers from last week's meeting are included, they're up 12% over the US. Let's schedule this for Tuesday, or actually Wednesday is better. The report needs to be clearer for the stakeholders, because last time they were confused. At the very end, add a line that says "we few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
 ```
 
 </details>
@@ -1127,7 +1135,7 @@ Version 2.5 ships first, and 26 people signed up for the API workshop.
 <details><summary>self-correction output: The cleaned output mostly follows the instructions and writing style, but it fails to merge the repetition about the ki…</summary>
 
 ```
-I told the client we could deliver by Tuesday, and the total came to 5000 after taxes. Also, loop in Rachel — she owns that account now. The kickoff is at 9:30, not 9 like I said before.
+I told the client we could deliver by Tuesday, and the total came to 5000 after taxes. Also, loop in Rachel; she owns that account now. The kickoff is at 9:30, not 9 like I said before.
 ```
 
 </details>
@@ -1173,14 +1181,14 @@ The deploy went out yesterday, but the pipeline kept failing on the test stage b
 <details><summary>kitchen-sink output: The cleaned output is fluent and well-structured, with strong mechanics and disfluency removal. However, it adds 'I'm o…</summary>
 
 ```
-I'm okay. I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Ensure the Q3 revenue numbers are included—the ones we discussed in last week's meeting, which showed a 12% increase in the US. Send it on Wednesday. The report needs to be clearer for stakeholders, as they were confused last time. At the end, add the line, "We few, we happy few, we band of brothers," and wrap it up nicely. Thanks.
+I'm okay. I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Ensure the Q3 revenue numbers are included, the ones we discussed in last week's meeting, which showed a 12% increase in the US. Send it on Wednesday. The report needs to be clearer for stakeholders, as they were confused last time. At the end, add the line, "We few, we happy few, we band of brothers," and wrap it up nicely. Thanks.
 ```
 
 </details>
 <details><summary>numbers-dates output: The editor added '2026' to the date, which was not spoken, and changed 'plus' to 'and', altering the original meaning. …</summary>
 
 ```
-The migration window was moved to 3:00–4:30 PM on July 3, 2026. We need 23 licenses and 8 gigabytes of RAM per developer; the budget is $950, which is 15% under plan. Version 2.5 will ship first, and 26 people signed up for the API workshop.
+The migration window was moved to 3:00 to 4:30 PM on July 3, 2026. We need 23 licenses and 8 gigabytes of RAM per developer; the budget is $950, which is 15% under plan. Version 2.5 will ship first, and 26 people signed up for the API workshop.
 ```
 
 </details>
@@ -1233,7 +1241,7 @@ The deploy went out yesterday, but the pipeline kept failing on the test stage b
 <details><summary>kitchen-sink output: The editor added 'I'm okay,' which was not present in the GOLDEN and is extraneous. The quote 'we few, we happy few, we…</summary>
 
 ```
-I'm okay. I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Make sure the Q3 revenue numbers are included—the ones we discussed in the meeting last week, where it went up about 12%. It should be ready by Wednesday instead of Tuesday. The report needs to be clearer and better for the stakeholders because last time they were confused. At the very end, add a line that says, "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
+I'm okay. I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Make sure the Q3 revenue numbers are included, the ones we discussed in the meeting last week, where it went up about 12%. It should be ready by Wednesday instead of Tuesday. The report needs to be clearer and better for the stakeholders because last time they were confused. At the very end, add a line that says, "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
 ```
 
 </details>
@@ -1357,7 +1365,7 @@ So basically, the deploy went out yesterday, but the pipeline kept failing on th
 <details><summary>kitchen-sink output: The cleaned output added 'in the US and in the remaining segment,' which was not present in the RAW or GOLDEN, and drop…</summary>
 
 ```
-Okay, I need to send a quarterly report to Sarah on the finance team by Friday, end of day. I need to make sure the Q3 revenue numbers are included—the ones we discussed in last week’s meeting, when they went up 12% in the US and in the remaining segment.
+Okay, I need to send a quarterly report to Sarah on the finance team by Friday, end of day. I need to make sure the Q3 revenue numbers are included, the ones we discussed in last week’s meeting, when they went up 12% in the US and in the remaining segment.
 
 Also, we should send it on Wednesday instead. The report also needs to be clearer for the stakeholders, since last time they were confused.
 
@@ -1483,7 +1491,7 @@ Anyway, it's out now, and everything looks good. But we should fix those flaky t
 <details><summary>kitchen-sink output: The cleaned output is fluent and well-structured, with strong mechanics and disfluency removal. However, it adds 'more …</summary>
 
 ```
-I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Make sure the Q3 revenue numbers are included—the ones we discussed in last week's meeting, where they increased by 12%. The meeting was actually on Wednesday, not Tuesday. The report needs to be clearer and more comprehensive for the stakeholders, as they were confused last time. At the very end, add a line that says, "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
+I need to send a quarterly report to Sarah on the finance team by the end of the day on Friday. Make sure the Q3 revenue numbers are included, the ones we discussed in last week's meeting, where they increased by 12%. The meeting was actually on Wednesday, not Tuesday. The report needs to be clearer and more comprehensive for the stakeholders, as they were confused last time. At the very end, add a line that says, "We few, we happy few, we band of brothers," and then wrap it up nicely. Thanks.
 ```
 
 </details>
@@ -1545,7 +1553,7 @@ The deployment went out yesterday, but the pipeline kept failing at the test sta
 ```
 :
 
-I'm okay. So I need to send a quarterly report over to Sarah on the finance team by Friday end of day. Make sure the Q3 revenue numbers are in there — you know the ones we were talking about in the meeting last week, where it went up like 12%. 
+I'm okay. So I need to send a quarterly report over to Sarah on the finance team by Friday end of day. Make sure the Q3 revenue numbers are in there, you know the ones we were talking about in the meeting last week, where it went up like 12%. 
 
 Actually, I think it's better to send it on Wednesday. Honestly, the report needs to be more clear and better structured for the stakeholders. Last time, they were confused.
 
@@ -1563,14 +1571,14 @@ The migration window has been moved from 3 PM to 4:30 PM on July 3. We need 23 l
 <details><summary>self-correction output: The cleaned output left filler words ('So', 'Uh', 'sorry'), failed to merge self-corrections cleanly, and retained drop…</summary>
 
 ```
-So I told the client we could deliver by Monday — no way Tuesday, sorry. The total came to $4,000 — I mean $5,000 after taxes. Uh, also loop in Dave from marketing. Actually, no — loop in Rachel. She owns that account now, and the kickoff is at 9:30 — not 9, like I said before.
+So I told the client we could deliver by Monday, no way Tuesday, sorry. The total came to $4,000, I mean $5,000 after taxes. Uh, also loop in Dave from marketing. Actually, no, loop in Rachel. She owns that account now, and the kickoff is at 9:30, not 9, like I said before.
 ```
 
 </details>
 <details><summary>redundancy output: The CLEANED output failed to merge repeated statements about updating the onboarding documentation, resulting in unnece…</summary>
 
 ```
-We really need to update the onboarding documentation before the new hires start. The documents are just out of date — they need updating. The onboarding documentation has to be refreshed before the new folks get here. And us separately — can you book the demo room for Thursday afternoon?
+We really need to update the onboarding documentation before the new hires start. The documents are just out of date; they need updating. The onboarding documentation has to be refreshed before the new folks get here. And us separately, can you book the demo room for Thursday afternoon?
 ```
 
 </details>
@@ -1849,7 +1857,7 @@ So, basically, the deployment went out yesterday, but the pipeline kept failing 
 <details><summary>kitchen-sink output: The editor altered the quoted text ('we few, we happy few, we band of brothers') and added new wording ('The Happy Few:…</summary>
 
 ```
-I'm okay, so I need to send a quarterly report over to Sarah on the finance team by the end of Friday, and make sure the Q3 revenue numbers are included—a 12% increase over last quarter. It would be best to send it on Wednesday. The report needs to be clearer for stakeholders since the last one was confusing. In the very end, please add a line that says, "The Happy Few: We're Together in Business." Wrap it up nicely. Thanks.
+I'm okay, so I need to send a quarterly report over to Sarah on the finance team by the end of Friday, and make sure the Q3 revenue numbers are included, a 12% increase over last quarter. It would be best to send it on Wednesday. The report needs to be clearer for stakeholders since the last one was confusing. In the very end, please add a line that says, "The Happy Few: We're Together in Business." Wrap it up nicely. Thanks.
 ```
 
 </details>
@@ -1863,7 +1871,7 @@ The migration window moved from 3 PM to 4:30 PM on July 3. We need 23 licenses p
 <details><summary>self-correction output: The editor failed to merge self-corrections and repeated statements as required, resulting in extra and conflicting inf…</summary>
 
 ```
-So I told the client we could deliver by Monday, no way, Tuesday, sorry. The total came to $4,000—I mean $5,000 after taxes. I also looped in Dave from marketing, actually, he does that for the project. However, it's Rachel who owns that account now. The kickoff is at 9:30 PM, not 9 as I said before.
+So I told the client we could deliver by Monday, no way, Tuesday, sorry. The total came to $4,000, I mean $5,000 after taxes. I also looped in Dave from marketing, actually, he does that for the project. However, it's Rachel who owns that account now. The kickoff is at 9:30 PM, not 9 as I said before.
 ```
 
 </details>
@@ -2105,7 +2113,7 @@ Okay, the migration window moved from 3 PM to 4:30 PM on July 3. We need 23 lice
 <details><summary>self-correction output: The cleaned output dropped the self-correction for the delivery date, incorrectly stating 'Monday, not Tuesday' instead…</summary>
 
 ```
-We can deliver by Monday, not Tuesday. Sorry. The total after taxes is 5,000. Also, loop in Rachel—she owns the account now. The kickoff is at 9:30 AM.
+We can deliver by Monday, not Tuesday. Sorry. The total after taxes is 5,000. Also, loop in Rachel; she owns the account now. The kickoff is at 9:30 AM.
 ```
 
 </details>
@@ -2151,7 +2159,7 @@ The deployment went out yesterday, but the pipeline kept failing at the test sta
 <details><summary>kitchen-sink output: The editor altered the quoted text ('we few, we happy few, we band of brothers' became 'We, the Happy Few, we, the band…</summary>
 
 ```
-I'm okay, so I need to send a quarterly report over to Sarah on the finance team by Friday, end of day. Make sure the Q3 revenue numbers are in there—the ones we talked about in the meeting last week, where it went up like 12%. 
+I'm okay, so I need to send a quarterly report over to Sarah on the finance team by Friday, end of day. Make sure the Q3 revenue numbers are in there, the ones we talked about in the meeting last week, where it went up like 12%. 
 
 Actually, Wednesday is better. And honestly, the report needs to be more better and more clearer for the stakeholders, because last time they were confused. 
 
@@ -2335,7 +2343,7 @@ Basically, the deployment was successful yesterday, but the pipeline kept failin
 <details><summary>kitchen-sink output: The cleaned output added information not present in the original speech (e.g., 'I’ll be grateful for your help,' 'speci…</summary>
 
 ```
-I’ll send the quarterly report to Sarah on the finance team by Friday at the end of the day. Make sure the Q3 revenue numbers are included, specifically the figures we discussed last week—those that showed a 12% increase.
+I’ll send the quarterly report to Sarah on the finance team by Friday at the end of the day. Make sure the Q3 revenue numbers are included, specifically the figures we discussed last week, those that showed a 12% increase.
 
 I’d prefer to finalize it on Wednesday rather than Tuesday. The report should also be clearer and more polished for stakeholders, as they seemed confused last time.
 
@@ -2359,7 +2367,7 @@ Here’s the corrected version:
 
 I told the client we could deliver by Monday, but not Tuesday. The total came to $4,000, not $5,000 after taxes.
 
-I also meant to loop in Dave from marketing, but I should have looped in Rachel instead—she owns that account. The kickoff is at 9:30 AM, not 9:00 AM as I initially said.
+I also meant to loop in Dave from marketing, but I should have looped in Rachel instead; she owns that account. The kickoff is at 9:30 AM, not 9:00 AM as I initially said.
 ```
 
 </details>
@@ -2388,7 +2396,7 @@ Please draft a summary of the security incident and send it to everyone by 5:00 
 Ensure the subject line reads: **Urgent: Security Review Required**
 
 End the email with the following quote:
-*"To be or not to be—that is the question."*
+*"To be or not to be, that is the question."*
 ```
 
 </details>

@@ -14,7 +14,7 @@ internal static class Win32Clipboard
     private const int OpenRetryDelayMs = 15;
 
     /// <summary>
-    /// True when the clipboard holds content that is NOT representable as text — an image, copied
+    /// True when the clipboard holds content that is NOT representable as text: an image, copied
     /// files, a spreadsheet range. Text-bearing content reports false even when rich companions
     /// (HTML/RTF) accompany it, because the text round-trip preserves what matters. Non-text
     /// content cannot be saved and restored by this class, so callers should avoid clobbering it.

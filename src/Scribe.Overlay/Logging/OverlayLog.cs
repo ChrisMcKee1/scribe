@@ -52,7 +52,7 @@ public static class OverlayLog
 
     public static void Write(string message, string level = "Information")
     {
-        // Diagnostics are best-effort and must NEVER throw into the overlay's UI/IPC code — including
+        // Diagnostics are best-effort and must NEVER throw into the overlay's UI/IPC code, including
         // from Path resolution (directory creation) or an unexpected writer failure below.
         try
         {

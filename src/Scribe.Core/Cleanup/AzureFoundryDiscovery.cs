@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Azure.Core;
 using Azure.Identity;
 using Azure.ResourceManager;
@@ -38,14 +38,14 @@ public sealed record AzureFoundryDeployment(
 
     /// <summary>Secondary label: which account / subscription this deployment lives in.</summary>
     public string Detail =>
-        string.IsNullOrWhiteSpace(AccountName) ? Endpoint : $"{AccountName} ({Kind}) — {SubscriptionName}";
+        string.IsNullOrWhiteSpace(AccountName) ? Endpoint : $"{AccountName} ({Kind}) in {SubscriptionName}";
 
     /// <summary>
     /// The endpoint to configure for this deployment. Microsoft's recommended shape is the Foundry
     /// <b>project</b> endpoint (…/api/projects/NAME), which <see cref="TextCleanupService"/> routes
     /// natively through <c>AIProjectClient</c>; the classic account endpoint is the fallback when the
     /// account exposes no project. Note the project data plane is AAD-only, so key auth must keep
-    /// using <see cref="Endpoint"/> — see <see cref="EndpointFor"/>.
+    /// using <see cref="Endpoint"/>; see <see cref="EndpointFor"/>.
     /// </summary>
     public string PreferredEndpoint =>
         string.IsNullOrWhiteSpace(ProjectEndpoint) ? Endpoint : ProjectEndpoint!;
@@ -125,7 +125,7 @@ public interface IAzureFoundryDiscovery
     /// Cheaply checks whether the user is already signed in through Azure CLI by requesting an ARM
     /// token from the existing <c>az login</c> session. Lets the UI show "already signed in" and
     /// list deployments automatically
-    /// instead of forcing a sign-in click. Never throws — a failed/absent credential returns
+    /// instead of forcing a sign-in click. Never throws; a failed/absent credential returns
     /// <see cref="AzureSignInStatus.IsSignedIn"/> = false.
     /// <paramref name="subscriptionId"/> selects the matching cached CLI account when supplied.
     /// <paramref name="servicePrincipal"/> probes the app registration instead when supplied, so the
@@ -157,7 +157,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     private const int MaxAccountConcurrency = 8;
 
     // Resource Graph reliably indexes the *accounts* (across every subscription in one query), but
-    // NOT their `.../deployments` child resources — so we find accounts here and list deployments
+    // NOT their `.../deployments` child resources, so we find accounts here and list deployments
     // per-account via the management API. This single query replaces a slow per-subscription crawl.
     private const string AccountsQuery = """
         resources
@@ -697,7 +697,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
     //     (gpt-5.4-pro, gpt-5.3-codex) report chatCompletion==false but responses==true and DO work.
     //   * chatCompletion  -> use its value. Older chat models (gpt-4o/4.1, gpt-5.x, model-router)
     //     report chatCompletion==true without a responses key; embedding/image/document models report
-    //     false. ("chatCompletion" alone is NOT sufficient — it misses the responses-only models above,
+    //     false. ("chatCompletion" alone is NOT sufficient; it misses the responses-only models above,
     //     which is why we check "responses" first.)
     // Only when the map surfaces NONE of these decisive keys do we fall back to the model-name
     // heuristic (older API versions / some non-OpenAI AIServices deployments).

@@ -4,7 +4,7 @@ using Xunit;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// Guards <see cref="TextCleanupService.TrySanitize"/> — the boundary that decides whether a model's
+/// Guards <see cref="TextCleanupService.TrySanitize"/>: the boundary that decides whether a model's
 /// raw answer is usable. A rejected answer must report failure (so an all-rejected dictation falls
 /// back to raw AND flashes the red "intelligence failed" overlay) rather than being silently logged
 /// as an unchanged success.
@@ -173,7 +173,7 @@ public sealed class SanitizeTests
 
     // ---- Invented-reply guard ---------------------------------------------------------------
     // A weaker model (e.g. a small Foundry Local model) sometimes ANSWERS a dictated question or
-    // acknowledges a request instead of cleaning it — the exact bug behind "Can you hear me now?"
+    // acknowledges a request instead of cleaning it; the exact bug behind "Can you hear me now?"
     // producing "Yeah." The guard must reject a reply the speaker never dictated so the chunk falls
     // back to the raw transcription (and the pipeline flashes "intelligence failed").
 
@@ -196,7 +196,7 @@ public sealed class SanitizeTests
     [Fact]
     public void Answer_that_echoes_the_question_as_a_statement_is_rejected()
     {
-        // The model converted the question into an affirmed statement — still an answer, not a clean-up.
+        // The model converted the question into an affirmed statement; still an answer, not a clean-up.
         const string raw = "can you hear me now";
         Assert.False(TextCleanupService.TrySanitize("Yes, I can hear you now.", raw, out var text));
         Assert.Equal(raw, text);

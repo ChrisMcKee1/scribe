@@ -76,7 +76,7 @@ public sealed class DatabaseSalvageTests : IDisposable
             db.Initialize();
             Assert.True(db.RepairedAtStartup);
 
-            // The dictionary — the data the user actually curates — survived intact.
+            // The dictionary, the data the user actually curates, survived intact.
             var entries = new DictionaryRepository(db).GetAll();
             Assert.Equal(2, entries.Count);
             Assert.Contains(entries, e => e.Replacement == "Geoffery");
@@ -93,7 +93,7 @@ public sealed class DatabaseSalvageTests : IDisposable
     [Fact]
     public void Unreadable_file_is_moved_aside_and_a_fresh_database_starts()
     {
-        // Not even a SQLite header — open/quick_check fails outright, so nothing can be salvaged.
+        // Not even a SQLite header; open/quick_check fails outright, so nothing can be salvaged.
         File.WriteAllBytes(DbPath, new byte[8192]);
 
         using var db = CreateFileDatabase();

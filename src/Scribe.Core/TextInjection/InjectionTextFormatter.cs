@@ -5,7 +5,7 @@ namespace Scribe.Core.TextInjection;
 
 /// <summary>
 /// Final formatting applied to dictated text just before injection. Terminals interpret an
-/// injected newline — typed as a Unicode key event or pasted — as Enter, so a dictation the AI
+/// injected newline, typed as a Unicode key event or pasted, as Enter, so a dictation the AI
 /// cleanup split into paragraphs would submit several partial messages instead of one. This
 /// flattens line breaks to spaces, either everywhere or only when the focused process is a known
 /// terminal, per <see cref="NewlineInjectionMode"/>.
@@ -15,7 +15,7 @@ public static class InjectionTextFormatter
     // Process names (no .exe suffix, compared case-insensitively) of hosts whose input line treats
     // Enter as "submit". IDE processes (e.g. Code) are deliberately absent: their integrated
     // terminals are indistinguishable from their editors by process name, and mangling newlines in
-    // an editor would be worse than an occasional early send — users who live in an IDE terminal
+    // an editor would be worse than an occasional early send; users who live in an IDE terminal
     // can pick AlwaysFlatten instead.
     private static readonly HashSet<string> TerminalProcesses = new(StringComparer.OrdinalIgnoreCase)
     {

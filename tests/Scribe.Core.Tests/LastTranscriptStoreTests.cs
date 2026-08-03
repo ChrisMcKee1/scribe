@@ -165,4 +165,146 @@ public sealed class LastTranscriptStoreTests
         Assert.Equal(string.Empty, LastTranscriptStore.FormatPreview(null));
         Assert.Equal(string.Empty, LastTranscriptStore.FormatPreview("  \r\n "));
     }
-}
+
+    // A correction saved from the quick add popup rewrites the transcript it came from, so that
+    // "copy last dictation" hands back the fixed wording. The ring must stay the same size doing it:
+    // spending a recovery slot on a spelling fix would evict a dictation the user might still need.
+
+    [Fact]
+    public void Update_rewrites_in_place_without_reordering_or_growing_the_ring()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("one");
+        store.Set("two");
+        store.Set("three");
+
+        Assert.True(store.Update("two", "TWO"));
+
+        Assert.Equal(new[] { "three", "TWO", "one" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void Update_of_the_newest_entry_is_reflected_by_Get()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("teh quick fox");
+
+        Assert.True(store.Update("teh quick fox", "the quick fox"));
+
+        Assert.Equal("the quick fox", store.Get());
+        Assert.Single(store.GetRecent());
+    }
+
+    [Fact]
+    public void Update_ignores_a_transcript_that_has_already_been_evicted()
+    {
+        var store = new LastTranscriptStore();
+        for (var i = 0; i < LastTranscriptStore.Capacity + 1; i++)
+        {
+            store.Set($"entry {i}");
+        }
+
+        Assert.False(store.Update("entry 0", "corrected"));
+        Assert.DoesNotContain("corrected", store.GetRecent());
+        Assert.Equal(LastTranscriptStore.Capacity, store.GetRecent().Count);
+    }
+
+    // The popup is modeless, so a dictation can land while it is open and shift every index in the
+    // ring. Matching on content rather than position is what stops the correction being written over
+    // the wrong transcript.
+    [Fact]
+    public void Update_follows_the_transcript_after_a_new_dictation_shifts_the_ring()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("target text");
+        store.Set("arrived while the popup was open");
+
+        Assert.True(store.Update("target text", "corrected text"));
+
+        Assert.Equal(new[] { "arrived while the popup was open", "corrected text" }, store.GetRecent());
+    }
+
+    [Fact]
+    public void Update_is_a_no_op_when_nothing_actually_changes()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("same");
+
+        Assert.False(store.Update("same", "same"));
+        Assert.False(store.Update(null, "x"));
+        Assert.False(store.Update("same", null));
+        Assert.False(store.Update("same", "   "));
+        Assert.Equal(new[] { "same" }, store.GetRecent());
+    }
+
+    // A correction can make one transcript identical to another already in the ring. The ring must
+    // still not shrink: losing a recovery slot as the price of a spelling fix is exactly what the
+    // "update, not insert" rule exists to prevent.
+    [Fact]
+    public void Update_keeps_the_ring_intact_when_the_correction_duplicates_another_entry()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("say hello");
+        store.Set("say helo");
+
+        Assert.True(store.Update("say helo", "say hello"));
+
+        Assert.Equal(new[] { "say hello", "say hello" }, store.GetRecent());
+    }
+
+    // The ring can hold the same text twice, because Set only collapses an immediate repeat. Fixing
+    // one and leaving its twin stale would look broken, and picking "the first match" would rewrite
+    // an entry the user did not select.
+    [Fact]
+    public void Update_rewrites_every_slot_holding_that_exact_transcript()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("okay thanks");
+        store.Set("something else");
+        store.Set("okay thanks");
+
+        Assert.True(store.Update("okay thanks", "OK, thanks"));
+
+        Assert.Equal(new[] { "OK, thanks", "something else", "OK, thanks" }, store.GetRecent());
+    }
+
+    // Everything shown after a restart comes from history. Without seeding, a correction saved
+    // against one of those transcripts would find nothing in the ring to repair, so the fix would
+    // report success while "copy last dictation" still returned the mistake.
+    [Fact]
+    public void Seed_fills_an_empty_ring_so_history_backed_transcripts_can_be_repaired()
+    {
+        var store = new LastTranscriptStore();
+        store.Seed(["newest", "older"]);
+
+        Assert.Equal(new[] { "newest", "older" }, store.GetRecent());
+        Assert.True(store.Update("newest", "newest, corrected"));
+        Assert.Equal("newest, corrected", store.Get());
+    }
+
+    [Fact]
+    public void Seed_never_displaces_live_dictations_or_overflows_the_ring()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("live");
+        store.Seed(["from history"]);
+
+        Assert.Equal(new[] { "live" }, store.GetRecent());
+
+        var empty = new LastTranscriptStore();
+        empty.Seed(Enumerable.Range(0, LastTranscriptStore.Capacity + 3).Select(i => $"h{i}"));
+
+        Assert.Equal(LastTranscriptStore.Capacity, empty.GetRecent().Count);
+        Assert.Null(Record.Exception(() => empty.Seed(null)));
+    }
+
+    [Fact]
+    public void Update_matches_case_sensitively_so_a_casing_fix_is_not_mistaken_for_a_no_op()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("aspire is great");
+
+        Assert.False(store.Update("Aspire is great", "Aspire is great!"));
+        Assert.True(store.Update("aspire is great", "Aspire is great"));
+        Assert.Equal("Aspire is great", store.Get());
+    }}

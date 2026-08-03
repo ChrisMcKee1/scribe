@@ -7,7 +7,7 @@ namespace Scribe.Core.Diagnostics;
 /// Central <see cref="ActivitySource"/> for Scribe's dictation pipeline. Tracing is opt-in: spans are
 /// only created when a listener (the OpenTelemetry SDK in the app host) subscribes to
 /// <see cref="SourceName"/>, so when telemetry is off these calls are nearly free. The spans make the
-/// end-to-end loop — capture, VAD, transcription, AI cleanup, post-processing and text injection —
+/// end-to-end loop (capture, VAD, transcription, AI cleanup, post-processing and text injection)
 /// inspectable, which is how an intermittent "the text didn't appear" can be traced to the exact
 /// stage that dropped it (a VAD discard, an empty decode, or a partial <c>SendInput</c>).
 /// </summary>
@@ -22,7 +22,7 @@ public static class ScribeTelemetry
     /// <summary>Child span covering the text-injection keystroke/paste delivery.</summary>
     public const string InjectActivity = "text.inject";
 
-    // Tag names (snake_case under a "scribe." namespace) — stable keys the log bridge and any OTLP
+    // Tag names (snake_case under a "scribe." namespace): stable keys the log bridge and any OTLP
     // backend surface for filtering and dashboards.
     public const string TagOutcome = "scribe.outcome";
     public const string TagCaptureSeconds = "scribe.capture_seconds";

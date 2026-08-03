@@ -196,7 +196,7 @@ internal sealed class BenchmarkRunner
             var key = $"{model.Group}/{model.Id}";
             if (!_cfg.Force && done.Contains(key))
             {
-                Console.WriteLine($"[{index}/{roster.Count}] {key} — already done, skipping.");
+                Console.WriteLine($"[{index}/{roster.Count}] {key}: already done, skipping.");
                 continue;
             }
 

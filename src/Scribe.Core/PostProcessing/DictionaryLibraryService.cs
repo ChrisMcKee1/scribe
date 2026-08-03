@@ -172,7 +172,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
         return candidate;
     }
 
-    // Lowercase, alphanumerics kept, every other run collapsed to a single hyphen — a safe file name
+    // Lowercase, alphanumerics kept, every other run collapsed to a single hyphen; a safe file name
     // and stable id derived from the library's display name.
     private static string Slugify(string value)
     {

@@ -5,7 +5,7 @@ namespace Scribe.Core.Cleanup;
 /// (fully offline). <see cref="AzureFoundry"/> uses a model already deployed in the user's Azure
 /// AI Foundry / Azure OpenAI account, reached with their Azure CLI sign-in (AAD token, no key).
 /// <see cref="OpenAiCompatible"/> is bring-your-own-endpoint: any server speaking the OpenAI chat
-/// protocol — Ollama, LM Studio, vLLM, OpenRouter, or a direct OpenAI key.
+/// protocol: Ollama, LM Studio, vLLM, OpenRouter, or a direct OpenAI key.
 /// </summary>
 public enum CleanupProvider
 {

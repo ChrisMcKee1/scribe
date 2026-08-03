@@ -8,7 +8,7 @@ namespace Scribe.Evals;
 /// A deterministic, model-agnostic <see cref="IEvaluator"/> that scores how well a cleaned
 /// transcript adheres to the writing-style instruction it was given. It looks for style "markers"
 /// (regex patterns) in the model's output and also checks that the output actually changed from the
-/// raw input — so a model that ignores the prompt and echoes the transcript fails. No judge model is
+/// raw input, so a model that ignores the prompt and echoes the transcript fails. No judge model is
 /// required, which makes it safe to run fully offline against Foundry Local.
 /// </summary>
 internal sealed class StyleAdherenceEvaluator : IEvaluator
@@ -64,7 +64,7 @@ internal sealed class StyleAdherenceEvaluator : IEvaluator
             ? _markers.Sum(m => m.Matches(output).Count)
             : matched.Count;
 
-        // Forbidden patterns catch content that should have been condensed away — the retracted
+        // Forbidden patterns catch content that should have been condensed away: the retracted
         // half of a self-correction, or a repeated statement the style says to merge. Any hit fails.
         var violations = _forbidden
             .Where(f => f.IsMatch(output))

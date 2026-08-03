@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,8 +12,8 @@ namespace Scribe.App.Infrastructure;
 /// <summary>
 /// Checks GitHub Releases for a newer Scribe build and, if found, downloads it in the background and
 /// stages it to apply when the user next quits. No-ops entirely for non-packaged (dev) builds, so it
-/// is safe to call unconditionally on startup. Update application is never forced mid-session — a
-/// dictation tray app must not restart out from under the user — but the settings UI can check on
+/// is safe to call unconditionally on startup. Update application is never forced mid-session; a
+/// dictation tray app must not restart out from under the user, but the settings UI can check on
 /// demand and apply immediately via <see cref="ApplyNowAndRestart"/>.
 /// </summary>
 public sealed class UpdateService
@@ -59,7 +59,7 @@ public sealed class UpdateService
             }
 
             PendingVersion = staged.Version.ToString();
-            UpdateReady?.Invoke($"Scribe {PendingVersion} is downloaded and ready — restart to install.");
+            UpdateReady?.Invoke($"Scribe {PendingVersion} is downloaded and ready. Restart to install.");
         }
         catch (Exception ex)
         {
@@ -107,7 +107,7 @@ public sealed class UpdateService
     /// <summary>
     /// Checks for, and downloads, any newer release. Returns a user-facing status string, so the
     /// settings UI can call this directly from a "Check for updates" button. Never throws for the
-    /// expected failure modes (not packaged, offline) — those come back as status text.
+    /// expected failure modes (not packaged, offline); those come back as status text.
     /// </summary>
     public async Task<string> CheckAndDownloadAsync(CancellationToken ct = default)
     {
@@ -123,8 +123,8 @@ public sealed class UpdateService
                 new GithubSource(RepositoryUrl, accessToken: null, prerelease: false));
             if (!manager.IsInstalled)
             {
-                // Plain dev/portable build — there is nothing to update against.
-                return $"Running {RunningVersion} (dev build — updates apply to installed builds only).";
+                // Plain dev/portable build; there is nothing to update against.
+                return $"Running {RunningVersion} (dev build, updates apply to installed builds only).";
             }
 
             _manager = manager;
@@ -136,7 +136,7 @@ public sealed class UpdateService
             if (staged is not null)
             {
                 PendingVersion = staged.Version.ToString();
-                var stagedMessage = $"Scribe {PendingVersion} is downloaded and ready — restart to install.";
+                var stagedMessage = $"Scribe {PendingVersion} is downloaded and ready. Restart to install.";
                 UpdateReady?.Invoke(stagedMessage);
                 return stagedMessage;
             }
@@ -164,7 +164,7 @@ public sealed class UpdateService
 
             _pending = update;
             PendingVersion = target;
-            var message = $"Scribe {target} is downloaded and ready — restart to install.";
+            var message = $"Scribe {target} is downloaded and ready. Restart to install.";
             UpdateReady?.Invoke(message);
             return message;
         }
@@ -175,7 +175,7 @@ public sealed class UpdateService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Update check failed.");
-            return "Couldn't check for updates — check your connection and try again.";
+            return "Couldn't check for updates. Check your connection and try again.";
         }
         finally
         {
@@ -186,7 +186,7 @@ public sealed class UpdateService
     /// <summary>
     /// Applies the staged update immediately: exits this process, swaps in the new version, and
     /// relaunches Scribe. Returns false when there is nothing staged (the caller should check
-    /// first). Only returns at all on failure — success never comes back.
+    /// first). Only returns at all on failure; success never comes back.
     /// </summary>
     public bool ApplyNowAndRestart()
     {
