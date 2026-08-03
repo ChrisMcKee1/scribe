@@ -52,7 +52,8 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   **Foundry Local** and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
-  in `Directory.Build.props`. Current version: **0.2.16**.
+  in `Directory.Build.props`. Read `<VersionPrefix>` from that file rather than trusting a
+  number quoted here; a version pinned in prose is stale the next time anyone ships.
 
 ## Commands (run these — include the flags)
 
@@ -60,7 +61,7 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
 # One-time: download ASR + VAD models (~670 MB) into src/Scribe.App/models (gitignored)
 pwsh ./scripts/Download-Models.ps1
 
-# Build the whole solution (all 5 projects, incl. the x64-only overlay)
+# Build the whole solution (8 projects: Core, App, Overlay, tests, and four tools)
 dotnet build Scribe.slnx -c Debug
 
 # Run the app — Scribe appears in the system tray
@@ -69,7 +70,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; count grows with every change, ~620+)
+# Run the unit tests (must stay green; the count only ever grows, 739 as of 0.3.4)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -108,7 +109,7 @@ Target 0 warnings / 0 errors — warnings are treated seriously.
 ## Project structure
 
 ```
-Scribe.slnx                         solution (Core, App, Overlay[x64], tests, tools)
+Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools)
   src/Scribe.Core/                  services + domain — UNIT-TESTABLE, no UI
     Audio/ Vad/ Transcription/      capture → 16 kHz mono, Silero VAD, Parakeet ASR
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework)
@@ -129,6 +130,9 @@ Scribe.slnx                         solution (Core, App, Overlay[x64], tests, to
   tests/Scribe.Core.Tests/          xUnit tests for Core
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
+  tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below)
+  tools/Scribe.Benchmarks/          BenchmarkDotNet hot paths (capture, cleanup, post-processing)
+  tools/Scribe.InjectionLab/        times each injection path into a real focused Win32 control
   scripts/Download-Models.ps1       fetches ASR + VAD models
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
@@ -275,9 +279,9 @@ builds the `TokenCredential`; everything else goes through it.
 
 ## Releases & Velopack (gotchas)
 
-`build/pack.ps1` publishes a self-contained `win-x64` app, bundles the overlay
-self-contained into the payload under `Overlay\`, packs with Velopack, and (with
-`-Publish`) uploads to GitHub Releases.
+`build/pack.ps1` publishes a self-contained app for each requested architecture (`-Architecture
+x64|arm64|all`), bundles the matching overlay self-contained into the payload under `Overlay\`,
+packs with Velopack, and (with `-Publish`) uploads to GitHub Releases.
 Production artifacts are intentionally unsigned. Packaging must not access a certificate
 store, GitHub signing secrets, or a publisher trust bundle.
 
@@ -288,15 +292,18 @@ store, GitHub signing secrets, or a publisher trust bundle.
   from the project file. Never hardcode the title, author, or icon path in the pack arguments.
 - `vpk` **refuses to pack an equal/greater version that already exists** in `releases\`.
   To repack the same version, delete that version's `*-full.nupkg`, `*-delta.nupkg`,
-  `Scribe-win-x64-Setup.exe`, `Scribe-win-x64-Portable.zip`, and `releases.win-x64.json`
+  `Scribe-win-<arch>-Setup.exe`, `Scribe-win-<arch>-Portable.zip`, and `releases.win-<arch>.json`
   — but **keep the older `*-full.nupkg`s** so the delta can build.
-- Channel is `win-x64`. The full nupkg is large (~640 MB, the overlay adds ~90 MB
-  self‑contained); the delta is small (~86 MB).
+- One Velopack channel per architecture, `win-x64` and `win-arm64`, so an install only ever
+  receives updates built for its own silicon. The full nupkg is large (~650 MB, the overlay adds
+  ~90 MB self‑contained); the delta is small (~86 MB).
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
-- To publish without a rebuild, set `$env:GITHUB_TOKEN = gh auth token` and run
-  `vpk upload github -o releases --channel win-x64 --repoUrl https://github.com/ChrisMcKee1/scribe --publish --releaseName "Scribe <ver>" --tag v<ver> --targetCommitish main --merge`.
+- To publish without a rebuild, capture the token first (`$t = (gh auth token | Out-String).Trim()`,
+  see Environment notes) and run
+  `vpk upload github -o releases --channel win-x64 --repoUrl https://github.com/ChrisMcKee1/scribe --publish --releaseName "Scribe <ver>" --tag v<ver> --targetCommitish main --merge --token $t`.
+  Repeat per channel; each architecture uploads separately.
 
 ### Manual release (GitHub Actions credits exhausted)
 
@@ -377,7 +384,8 @@ Constraints that are easy to trip over:
 - The API **cannot** be used on a product that uses **mandatory app updates**; it returns HTTP 409.
 - The app must already have **one completed manual submission**, including the age ratings
   questionnaire. Scribe satisfies this.
-- MSIX packages may be up to 25 GB, so our ~650 MB package is fine, but the upload uses an Azure
+- MSIX packages may be up to 25 GB, so our package is fine (~650 MB per architecture, ~1.3 GB for
+  the combined `.msixbundle` that actually gets uploaded), but the upload uses an Azure
   blob SAS with its own expiry; a very slow upload needs a fresh submission GET rather than a retry.
 - **MSIX only.** The `api.store.microsoft.com` submission API documented for MSI/EXE apps does not
   handle MSIX, and the `microsoft/store-submission` action is unmaintained (still `node16`) and has
@@ -491,7 +499,8 @@ Arm64 build.
   network. Online features (Azure/Foundry cleanup) are strictly opt‑in.
 - Put new logic in `Scribe.Core` with a test; keep the build warning‑clean.
 - Keep all logging non‑throwing and use `FileShare.ReadWrite` + retry on the shared log.
-- Build the overlay with `-p:Platform=x64`; verify the pill via logs after overlay changes.
+- Build the overlay with `-p:Platform=` matching the architecture you are shipping (`x64` or
+  `ARM64`); verify the pill via logs after overlay changes.
 
 **Ask first:**
 - Bumping the version, cutting a release, or changing the signing posture.
