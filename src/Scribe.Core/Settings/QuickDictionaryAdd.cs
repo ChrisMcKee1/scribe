@@ -26,6 +26,82 @@ public static class QuickDictionaryAdd
     /// <summary>One selectable chip: the word as it appears, plus its span in the source transcript.</summary>
     public readonly record struct Token(string Text, int Start, int Length);
 
+    /// <summary>
+    /// The contiguous run of chips currently selected, or <see cref="None"/> when nothing is picked.
+    /// Contiguous because a dictionary pattern is a phrase: a gapped selection could not describe
+    /// anything the matcher is able to find.
+    /// </summary>
+    public readonly record struct WordRange(int First, int Last)
+    {
+        public static WordRange None => new(-1, -1);
+
+        public bool IsEmpty => First < 0;
+    }
+
+    /// <summary>
+    /// Applies one plain click at <paramref name="index"/> to the selected word range.
+    /// </summary>
+    /// <remarks>
+    /// A plain click grows the phrase rather than replacing it. Joining words the recogniser split
+    /// apart, "V B D" into "VBD", is the single most common reason the popup gets opened, and the
+    /// first build put that behind shift-click and drag only, which read as multi-select being
+    /// missing altogether.
+    ///
+    /// Growth is limited to a word touching the range. Spanning to an arbitrary click would let one
+    /// stray click swallow a whole sentence, and the words in between were never chosen. Clicking
+    /// inside the phrase takes words back out of it, so an over-extension can be corrected without
+    /// starting the selection again.
+    /// </remarks>
+    public static WordRange Toggle(WordRange current, int index)
+    {
+        if (index < 0)
+        {
+            return current;
+        }
+
+        if (current.IsEmpty)
+        {
+            return new WordRange(index, index);
+        }
+
+        var (first, last) = (current.First, current.Last);
+
+        if (index == first - 1)
+        {
+            return new WordRange(index, last);
+        }
+
+        if (index == last + 1)
+        {
+            return new WordRange(first, index);
+        }
+
+        if (index >= first && index <= last)
+        {
+            if (first == last)
+            {
+                return WordRange.None;
+            }
+
+            if (index == first)
+            {
+                return new WordRange(first + 1, last);
+            }
+
+            if (index == last)
+            {
+                return new WordRange(first, last - 1);
+            }
+
+            // Clicking the middle of a phrase is not an unpick of one word: it would split the range
+            // in two, and only one of the halves can survive. Collapsing to the clicked word is the
+            // reading that keeps what the user actually pointed at.
+            return new WordRange(index, index);
+        }
+
+        return new WordRange(index, index);
+    }
+
     public enum PlanKind
     {
         /// <summary>Nothing worth saving; <see cref="Plan.Entry"/> is null.</summary>

@@ -33,6 +33,11 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
     private string _transcript = string.Empty;
     private IReadOnlyList<QuickDictionaryAdd.Token> _tokens = [];
 
+    // The word range currently lit, or -1 when nothing is selected. Authoritative: chip visuals are
+    // written from it and never read back, so a toggle arriving from assistive tech cannot corrupt it.
+    private int _first = -1;
+    private int _last = -1;
+
     // -1 means "no chip has been clicked yet", so a shift-click has nothing to extend from.
     private int _anchor = -1;
     private bool _dragging;
@@ -99,7 +104,14 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             _dragging = false;
-            FocusCorrection();
+
+            // Only a finished selection hands the caret over. Unpicking the last word is not the
+            // end of a gesture, and pulling focus then would drag the user away from the chips
+            // just as they were about to pick a different word.
+            if (_first >= 0)
+            {
+                FocusCorrection();
+            }
         };
 
         var sources = recentTranscripts
@@ -137,6 +149,8 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         _transcript = transcript;
         _tokens = QuickDictionaryAdd.Tokenize(transcript);
         _anchor = -1;
+        _first = -1;
+        _last = -1;
         _dragging = false;
 
         _chips.Clear();
@@ -162,18 +176,47 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Suppress the ToggleButton's own toggle. IsChecked is bound one-way from the chip model,
-        // so letting the control set it locally would desynchronise the visual from the selection.
+        // Suppress the ToggleButton's own toggle. IsChecked is bound two-way to the chip model, so
+        // letting the control set it locally would fight the selection ApplySelection writes.
         e.Handled = true;
 
-        var extend = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && _anchor >= 0;
-        if (!extend)
+        // Shift keeps the classic range gesture for anyone who reaches for it.
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) && _anchor >= 0)
         {
-            _anchor = index;
+            _dragging = true;
+            ApplySelection(_anchor, index);
+            return;
         }
 
+        ToggleAt(index);
+    }
+
+    /// <summary>
+    /// Applies one plain click, from the mouse or from assistive tech, to the selected word range.
+    /// The decision itself lives in <see cref="QuickDictionaryAdd.Toggle"/>; this only carries the
+    /// result into the chips and the drag anchor.
+    /// </summary>
+    private void ToggleAt(int index)
+    {
+        var previous = new QuickDictionaryAdd.WordRange(_first, _last);
+        var next = QuickDictionaryAdd.Toggle(previous, index);
+
+        if (next.IsEmpty)
+        {
+            // Still arm the drag. Pressing the only selected word unpicks it, but the press may
+            // equally be the start of a drag from that chip, and refusing to track it would kill
+            // that gesture on exactly the chips where it used to work.
+            _anchor = index;
+            _dragging = true;
+            ClearSelection();
+            return;
+        }
+
+        // Anchor the end that did not move, so a shift-click or drag straight afterwards grows from
+        // the stable side rather than from wherever the last click happened to land.
+        _anchor = next.First == previous.First ? next.First : next.Last;
         _dragging = true;
-        ApplySelection(_anchor, index);
+        ApplySelection(next.First, next.Last);
     }
 
     private void Chip_MouseEnter(object sender, MouseEventArgs e)
@@ -183,10 +226,18 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Self-heals a drag whose mouse-up landed somewhere that never reported it.
+        // Self-heals a drag whose mouse-up landed somewhere that never reported it. Suppressing the
+        // chip's own mouse handling means nothing captures the mouse, so releasing outside the
+        // window never reaches PreviewMouseLeftButtonUp and the gesture is only finishable here.
         if (e.LeftButton != MouseButtonState.Pressed)
         {
             _dragging = false;
+
+            if (_first >= 0)
+            {
+                FocusCorrection();
+            }
+
             return;
         }
 
@@ -203,6 +254,9 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             (first, last) = (last, first);
         }
 
+        _first = first;
+        _last = last;
+
         _syncingChips = true;
         try
         {
@@ -217,6 +271,11 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         HeardBox.Text = QuickDictionaryAdd.Select(_transcript, _tokens, first, last);
+
+        // TextChanged only fires when the string actually differs, and a transcript can repeat a
+        // word ("V" three times here), so moving between two identical selections would otherwise
+        // leave the hint describing a range that is no longer the one lit.
+        UpdateStatus();
     }
 
     /// <summary>
@@ -224,33 +283,36 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
     /// ToggleButton through the UI Automation Toggle pattern, which never raises the mouse events
     /// the selection is built on, so without this the chip would light up while the phrase in the
     /// box below stayed unchanged and the user would save something other than what they saw.
+    /// Routed through the same <see cref="ToggleAt"/> rules the mouse uses, so a screen reader can
+    /// build a multi-word phrase exactly the way a sighted user can.
     /// </summary>
     private void Chip_Toggled(object sender, RoutedEventArgs e)
     {
         // ApplySelection sets IsSelected on every chip, which raises this event again for each one.
-        if (_syncingChips || sender is not ToggleButton { Tag: int index } chip)
+        if (_syncingChips || sender is not ToggleButton { Tag: int index })
         {
             return;
         }
 
+        // The chip has already flipped its own IsChecked. ToggleAt works from the range fields rather
+        // than from chip state, and ApplySelection rewrites every chip afterwards, so whichever way
+        // it flipped gets corrected here and both input paths land on the same selection.
+        ToggleAt(index);
         _dragging = false;
 
-        if (chip.IsChecked == true)
+        // Matches the mouse: unpicking the last word leaves the caret where it was rather than
+        // throwing it into the correction box.
+        if (_first >= 0)
         {
-            _anchor = index;
-            ApplySelection(index, index);
             FocusCorrection();
-            return;
         }
-
-        // Toggling the selected chip back off means "I did not mean that word", so the phrase has to
-        // clear too rather than leaving a pattern behind with nothing highlighted to explain it.
-        _anchor = -1;
-        ClearSelection();
     }
 
     private void ClearSelection()
     {
+        _first = -1;
+        _last = -1;
+
         _syncingChips = true;
         try
         {
@@ -265,6 +327,7 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         HeardBox.Text = string.Empty;
+        UpdateStatus();
     }
 
     /// <summary>
@@ -312,6 +375,20 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         // "this" rather than "it" or "the word": the selection is often a phrase, and an unanchored
         // pronoun on a button that behaves differently from the primary action reads as a threat.
         SaveButton.Content = deletes ? "Leave this out of dictations" : "Save to dictionary";
+
+        // The hint has to follow the selection. A static line describing a gesture is exactly what
+        // hid multi-select before: it was there, and it still read as "one word is all you get".
+        if (HintText is not null)
+        {
+            HintText.Text = _first < 0
+                ? "Click the word Scribe got wrong, or just type it below."
+                : _first == _last
+                    ? "Click the word beside it to build a phrase, or click it again to unpick it."
+                    // "next to" rather than "either end": clicking an end word is the shrink
+                    // gesture, so telling the user to click an end to grow it would be advice that
+                    // does the opposite of what it says.
+                    : "Click a word next to the phrase to grow it, or an end word to drop it.";
+        }
     }
 
     private QuickDictionaryAdd.Plan BuildPlan(IReadOnlyList<DictionaryEntry> existing) =>

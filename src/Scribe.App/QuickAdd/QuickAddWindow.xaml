@@ -93,11 +93,12 @@
                           HorizontalAlignment="Stretch"
                           AutomationProperties.Name="Recent dictation to correct"
                           SelectionChanged="RecentPicker_SelectionChanged"/>
-                <TextBlock Margin="2,8,0,0"
+                <TextBlock x:Name="HintText"
+                           Margin="2,8,0,0"
                            FontSize="12"
                            TextWrapping="Wrap"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                           Text="Click the word Scribe got wrong. Drag or shift-click across several for a phrase, or just type it below."/>
+                           Text="Click the word Scribe got wrong, or just type it below."/>
             </StackPanel>
 
             <Border Grid.Row="1"
