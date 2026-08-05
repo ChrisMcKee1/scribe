@@ -53,6 +53,12 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user picks "Show welcome" to reopen the first-run intro.</summary>
     public event Action? WelcomeRequested;
 
+    /// <summary>Raised when the user picks "Open in Microsoft Store".</summary>
+    public event Action? OpenStoreRequested;
+
+    /// <summary>Raised when the user picks "Share app" to copy the Store link.</summary>
+    public event Action? ShareAppRequested;
+
     /// <summary>Raised when the user toggles pause; the argument is the requested paused state.</summary>
     public event Action<bool>? PauseToggled;
 
@@ -101,6 +107,15 @@ internal sealed class TrayIconHost : IDisposable
         var welcome = new MenuItem { Header = "Show welcome" };
         welcome.Click += (_, _) => WelcomeRequested?.Invoke();
         menu.Items.Add(welcome);
+        menu.Items.Add(new Separator());
+
+        var openStore = new MenuItem { Header = "Open in Microsoft Store" };
+        openStore.Click += (_, _) => OpenStoreRequested?.Invoke();
+        menu.Items.Add(openStore);
+
+        var shareApp = new MenuItem { Header = "Share app" };
+        shareApp.Click += (_, _) => ShareAppRequested?.Invoke();
+        menu.Items.Add(shareApp);
         menu.Items.Add(new Separator());
 
         // Checkable items: WPF flips IsChecked before Click fires, so it already reflects the
