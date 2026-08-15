@@ -160,6 +160,57 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Reserved_chord_pre_empts_only_the_Windows_key_so_its_partner_still_types()
+    {
+        // Pre-empting the partner key swallowed it globally: a "Left Win+H" binding used to eat
+        // every "h" the user typed anywhere, for as long as Scribe ran.
+        var state = new ChordStateMachine(new HotkeyBinding(
+            0x5B, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Left Win+H",
+            SecondaryVirtualKey: 0x48, SuppressChordMembers: true));
+
+        Assert.True(state.Process(0x5B, isDown: true).ShouldSuppress);   // Start must not open
+        Assert.True(state.Process(0x5B, isDown: false).ShouldSuppress);
+
+        Assert.False(state.Process(0x48, isDown: true).ShouldSuppress);  // typing "h" still works
+        Assert.False(state.Process(0x48, isDown: false).ShouldSuppress);
+    }
+
+    [Fact]
+    public void Chord_member_that_is_not_reserved_reaches_the_rest_of_Windows_on_its_own()
+    {
+        // The reported failure: "Right Ctrl+Right Shift" swallowed every bare Right Shift, which
+        // killed Win+Shift+S and right-handed capitals system-wide until Scribe was closed.
+        var state = new ChordStateMachine(new HotkeyBinding(
+            0xA3, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Right Ctrl+Right Shift",
+            SecondaryVirtualKey: 0xA1, SuppressChordMembers: true));
+
+        Assert.False(state.Process(0xA1, isDown: true).ShouldSuppress);
+        Assert.False(state.Process(0xA1, isDown: false).ShouldSuppress);
+
+        Assert.False(state.Process(0xA3, isDown: true).ShouldSuppress);
+        Assert.False(state.Process(0xA3, isDown: false).ShouldSuppress);
+    }
+
+    [Fact]
+    public void Non_reserved_chord_still_suppresses_the_key_that_completes_it()
+    {
+        var state = new ChordStateMachine(new HotkeyBinding(
+            0xA3, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Right Ctrl+Right Shift",
+            SecondaryVirtualKey: 0xA1, SuppressChordMembers: true));
+
+        Assert.False(state.Process(0xA3, isDown: true).ShouldSuppress);
+
+        var completing = state.Process(0xA1, isDown: true);
+        Assert.True(completing.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.Activated, completing.Transition);
+
+        // The release pairs with whatever was swallowed: Shift's down was eaten so its up must be
+        // too, while Ctrl's down reached other apps so its up has to as well or Ctrl sticks.
+        Assert.True(state.Process(0xA1, isDown: false).ShouldSuppress);
+        Assert.False(state.Process(0xA3, isDown: false).ShouldSuppress);
+    }
+
+    [Fact]
     public void Capture_mode_passes_the_bound_key_through_without_activating_or_suppressing()
     {
         var state = new ChordStateMachine(HotkeyBinding.Default); // Right Ctrl, suppressed

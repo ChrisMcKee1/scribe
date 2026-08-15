@@ -5,6 +5,13 @@ namespace Scribe.Core.Models;
 /// the press semantics (hold vs toggle). <paramref name="Suppress"/> indicates the key
 /// event should be swallowed by the low-level hook so it does not reach other apps
 /// (appropriate for a dedicated push-to-talk key).
+///
+/// <paramref name="SuppressChordMembers"/> asks for a chord member to be swallowed on its own
+/// key-down rather than waiting for the chord to complete. Only the Windows key actually gets
+/// that treatment (see <c>ChordStateMachine.NeedsPreemptiveSuppression</c>): honouring it for
+/// every member swallowed that key globally, which is how binding "Right Ctrl+Right Shift" once
+/// killed Right Shift across the whole system. The name is load-bearing for settings
+/// deserialization, so it stays even though the state machine now narrows what it means.
 /// </summary>
 public sealed record HotkeyBinding(
     uint VirtualKey,

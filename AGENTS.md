@@ -73,7 +73,7 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows, 832 as of 0.3.5)
+# Run the unit tests (must stay green; the count only ever grows, 878 as of 0.3.8)
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -156,13 +156,13 @@ back into the code-behind; that is a recurring smell.
 - **No em dashes or en dashes anywhere in the repo**, including code comments: rewrite with
   commas, colons, periods, or "to" for ranges. Ordinary ASCII hyphens are fine. Enforced in three
   layers, because a prompt instruction alone is advisory and models ignore it:
-  1. Source prose and UI strings are dash-free (swept as of 0.3.5; the only deliberate exceptions
+    1. Source prose and UI strings are dash-free (swept as of 0.3.5; the only deliberate exceptions
      are `Win32ClipboardTests` and `Scribe.InjectionLab`, which round-trip an em dash on purpose to
      prove Unicode survives the clipboard and injection paths).
-  2. `CleanupPrompt.DefaultWritingStyle` / `DefaultFrontierPrompt` contain no dashes themselves.
+    2. `CleanupPrompt.DefaultWritingStyle` / `DefaultFrontierPrompt` contain no dashes themselves.
      This matters more than it looks: the prompt is *shown to the model on every dictation*, so
      dashes in it were teaching the model to imitate the style straight into the user's text.
-  3. `Scribe.Core/Cleanup/DashNormalizer` deterministically rewrites U+2014/U+2013 out of model
+    3. `Scribe.Core/Cleanup/DashNormalizer` deterministically rewrites U+2014/U+2013 out of model
      output in `TextCleanupService.TrySanitize` and `CompleteAsync`. This is the only actual
      guarantee. It runs **after** the ramble/refusal guards (they compare the model's answer to the
      raw transcript, so mutating first could flip a borderline detection) and **only** on model
@@ -351,7 +351,7 @@ supporting S Mode and Windows 11 backup and restore. See issue #42 for the full 
 re-litigate it from memory:
 
 | Path | Who signs | Cost |
-|---|---|---|
+| --- | --- | --- |
 | Store, MSIX | Microsoft re-signs after certification | free |
 | Store, MSI or EXE | **you must Authenticode-sign before submission**, chaining to a CA in the Microsoft Trusted Root Program; self-signed is rejected | $150-500/yr, or Azure Artifact Signing ~$10/mo |
 | Direct download (our GitHub Releases) | you | same as above |
@@ -499,9 +499,9 @@ Arm64 build.
 - Branch off `main`; keep PRs small and focused. Open an issue first for large changes.
 - Commit message: what changed **and why**. Always append this trailer (per house rule):
 
-  ```
+```
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
-  ```
+```
 
 - Run build + tests green before committing. `releases/` and `publish/` are gitignored;
   never commit build artifacts or the downloaded models.

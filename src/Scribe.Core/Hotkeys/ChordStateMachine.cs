@@ -97,7 +97,7 @@ internal sealed class ChordStateMachine
 
             var shouldSuppress = false;
             if (isDown && _binding.Suppress && isBindingKey &&
-                (_binding.SuppressChordMembers ||
+                ((_binding.SuppressChordMembers && NeedsPreemptiveSuppression(virtualKey)) ||
                  (!wasSatisfied && satisfied) ||
                  (repeated && _suppressed.Contains(virtualKey))))
             {
@@ -203,6 +203,20 @@ internal sealed class ChordStateMachine
         (!binding.Modifiers.HasFlag(KeyModifiers.Alt) || _pressed.Any(IsAlt)) &&
         (!binding.Modifiers.HasFlag(KeyModifiers.Shift) || _pressed.Any(IsShift)) &&
         (!binding.Modifiers.HasFlag(KeyModifiers.Win) || _pressed.Any(IsWin));
+
+    /// <summary>
+    /// Whether a chord member has to be swallowed on its own key-down, before the second key
+    /// arrives and completes the chord. Only the Windows key does: the shell opens Start the
+    /// moment it sees that key-down, so waiting for the partner key is already too late.
+    ///
+    /// Every other member waits for the chord to complete, because pre-empting a member swallows
+    /// that key GLOBALLY for as long as Scribe runs. Binding "Right Ctrl+Right Shift" used to kill
+    /// Right Shift system-wide (so Win+Shift+S and every right-handed capital letter died), and
+    /// binding "Left Win+H" used to eat every "h" the user typed. Neither key is reserved, so
+    /// neither needs pre-empting; the chord-completing branch below still suppresses them once the
+    /// chord actually fires.
+    /// </summary>
+    private static bool NeedsPreemptiveSuppression(uint virtualKey) => IsWin(virtualKey);
 
     private static bool IsControl(uint key) => key is VkControl or VkLeftControl or VkRightControl;
     private static bool IsAlt(uint key) => key is VkAlt or VkLeftAlt or VkRightAlt;
