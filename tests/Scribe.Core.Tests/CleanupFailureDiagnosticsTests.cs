@@ -19,6 +19,12 @@ public sealed class CleanupFailureDiagnosticsTests
         "loaded. Please load the model before getting a ChatClient.\"," +
         "\"type\":\"invalid_request_error\",\"code\":null}}";
 
+    private const string QuickGeluWebGpuBody =
+        "{\"error\":{\"message\":\"Failed to handle OpenAI completion: Non-zero status code returned " +
+        "while running QuickGelu node. Name:'/model/layers.0/mlp/act_fn/Mul/QuickGeluFusion/' " +
+        "Status Message: Failed to create a WebGPU compute pipeline: [Invalid ShaderModule " +
+        "\\\"QuickGelu\\\"] is invalid due to a previous error. - While validating...\"}}";
+
     /// <summary>
     /// Builds the exception exactly as it arrives in production. Captured from a live Foundry Local
     /// endpoint after the runtime evicted a resident model: the OpenAI client raises a
@@ -94,6 +100,53 @@ public sealed class CleanupFailureDiagnosticsTests
 
         Assert.Contains("400", message, StringComparison.Ordinal);
         Assert.Contains("context length exceeded", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Webgpu_shader_server_failure_tells_user_to_pick_cpu_variant()
+    {
+        var message = TextCleanupService.DescribeFailure(
+            Http(500, QuickGeluWebGpuBody), CleanupProvider.FoundryLocal);
+
+        Assert.Contains("cannot run on this GPU", message, StringComparison.Ordinal);
+        Assert.Contains("CPU variant", message, StringComparison.Ordinal);
+        Assert.Contains("WebGPU compute pipeline", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("transient", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Webgpu_shader_failure_message_is_provider_aware()
+    {
+        var local = TextCleanupService.DescribeFailure(
+            Http(500, QuickGeluWebGpuBody), CleanupProvider.FoundryLocal);
+        var custom = TextCleanupService.DescribeFailure(
+            Http(500, QuickGeluWebGpuBody), CleanupProvider.OpenAiCompatible);
+
+        Assert.Contains("Foundry Local", local, StringComparison.Ordinal);
+        Assert.DoesNotContain("Foundry Local", custom, StringComparison.Ordinal);
+        Assert.NotEqual(local, custom);
+    }
+
+    [Fact]
+    public void Ordinary_server_failure_keeps_the_transient_wording()
+    {
+        var message = TextCleanupService.DescribeFailure(
+            Http(500, "upstream temporarily unavailable"), CleanupProvider.FoundryLocal);
+
+        Assert.Contains("server error (500)", message, StringComparison.Ordinal);
+        Assert.Contains("usually transient", message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("webgpu failed while running quickgelu", true)]
+    [InlineData("NON-ZERO STATUS CODE RETURNED WHILE RUNNING node, INVALID SHADERMODULE", true)]
+    [InlineData("WebGPU failed without the ONNX node context", true)]
+    [InlineData("Failed to create a WebGPU compute pipeline", true)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Gpu_shader_detection_is_case_insensitive_and_null_safe(string? text, bool expected)
+    {
+        Assert.Equal(expected, TextCleanupService.MentionsGpuShaderIncompatibility(text));
     }
 
     [Fact]
@@ -188,7 +241,7 @@ public sealed class CleanupFailureDiagnosticsTests
         var message = TextCleanupService.DescribeFailure(
             Http(500, new string('x', 5_000)), CleanupProvider.AzureFoundry);
 
-        Assert.True(message.Length < 600, $"message was {message.Length} chars");
+        Assert.True(message.Length < 2_300, $"message was {message.Length} chars");
     }
 
     [Fact]

@@ -12,6 +12,12 @@ Dictation itself never needs any of this. Scribe transcribes offline on your own
 cleanup is optional. Only the cleanup step talks to Azure, and it sends the transcribed text only,
 never audio.
 
+> **Starting from nothing?** If you do not yet have a Foundry resource with a deployed model, use
+> [foundry-setup.md](foundry-setup.md) instead. That guide has a script that creates the resource,
+> the project, the model deployment **and** the service principal in one run, so you do not need to
+> do any of the steps below by hand. Come back here if you would rather do it manually, or if you
+> need the portal walkthrough or the troubleshooting detail.
+
 ## What you will need
 
 - An Azure subscription containing a Microsoft Foundry or Azure OpenAI resource with a deployed
