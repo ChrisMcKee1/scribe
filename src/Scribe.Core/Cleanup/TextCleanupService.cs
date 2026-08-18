@@ -51,16 +51,14 @@ internal sealed class TextCleanupService : ITextCleanupService
     // a couple of seconds regardless, so the cap only ever bites a genuinely slow model.
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
+    private const int InitProbeTimeoutSeconds = 30;
+    private const int InitProbeMaxOutputTokens = 8;
 
     // How much of the cloud budget one attempt may spend. Measured cleanups on a real deployment
     // run around 2s and peak near 12s, so 25s is far beyond any healthy call and leaves 20s to
     // recover from a stalled connection.
     private const int CloudFirstAttemptTimeoutSeconds = 25;
     private const int TotalCleanupTimeoutSeconds = 90;
-    // Cold-start validation gets a longer budget than a per-cleanup call: a reasoning model's first
-    // request can take far longer than its warm steady-state latency, and a spurious timeout here
-    // would wrongly report an otherwise-working deployment as Unavailable.
-    private const int AzureValidationTimeoutSeconds = 60;
     // Long dictation is split into bounded chunks cleaned sequentially, so a multi-minute capture is
     // still polished instead of skipped or truncated. Each chunk is small enough that the per-chunk
     // token budget never truncates and the per-chunk timeout bounds latency. The chunk ceiling caps
@@ -73,7 +71,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// enough for the sentence that names the fault, short enough that a response body cannot flood
     /// the shared log.
     /// </summary>
-    private const int MaxServerMessageChars = 300;
+    private const int MaxServerMessageChars = 2048;
     private const float CleanupTemperature = 0.1f;
     private const string AgentName = "ScribeCleanup";
 
@@ -800,15 +798,29 @@ internal sealed class TextCleanupService : ITextCleanupService
                 : $"The endpoint reports that model is not loaded ({status}). {detail}".TrimEnd();
         }
 
+        if (IsGpuShaderIncompatibility(ex))
+        {
+            return provider == CleanupProvider.FoundryLocal
+                ? $"This model variant cannot run on this GPU. In Foundry Local, pick a CPU variant " +
+                  $"of the model and try again. {detail}".TrimEnd()
+                : $"This model variant cannot run on the endpoint GPU. Pick a CPU variant or use " +
+                  $"a different model variant. {detail}".TrimEnd();
+        }
+
         // The endpoint's own message is appended where it adds something; it is empty often enough
         // (a transport failure has no response body) that every branch has to survive without it.
         var described = status switch
         {
             400 => $"The AI endpoint rejected the request (400). {detail}",
 
-            401 or 403 => provider == CleanupProvider.FoundryLocal
-                ? $"Foundry Local refused the request ({status}). {detail}"
-                : $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again.",
+            401 or 403 => provider switch
+            {
+                CleanupProvider.FoundryLocal => $"Foundry Local refused the request ({status}). {detail}",
+                CleanupProvider.AzureFoundry =>
+                    $"The AI endpoint rejected the Azure access ({status}). Check the sign-in and role " +
+                    $"assignment, then try again. {detail}",
+                _ => $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again.",
+            },
 
             404 => provider == CleanupProvider.FoundryLocal
                 ? "Foundry Local no longer recognises the cleanup model (404). Reopen Settings and " +
@@ -860,6 +872,38 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     private static bool MentionsUnloadedModel(string? text) =>
         text?.Contains("is not loaded", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static bool MentionsGpuShaderIncompatibility(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains("WebGPU", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("ShaderModule", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("compute pipeline", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsGpuShaderIncompatibility(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (MentionsGpuShaderIncompatibility(current.Message) ||
+                MentionsGpuShaderIncompatibility(ReadResponseBody(current)))
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate &&
+                aggregate.InnerExceptions.Any(inner => IsGpuShaderIncompatibility(inner)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // Never throws: reading a raw response can fail on a non-buffered or already-disposed response, and
     // a diagnostics helper that takes down the cleanup path would be worse than the missing detail.
@@ -1326,6 +1370,33 @@ internal sealed class TextCleanupService : ITextCleanupService
                 return;
             }
 
+            if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } probeFailure)
+            {
+                lock (_gate)
+                {
+                    if (!_options.Enabled || _options != options)
+                    {
+                        return;
+                    }
+
+                    DropAgents();
+                    _pendingFactory = null;
+                }
+
+                if (probeFailure.Exception is { } ex)
+                {
+                    _log.LogWarning(ex, "AI cleanup initialization probe failed ({Provider}).", options.Provider);
+                }
+                else
+                {
+                    _log.LogWarning("AI cleanup initialization probe failed ({Provider}): {Message}",
+                        options.Provider, probeFailure.Message);
+                }
+
+                SetStatus(CleanupStatus.Unavailable, probeFailure.Message);
+                return;
+            }
+
             lock (_gate)
             {
                 // A newer Configure (different provider/model, or disabled) may have superseded this run.
@@ -1360,6 +1431,44 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
+    private sealed record AgentProbeFailure(string Message, Exception? Exception);
+
+    private async Task<AgentProbeFailure?> ProbeAgentAsync(AIAgent agent, CleanupOptions options, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(InitProbeTimeoutSeconds));
+
+        try
+        {
+            var chatOptions = new ChatOptions
+            {
+                MaxOutputTokens = InitProbeMaxOutputTokens,
+            };
+            if (options.Provider == CleanupProvider.FoundryLocal)
+            {
+                chatOptions.Temperature = CleanupTemperature;
+            }
+
+            var runOptions = new ChatClientAgentRunOptions(chatOptions);
+            _ = await agent.RunAsync(BuildUserMessage("ok"), options: runOptions, cancellationToken: cts.Token)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            return new AgentProbeFailure("AI cleanup validation timed out.", ex);
+        }
+        catch (Exception ex)
+        {
+            return new AgentProbeFailure(DescribeFailure(ex, options.Provider), ex);
+        }
+    }
+
     private async Task<AIAgent?> InitFoundryAsync(CleanupOptions options, CancellationToken ct)
     {
         var alias = options.FoundryModelAlias;
@@ -1380,6 +1489,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             SetStatus(CleanupStatus.Unavailable, $"Model '{alias}' was not found in the Foundry catalog.");
             return null;
         }
+        _log.LogInformation("Foundry Local cleanup model resolved to {ModelId}.", model.Id);
 
         var cached = await model.IsCachedAsync(ct).ConfigureAwait(false);
         if (!cached)
@@ -1407,18 +1517,18 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// vLLM, OpenRouter, or api.openai.com itself). The API key is optional because local servers
     /// don't check it; a placeholder is sent when blank, mirroring the Foundry Local client.
     /// </summary>
-    private async Task<AIAgent?> InitOpenAiCompatibleAsync(CleanupOptions options, CancellationToken ct)
+    private Task<AIAgent?> InitOpenAiCompatibleAsync(CleanupOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.CustomEndpoint) || string.IsNullOrWhiteSpace(options.CustomModel))
         {
             SetStatus(CleanupStatus.Unavailable, "Enter the endpoint URL and model name to enable cleanup.");
-            return null;
+            return Task.FromResult<AIAgent?>(null);
         }
 
         if (!TryValidateCustomEndpoint(options.CustomEndpoint, out var endpointUri, out var endpointError))
         {
             SetStatus(CleanupStatus.Unavailable, endpointError);
-            return null;
+            return Task.FromResult<AIAgent?>(null);
         }
 
         SetStatus(CleanupStatus.Initializing, $"Connecting to {endpointUri.Host}…");
@@ -1429,46 +1539,21 @@ internal sealed class TextCleanupService : ITextCleanupService
             new OpenAIClientOptions { Endpoint = endpointUri });
         var chatClient = client.GetChatClient(options.CustomModel!.Trim());
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
-        var agent = _pendingFactory(BuildSystemPrompt(options));
-
-        // Same tiny validation as Azure so a wrong URL/model/key surfaces in the status pill now,
-        // not as a silent no-op on every dictation. The generous budget covers a local server
-        // cold-loading the model on first request.
-        ct.ThrowIfCancellationRequested();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(AzureValidationTimeoutSeconds));
-        try
-        {
-            _ = await agent.RunAsync("Reply with: ok", cancellationToken: cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "OpenAI-compatible endpoint validation failed for {Endpoint}.", endpointUri.Host);
-            SetStatus(CleanupStatus.Unavailable,
-                $"Couldn't reach '{options.CustomModel}' at {endpointUri.Host}. Check the endpoint URL " +
-                "(it usually ends in /v1), the model name, and the API key if the server needs one.");
-            return null;
-        }
-
-        return agent;
+        return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
     }
 
-    private async Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
+    private Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
         {
             SetStatus(CleanupStatus.Unavailable, "Choose an Azure deployment to enable cleanup.");
-            return null;
+            return Task.FromResult<AIAgent?>(null);
         }
 
         if (!Uri.TryCreate(options.AzureEndpoint, UriKind.Absolute, out var endpointUri))
         {
             SetStatus(CleanupStatus.Unavailable, "The Azure endpoint is not a valid URL.");
-            return null;
+            return Task.FromResult<AIAgent?>(null);
         }
 
         SetStatus(CleanupStatus.Initializing, $"Connecting to Azure deployment '{options.AzureDeployment}'…");
@@ -1539,29 +1624,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             agent = _pendingFactory(instructions);
         }
 
-        // Validate auth + deployment with a tiny request so the status reflects reality rather than
-        // silently no-op'ing on every dictation. We only care that the call doesn't fault; no token
-        // cap, because a clamped budget could be consumed entirely by a reasoning model's thinking.
-        ct.ThrowIfCancellationRequested();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(AzureValidationTimeoutSeconds));
-        try
-        {
-            _ = await agent.RunAsync("Reply with: ok", cancellationToken: cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Azure deployment validation failed for {Deployment} at {Endpoint} (auth={Auth}).",
-                options.AzureDeployment, endpointUri, useKey ? "ApiKey" : options.AzureAuthMode.ToString());
-            SetStatus(CleanupStatus.Unavailable, DescribeAzureFailure(ex, useKey, options.AzureAuthMode, options.AzureDeployment));
-            return null;
-        }
-
-        return agent;
+        return Task.FromResult<AIAgent?>(agent);
     }
 
     /// <summary>

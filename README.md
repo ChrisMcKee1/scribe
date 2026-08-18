@@ -123,6 +123,11 @@ or api.openai.com with your own key. Only the transcribed *text* is ever sent (n
 only to the endpoint **you** configure. And when you want the raw transcript, **toggle AI cleanup
 straight from the tray menu** with no settings trip required.
 
+> **No Foundry resource yet?** [`docs/foundry-setup.md`](docs/foundry-setup.md) walks you through it
+> from scratch, including a script that creates the resource, project, model deployment and service
+> principal in one run. If you work at Microsoft, your Visual Studio subscription almost certainly
+> includes unused Azure credits that cover it.
+
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
 AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **import a CSV** your team
