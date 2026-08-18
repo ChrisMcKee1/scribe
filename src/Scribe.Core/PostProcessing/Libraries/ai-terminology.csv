@@ -108,7 +108,6 @@ dpo,DPO
 sft,SFT
 back propagation,backpropagation
 cross validation,cross-validation
-distillation,distillation
 pre training,pretraining
 post training,post-training
 #
@@ -172,7 +171,6 @@ t sne,t-SNE
 tsne,t-SNE
 umap,UMAP
 shap,SHAP
-hallucination,hallucination
 #
 # --- Speech ---
 asr,ASR
@@ -189,7 +187,6 @@ w e r,WER
 ocr,OCR
 o c r,OCR
 real time factor,real-time factor
-diarization,diarization
 #
 # --- Generation ---
 text to image,text-to-image
@@ -204,7 +201,6 @@ x a i,XAI
 red teaming,red-teaming
 pii,PII
 p i i,PII
-guardrails,guardrails
 #
 # --- Ecosystem ---
 open a i,OpenAI

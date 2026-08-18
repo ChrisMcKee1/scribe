@@ -68,6 +68,38 @@ public class BuiltInLibraryDataTests
         Assert.True(offenders.Count == 0, "Substring rules found: " + string.Join(", ", offenders));
     }
 
+    /// <summary>
+    /// Names that really are always lowercase, so forcing them down is the intended behaviour.
+    /// Everything else that maps a word to its own lowercase form is a bug: matching is
+    /// case-insensitive and nothing re-capitalises afterwards, so "Distillation reduces size"
+    /// came out as "distillation reduces size". Four such rows shipped enabled by default.
+    /// </summary>
+    private static readonly HashSet<string> AlwaysLowercaseNames =
+        new(StringComparer.Ordinal)
+        {
+            "npm", "pnpm", "kubectl", "webpack", "pandas", "conda", "dbt", "htmx",
+            "statsmodels", "torchvision", "torchaudio",
+        };
+
+    [Fact]
+    public void No_rule_forces_an_ordinary_word_to_lowercase()
+    {
+        var offenders = Libraries
+            .SelectMany(lib => lib.Entries.Select(e => (Library: lib.Id, e.Pattern, e.Replacement)))
+            // Only casing differs, and the canonical form is entirely lowercase.
+            .Where(x => x.Pattern.Equals(x.Replacement, StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Replacement == x.Replacement.ToLowerInvariant())
+            .Where(x => !AlwaysLowercaseNames.Contains(x.Replacement.Trim()))
+            .Select(x => $"{x.Library}: '{x.Pattern}'")
+            .ToList();
+
+        Assert.True(
+            offenders.Count == 0,
+            "These rules lowercase a word wherever it appears, including the start of a sentence. " +
+            "Add genuinely all-lowercase names to AlwaysLowercaseNames; otherwise delete the row: " +
+            string.Join(", ", offenders));
+    }
+
     [Fact]
     public void No_library_contradicts_itself()
     {

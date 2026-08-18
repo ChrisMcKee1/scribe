@@ -97,17 +97,67 @@ public sealed class DictionarySuggestionMinerTests
     }
 
     [Fact]
-    public void History_learner_builds_enabled_dictionary_entries_with_spoken_forms()
+    public void History_learner_spells_out_acronyms_rather_than_lowercasing_them()
     {
-        var history = new[] { H("use ReBAC"), H("check ReBAC"), H("ship ReBAC") };
+        var history = new[] { H("the ATU owns it"), H("ask the ATU"), H("ATU signed off") };
+
+        var entries = DictionaryHistoryLearner.BuildEntries(history, []);
+
+        // Re-decoding retained audio showed the recognizer spells unknown acronyms out ("C L I",
+        // "M C P") and never emits them lowercased, so "atu" would be a rule that can never fire.
+        var entry = Assert.Single(entries);
+        Assert.Equal("a t u", entry.Pattern);
+        Assert.Equal("ATU", entry.Replacement);
+        Assert.True(entry.WholeWord);
+        Assert.True(entry.Enabled);
+    }
+
+    [Fact]
+    public void History_learner_splits_compounds_rather_than_lowercasing_them()
+    {
+        var history = new[] { H("open WebIQ"), H("WebIQ again"), H("check WebIQ") };
 
         var entries = DictionaryHistoryLearner.BuildEntries(history, []);
 
         var entry = Assert.Single(entries);
-        Assert.Equal("rebac", entry.Pattern);
-        Assert.Equal("ReBAC", entry.Replacement);
-        Assert.True(entry.WholeWord);
-        Assert.True(entry.Enabled);
+        Assert.Equal("web iq", entry.Pattern);
+        Assert.Equal("WebIQ", entry.Replacement);
+    }
+
+    [Fact]
+    public void History_learner_never_emits_a_lowercased_copy_of_the_term()
+    {
+        var history = new[]
+        {
+            H("the ATU and WebIQ"),
+            H("ATU plus WebIQ"),
+            H("ATU, WebIQ, done"),
+        };
+
+        var entries = DictionaryHistoryLearner.BuildEntries(history, []);
+
+        // The original defect: history is written after the dictionary runs, so lowercasing its
+        // output invents a left-hand side the recognizer never produced.
+        Assert.DoesNotContain(entries, e =>
+            string.Equals(e.Pattern, e.Replacement, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void History_learner_skips_two_letter_acronyms()
+    {
+        var history = new[] { H("the AI plan"), H("AI again"), H("more AI") };
+
+        // "a i" as a pattern would collide with the article "a" and the pronoun "I".
+        Assert.Empty(DictionaryHistoryLearner.BuildEntries(history, []));
+    }
+
+    [Fact]
+    public void History_learner_does_not_readd_a_pattern_the_user_disabled()
+    {
+        var history = new[] { H("the ATU owns it"), H("ask the ATU"), H("ATU signed off") };
+        var disabled = new DictionaryEntry(7, "a t u", "ATU", WholeWord: true, Enabled: false);
+
+        Assert.Empty(DictionaryHistoryLearner.BuildEntries(history, [disabled]));
     }
 
     [Fact]

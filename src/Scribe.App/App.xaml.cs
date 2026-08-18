@@ -1,4 +1,5 @@
-﻿using System.IO;
+using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
@@ -117,6 +118,8 @@ public partial class App : Application
             ? []
             : _host.Services.GetRequiredService<LastTranscriptStore>().GetRecent();
         _tray.WelcomeRequested += ShowWelcome; // reopen the first-run intro on demand
+        _tray.OpenStoreRequested += OpenMicrosoftStore;
+        _tray.ShareAppRequested += ShareApp;
         _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
@@ -573,6 +576,64 @@ public partial class App : Application
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogWarning(ex, "Copying a recent dictation failed.");
             _tray.ShowNotification("Couldn't copy the dictation.", isError: true);
+        }
+    });
+
+    /// <summary>
+    /// Opens the Store listing through the ms-windows-store protocol so it lands in the Store app
+    /// rather than a browser tab.
+    /// </summary>
+    private void OpenMicrosoftStore() => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(ScribeLinks.StoreProtocol) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            // Falls back to the web listing: the protocol handler is missing on a machine where
+            // the Store app has been removed, which is common on managed devices.
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Opening the Microsoft Store listing failed; falling back to the web listing.");
+            try
+            {
+                Process.Start(new ProcessStartInfo(ScribeLinks.StoreWeb) { UseShellExecute = true });
+            }
+            catch (Exception fallbackError)
+            {
+                _host.Services.GetRequiredService<ILogger<App>>()
+                    .LogWarning(fallbackError, "Opening the Store web listing failed.");
+                _tray.ShowNotification("Couldn't open the Microsoft Store.", isError: true);
+            }
+        }
+    });
+
+    /// <summary>
+    /// Copies the shareable Store link. The web form is used rather than the protocol form because
+    /// whoever receives it may not be on a Windows device.
+    /// </summary>
+    private void ShareApp() => Dispatcher.Invoke(() =>
+    {
+        if (_host is null || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(ScribeLinks.StoreWeb);
+            _tray.ShowNotification("Copied the Scribe Store link.");
+        }
+        catch (Exception ex)
+        {
+            _host.Services.GetRequiredService<ILogger<App>>()
+                .LogWarning(ex, "Copying the Store link failed.");
+            _tray.ShowNotification("Couldn't copy the Store link.", isError: true);
         }
     });
 

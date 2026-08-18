@@ -35,9 +35,9 @@ namespace Scribe.App.Settings;
 /// </summary>
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
-    private const string RepositoryUrl = "https://github.com/ChrisMcKee1/scribe";
-    private const string PrivacyPolicyUrl = RepositoryUrl + "/blob/main/PRIVACY.md";
-    private const string NewIssueUrl = RepositoryUrl + "/issues/new";
+    private const string RepositoryUrl = ScribeLinks.Repository;
+    private const string PrivacyPolicyUrl = ScribeLinks.PrivacyPolicy;
+    private const string NewIssueUrl = ScribeLinks.NewIssue;
 
     private readonly ISettingsRepository _settingsRepository;
     private readonly IAudioCaptureService _audio;
@@ -175,6 +175,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
         AboutLogsPathBox.Text = _paths.LogsDir;
         AboutDatabasePathBox.Text = _paths.DatabasePath;
+        AboutStoreLinkBox.Text = ScribeLinks.StoreWeb;
     }
 
     // --- Updates card (General) --------------------------------------------------------------
@@ -2476,6 +2477,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void GitHubSourceButton_Click(object sender, RoutedEventArgs e) =>
         OpenExternalLink(RepositoryUrl, "Could not open the Scribe source code.");
+
+    private void AboutOpenStore_Click(object sender, RoutedEventArgs e) =>
+        // The protocol form lands in the Store app; OpenExternalLink surfaces the failure if the
+        // Store has been removed, in which case the copyable web link beside it still works.
+        OpenExternalLink(ScribeLinks.StoreProtocol, "Could not open the Microsoft Store.");
+
+    private void AboutCopyStoreLink_Click(object sender, RoutedEventArgs e) =>
+        CopyPathToClipboard(ScribeLinks.StoreWeb, "Store link");
 
     // --- About: where your data lives --------------------------------------------------------
     // The paths come from AppPaths, the same object every writer uses, so what is shown here can

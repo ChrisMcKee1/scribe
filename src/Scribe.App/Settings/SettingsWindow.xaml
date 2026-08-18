@@ -1931,6 +1931,31 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Share Scribe" Style="{StaticResource SettingTitle}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
+                                                   Text="Send this link to anyone who wants private, offline dictation. It opens the Scribe AI listing in the Microsoft Store."/>
+                                        <Grid Margin="0,12,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="AboutStoreLinkBox" Grid.Column="0" IsReadOnly="True"
+                                                        VerticalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        VerticalAlignment="Center" Margin="8,0,0,0">
+                                                <ui:Button Content="Copy" MinWidth="76" Margin="0,0,8,0"
+                                                           Click="AboutCopyStoreLink_Click"
+                                                           ToolTip="Copy the Store link to the clipboard"/>
+                                                <ui:Button Content="Open in Store" MinWidth="120"
+                                                           Click="AboutOpenStore_Click"
+                                                           ToolTip="Open the Scribe AI listing in the Microsoft Store"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>

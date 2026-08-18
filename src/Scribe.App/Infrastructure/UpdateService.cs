@@ -18,7 +18,7 @@ namespace Scribe.App.Infrastructure;
 /// </summary>
 public sealed class UpdateService
 {
-    private const string RepositoryUrl = "https://github.com/ChrisMcKee1/scribe";
+    private const string RepositoryUrl = ScribeLinks.Repository;
 
     private readonly ILogger<UpdateService> _log;
     private readonly SemaphoreSlim _checkGate = new(1, 1);
