@@ -141,8 +141,15 @@ public partial class App : Application
             log.LogInformation("Azure CLI environment prepared for Microsoft Foundry authentication.");
         }
 
-        // Install the seed dictionary on first run so post-processing is useful out of the box.
-        services.GetRequiredService<IDictionaryRepository>().SeedIfEmpty(DefaultVocabulary.Entries);
+        // Install the seed dictionary on first run so post-processing is useful out of the box, then
+        // retire the entries older versions seeded that replaced ordinary words.
+        var dictionary = services.GetRequiredService<IDictionaryRepository>();
+        dictionary.SeedIfEmpty(DefaultVocabulary.Entries);
+        SeedVocabularyRetirement.Apply(
+            services.GetRequiredService<ISettingsRepository>(),
+            dictionary,
+            DefaultVocabulary.RetiredEntries,
+            log);
 
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);

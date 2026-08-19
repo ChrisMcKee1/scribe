@@ -32,4 +32,11 @@ public interface IDictionaryRepository
 
     /// <summary>Inserts the supplied seed entries only when the table is empty; returns rows added.</summary>
     int SeedIfEmpty(IEnumerable<DictionaryEntry> entries);
+
+    /// <summary>
+    /// Disables stored entries that still match the supplied pattern and replacement exactly and are
+    /// still enabled; returns rows changed. Used to retire seed entries earlier versions installed,
+    /// without touching an entry the user edited, already disabled, or deliberately re-enabled.
+    /// </summary>
+    int DisableUnmodifiedEntries(IEnumerable<DictionaryEntry> entries);
 }

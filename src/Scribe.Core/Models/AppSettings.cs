@@ -123,8 +123,8 @@ public sealed class AppSettings
 
     /// <summary>
     /// Which cleanup prompt preamble to use. <see cref="Cleanup.CleanupPromptStyle.Auto"/> (default)
-    /// picks by provider — the terse local-optimized prompt for on-device Foundry Local, the frontier
-    /// prompt for cloud/bring-your-own — while letting the user force either. Hot-swappable: changing it
+    /// picks by provider, the terse local-optimized prompt for on-device Foundry Local and the
+    /// frontier prompt for cloud/bring-your-own, while letting the user force either. Hot-swappable: changing it
     /// re-applies on the next dictation with no restart, like the other cleanup settings.
     /// </summary>
     public Cleanup.CleanupPromptStyle AiCleanupPromptStyle { get; set; } = Cleanup.CleanupPromptStyle.Auto;
@@ -238,6 +238,13 @@ public sealed class AppSettings
     /// A plain value type, so the memberwise <see cref="Clone"/> copies it correctly.
     /// </summary>
     public bool HasCompletedFirstRun { get; set; }
+
+    /// <summary>
+    /// Set once the retired seed vocabulary has been disabled, so the cleanup runs at most once per
+    /// install. Without the gate, re-enabling one of those entries on purpose would be undone on the
+    /// next launch, which would read as Scribe fighting the user.
+    /// </summary>
+    public bool HasRetiredSeedVocabulary { get; set; }
 
     /// <summary>
     /// A settings object for a brand new install. Distinct from <c>new AppSettings()</c>: this is

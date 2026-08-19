@@ -11,41 +11,59 @@ namespace Scribe.Core.Tests;
 public sealed class CleanupModelCatalogTests
 {
     [Theory]
-    [InlineData("CPUExecutionProvider", "CPU")]
-    [InlineData("WebGpuExecutionProvider", "GPU")]
-    [InlineData("CUDAExecutionProvider", "GPU")]
-    [InlineData("NvTensorRTRTXExecutionProvider", "GPU")]
-    [InlineData("OpenVINOExecutionProvider", "GPU")]
-    [InlineData("QNNExecutionProvider", "NPU")]
-    [InlineData("VitisAIExecutionProvider", "NPU")]
-    public void Execution_provider_maps_to_the_documented_device_type(string provider, string expected)
+    [InlineData("CPU", "CPUExecutionProvider", "CPU")]
+    [InlineData("GPU", "CUDAExecutionProvider", "GPU")]
+    [InlineData("GPU", "WebGpuExecutionProvider", "GPU")]
+    [InlineData("NPU", "QNNExecutionProvider", "NPU")]
+    [InlineData("NPU", "VitisAIExecutionProvider", "NPU")]
+    public void Describe_reports_the_device_type_the_sdk_supplied(
+        string deviceType, string provider, string expected)
     {
-        Assert.Equal(expected, FoundryExecutionProviders.DeviceType(provider));
+        Assert.Contains(expected, FoundryExecutionProviders.Describe(deviceType, provider));
+    }
+
+    [Fact]
+    public void Describe_reports_a_device_type_it_does_not_recognise_verbatim()
+    {
+        // The SDK naming a device means it is real. Under WinML the provider set is extended by
+        // Windows Update, so silently dropping an unfamiliar one would hide working hardware.
+        var text = FoundryExecutionProviders.Describe("TPU", "SomeFutureExecutionProvider");
+
+        Assert.Contains("TPU", text);
+        Assert.Contains("SomeFuture", text);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("SomeFutureProvider")]
-    public void Unknown_execution_providers_are_reported_as_unknown_rather_than_guessed(string? provider)
+    [InlineData("Invalid")]
+    public void Describe_stays_silent_when_the_sdk_reports_no_usable_device(string? deviceType)
     {
-        // Naming the wrong hardware is worse than saying nothing, so anything unrecognised yields no
-        // claim at all instead of defaulting to CPU.
-        Assert.Null(FoundryExecutionProviders.DeviceType(provider));
-        Assert.Null(FoundryExecutionProviders.Describe(provider));
+        // "Invalid" is the SDK's own value for no meaningful device, so it must not read as a
+        // hardware claim.
+        Assert.Null(FoundryExecutionProviders.Describe(deviceType, "CPUExecutionProvider"));
+    }
+
+    [Fact]
+    public void Describe_still_names_the_device_when_no_provider_is_supplied()
+    {
+        var text = FoundryExecutionProviders.Describe("GPU", null);
+
+        Assert.Contains("GPU", text);
     }
 
     [Fact]
     public void Model_option_describes_the_hardware_reported_by_the_sdk()
     {
-        var npu = new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: true, "QNNExecutionProvider");
+        var npu = new FoundryModelOption(
+            "qwen3-1.7b", Cached: true, Loaded: true, "QNNExecutionProvider", "NPU");
 
         Assert.Contains("NPU", npu.ExecutionBuildLabel);
     }
 
     [Fact]
-    public void Model_option_stays_silent_when_the_sdk_reports_no_provider()
+    public void Model_option_stays_silent_when_the_sdk_reports_no_device()
     {
         var unknown = new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: false);
 

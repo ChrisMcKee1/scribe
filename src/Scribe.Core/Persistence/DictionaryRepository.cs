@@ -207,6 +207,37 @@ public sealed class DictionaryRepository : IDictionaryRepository
         return added;
     }
 
+    public int DisableUnmodifiedEntries(IEnumerable<DictionaryEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        using var connection = _database.Open();
+        using var transaction = connection.BeginTransaction();
+        var disabled = 0;
+
+        foreach (var entry in entries)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+
+            // Matching the replacement as well as the pattern is what makes this safe: an entry the
+            // user edited no longer matches, so their change survives. Requiring enabled = 1 means a
+            // deliberate re-enable is not undone on a later launch.
+            command.CommandText =
+                """
+                UPDATE dictionary
+                SET enabled = 0
+                WHERE pattern = $pattern AND replacement = $replacement AND enabled = 1;
+                """;
+            command.Parameters.AddWithValue("$pattern", entry.Pattern);
+            command.Parameters.AddWithValue("$replacement", entry.Replacement);
+            disabled += command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return disabled;
+    }
+
     private static void BindBody(SqliteCommand command, DictionaryEntry entry)
     {
         command.Parameters.AddWithValue("$pattern", entry.Pattern);

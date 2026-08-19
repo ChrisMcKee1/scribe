@@ -1,5 +1,6 @@
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
+using Scribe.Core.PostProcessing;
 using Xunit;
 
 namespace Scribe.Core.Tests;
@@ -284,6 +285,107 @@ public class PersistenceTests
         Assert.Equal(2, repo.SeedIfEmpty(seed));
         Assert.Equal(0, repo.SeedIfEmpty(seed)); // table no longer empty
         Assert.Equal(2, repo.GetAll().Count);
+    }
+
+    [Fact]
+    public void Retiring_seed_entries_disables_only_the_untouched_ones()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        repo.SeedIfEmpty(
+        [
+            DictionaryEntry.New("azure", "Azure"),      // untouched, should be disabled
+            DictionaryEntry.New("foundry", "Foundry"),  // edited below, must survive
+            DictionaryEntry.New("api", "API"),          // not retired, must survive
+        ]);
+
+        // The user changed what "foundry" produces. That edit is theirs and must not be undone.
+        var edited = repo.GetAll().Single(e => e.Pattern == "foundry") with { Replacement = "Foundry Local" };
+        repo.Update(edited);
+
+        var disabled = repo.DisableUnmodifiedEntries(
+        [
+            DictionaryEntry.New("azure", "Azure"),
+            DictionaryEntry.New("foundry", "Foundry"),
+        ]);
+
+        Assert.Equal(1, disabled);
+
+        var stored = repo.GetAll();
+        Assert.False(stored.Single(e => e.Pattern == "azure").Enabled);
+        Assert.True(stored.Single(e => e.Pattern == "foundry").Enabled);
+        Assert.True(stored.Single(e => e.Pattern == "api").Enabled);
+
+        // Nothing is deleted, so anyone who wants an entry back can re-enable it.
+        Assert.Equal(3, stored.Count);
+    }
+
+    [Fact]
+    public void Retiring_seed_entries_is_a_no_op_once_they_are_already_disabled()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new DictionaryRepository(db);
+
+        repo.SeedIfEmpty([DictionaryEntry.New("azure", "Azure")]);
+
+        Assert.Equal(1, repo.DisableUnmodifiedEntries([DictionaryEntry.New("azure", "Azure")]));
+
+        // Already disabled, so a repeat pass changes nothing and cannot churn the row.
+        Assert.Equal(0, repo.DisableUnmodifiedEntries([DictionaryEntry.New("azure", "Azure")]));
+        Assert.False(repo.GetAll().Single().Enabled);
+
+        // Note the boundary of this primitive: it disables anything matching that is enabled, so it
+        // WOULD re-disable an entry the user turned back on. Nothing here prevents that, and it must
+        // not: the run-once guard belongs to the caller (App.RetireSeedVocabulary via
+        // AppSettings.HasRetiredSeedVocabulary), which is what stops Scribe fighting the user.
+        var restored = repo.GetAll().Single() with { Enabled = true };
+        repo.Update(restored);
+        Assert.Equal(1, repo.DisableUnmodifiedEntries([DictionaryEntry.New("azure", "Azure")]));
+    }
+
+    [Fact]
+    public void Seed_retirement_disables_old_entries_once_and_records_that_it_ran()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var dictionary = new DictionaryRepository(db);
+        var settings = new SettingsRepository(db);
+
+        dictionary.SeedIfEmpty(
+        [
+            DictionaryEntry.New("azure", "Azure"),
+            DictionaryEntry.New("api", "API"),
+        ]);
+
+        var retired = new[] { DictionaryEntry.New("azure", "Azure") };
+
+        Assert.Equal(1, SeedVocabularyRetirement.Apply(settings, dictionary, retired));
+        Assert.True(settings.Load().HasRetiredSeedVocabulary);
+        Assert.False(dictionary.GetAll().Single(e => e.Pattern == "azure").Enabled);
+        Assert.True(dictionary.GetAll().Single(e => e.Pattern == "api").Enabled);
+
+        // The flag is the guard that stops a later launch undoing a deliberate re-enable, so a
+        // second pass must do nothing even though the entry would otherwise match again.
+        var restored = dictionary.GetAll().Single(e => e.Pattern == "azure") with { Enabled = true };
+        dictionary.Update(restored);
+
+        Assert.Equal(0, SeedVocabularyRetirement.Apply(settings, dictionary, retired));
+        Assert.True(dictionary.GetAll().Single(e => e.Pattern == "azure").Enabled);
+    }
+
+    [Fact]
+    public void Seed_retirement_leaves_a_brand_new_dictionary_untouched()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var dictionary = new DictionaryRepository(db);
+        var settings = new SettingsRepository(db);
+
+        // A new install seeds the corrected list, which contains none of the retired entries.
+        dictionary.SeedIfEmpty(DefaultVocabulary.Entries);
+
+        Assert.Equal(0, SeedVocabularyRetirement.Apply(
+            settings, dictionary, DefaultVocabulary.RetiredEntries));
+        Assert.All(dictionary.GetAll(), entry => Assert.True(entry.Enabled));
     }
 
     [Fact]

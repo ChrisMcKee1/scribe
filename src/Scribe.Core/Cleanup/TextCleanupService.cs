@@ -1189,14 +1189,17 @@ internal sealed class TextCleanupService : ITextCleanupService
                     continue;
                 }
 
-                // The SDK states the execution provider, so read it rather than inferring one from
-                // the alias text. That is what makes an NPU (QNN, Vitis AI) reportable at all: alias
-                // suffixes only ever spell cpu or gpu.
+                // Both the device type and the provider name come from the SDK. Deriving the device
+                // from the provider string would be a hand-maintained mirror of SDK state, and under
+                // WinML the provider set is extended by Windows Update, so a name we have never seen
+                // is an ordinary runtime condition rather than a theoretical one.
+                var runtime = model.Info?.Runtime;
                 options.Add(new FoundryModelOption(
                     model.Alias,
                     cachedAliases.Contains(model.Alias),
                     loadedAliases.Contains(model.Alias),
-                    model.Info?.Runtime?.ExecutionProvider));
+                    runtime?.ExecutionProvider,
+                    runtime?.DeviceType.ToString()));
             }
 
             // Loaded first, then downloaded, then the rest; alphabetical within each tier.
@@ -2315,6 +2318,18 @@ internal sealed class TextCleanupService : ITextCleanupService
                 discovered,
                 result.RegisteredEps,
                 _manager.DiscoverEps());
+
+            // Latch only on success. Under the WinML package these plugins come from the OS and
+            // Windows Update, so a first-run network hiccup is an ordinary transient failure. Setting
+            // this unconditionally would turn that into a permanent CPU-only session, because the
+            // catalog is populated from the registered providers and cached on first read.
+            _epsRegistered = true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A newer Configure superseded this run. Callers already handle cancellation, and the
+            // next initialization must be free to try registration again.
+            throw;
         }
         catch (Exception ex)
         {
@@ -2328,8 +2343,6 @@ internal sealed class TextCleanupService : ITextCleanupService
                 _log.LogDebug(discoverEx, "Could not enumerate Foundry execution providers.");
             }
         }
-
-        _epsRegistered = true;
     }
 
     private static string[] MergeAvailableExecutionProviders(

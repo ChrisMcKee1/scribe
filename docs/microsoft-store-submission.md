@@ -107,9 +107,11 @@ cloud-hosted, or supplied by a third party.
 - Internet connection: not required for dictation
 - Internet connection: required only for downloads, updates, and optional remote AI providers
 
-The package currently declares Windows Desktop build `10.0.19041.0` as its minimum. Before the
-final package, decide whether to support that Windows 10 minimum or raise it to Windows 11 build
-`10.0.22000.0` so the package and marketing promise match.
+The package declares Windows Desktop build `10.0.22000.0` (Windows 11) as its minimum, matching
+`SupportedOSPlatformVersion` in `Scribe.App.csproj` and the Windows 11 promise in the listing. The
+two are deliberately kept equal: a lower MinVersion would let the Store install Scribe on a Windows
+10 build where the app is compiled against a higher floor and Foundry Local's WinML integration
+cannot acquire execution providers, which fails at first use rather than at install.
 
 ## Age rating
 

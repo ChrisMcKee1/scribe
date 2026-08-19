@@ -63,19 +63,21 @@ public static class CleanupModelCatalog
 /// A live entry from the Foundry Local catalog, surfaced in the searchable model picker.
 /// <see cref="Alias"/> is the catalog alias used to load the model; <see cref="Cached"/> means it is
 /// already downloaded on this PC, and <see cref="Loaded"/> means it is currently resident in the
-/// runtime (only one model is kept loaded at a time). <see cref="ExecutionProvider"/> is the ONNX
-/// Runtime provider the SDK reports for this model, for example <c>QNNExecutionProvider</c>.
+/// runtime (only one model is kept loaded at a time). <see cref="ExecutionProvider"/> and
+/// <see cref="DeviceType"/> are both reported by the SDK, for example
+/// <c>QNNExecutionProvider</c> on the NPU.
 /// </summary>
 public sealed record FoundryModelOption(
     string Alias,
     bool Cached,
     bool Loaded,
-    string? ExecutionProvider = null)
+    string? ExecutionProvider = null,
+    string? DeviceType = null)
 {
     /// <summary>
-    /// Plain-language hardware note for the picker, or null when the SDK does not report a provider.
+    /// Plain-language hardware note for the picker, or null when the SDK reports nothing usable.
     /// Foundry Local chooses the provider itself, so this reports what it picked rather than
     /// offering a choice we do not actually control.
     /// </summary>
-    public string? ExecutionBuildLabel => FoundryExecutionProviders.Describe(ExecutionProvider);
+    public string? ExecutionBuildLabel => FoundryExecutionProviders.Describe(DeviceType, ExecutionProvider);
 }

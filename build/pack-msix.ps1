@@ -228,7 +228,11 @@ function New-ScribeMsix {
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+    <!-- Windows 11 (build 22000) matches SupportedOSPlatformVersion in Scribe.App.csproj. The two
+         must agree: a lower MinVersion would let the Store install Scribe on a Windows 10 build
+         where the app is compiled against a higher floor and WinML cannot acquire execution
+         providers, which fails at runtime rather than at install. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
 
   <Resources>

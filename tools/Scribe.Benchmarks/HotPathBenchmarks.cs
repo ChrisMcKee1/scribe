@@ -96,5 +96,6 @@ public class HotPathBenchmarks
         public void Delete(long id) => throw new NotSupportedException();
         public void SaveAll(IReadOnlyList<DictionaryEntry> updatedEntries) => throw new NotSupportedException();
         public int SeedIfEmpty(IEnumerable<DictionaryEntry> seedEntries) => throw new NotSupportedException();
+        public int DisableUnmodifiedEntries(IEnumerable<DictionaryEntry> retiredEntries) => throw new NotSupportedException();
     }
 }
