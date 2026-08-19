@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <!-- Dual-architecture: win-x64 for Intel/AMD, win-arm64 for Copilot+ PCs. PlatformTarget is
          deliberately NOT pinned so the active RuntimeIdentifier decides the architecture; a
          hardcoded x64 would silently produce an x64 assembly inside an ARM64 publish. -->
@@ -62,7 +62,7 @@
                       Condition="'$(ScribeNativeRid)' == 'win-x64'" />
     <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.win-arm64"
                       Condition="'$(ScribeNativeRid)' == 'win-arm64'" />
-    <PackageReference Include="Microsoft.AI.Foundry.Local" />
+    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" />
     <PackageReference Include="OpenAI" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <PackageReference Include="Microsoft.Extensions.AI" />

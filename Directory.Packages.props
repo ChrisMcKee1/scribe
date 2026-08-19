@@ -41,8 +41,10 @@
     <PackageVersion Include="WPF-UI" Version="4.3.0" />
 
     <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
-         client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
-    <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.4" />
+         client). The WinML variant is the Windows package: same API surface, but execution provider
+         plugins are sourced from the OS and Windows Update with driver compatibility negotiation,
+         which is what reaches NPUs (Qualcomm QNN, AMD Vitis) rather than only CPU and WebGPU. -->
+    <PackageVersion Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.4" />
     <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
     <!-- Held at 2.12.0 deliberately: Microsoft.Extensions.AI.OpenAI 10.9.0 constrains OpenAI to
          >= 2.12.0 && < 2.13.0, so taking 2.13.0 breaks restore (NU1608). Revisit when
