@@ -10,6 +10,48 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class CleanupModelCatalogTests
 {
+    [Theory]
+    [InlineData("CPUExecutionProvider", "CPU")]
+    [InlineData("WebGpuExecutionProvider", "GPU")]
+    [InlineData("CUDAExecutionProvider", "GPU")]
+    [InlineData("NvTensorRTRTXExecutionProvider", "GPU")]
+    [InlineData("OpenVINOExecutionProvider", "GPU")]
+    [InlineData("QNNExecutionProvider", "NPU")]
+    [InlineData("VitisAIExecutionProvider", "NPU")]
+    public void Execution_provider_maps_to_the_documented_device_type(string provider, string expected)
+    {
+        Assert.Equal(expected, FoundryExecutionProviders.DeviceType(provider));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("SomeFutureProvider")]
+    public void Unknown_execution_providers_are_reported_as_unknown_rather_than_guessed(string? provider)
+    {
+        // Naming the wrong hardware is worse than saying nothing, so anything unrecognised yields no
+        // claim at all instead of defaulting to CPU.
+        Assert.Null(FoundryExecutionProviders.DeviceType(provider));
+        Assert.Null(FoundryExecutionProviders.Describe(provider));
+    }
+
+    [Fact]
+    public void Model_option_describes_the_hardware_reported_by_the_sdk()
+    {
+        var npu = new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: true, "QNNExecutionProvider");
+
+        Assert.Contains("NPU", npu.ExecutionBuildLabel);
+    }
+
+    [Fact]
+    public void Model_option_stays_silent_when_the_sdk_reports_no_provider()
+    {
+        var unknown = new FoundryModelOption("qwen3-1.7b", Cached: true, Loaded: false);
+
+        Assert.Null(unknown.ExecutionBuildLabel);
+    }
+
     [Fact]
     public void Default_alias_is_present_in_the_curated_list()
     {

@@ -9,6 +9,16 @@ public enum FoundryModelExecutionBuild
 
 internal readonly record struct FoundryModelVariantCandidate(string Alias, string? ExecutionProvider);
 
+/// <summary>
+/// Alias-shape helpers for the GPU to CPU demotion.
+/// <para>
+/// Foundry Local reports a model's execution provider directly, and that is what the settings UI
+/// reads (see <see cref="FoundryExecutionProviders"/>). These helpers exist for the one case where
+/// that information is not trustworthy: the variant has just failed to load or failed its first
+/// inference, so Scribe has to work out a CPU counterpart from the alias it was given. Prefer the
+/// SDK's provider anywhere the model actually loaded.
+/// </para>
+/// </summary>
 internal static class FoundryModelVariant
 {
     private const string GenericGpuSuffix = "-generic-gpu";

@@ -79,6 +79,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private int _usageLoadVersion;
     private int _azureDeploymentLoadVersion;
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, FoundryModelOption> _foundryExecutionBuilds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AzureFoundryDeployment> _azureModelMap = new(StringComparer.OrdinalIgnoreCase);
     // Subscription filter for Azure model discovery. The sentinel "All subscriptions" row is not in
     // the map, so a missing lookup means "no filter" by construction.
@@ -1959,6 +1960,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 SetComboItems(AiModelBox, aliases);
             }
 
+            // Remember each alias's build so the hint can say whether a model runs on the CPU or the
+            // GPU. The picker items stay plain strings, because the box is editable and its filter
+            // and saved value both work on text.
+            _foundryExecutionBuilds.Clear();
+            foreach (var model in models)
+            {
+                _foundryExecutionBuilds[model.Alias] = model;
+            }
+
+            UpdateAiModelHint();
             UpdateFoundryLoadedText(models.FirstOrDefault(m => m.Loaded)?.Alias);
         }
         catch
@@ -3516,17 +3527,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         var alias = AiModelBox.Text?.Trim() ?? string.Empty;
+        var buildNote = _foundryExecutionBuilds.TryGetValue(alias, out var option)
+            ? option.ExecutionBuildLabel
+            : null;
+
         if (!_foundryCuratedByAlias.TryGetValue(alias, out var model))
         {
-            AiModelHint.Text = string.Empty;
+            // A live catalog alias that is not curated still deserves the build note: those are
+            // exactly the hardware-specific entries where CPU versus GPU is the useful signal.
+            AiModelHint.Text = buildNote ?? string.Empty;
             return;
         }
 
         // Lead with the benchmark badge when this model is a golden-suite winner so the
         // recommendation is visible the moment it is selected, not just in the panel hint above.
-        AiModelHint.Text = string.IsNullOrEmpty(model.Recommendation)
+        var hint = string.IsNullOrEmpty(model.Recommendation)
             ? model.Hint
             : $"Recommended, {model.Recommendation}. {model.Hint}";
+
+        AiModelHint.Text = buildNote is null ? hint : $"{hint} {buildNote}";
     }
 
     private void UpdateAzureDeploymentHint()

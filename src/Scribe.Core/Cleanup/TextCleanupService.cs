@@ -1189,11 +1189,14 @@ internal sealed class TextCleanupService : ITextCleanupService
                     continue;
                 }
 
+                // The SDK states the execution provider, so read it rather than inferring one from
+                // the alias text. That is what makes an NPU (QNN, Vitis AI) reportable at all: alias
+                // suffixes only ever spell cpu or gpu.
                 options.Add(new FoundryModelOption(
                     model.Alias,
                     cachedAliases.Contains(model.Alias),
                     loadedAliases.Contains(model.Alias),
-                    FoundryModelVariant.Classify(model.Alias)));
+                    model.Info?.Runtime?.ExecutionProvider));
             }
 
             // Loaded first, then downloaded, then the rest; alphabetical within each tier.
