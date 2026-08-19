@@ -1,9 +1,11 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
 using Scribe.Core.PostProcessing;
+using Wpf.Ui.Appearance;
 
 namespace Scribe.App.Tray;
 
@@ -14,6 +16,7 @@ namespace Scribe.App.Tray;
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
+    private readonly ContextMenu _menu;
     private readonly TaskbarIcon _icon;
     private readonly MenuItem _pauseItem;
     private readonly MenuItem _aiItem;
@@ -67,7 +70,10 @@ internal sealed class TrayIconHost : IDisposable
 
     public TrayIconHost()
     {
-        var menu = new ContextMenu();
+        _menu = new ContextMenu();
+        var menu = _menu;
+        ApplyMenuTheme();
+        ApplicationThemeManager.Changed += OnApplicationThemeChanged;
 
         // Header: the app name + version, bold and clickable (opens settings); a live entry
         // point rather than a greyed-out label that looks like a broken button.
@@ -101,7 +107,11 @@ internal sealed class TrayIconHost : IDisposable
         // transcripts that are actually recoverable right now.
         var copyRecentDictation = new MenuItem { Header = "Copy recent dictation" };
         menu.Items.Add(copyRecentDictation);
-        menu.Opened += (_, _) => PopulateRecentDictations(copyRecentDictation);
+        menu.Opened += (_, _) =>
+        {
+            ApplyMenuTheme();
+            PopulateRecentDictations(copyRecentDictation);
+        };
 
         // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
         var welcome = new MenuItem { Header = "Show welcome" };
@@ -143,6 +153,22 @@ internal sealed class TrayIconHost : IDisposable
             MenuActivation = PopupActivationMode.RightClick,
         };
         _icon.ForceCreate(false);
+    }
+
+
+    private void OnApplicationThemeChanged(Wpf.Ui.Appearance.ApplicationTheme currentApplicationTheme, Color systemAccent) =>
+        Dispatch(ApplyMenuTheme);
+
+    private void ApplyMenuTheme()
+    {
+        try
+        {
+            ApplicationThemeManager.Apply(_menu);
+        }
+        catch
+        {
+            // The tray menu is a fallback path; a theme refresh failure must not break right-click access.
+        }
     }
 
     /// <summary>Updates the tray icon and tooltip to match the current dictation state.</summary>
@@ -262,6 +288,7 @@ internal sealed class TrayIconHost : IDisposable
 
     public void Dispose()
     {
+        ApplicationThemeManager.Changed -= OnApplicationThemeChanged;
         _icon.Dispose();
         _retiredIcon?.Dispose();
         _retiredIcon = null;

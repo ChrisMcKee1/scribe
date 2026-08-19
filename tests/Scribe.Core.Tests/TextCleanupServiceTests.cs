@@ -1,4 +1,8 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.AI;
+#pragma warning disable OPENAI001
+using OpenAI.Responses;
+#pragma warning restore OPENAI001
 using Scribe.Core.Cleanup;
 using Xunit;
 
@@ -21,6 +25,135 @@ public sealed class TextCleanupServiceTests
     public void Custom_endpoint_requires_https_except_for_loopback(string value, bool expected)
     {
         Assert.Equal(expected, TextCleanupService.TryValidateCustomEndpoint(value, out _, out _));
+    }
+
+    [Theory]
+    [InlineData("qwen3-1.7b-generic-gpu", FoundryModelExecutionBuild.Gpu)]
+    [InlineData("qwen3-1.7b-generic-cpu", FoundryModelExecutionBuild.Cpu)]
+    [InlineData("qwen3-1.7b-cuda-gpu:2", FoundryModelExecutionBuild.Gpu)]
+    [InlineData("qwen3-1.7b", FoundryModelExecutionBuild.Unknown)]
+    public void Foundry_model_option_exposes_execution_build(string alias, FoundryModelExecutionBuild expected)
+    {
+        Assert.Equal(expected, FoundryModelVariant.Classify(alias));
+    }
+
+    [Fact]
+    public void Gpu_alias_demotes_to_catalog_cpu_counterpart()
+    {
+        var catalogAliases = new[]
+        {
+            "qwen3-1.7b-generic-gpu",
+            "qwen3-1.7b-generic-cpu",
+            "mistral-nemo-12b-instruct-generic-cpu",
+        };
+
+        var resolved = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            "qwen3-1.7b-generic-gpu",
+            catalogAliases);
+
+        Assert.Equal("qwen3-1.7b-generic-cpu", resolved);
+    }
+
+    [Fact]
+    public void Cuda_gpu_alias_demotes_to_generic_cpu_counterpart()
+    {
+        var catalogAliases = new[]
+        {
+            "qwen3-1.7b-cuda-gpu:2",
+            "qwen3-1.7b-generic-cpu:2",
+        };
+
+        var resolved = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            "qwen3-1.7b-cuda-gpu:2",
+            catalogAliases);
+
+        Assert.Equal("qwen3-1.7b-generic-cpu:2", resolved);
+    }
+
+    [Fact]
+    public void Cpu_counterpart_resolution_prefers_cpu_execution_provider_metadata()
+    {
+        var catalogAliases = new[]
+        {
+            new FoundryModelVariantCandidate("qwen3-1.7b-generic-cpu:2", "WebGpuExecutionProvider"),
+            new FoundryModelVariantCandidate("qwen3-1.7b-generic-cpu", "CPUExecutionProvider"),
+        };
+
+        var resolved = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            "qwen3-1.7b-cuda-gpu:2",
+            catalogAliases);
+
+        Assert.Equal("qwen3-1.7b-generic-cpu", resolved);
+    }
+
+    [Fact]
+    public void Gpu_alias_without_catalog_cpu_counterpart_does_not_demote()
+    {
+        var resolved = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            "qwen3-1.7b-generic-gpu",
+            ["qwen3-1.7b-generic-gpu", "phi-4-generic-cpu"]);
+
+        Assert.Null(resolved);
+    }
+
+    [Theory]
+    [InlineData("Cannot load model 'qwen3-1.7b-cuda-gpu:2': it requires the 'CUDAExecutionProvider' execution provider, which is not available. Available EPs: [CPUExecutionProvider, WebGpuExecutionProvider].", true)]
+    [InlineData("Cannot load model 'qwen3': the file is corrupt.", false)]
+    [InlineData("execution provider, which is not available", false)]
+    public void Execution_provider_unavailable_detector_is_specific(string message, bool expected)
+    {
+        Assert.Equal(expected, TextCleanupService.MentionsExecutionProviderUnavailable(message));
+    }
+
+    [Fact]
+    public void Stored_output_override_creates_responses_options_with_storage_disabled()
+    {
+        var options = TextCleanupService.WithStoredOutputDisabled(null);
+
+#pragma warning disable OPENAI001
+        var raw = Assert.IsType<CreateResponseOptions>(options.RawRepresentationFactory!(new StubChatClient()));
+
+        Assert.False(raw.StoredOutputEnabled);
+#pragma warning restore OPENAI001
+    }
+
+    [Fact]
+    public void Stored_output_override_preserves_existing_responses_options()
+    {
+        var source = new ChatOptions
+        {
+#pragma warning disable OPENAI001
+            RawRepresentationFactory = _ => new CreateResponseOptions { StoredOutputEnabled = true },
+#pragma warning restore OPENAI001
+        };
+
+        var options = TextCleanupService.WithStoredOutputDisabled(source);
+
+#pragma warning disable OPENAI001
+        var raw = Assert.IsType<CreateResponseOptions>(options.RawRepresentationFactory!(new StubChatClient()));
+
+        Assert.False(raw.StoredOutputEnabled);
+#pragma warning restore OPENAI001
+    }
+
+    [Fact]
+    public void Stored_output_override_fails_closed_on_an_unrecognised_raw_representation()
+    {
+        // A future package version could start supplying its own factory returning some other type.
+        // Passing that through would let Azure apply its store=true default and silently retain
+        // dictated text, so the override must replace it rather than defer to it.
+        var source = new ChatOptions
+        {
+            RawRepresentationFactory = _ => new object(),
+        };
+
+        var options = TextCleanupService.WithStoredOutputDisabled(source);
+
+#pragma warning disable OPENAI001
+        var raw = Assert.IsType<CreateResponseOptions>(options.RawRepresentationFactory!(new StubChatClient()));
+
+        Assert.False(raw.StoredOutputEnabled);
+#pragma warning restore OPENAI001
     }
 
     [Fact]
@@ -63,5 +196,26 @@ public sealed class TextCleanupServiceTests
         var afterDisable = await svc.CleanAsync("please book the demo room for thursday");
         Assert.Equal(CleanupOutcome.Skipped, afterDisable.Outcome);
         Assert.Equal("please book the demo room for thursday", afterDisable.Text);
+    }
+
+    private sealed class StubChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 }

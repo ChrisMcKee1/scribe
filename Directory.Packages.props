@@ -29,10 +29,10 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
 
     <!-- Hosting / DI / logging / options -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
 
     <!-- Tray UI -->
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
@@ -42,14 +42,17 @@
 
     <!-- Optional offline AI cleanup via Foundry Local (self-contained SDK + OpenAI-compatible
          client). Cross-platform package shares the installed Foundry Local model/EP cache. -->
-    <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.3" />
+    <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="1.2.4" />
     <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
+    <!-- Held at 2.12.0 deliberately: Microsoft.Extensions.AI.OpenAI 10.9.0 constrains OpenAI to
+         >= 2.12.0 && < 2.13.0, so taking 2.13.0 breaks restore (NU1608). Revisit when
+         Microsoft.Extensions.AI.OpenAI widens the range. -->
     <PackageVersion Include="OpenAI" Version="2.12.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.8.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
     <!-- Microsoft.Extensions.AI.Evaluation powers the offline evals harness (tools/Scribe.Evals)
          only; referenced with PrivateAssets=all so it never ships with the WPF app. -->
-    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.8.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.9.0" />
 
     <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive.
          Microsoft.Agents.AI.OpenAI supplies the .AsAIAgent(model, instructions, name) extension on the
@@ -58,8 +61,8 @@
          GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
          into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
          Azure.AI.Projects' AIProjectClient, the framework's native Foundry path, no server-side agent. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.13.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.13.0" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.18.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.18.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 

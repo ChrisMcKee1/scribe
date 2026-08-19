@@ -119,14 +119,16 @@ to filter) so you pick a model instead of remembering deployment names. Live in 
 tenant? Choose **service principal** sign-in instead and Scribe authenticates as exactly the
 identity you name, every time ([setup guide](docs/service-principal-setup.md)). Or aim it at **any
 OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
-or api.openai.com with your own key. Only the transcribed *text* is ever sent (never audio), and
-only to the endpoint **you** configure. And when you want the raw transcript, **toggle AI cleanup
-straight from the tray menu** with no settings trip required.
+or api.openai.com with your own key. Only the transcribed *text* is ever sent (never audio), only
+to the endpoint **you** configure, and Scribe asks compatible services not to retain it. And when
+you want the raw transcript, **toggle AI cleanup straight from the tray menu** with no settings trip
+required.
 
 > **No Foundry resource yet?** [`docs/foundry-setup.md`](docs/foundry-setup.md) walks you through it
-> from scratch, including a script that creates the resource, project, model deployment and service
-> principal in one run. If you work at Microsoft, your Visual Studio subscription almost certainly
-> includes unused Azure credits that cover it.
+> from scratch with a script that creates the resource, project and model deployment in one run.
+> Most people can run it for free: a Visual Studio subscription includes monthly Azure credits ($150
+> on Enterprise, $50 on Professional), no credit card is needed, and Azure stops rather than billing
+> you if the credit ever ran out. Every Microsoft employee has one.
 
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
@@ -265,7 +267,8 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 - **Transcription is 100% local** (Parakeet via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on CPU).
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
   offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is
-  sent to the server **you** configure, under **your** credentials.
+  sent to the server **you** configure, under **your** credentials, and Scribe asks compatible
+  services not to retain it.
 - **Even the stats are local.** Performance and Usage are computed from history already on your disk.
   Usage AI insight runs only when you click it and sends bounded aggregate data without transcripts,
   audio, application names or timestamps.

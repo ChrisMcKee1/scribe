@@ -14,9 +14,9 @@ never audio.
 
 > **Starting from nothing?** If you do not yet have a Foundry resource with a deployed model, use
 > [foundry-setup.md](foundry-setup.md) instead. That guide has a script that creates the resource,
-> the project, the model deployment **and** the service principal in one run, so you do not need to
-> do any of the steps below by hand. Come back here if you would rather do it manually, or if you
-> need the portal walkthrough or the troubleshooting detail.
+> a companion project, the model deployment **and** the service principal in one run, so you do not
+> need to do any of the steps below by hand. Come back here if you would rather do it manually, or if
+> you need the portal walkthrough or the troubleshooting detail.
 
 ## What you will need
 
@@ -235,16 +235,18 @@ If your resource uses a regional endpoint, add a custom subdomain to it before c
 
 ### Which endpoint to enter
 
-Scribe accepts both shapes, and either works with a service principal:
+Scribe accepts both shapes, and either works with a service principal. The project is convenient,
+but the cleanup call only requires an account with a deployed model:
 
 | Shape | Example | Notes |
 | --- | --- | --- |
-| Foundry **project** endpoint | `https://my-resource.services.ai.azure.com/api/projects/my-project` | Microsoft's recommended form. Scribe routes it natively. Entra only, no API keys. |
-| Account endpoint | `https://my-resource.services.ai.azure.com` or `https://my-resource.openai.azure.com` | Works with Entra or an API key. |
+| Foundry **project** endpoint | `https://my-resource.services.ai.azure.com/api/projects/my-project` | Microsoft's recommended form in the Foundry portal. Scribe routes it natively with Entra auth. Do not use this with API keys. |
+| Account endpoint | `https://my-resource.services.ai.azure.com` or `https://my-resource.openai.azure.com` | Works with Entra. It is also the endpoint shape Scribe uses for API key auth. |
 
 The project endpoint is on the project's overview page in the Foundry portal; the account endpoint is
 on the resource's overview page in the Azure portal. Both are shown in Foundry, which is a common
-source of confusion, so copy the one whose page you are actually on.
+source of confusion, so copy the one whose page you are actually on. A project is useful in the
+portal, but Scribe's single-turn cleanup call is account plus deployment based.
 
 The **deployment name** is the name you gave the model when you deployed it, not the model's own
 name. These match by default and often diverge later. If the same model is deployed on two resources
@@ -269,6 +271,7 @@ was not found. Reading the status first saves changing the wrong thing.
 | `AADSTS700016` application not found | The app registration is in a different tenant than the one entered | Confirm the tenant ID matches the directory that owns the app registration |
 | `AADSTS7000215` invalid client secret | Usually a secret created moments ago that has not propagated. Otherwise the Secret ID was copied instead of the Value | Wait a minute and verify again, then check you copied the Value column |
 | 401 Unauthorized | The token itself was rejected | Check the resource has a custom subdomain (step 4) |
+| API key cannot be listed, or `disableLocalAuth` is true | The resource or subscription policy disables local key authentication | Use service principal sign-in instead |
 | 403 Forbidden, right after assigning a role | Authorization has not propagated yet | Confirm the assignment exists, then wait. Ten minutes is normal; do not start swapping roles |
 | 403 Forbidden, and the assignment is minutes old or more | The role is missing, on the wrong resource, or is one of the look-alike roles | Re-check step 3, and confirm the scope is the resource that hosts the deployment |
 | 403 Forbidden on a Foundry resource with a `Cognitive Services *` role | That role family is not supported for Foundry | Assign **Foundry User** (`53ca6127-db72-4b80-b1b0-d745d6d5456d`) instead |

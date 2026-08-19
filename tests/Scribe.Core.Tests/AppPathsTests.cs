@@ -47,6 +47,104 @@ public class AppPathsTests
     }
 
     [Fact]
+    public void CreateForStartup_uses_fallback_when_preferred_root_is_blocked_by_a_file()
+    {
+        var stamp = Guid.NewGuid().ToString("N");
+        var blockedRoot = Path.Combine(Path.GetTempPath(), "scribe-blocked-" + stamp);
+        var fallbackRoot = Path.Combine(Path.GetTempPath(), "scribe-fallback-" + stamp);
+
+        try
+        {
+            File.WriteAllText(blockedRoot, "not a directory");
+
+            var paths = AppPaths.CreateForStartup(blockedRoot, fallbackRoot);
+
+            Assert.Equal(fallbackRoot, paths.RootDir);
+            Assert.Equal(blockedRoot, paths.PreferredRootDir);
+            Assert.True(paths.IsFallbackRoot);
+            Assert.Null(paths.LegacyRootDir);
+            Assert.Contains(blockedRoot, paths.CreationFailureMessage!);
+            Assert.True(Directory.Exists(paths.LogsDir));
+            Assert.True(Directory.Exists(paths.LibrariesDir));
+        }
+        finally
+        {
+            Cleanup(blockedRoot, fallbackRoot);
+        }
+    }
+
+    [Fact]
+    public void CreateForStartup_reports_a_fallback_root_left_behind_by_an_earlier_session()
+    {
+        // A session that recovers onto the preferred root must not leave the user silently running
+        // two divergent copies of their history.
+        var stamp = Guid.NewGuid().ToString("N");
+        var preferredRoot = Path.Combine(Path.GetTempPath(), "scribe-preferred-" + stamp);
+        var fallbackRoot = Path.Combine(Path.GetTempPath(), "scribe-orphan-" + stamp);
+
+        try
+        {
+            Directory.CreateDirectory(fallbackRoot);
+            File.WriteAllText(Path.Combine(fallbackRoot, AppPaths.DatabaseFileName), "stranded history");
+
+            var paths = AppPaths.CreateForStartup(preferredRoot, fallbackRoot);
+
+            Assert.Equal(preferredRoot, paths.RootDir);
+            Assert.False(paths.IsFallbackRoot);
+            Assert.Equal(fallbackRoot, paths.OrphanedFallbackRootDir);
+        }
+        finally
+        {
+            Cleanup(preferredRoot, fallbackRoot);
+        }
+    }
+
+    [Fact]
+    public void CreateForStartup_ignores_an_empty_fallback_root()
+    {
+        // Directories left by a failed attempt carry nothing worth recovering, and warning about
+        // them would train the user to ignore the warning that matters.
+        var stamp = Guid.NewGuid().ToString("N");
+        var preferredRoot = Path.Combine(Path.GetTempPath(), "scribe-preferred-" + stamp);
+        var fallbackRoot = Path.Combine(Path.GetTempPath(), "scribe-empty-" + stamp);
+
+        try
+        {
+            Directory.CreateDirectory(fallbackRoot);
+
+            var paths = AppPaths.CreateForStartup(preferredRoot, fallbackRoot);
+
+            Assert.Null(paths.OrphanedFallbackRootDir);
+        }
+        finally
+        {
+            Cleanup(preferredRoot, fallbackRoot);
+        }
+    }
+
+    [Fact]
+    public void TryEnsureCreated_reports_failure_without_throwing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scribe-blocked-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            File.WriteAllText(root, "not a directory");
+            var paths = new AppPaths(root);
+
+            var created = paths.TryEnsureCreated(out var exception);
+
+            Assert.False(created);
+            Assert.NotNull(exception);
+            Assert.False(Directory.Exists(paths.LogsDir));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void TryMigrateDatabase_backs_up_committed_wal_data_when_destination_empty()
     {
         var (legacy, fresh) = CreateTempPair();
@@ -130,15 +228,19 @@ public class AppPathsTests
             Path.Combine(Path.GetTempPath(), "scribe-new-" + stamp));
     }
 
-    private static void Cleanup(params string[] dirs)
+    private static void Cleanup(params string[] paths)
     {
-        foreach (var dir in dirs)
+        foreach (var path in paths)
         {
             try
             {
-                if (Directory.Exists(dir))
+                if (Directory.Exists(path))
                 {
-                    Directory.Delete(dir, recursive: true);
+                    Directory.Delete(path, recursive: true);
+                }
+                else if (File.Exists(path))
+                {
+                    File.Delete(path);
                 }
             }
             catch

@@ -709,6 +709,7 @@
                                                       SelectionChanged="AzureAuthModeBox_SelectionChanged">
                                                 <ComboBoxItem Content="Azure CLI (your az login account)"/>
                                                 <ComboBoxItem Content="Service principal (app registration)"/>
+                                                <ComboBoxItem Content="API key (personal or resource key)"/>
                                             </ComboBox>
                                             <TextBlock x:Name="AzureAuthModeHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Azure CLI uses whichever account you signed in with. Choose a service principal to pin one identity, which is the reliable option when you belong to more than one tenant."/>
@@ -812,41 +813,50 @@
                                                 <TextBlock Text="Endpoint" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                                 <ui:TextBox x:Name="AzureEndpointBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             VerticalContentAlignment="Center"
-                                                            PlaceholderText="https://my-resource.services.ai.azure.com/"/>
+                                                            PlaceholderText="https://my-resource.services.ai.azure.com/"
+                                                            TextChanged="AzureEndpointBox_TextChanged"/>
                                                 <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                            Text="A discovered model fills this automatically. For manual setup, paste the Microsoft Foundry project or Azure OpenAI endpoint."/>
+
+                                                <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="e.g. gpt-4o"
+                                                            TextChanged="AzureDeploymentBox_TextChanged"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="The model picker fills this in after sign-in. Enter the exact Azure deployment name when configuring manually."/>
+
+                                                <StackPanel x:Name="AzureApiKeyPanel" Visibility="Collapsed">
+                                                    <TextBlock Text="API key" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                    <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                    VerticalContentAlignment="Center"
+                                                                    PlaceholderText="Paste your Azure OpenAI or Foundry resource key"
+                                                                    PasswordChanged="AzureApiKeyBox_PasswordChanged"/>
+                                                    <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                               Text="An API key needs no app registration or tenant permissions. It is stored encrypted on this PC with Windows DPAPI."/>
+                                                    <TextBlock x:Name="AzureProjectApiKeyHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                               Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                                               Visibility="Collapsed"
+                                                               Text="Project endpoints use the account host with API keys. This is expected because project data planes require Entra sign-in."/>
+                                                </StackPanel>
 
                                                 <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
                                                     <ui:CardExpander.Header>
                                                         <StackPanel>
-                                                            <TextBlock Text="Deployment and authentication" Style="{StaticResource SettingTitle}" FontSize="13"/>
+                                                            <TextBlock Text="Optional Azure details" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                       Text="Use the discovered values, or enter a deployment and API key for manual setup."/>
+                                                                       Text="Pin Azure CLI authentication to one tenant when no subscription is selected."/>
                                                         </StackPanel>
                                                     </ui:CardExpander.Header>
                                                     <StackPanel Margin="0,4,0,0">
-                                                        <TextBlock Text="Deployment name" Style="{StaticResource SettingTitle}"/>
-                                                        <ui:TextBox x:Name="AzureDeploymentBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                    VerticalContentAlignment="Center"
-                                                                    PlaceholderText="e.g. gpt-4o"/>
-                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                                   Text="The model picker fills this in after sign-in. Enter the exact Azure deployment name when configuring manually."/>
-
-                                                        <TextBlock Text="API key (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
-                                                        <ui:PasswordBox x:Name="AzureApiKeyBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                        VerticalContentAlignment="Center"
-                                                                        PlaceholderText="Leave blank to use your verified Azure sign-in"/>
-                                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                                   Text="An API key bypasses Azure CLI authentication. It is stored encrypted on this PC with Windows DPAPI."/>
-
                                                         <StackPanel x:Name="AzureCliTenantPanel">
-                                                            <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,14,0,0"/>
+                                                            <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}"/>
                                                             <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                                         VerticalContentAlignment="Center"
                                                                         PlaceholderText="Entra tenant GUID"
                                                                         TextChanged="AzureTenantBox_TextChanged"/>
                                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                                       Text="Pins Azure CLI authentication to one tenant when no subscription is selected. It is ignored when an API key is set."/>
+                                                                       Text="Pins Azure CLI authentication to one tenant when no subscription is selected."/>
                                                         </StackPanel>
                                                     </StackPanel>
                                                 </ui:CardExpander>
@@ -1980,6 +1990,11 @@
                                         <TextBlock Text="Where your data is stored" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
                                                    Text="Scribe keeps its local data files in these locations. Copy a path to paste it elsewhere, or open the folder."/>
+                                        <TextBlock x:Name="AboutDataPathWarning" Style="{StaticResource SettingHint}"
+                                                   Margin="0,8,0,0"
+                                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Visibility="Collapsed"/>
 
                                         <TextBlock Text="Diagnostic logs" Style="{StaticResource SettingTitle}"
                                                    FontSize="13" Margin="0,16,0,0"/>

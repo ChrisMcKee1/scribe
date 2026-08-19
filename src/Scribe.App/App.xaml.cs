@@ -1,10 +1,11 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32;
 using Scribe.App.Dictation;
 using Scribe.App.Infrastructure;
 using Scribe.App.Overlay;
@@ -20,6 +21,7 @@ using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
+using Wpf.Ui.Appearance;
 
 namespace Scribe.App;
 
@@ -49,6 +51,7 @@ public partial class App : Application
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
     private UpdateService? _updates;
+    private ILogger? _appLog;
     private int _learningFromHistory;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -78,11 +81,21 @@ public partial class App : Application
         // Tray app: never exit just because a window closed; quit happens explicitly from the tray.
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
-        var paths = new AppPaths();
-        paths.EnsureCreated();
+        AppPaths paths;
+        try
+        {
+            paths = AppPaths.CreateForStartup();
+        }
+        catch (Exception ex)
+        {
+            ShowFatalDataPathNotice(ex);
+            Shutdown();
+            return;
+        }
 
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddScribeCore();
+        builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
@@ -95,7 +108,30 @@ public partial class App : Application
 
         var services = _host.Services;
         var log = services.GetRequiredService<ILogger<App>>();
+        _appLog = log;
         WireGlobalExceptionLogging(log);
+        InitializeApplicationTheme(log);
+        if (paths.IsFallbackRoot)
+        {
+            log.LogWarning(
+                "Scribe could not create the preferred data folder {PreferredRootDir}; using fallback data folder {RootDir}. {Failure}",
+                paths.PreferredRootDir,
+                paths.RootDir,
+                paths.CreationFailureMessage);
+            ShowDataPathFallbackNotice(paths);
+        }
+        else if (paths.OrphanedFallbackRootDir is { } orphaned)
+        {
+            // An earlier session fell back, wrote data there, and this one recovered. Saying so is
+            // the difference between a user recovering that history and silently running with two
+            // divergent copies. Log only: the data in use is correct, so a modal on every launch
+            // would be noise, and Settings > About shows both paths.
+            log.LogWarning(
+                "An earlier session stored data in the fallback folder {OrphanedRootDir} because {RootDir} was unavailable. " +
+                "That data is not in use now. Copy scribe.db across if you need its history.",
+                orphaned,
+                paths.RootDir);
+        }
 
         // Azure CLI may have been installed or updated after this tray process inherited its PATH.
         // Prepare it before DictationController.Start configures cloud cleanup in the background.
@@ -290,6 +326,45 @@ public partial class App : Application
 
     private static bool HasSettingsSwitch(IEnumerable<string> args) =>
         args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
+
+    private static void ShowFatalDataPathNotice(Exception exception)
+    {
+        try
+        {
+            MessageBox.Show(
+                "Scribe could not create a writable data folder and must close.\n\n" +
+                $"{exception.Message}\n\n" +
+                "Check disk space, folder permissions, antivirus rules, and whether a file is blocking the ScribeData folder.",
+                "Scribe data folder problem",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch
+        {
+            // If Windows cannot show the dialog, there is no safe startup path left.
+        }
+    }
+
+    private static void ShowDataPathFallbackNotice(AppPaths paths)
+    {
+        try
+        {
+            MessageBox.Show(
+                "Scribe could not use its usual data folder:\n" +
+                $"{paths.PreferredRootDir}\n\n" +
+                $"{paths.CreationFailureMessage}\n\n" +
+                "Scribe is running with temporary data and logs here:\n" +
+                $"{paths.RootDir}\n\n" +
+                "Open Settings, About to copy the active log and data paths. Check disk space, folder permissions, antivirus rules, and whether a file is blocking the ScribeData folder.",
+                "Scribe is using a fallback data folder",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch
+        {
+            // A failure showing the warning must not undo the fallback startup.
+        }
+    }
 
     /// <summary>
     /// Raises the cross-process signal that asks the running instance to show Settings. Returns
@@ -867,6 +942,100 @@ public partial class App : Application
         }
     }
 
+
+    private void InitializeApplicationTheme(ILogger log)
+    {
+        ApplyCurrentWindowsTheme(log, "startup");
+
+        try
+        {
+            SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Unable to subscribe to Windows theme changes.");
+        }
+    }
+
+    private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category != UserPreferenceCategory.General)
+        {
+            return;
+        }
+
+        try
+        {
+            Dispatcher.BeginInvoke(() => ApplyCurrentWindowsTheme(_appLog, "user preference changed"));
+        }
+        catch (Exception ex)
+        {
+            _appLog?.LogWarning(ex, "Unable to queue Windows theme refresh.");
+        }
+    }
+
+    private static void ApplyCurrentWindowsTheme(ILogger? log, string reason)
+    {
+        var (theme, registryValue, readRegistry) = ReadWindowsAppTheme();
+
+        try
+        {
+            ApplicationThemeManager.Apply(theme, updateAccent: true);
+            var applied = ApplicationThemeManager.GetAppTheme();
+            log?.LogInformation(
+                "Applied Windows theme: {Theme} (AppsUseLightTheme={RegistryValue}, source={Source}, registryRead={RegistryRead}).",
+                applied,
+                registryValue?.ToString() ?? "unavailable",
+                reason,
+                readRegistry);
+        }
+        catch (Exception ex)
+        {
+            log?.LogWarning(ex, "Unable to apply the Windows theme; keeping the current app resources.");
+        }
+    }
+
+    private static (ApplicationTheme Theme, int? RegistryValue, bool ReadRegistry) ReadWindowsAppTheme()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            var value = key?.GetValue("AppsUseLightTheme");
+            if (value is int intValue)
+            {
+                return (intValue == 0 ? ApplicationTheme.Dark : ApplicationTheme.Light, intValue, true);
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            var systemTheme = ApplicationThemeManager.GetSystemTheme();
+            if (systemTheme == SystemTheme.Light)
+            {
+                return (ApplicationTheme.Light, null, false);
+            }
+
+            if (systemTheme == SystemTheme.Dark)
+            {
+                return (ApplicationTheme.Dark, null, false);
+            }
+        }
+        catch
+        {
+        }
+
+        return (ApplicationTheme.Dark, null, false);
+    }
+
+    private void DisposeThemeWatcher()
+    {
+        try { SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged; } catch { }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         try
@@ -877,6 +1046,7 @@ public partial class App : Application
             _overlay?.CloseOverlay();
             _controller?.Dispose();
             _tray?.Dispose();
+            DisposeThemeWatcher();
 
             if (_host is not null)
             {

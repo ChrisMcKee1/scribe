@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Sets up a Microsoft Foundry resource, project and chat model deployment for Scribe's AI cleanup.
+    Sets up a Microsoft Foundry resource, companion project and chat model deployment for Scribe's AI cleanup.
 
 .DESCRIPTION
     Run it with no arguments and answer the prompts. It signs you in, lets you pick the Azure
@@ -9,7 +9,7 @@
 
       - a resource group
       - a Microsoft Foundry resource (kind AIServices, project management enabled, custom subdomain)
-      - a Foundry project
+      - a companion Foundry project for the portal and Entra endpoint shape
       - a chat model deployment
       - a dedicated Entra identity (service principal) for Scribe, with the Foundry User role
 
@@ -26,8 +26,8 @@
     back to az login sign-in so you still end up with a working setup.
 
     This deliberately creates a FOUNDRY resource, not a classic "Azure AI services" resource. They
-    look similar in the portal and are not interchangeable: only the Foundry shape gives you the
-    project endpoint and the Foundry role model that Scribe expects.
+    look similar in the portal and are not interchangeable: the Foundry shape gives you the
+    supported role model and the optional project endpoint used by the portal.
 
 .PARAMETER SubscriptionId
     Skip the subscription picker and use this subscription.
@@ -46,7 +46,8 @@
     Foundry project name. Defaults to scribe.
 
 .PARAMETER Model
-    Model to deploy. Defaults to gpt-5.6-terra.
+    Model to deploy. When omitted, tries gpt-5.6-terra, then gpt-5-mini, then gpt-5-nano, and takes
+    the first with quota available. Naming one explicitly disables the fallback.
 
 .PARAMETER ModelVersion
     Pin a specific model version. Defaults to the newest version the region offers.
@@ -60,17 +61,27 @@
     actually have left. Standard deployments bill per token, so a larger number costs nothing
     extra, it just raises the ceiling before you get throttled.
 
+.PARAMETER UseServicePrincipal
+    Create a dedicated Entra identity instead of using an API key. Needs permission to register an
+    application in your tenant. Worth choosing when policy forbids key authentication, or when you
+    want the access scoped by a role rather than by a key.
+
 .PARAMETER ServicePrincipalName
     Name for the Entra app registration. Defaults to Scribe-AI-Cleanup-<your alias>. Reused if it
     already exists, so re-running the script does not litter your tenant with duplicates.
+    Only used with -UseServicePrincipal.
 
 .PARAMETER SecretYears
     How long the client secret lasts before it expires. Defaults to 1. Microsoft recommends under
-    2, and the maximum Entra allows is 2.
+    2, and the maximum Entra allows is 2. Only used with -UseServicePrincipal.
 
-.PARAMETER SkipServicePrincipal
-    Do not create a dedicated identity. Scribe will sign in with your az login instead. Only choose
-    this if you are certain you only ever sign in to one tenant.
+.PARAMETER NonInteractive
+    Never prompt. Any answer that was not supplied as a parameter stops the run with a message
+    naming the parameter to pass. Detected automatically when there is no console to prompt on, so
+    an AI assistant or a CI job does not have to set it.
+
+.PARAMETER Yes
+    Skip the confirmation before anything is created.
 
 .PARAMETER WhatIf
     Print every step and every Azure command without changing anything.
@@ -87,19 +98,19 @@
 
 .EXAMPLE
     $s = irm https://raw.githubusercontent.com/ChrisMcKee1/scribe/main/scripts/Setup-ScribeFoundry.ps1
-    & ([scriptblock]::Create($s)) -Location eastus2 -Model gpt-5.4
+    & ([scriptblock]::Create($s)) -Location eastus2
 
     Piping into iex cannot pass parameters, so build a scriptblock when you need them.
 
 .EXAMPLE
-    .\Setup-ScribeFoundry.ps1 -Location eastus2 -Model gpt-5.4
+    .\Setup-ScribeFoundry.ps1 -SubscriptionId <id> -Location eastus2 -Yes
 
-    Skip the region picker and deploy a different model.
+    Unattended. Everything answered up front, so nothing prompts.
 
 .EXAMPLE
-    .\Setup-ScribeFoundry.ps1 -SkipServicePrincipal
+    .\Setup-ScribeFoundry.ps1 -UseServicePrincipal
 
-    Use your az login instead of a dedicated identity.
+    Use a dedicated Entra identity instead of an API key.
 
 .LINK
     https://github.com/ChrisMcKee1/scribe/blob/main/docs/foundry-setup.md
@@ -111,16 +122,18 @@ param(
     [string]$ResourceGroup = 'rg-scribe-ai',
     [string]$ResourceName,
     [string]$ProjectName = 'scribe',
-    [string]$Model = 'gpt-5.6-terra',
+    [string]$Model,
     [string]$ModelVersion,
     [ValidateSet('DataZoneStandard', 'GlobalStandard', 'Standard')]
     [string]$Sku = 'DataZoneStandard',
     [ValidateRange(1, 5000)]
     [int]$Capacity = 100,
+    [switch]$UseServicePrincipal,
     [string]$ServicePrincipalName,
     [ValidateRange(1, 2)]
     [int]$SecretYears = 1,
-    [switch]$SkipServicePrincipal
+    [switch]$NonInteractive,
+    [switch]$Yes
 )
 
 # Everything below runs inside a scriptblock on purpose, so that this script is safe to pipe
@@ -142,6 +155,33 @@ param(
     # Where this script lives, so the error paths can show a re-run command that works for the people
     # who got here through "irm ... | iex" and have no local copy to invoke.
     $ScriptUrl = 'https://raw.githubusercontent.com/ChrisMcKee1/scribe/main/scripts/Setup-ScribeFoundry.ps1'
+
+    # Tried in order until one has quota in a reachable region. Ordered by cleanup quality, not by
+    # quota: measured remaining quota decides the winner, because assuming a smaller model has more
+    # headroom is wrong. At the entry quota tier gpt-5-mini carries the SAME global standard limit as
+    # gpt-5.6-terra, and only gpt-5-nano is meaningfully higher.
+    $ModelFallbackChain = @('gpt-5.6-terra', 'gpt-5-mini', 'gpt-5-nano')
+
+    # An AI agent or a CI job has no console to answer a prompt. Blocking on Read-Host there looks
+    # like a hang, which is exactly how this script stranded its first agent-driven run.
+    $Interactive = -not $NonInteractive -and
+                   -not [System.Console]::IsInputRedirected -and
+                   [Environment]::UserInteractive
+
+    # Raised whenever a prompt is unavoidable but nobody can answer it, so the caller gets an
+    # actionable message naming the parameter to pass instead of an unexplained stall.
+    function Stop-NeedsInput {
+        param([string]$What, [string]$Parameter)
+        Write-Fail "This step needs an answer for $What, but nothing can respond."
+        Write-Host ''
+        Write-Host '  Re-run with the value supplied up front:' -ForegroundColor Gray
+        Write-Host "    $Parameter" -ForegroundColor White
+        Write-Host ''
+        Write-Host '  Every prompt in this script has a matching parameter, so it can run start to' -ForegroundColor Gray
+        Write-Host '  finish unattended. Run Get-Help against the script for the full list.' -ForegroundColor Gray
+        Write-Host ''
+        throw "Input required for $What in a non-interactive session."
+    }
 
     # Minimum az version that understands --allow-project-management, which is what makes the resource
     # a Foundry resource rather than a classic Azure AI services account.
@@ -273,7 +313,8 @@ param(
             [Parameter(Mandatory = $true)][string]$Prompt,
             [Parameter(Mandatory = $true)][array]$Items,
             [Parameter(Mandatory = $true)][scriptblock]$Label,
-            [int]$DefaultIndex = 0
+            [int]$DefaultIndex = 0,
+            [string]$NonInteractiveParameter
         )
 
         if ($Items.Count -eq 1) {
@@ -289,6 +330,16 @@ param(
         }
         Write-Host ''
 
+        # Listing the options above before bailing is deliberate: an agent that cannot answer can at
+        # least show the human what the choices were, instead of failing with nothing to act on.
+        if (-not $Interactive) {
+            if ($NonInteractiveParameter) {
+                Stop-NeedsInput -What $Prompt -Parameter $NonInteractiveParameter
+            }
+            Write-Detail 'Not interactive, taking the marked default.'
+            return $Items[$DefaultIndex]
+        }
+
         while ($true) {
             $answer = Read-Host "$Prompt [Enter for $($DefaultIndex + 1)]"
             if ([string]::IsNullOrWhiteSpace($answer)) { return $Items[$DefaultIndex] }
@@ -303,6 +354,13 @@ param(
 
     function Confirm-Yes {
         param([string]$Prompt, [bool]$DefaultYes = $true)
+        if ($Yes) { return $true }
+        if (-not $Interactive) {
+            # Creating billable Azure resources is not something to assume consent for. An automated
+            # caller says so explicitly with -Yes; anything else stops here rather than provisioning
+            # on someone's subscription because nobody was present to object.
+            Stop-NeedsInput -What $Prompt -Parameter '-Yes'
+        }
         $suffix = if ($DefaultYes) { '[Y/n]' } else { '[y/N]' }
         while ($true) {
             $answer = (Read-Host "$Prompt $suffix").Trim()
@@ -396,7 +454,7 @@ param(
 
     Write-Host ''
     Write-Host '  Scribe: Microsoft Foundry setup' -ForegroundColor White
-    Write-Host '  Creates a Foundry resource, project and model deployment for AI cleanup.' -ForegroundColor DarkGray
+    Write-Host '  Creates a Foundry resource, companion project and model deployment for AI cleanup.' -ForegroundColor DarkGray
     if ($WhatIfPreference) {
         Write-Host '  Running in -WhatIf mode. Nothing will be created.' -ForegroundColor Magenta
     }
@@ -435,6 +493,12 @@ param(
 
     $account = Invoke-Az -AsJson -AllowFailure -AlwaysRun -Arguments @('account', 'show', '-o', 'json')
     if (-not $account) {
+        # az login opens a browser and blocks. With nobody to complete it that reads as a hang, which
+        # is exactly how this script stranded its first agent-driven run, so say what to do instead.
+        if (-not $Interactive) {
+            Stop-NeedsInput -What 'an Azure sign-in (run az login first)' -Parameter 'az login'
+        }
+
         Write-Detail 'No active session. A browser window will open, sign in with your work account.'
         Invoke-Az -AlwaysRun -Arguments @('login', '--only-show-errors', '-o', 'none') | Out-Null
         $account = Invoke-Az -AsJson -AlwaysRun -Arguments @('account', 'show', '-o', 'json')
@@ -468,7 +532,28 @@ param(
     if ($SubscriptionId) {
         $chosenSubscription = $subscriptions | Where-Object { $_.id -eq $SubscriptionId } | Select-Object -First 1
         if (-not $chosenSubscription) {
-            throw "Subscription '$SubscriptionId' was not found on this account. Run 'az account list --all -o table' to see what you have."
+            # Naming BOTH sides matters. The common case is someone whose Azure credits live on a
+            # personal account while az login landed on their work account, and a message that only
+            # says "not found" sends them hunting for a typo in the subscription id instead.
+            Write-Fail "Subscription $SubscriptionId is not available to the signed-in account."
+            Write-Host ''
+            Write-Host ("  Signed in as:  {0}" -f $account.user.name) -ForegroundColor White
+            Write-Host ("  Looking for:   {0}" -f $SubscriptionId) -ForegroundColor White
+            Write-Host ''
+            Write-Host '  That subscription almost certainly belongs to a different account. Azure credits' -ForegroundColor Gray
+            Write-Host '  from a personal Visual Studio subscription often sit on a personal account while' -ForegroundColor Gray
+            Write-Host '  az login lands on a work account, or the other way round.' -ForegroundColor Gray
+            Write-Host ''
+            Write-Host '  Subscriptions this account CAN see:' -ForegroundColor Gray
+            foreach ($s in $subscriptions) {
+                Write-Host ("    {0}  {1}" -f $s.id, $s.name) -ForegroundColor DarkGray
+            }
+            Write-Host ''
+            Write-Host '  To switch accounts:' -ForegroundColor Gray
+            Write-Host '    az logout' -ForegroundColor White
+            Write-Host '    az login' -ForegroundColor White
+            Write-Host ''
+            throw "Subscription $SubscriptionId is not visible to $($account.user.name)."
         }
     }
     else {
@@ -477,7 +562,7 @@ param(
             Expression = { if ($_.name -match 'visual studio|vs enterprise|vs professional|msdn') { 0 } else { 1 } }
         }, 'name')
 
-        $chosenSubscription = Read-Choice -Prompt 'Which subscription should hold the Foundry resource?' -Items $ranked -Label {
+        $chosenSubscription = Read-Choice -Prompt 'Which subscription should hold the Foundry resource?' -Items $ranked -NonInteractiveParameter '-SubscriptionId <id>' -Label {
             param($s)
             $hint = if ($s.name -match 'visual studio|msdn') { '  (Visual Studio credits)' } else { '' }
             "{0}{1}`n         {2}" -f $s.name, $hint, $s.id
@@ -488,6 +573,18 @@ param(
     Write-Good ("Using {0}" -f $chosenSubscription.name)
     Write-Detail ("Subscription {0}" -f $chosenSubscription.id)
     Write-Detail ("Tenant       {0}" -f $chosenSubscription.tenantId)
+
+    # Say this now rather than letting the user discover it when a deployment is refused. Credit
+    # subscriptions get real but modest quota, which is plenty for dictation, and quota increase
+    # requests on them are usually turned down because there is no enterprise agreement behind them.
+    $isCreditSubscription = $chosenSubscription.name -match 'visual studio|vs enterprise|vs professional|msdn|dev/test|azure pass'
+    if ($isCreditSubscription) {
+        Write-Host ''
+        Write-Detail 'This looks like a Visual Studio credit subscription. That is the ideal setup for'
+        Write-Detail 'Scribe: cleanup costs a fraction of a cent per dictation, and Azure stops rather'
+        Write-Detail 'than bills you if the monthly credit ever ran out.'
+        Write-Detail 'Model quota on these is modest but far more than Scribe needs.'
+    }
 
     # --------------------------------------------------------------------------------------------
     Write-Step 'Making sure the subscription can create Foundry resources'
@@ -505,73 +602,128 @@ param(
     }
 
     # --------------------------------------------------------------------------------------------
-    Write-Step 'Finding the best region for you'
+    Write-Step 'Choosing a model and region'
+
+    # An explicit -Model means the caller knows what they want, so honour it and do not silently
+    # substitute something else. Otherwise walk the chain until one has quota somewhere reachable.
+    $modelsToTry = if ($Model) { @($Model) } else { $ModelFallbackChain }
 
     if ($Location) {
         $chosenRegion = $Location
         Write-Detail "Region supplied on the command line: $chosenRegion"
 
-        $offer = Get-ModelOffer -Region $chosenRegion -ModelName $Model -SkuName $Sku
-        if (-not $offer -and $Sku -eq 'DataZoneStandard') {
-            Write-Warn "$Model has no $Sku offer in $chosenRegion. Falling back to GlobalStandard."
-            $Sku = 'GlobalStandard'
-            $offer = Get-ModelOffer -Region $chosenRegion -ModelName $Model -SkuName $Sku
+        $chosenOffer = $null
+        foreach ($candidate in $modelsToTry) {
+            foreach ($trySku in @($Sku, 'GlobalStandard' | Select-Object -Unique)) {
+                $offer = Get-ModelOffer -Region $chosenRegion -ModelName $candidate -SkuName $trySku
+                if (-not $offer) { continue }
+                $quota = Get-RemainingQuota -Region $chosenRegion -ModelName $candidate -SkuName $trySku
+                if ($null -ne $quota -and $quota -le 0) { continue }
+                $chosenOffer = $offer
+                $Sku = $trySku
+                $Model = $candidate
+                $remainingQuota = $quota
+                break
+            }
+            if ($chosenOffer) { break }
         }
-        if (-not $offer) {
-            throw "$Model is not available as $Sku in $chosenRegion. Pick another region, or run without -Location to be shown the ones that work."
+
+        if (-not $chosenOffer) {
+            Write-Fail "No model from the list is available with quota in $chosenRegion."
+            Write-Host ''
+            Write-Host ("  Tried: {0}" -f ($modelsToTry -join ', ')) -ForegroundColor Gray
+            Write-Host '  Run without -Location to be shown every region that does work.' -ForegroundColor Gray
+            Write-Host ''
+            return
         }
-        $chosenOffer = $offer
-        $remainingQuota = Get-RemainingQuota -Region $chosenRegion -ModelName $Model -SkuName $Sku
+        Write-Good ("Using {0} in {1}." -f $chosenOffer.Name, $chosenRegion)
     }
     else {
-        Write-Detail "Timing $($CandidateRegions.Count) regions from this machine and checking $Model quota in each."
+        # Latency is measured once and reused across every model, because the TCP probe is the slow
+        # part and the answer does not change per model.
+        Write-Detail "Timing $($CandidateRegions.Count) regions from this machine."
         Write-Detail 'This takes about a minute. Lower milliseconds means less delay on every dictation.'
-        Write-Host ''
 
-        $results = New-Object System.Collections.Generic.List[object]
+        $reachable = New-Object System.Collections.Generic.List[object]
         $index = 0
         foreach ($region in $CandidateRegions) {
             $index++
-            Write-Progress -Activity 'Checking regions' -Status $region.Display -PercentComplete (($index / $CandidateRegions.Count) * 100)
-
+            Write-Progress -Activity 'Timing regions' -Status $region.Display -PercentComplete (($index / $CandidateRegions.Count) * 100)
             $latency = Measure-RegionLatency -Region $region.Name
             if ($null -eq $latency) { continue }
-
-            $effectiveSku = $Sku
-            $offer = Get-ModelOffer -Region $region.Name -ModelName $Model -SkuName $effectiveSku
-            if (-not $offer -and $Sku -eq 'DataZoneStandard') {
-                $effectiveSku = 'GlobalStandard'
-                $offer = Get-ModelOffer -Region $region.Name -ModelName $Model -SkuName $effectiveSku
-            }
-            if (-not $offer) { continue }
-
-            $quota = Get-RemainingQuota -Region $region.Name -ModelName $Model -SkuName $effectiveSku
-            if ($null -ne $quota -and $quota -le 0) { continue }
-
-            $results.Add([pscustomobject]@{
-                Name      = $region.Name
-                Display   = $region.Display
-                LatencyMs = $latency
-                Sku       = $effectiveSku
-                Quota     = $quota
-                Offer     = $offer
-            })
+            $reachable.Add([pscustomobject]@{ Name = $region.Name; Display = $region.Display; LatencyMs = $latency })
         }
-        Write-Progress -Activity 'Checking regions' -Completed
+        Write-Progress -Activity 'Timing regions' -Completed
+
+        if ($reachable.Count -eq 0) {
+            Write-Fail 'Could not reach any Azure region from this machine.'
+            Write-Host ''
+            Write-Host '  Check your network connection, then run this again.' -ForegroundColor Gray
+            Write-Host ''
+            return
+        }
+
+        $results = @()
+        $triedModels = @()
+        foreach ($candidate in $modelsToTry) {
+            $triedModels += $candidate
+            Write-Host ''
+            Write-Detail "Checking $candidate quota across $($reachable.Count) reachable regions."
+
+            $found = New-Object System.Collections.Generic.List[object]
+            foreach ($region in ($reachable | Sort-Object LatencyMs)) {
+                $effectiveSku = $Sku
+                $offer = Get-ModelOffer -Region $region.Name -ModelName $candidate -SkuName $effectiveSku
+                if (-not $offer -and $Sku -eq 'DataZoneStandard') {
+                    $effectiveSku = 'GlobalStandard'
+                    $offer = Get-ModelOffer -Region $region.Name -ModelName $candidate -SkuName $effectiveSku
+                }
+                if (-not $offer) { continue }
+
+                $quota = Get-RemainingQuota -Region $region.Name -ModelName $candidate -SkuName $effectiveSku
+                if ($null -ne $quota -and $quota -le 0) { continue }
+
+                $found.Add([pscustomobject]@{
+                    Name      = $region.Name
+                    Display   = $region.Display
+                    LatencyMs = $region.LatencyMs
+                    Sku       = $effectiveSku
+                    Quota     = $quota
+                    Offer     = $offer
+                })
+            }
+
+            if ($found.Count -gt 0) {
+                $results = @($found)
+                $Model = $candidate
+                if ($triedModels.Count -gt 1) {
+                    Write-Warn ("No quota for {0}, falling back to {1}." -f (($triedModels | Select-Object -SkipLast 1) -join ', '), $candidate)
+                }
+                break
+            }
+        }
 
         if ($results.Count -eq 0) {
-            Write-Fail "Could not find any region offering $Model with quota available on this subscription."
+            Write-Fail 'No model in the list has quota available on this subscription.'
             Write-Host ''
-            Write-Host '  Try a different model. Because this script is usually run by piping it into' -ForegroundColor Gray
-            Write-Host '  iex, which cannot take options, pass them like this:' -ForegroundColor Gray
+            Write-Host ("  Tried: {0}" -f ($triedModels -join ', ')) -ForegroundColor Gray
+            Write-Host ''
+            Write-Host '  Request more quota at https://aka.ms/oai/stuquotarequest' -ForegroundColor Gray
+            if ($isCreditSubscription) {
+                Write-Host '  Note: increases on Visual Studio credit subscriptions are frequently declined,' -ForegroundColor Gray
+                Write-Host '  because approval favours accounts with an enterprise agreement. Foundry Local' -ForegroundColor Gray
+                Write-Host '  runs cleanup entirely on this machine with no quota and no account at all.' -ForegroundColor Gray
+            }
+            Write-Host ''
+            Write-Host '  To try a specific model instead:' -ForegroundColor Gray
             Write-Host "    `$s = irm $ScriptUrl" -ForegroundColor White
-            Write-Host '    & ([scriptblock]::Create($s)) -Model gpt-5.4' -ForegroundColor White
+            Write-Host '    & ([scriptblock]::Create($s)) -Model gpt-5-nano' -ForegroundColor White
             Write-Host ''
             return
         }
 
         $ordered = @($results | Sort-Object LatencyMs)
-        $selection = Read-Choice -Prompt 'Which region?' -Items $ordered -Label {
+        $selection = Read-Choice -Prompt 'Which region?' -Items $ordered -NonInteractiveParameter '-Location <region>' -Label {
             param($r)
             $quotaText = if ($null -ne $r.Quota) { "{0}K tokens/min available" -f $r.Quota } else { 'quota unknown' }
             "{0,-28} {1,4} ms   {2,-16} {3}" -f $r.Display, $r.LatencyMs, $r.Sku, $quotaText
@@ -581,7 +733,7 @@ param(
         $chosenOffer = $selection.Offer
         $Sku = $selection.Sku
         $remainingQuota = $selection.Quota
-        Write-Good ("Using {0} at {1} ms" -f $selection.Display, $selection.LatencyMs)
+        Write-Good ("Using {0} in {1} at {2} ms" -f $chosenOffer.Name, $selection.Display, $selection.LatencyMs)
     }
 
     if ($ModelVersion) { $chosenOffer.Version = $ModelVersion }
@@ -636,7 +788,7 @@ param(
     Write-Step 'Creating the Microsoft Foundry resource'
 
     Write-Detail 'kind=AIServices with project management on. This is what makes it Foundry rather than'
-    Write-Detail 'a classic Azure AI services account, which cannot host a project endpoint.'
+    Write-Detail 'a classic Azure AI services account. The project is useful, but cleanup calls the account.'
 
     # Discarded on purpose: the create call is the point, and binding it to $account would clobber the
     # signed-in account object that earlier steps still describe.
@@ -656,7 +808,7 @@ param(
     Write-Created "Foundry resource $ResourceName is ready."
 
     # --------------------------------------------------------------------------------------------
-    Write-Step 'Creating the Foundry project'
+    Write-Step 'Creating the companion Foundry project'
 
     $existingProject = Invoke-Az -AsJson -AllowFailure -AlwaysRun -Arguments @(
         'cognitiveservices', 'account', 'project', 'show',
@@ -676,6 +828,9 @@ param(
         ) | Out-Null
         Write-Created "Created project $ProjectName."
     }
+
+    Write-Detail 'Scribe can call the account endpoint without a project. The project costs nothing and'
+    Write-Detail 'keeps the setup aligned with the Foundry portal and Entra endpoint shape.'
 
     # --------------------------------------------------------------------------------------------
     Write-Step 'Deploying the model'
@@ -701,10 +856,31 @@ param(
     # --------------------------------------------------------------------------------------------
     $projectEndpoint = "https://$ResourceName.services.ai.azure.com/api/projects/$ProjectName"
     $servicePrincipal = $null
+    $apiKey = $null
 
-    if ($SkipServicePrincipal) {
-        Write-Step 'Skipping the dedicated identity'
-        Write-Detail 'Scribe will use your az login. Set sign-in method to Azure CLI in Scribe.'
+    if (-not $UseServicePrincipal) {
+        # API key is the default because it is the shortest path to a working setup and needs no
+        # directory permissions at all. Creating an app registration requires rights that plenty of
+        # corporate tenants withhold, and on a personal credit subscription it is pure ceremony: the
+        # key is scoped to this one resource either way.
+        Write-Step 'Reading the API key'
+
+        Write-Detail 'Scribe will authenticate with a key belonging to this resource. No app'
+        Write-Detail 'registration, no tenant permissions, and nothing to expire in a year.'
+
+        $keys = Invoke-Az -AsJson -AllowFailure -Arguments @(
+            'cognitiveservices', 'account', 'keys', 'list',
+            '--name', $ResourceName, '--resource-group', $ResourceGroup, '-o', 'json'
+        ) -WhatIfResult '{"key1":"<key>","key2":"<key>"}'
+
+        if ($keys -and (Test-HasValue $keys 'key1')) {
+            $apiKey = $keys.key1
+            Write-Created 'Got the key.'
+        }
+        else {
+            Write-Warn 'Could not read the resource keys. You can copy one later from the Azure portal,'
+            Write-Warn 'under the resource, Resource Management, Keys and Endpoint.'
+        }
     }
     else {
         Write-Step 'Creating a dedicated identity for Scribe'
@@ -758,12 +934,23 @@ param(
             Write-Warn 'Could not create the identity. The usual cause is that your tenant does not let'
             Write-Warn 'you register applications.'
             Write-Host ''
-            Write-Host '     Ask your Entra administrator for the Application Developer role, then re-run:' -ForegroundColor Gray
+            Write-Host '     Ask your Entra administrator for the Application Developer role, then re-run' -ForegroundColor Gray
+            Write-Host '     with -UseServicePrincipal to try again:' -ForegroundColor Gray
             Write-Host "       `$s = irm $ScriptUrl" -ForegroundColor White
-            Write-Host ("       & ([scriptblock]::Create(`$s)) -ResourceName {0} -ResourceGroup {1} -Location {2}" -f $ResourceName, $ResourceGroup, $chosenRegion) -ForegroundColor White
+            Write-Host ("       & ([scriptblock]::Create(`$s)) -ResourceName {0} -ResourceGroup {1} -Location {2} -UseServicePrincipal" -f $ResourceName, $ResourceGroup, $chosenRegion) -ForegroundColor White
             Write-Host ''
-            Write-Warn 'Carrying on without it. Scribe will use your az login instead, which works fine'
-            Write-Warn 'as long as az login stays pointed at this tenant.'
+            # Falling through to the API key keeps the run useful instead of abandoning a resource
+            # that is already built. Reading the key here matters: the summary below reports whatever
+            # credential actually exists, so a failed identity can never print as a finished setup.
+            Write-Warn 'Falling back to an API key so this run still leaves you with a working setup.'
+            $keys = Invoke-Az -AsJson -AllowFailure -Arguments @(
+                'cognitiveservices', 'account', 'keys', 'list',
+                '--name', $ResourceName, '--resource-group', $ResourceGroup, '-o', 'json'
+            ) -WhatIfResult '{"key1":"<key>","key2":"<key>"}'
+            if ($keys -and (Test-HasValue $keys 'key1')) {
+                $apiKey = $keys.key1
+                Write-Created 'Got the key.'
+            }
         }
         else {
             Write-Created "Identity $ServicePrincipalName is ready."
@@ -831,12 +1018,17 @@ param(
         Write-Host '  ------------------------------------------------------------------' -ForegroundColor DarkGray
         Write-Host ''
         Write-Host '  A real run would give you:' -ForegroundColor Gray
-        Write-Host "    Endpoint         $projectEndpoint" -ForegroundColor Gray
+        Write-Host ("    Endpoint         {0}" -f $(if ($UseServicePrincipal) { $projectEndpoint } else { "https://$ResourceName.services.ai.azure.com/" })) -ForegroundColor Gray
         Write-Host "    Deployment name  $deploymentName" -ForegroundColor Gray
         Write-Host ''
-        if (-not $SkipServicePrincipal) {
+        if ($UseServicePrincipal) {
             Write-Host '  The tenant ID, client ID and client secret only exist once the identity is really' -ForegroundColor Gray
             Write-Host '  created, so there is nothing genuine to show for them here.' -ForegroundColor Gray
+            Write-Host ''
+        }
+        else {
+            Write-Host '  The API key only exists once the resource is really created, so there is nothing' -ForegroundColor Gray
+            Write-Host '  genuine to show for it here.' -ForegroundColor Gray
             Write-Host ''
         }
         Write-Host '  Run the same command without -WhatIf to create it all for real.' -ForegroundColor Gray
@@ -844,13 +1036,19 @@ param(
         return
     }
 
+    # A key authenticates against the resource rather than the project, and Scribe rewrites a project
+    # URL down to the account host when a key is set. Showing the address that will actually be used
+    # avoids handing someone a URL that silently is not the one in play.
+    $accountEndpoint = "https://$ResourceName.services.ai.azure.com/"
+    $endpointForScribe = if ($servicePrincipal) { $projectEndpoint } else { $accountEndpoint }
+
     Write-Host ''
     Write-Host '  ------------------------------------------------------------------' -ForegroundColor DarkGray
     Write-Host '  Done. Paste these into Scribe: Settings > AI cleanup > Microsoft Foundry' -ForegroundColor White
     Write-Host '  ------------------------------------------------------------------' -ForegroundColor DarkGray
     Write-Host ''
     Write-Host '  Endpoint         ' -NoNewline -ForegroundColor Gray
-    Write-Host $projectEndpoint -ForegroundColor Green
+    Write-Host $endpointForScribe -ForegroundColor Green
     Write-Host '  Deployment name  ' -NoNewline -ForegroundColor Gray
     Write-Host $deploymentName -ForegroundColor Green
 
@@ -887,14 +1085,32 @@ param(
     else {
         Write-Host ''
         Write-Host '  Sign-in method   ' -NoNewline -ForegroundColor Gray
-        Write-Host 'Azure CLI (you are already signed in, nothing else to do)' -ForegroundColor Green
+        Write-Host 'API key' -ForegroundColor Green
+        if ($apiKey) {
+            Write-Host '  API key          ' -NoNewline -ForegroundColor Gray
+            Write-Host $apiKey -ForegroundColor Green
+            Write-Host ''
+            Write-Host '  That key is a credential. Put it straight into Scribe and do not paste it into' -ForegroundColor Yellow
+            Write-Host '  chat, a ticket, or a file. Scribe encrypts it with Windows DPAPI.' -ForegroundColor Yellow
+            Write-Host '  It does not expire. Rotate it any time with:' -ForegroundColor Yellow
+            Write-Host ("    az cognitiveservices account keys regenerate -n {0} -g {1} --key-name key1" -f $ResourceName, $ResourceGroup) -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host '  API key          ' -NoNewline -ForegroundColor Gray
+            Write-Host 'could not be read, copy it from the portal' -ForegroundColor Yellow
+            Write-Host ''
+            Write-Host ("    az cognitiveservices account keys list -n {0} -g {1}" -f $ResourceName, $ResourceGroup) -ForegroundColor DarkGray
+        }
         Write-Host ''
-        Write-Host '  Keep in mind: az login has one active account. If you sign in to a different tenant' -ForegroundColor Gray
-        Write-Host '  later, cleanup starts failing with AADSTS700016 until you switch back with:' -ForegroundColor Gray
-        Write-Host ("    az account set --subscription {0}" -f $chosenSubscription.id) -ForegroundColor DarkGray
+        Write-Host '  Note on the endpoint: a key authenticates against the resource rather than the' -ForegroundColor Gray
+        Write-Host '  project, so the account address above is the one to use. The deployment is' -ForegroundColor Gray
+        Write-Host '  account-hosted, so the project is not required for cleanup.' -ForegroundColor Gray
+        Write-Host ''
+        Write-Host '  Prefer a dedicated identity instead? Re-run with -UseServicePrincipal. It needs' -ForegroundColor Gray
+        Write-Host '  permission to register an app in your tenant, which not every tenant grants.' -ForegroundColor Gray
     }
 
-    if (Set-ClipboardSafely -Text $projectEndpoint) {
+    if (Set-ClipboardSafely -Text $endpointForScribe) {
         Write-Host ''
         Write-Detail 'The endpoint is on your clipboard.'
     }

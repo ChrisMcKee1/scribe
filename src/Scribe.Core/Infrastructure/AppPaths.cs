@@ -45,7 +45,20 @@ public sealed class AppPaths
         LogsDir = Path.Combine(RootDir, "logs");
         ModelsDir = Path.Combine(RootDir, "models");
         LibrariesDir = Path.Combine(RootDir, "libraries");
-        DatabasePath = Path.Combine(RootDir, "scribe.db");
+        DatabasePath = Path.Combine(RootDir, DatabaseFileName);
+        PreferredRootDir = RootDir;
+    }
+
+    private AppPaths(string rootDir, string? legacyRootDir, string preferredRootDir, string creationFailureMessage)
+    {
+        RootDir = rootDir;
+        LegacyRootDir = legacyRootDir;
+        LogsDir = Path.Combine(RootDir, "logs");
+        ModelsDir = Path.Combine(RootDir, "models");
+        LibrariesDir = Path.Combine(RootDir, "libraries");
+        DatabasePath = Path.Combine(RootDir, DatabaseFileName);
+        PreferredRootDir = preferredRootDir;
+        CreationFailureMessage = creationFailureMessage;
     }
 
     /// <summary>Root writable directory (<c>%LOCALAPPDATA%\ScribeData</c>).</summary>
@@ -70,6 +83,101 @@ public sealed class AppPaths
     /// <summary>Full path to the SQLite database file.</summary>
     public string DatabasePath { get; }
 
+    /// <summary>The root Scribe first tried to use before falling back.</summary>
+    public string PreferredRootDir { get; }
+
+    /// <summary>Startup failure that forced the app onto a fallback root, if any.</summary>
+    public string? CreationFailureMessage { get; }
+
+    /// <summary>Fallback data folder name, used when the preferred root cannot be created.</summary>
+    public const string FallbackAppFolderName = "ScribeData.fallback";
+
+    /// <summary>SQLite database file name, shared by the live path and the migration probes.</summary>
+    public const string DatabaseFileName = "scribe.db";
+
+    /// <summary>True when Scribe is using a fallback data root for this process.</summary>
+    public bool IsFallbackRoot => CreationFailureMessage is not null;
+
+    /// <summary>
+    /// Creates startup paths, falling back to a sibling folder when the preferred root fails.
+    /// </summary>
+    public static AppPaths CreateForStartup(string? rootOverride = null, string? fallbackRootOverride = null)
+    {
+        var preferred = new AppPaths(rootOverride);
+        if (preferred.TryEnsureCreated(out var preferredFailure))
+        {
+            preferred.OrphanedFallbackRootDir = FindOrphanedFallback(rootOverride, fallbackRootOverride);
+            return preferred;
+        }
+
+        // Deliberately NOT under Path.GetTempPath(): that resolves inside %LOCALAPPDATA%\Temp, which
+        // Storage Sense and Disk Cleanup are entitled to empty. A fallback session still writes the
+        // dictation database, the dictionary, and the encrypted API key, so putting them somewhere
+        // Windows may delete would turn a transient folder failure into silent data loss.
+        var fallbackRoot = fallbackRootOverride ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            FallbackAppFolderName);
+        var fallback = new AppPaths(
+            fallbackRoot,
+            legacyRootDir: null,
+            preferred.RootDir,
+            FormatCreationFailure(preferred.RootDir, preferredFailure));
+
+        if (fallback.TryEnsureCreated(out var fallbackFailure))
+        {
+            return fallback;
+        }
+
+        throw new AppPathsCreationException(
+            preferred.RootDir,
+            fallback.RootDir,
+            preferredFailure,
+            fallbackFailure);
+    }
+
+    /// <summary>
+    /// A fallback root left behind by an earlier session that has data in it, when this session is
+    /// running on the preferred root. Non-null means the user has dictation history, dictionary
+    /// entries, or settings stranded in a second location and should be told, rather than quietly
+    /// left with two divergent copies.
+    /// </summary>
+    public string? OrphanedFallbackRootDir { get; private set; }
+
+    /// <summary>
+    /// Looks for a fallback root containing real data. Best effort and non-throwing: this runs
+    /// during startup before logging exists, so a probe failure must never be the thing that stops
+    /// the app from launching.
+    /// </summary>
+    private static string? FindOrphanedFallback(string? rootOverride, string? fallbackRootOverride)
+    {
+        // An explicit root is a self-contained profile (tests, portable installs) and must not be
+        // told about an unrelated fallback belonging to the normal installation.
+        if (rootOverride is not null && fallbackRootOverride is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var fallbackRoot = fallbackRootOverride ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                FallbackAppFolderName);
+
+            if (!Directory.Exists(fallbackRoot))
+            {
+                return null;
+            }
+
+            // The database is the only thing worth recovering; empty directories from a failed
+            // attempt are noise and reporting them would train the user to ignore the warning.
+            return File.Exists(Path.Combine(fallbackRoot, DatabaseFileName)) ? fallbackRoot : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>Creates the writable directories if they do not already exist.</summary>
     public void EnsureCreated()
     {
@@ -79,6 +187,22 @@ public sealed class AppPaths
         if (LegacyRootDir is not null)
         {
             TryMigrateDatabase(LegacyRootDir, RootDir);
+        }
+    }
+
+    /// <summary>Tries to create the writable directories and captures the startup error.</summary>
+    public bool TryEnsureCreated(out Exception? exception)
+    {
+        try
+        {
+            EnsureCreated();
+            exception = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+            return false;
         }
     }
 
@@ -95,13 +219,13 @@ public sealed class AppPaths
             return;
         }
 
-        var newDb = Path.Combine(newRoot, "scribe.db");
+        var newDb = Path.Combine(newRoot, DatabaseFileName);
         if (File.Exists(newDb))
         {
             return;
         }
 
-        var legacyDb = Path.Combine(legacyRoot, "scribe.db");
+        var legacyDb = Path.Combine(legacyRoot, DatabaseFileName);
         if (!File.Exists(legacyDb))
         {
             return;
@@ -158,4 +282,40 @@ public sealed class AppPaths
             // Cleanup is best-effort; the unique staging name cannot block a later retry.
         }
     }
+
+    private static string FormatCreationFailure(string rootDir, Exception? exception)
+    {
+        if (exception is null)
+        {
+            return $"Scribe could not create {rootDir}.";
+        }
+
+        return $"Scribe could not create {rootDir}. {exception.GetType().Name}: {exception.Message}";
+    }
+}
+
+public sealed class AppPathsCreationException : Exception
+{
+    public AppPathsCreationException(
+        string preferredRootDir,
+        string fallbackRootDir,
+        Exception? preferredFailure,
+        Exception? fallbackFailure)
+        : base(
+            $"Scribe could not create its data folder at {preferredRootDir} or fallback folder at {fallbackRootDir}.",
+            fallbackFailure ?? preferredFailure)
+    {
+        PreferredRootDir = preferredRootDir;
+        FallbackRootDir = fallbackRootDir;
+        PreferredFailure = preferredFailure;
+        FallbackFailure = fallbackFailure;
+    }
+
+    public string PreferredRootDir { get; }
+
+    public string FallbackRootDir { get; }
+
+    public Exception? PreferredFailure { get; }
+
+    public Exception? FallbackFailure { get; }
 }

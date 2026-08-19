@@ -26,11 +26,11 @@ internal static class AuxiliaryScenarios
         words: 21430,
         activeDays: 19,
         [
-            new UsageAnalyzer.TermUsage("Kubernetes", 32, 42, Covered: false),
-            new UsageAnalyzer.TermUsage("PostgreSQL", 27, 35, Covered: false),
-            new UsageAnalyzer.TermUsage("Terraform", 19, 24, Covered: false),
-            new UsageAnalyzer.TermUsage("GitHub Actions", 14, 18, Covered: false),
-            new UsageAnalyzer.TermUsage("Azure", 11, 15, Covered: false),
+            new UsageAnalyzer.TermUsage("Kubernetes", 32, 42, Covered: true),
+            new UsageAnalyzer.TermUsage("PostgreSQL", 27, 35, Covered: true),
+            new UsageAnalyzer.TermUsage("Terraform", 19, 24, Covered: true),
+            new UsageAnalyzer.TermUsage("GitHub Actions", 14, 18, Covered: true),
+            new UsageAnalyzer.TermUsage("Azure", 11, 15, Covered: true),
         ]);
 
     private static readonly string ClinicalSummary = BuildUsageSummary(
@@ -38,10 +38,10 @@ internal static class AuxiliaryScenarios
         words: 9840,
         activeDays: 12,
         [
-            new UsageAnalyzer.TermUsage("Radiology", 21, 26, Covered: false),
-            new UsageAnalyzer.TermUsage("MRI", 18, 22, Covered: false),
-            new UsageAnalyzer.TermUsage("Hypertension", 9, 11, Covered: false),
-            new UsageAnalyzer.TermUsage("Cardiology", 7, 9, Covered: false),
+            new UsageAnalyzer.TermUsage("Radiology", 21, 26, Covered: true),
+            new UsageAnalyzer.TermUsage("MRI", 18, 22, Covered: true),
+            new UsageAnalyzer.TermUsage("Hypertension", 9, 11, Covered: true),
+            new UsageAnalyzer.TermUsage("Cardiology", 7, 9, Covered: true),
         ]);
 
     private static readonly string SparseSummary = BuildUsageSummary(
@@ -49,8 +49,8 @@ internal static class AuxiliaryScenarios
         words: 980,
         activeDays: 4,
         [
-            new UsageAnalyzer.TermUsage("Unity", 5, 7, Covered: false),
-            new UsageAnalyzer.TermUsage("Blender", 3, 4, Covered: false),
+            new UsageAnalyzer.TermUsage("Unity", 5, 7, Covered: true),
+            new UsageAnalyzer.TermUsage("Blender", 3, 4, Covered: true),
         ]);
 
     // Dictation samples in the shape BuildHistorySample emits (one dictation per line). Each

@@ -18,11 +18,18 @@ internal sealed class FileLoggerProvider : ILoggerProvider
 
     public FileLoggerProvider(string logsDirectory)
     {
-        Directory.CreateDirectory(logsDirectory);
-        _logsDirectory = logsDirectory;
         var now = DateTime.Now;
+        _logsDirectory = logsDirectory ?? string.Empty;
         _fileDay = now.DayOfYear;
-        _filePath = DailyPath(now);
+        try
+        {
+            Directory.CreateDirectory(_logsDirectory);
+            _filePath = DailyPath(now);
+        }
+        catch
+        {
+            _filePath = string.Empty;
+        }
     }
 
     public ILogger CreateLogger(string categoryName) => new FileLogger(categoryName, this);
@@ -45,6 +52,11 @@ internal sealed class FileLoggerProvider : ILoggerProvider
             {
                 lock (_gate)
                 {
+                    if (string.IsNullOrWhiteSpace(_filePath))
+                    {
+                        return;
+                    }
+
                     // The tray app runs for days, so "daily" must rotate per write, not per launch:
                     // a launch-day file pinned at construction diverges from the overlay's properly
                     // rotated file at midnight and splits the shared timeline the logs exist for.

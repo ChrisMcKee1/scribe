@@ -4,7 +4,7 @@ using OpenAI.Responses;
 using System.ClientModel;
 using System.ClientModel.Primitives;
 
-#pragma warning disable OPENAI001
+#pragma warning disable MAAI001, OPENAI001
 
 namespace Scribe.Core.Cleanup;
 
@@ -77,4 +77,4 @@ internal static class AzureOpenAIResponsesClientFactory
     }
 }
 
-#pragma warning restore OPENAI001
+#pragma warning restore MAAI001, OPENAI001

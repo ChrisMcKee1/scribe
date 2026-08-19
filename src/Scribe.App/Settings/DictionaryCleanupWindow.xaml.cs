@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -23,6 +23,7 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
     private DictionaryCleanupWindow(DictionaryUsageReport report)
     {
+        Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
         InitializeComponent();
 
         SummaryText.Text = report.Summary;

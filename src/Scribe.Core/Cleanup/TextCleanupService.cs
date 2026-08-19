@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using OpenAI;
 using OpenAI.Chat;
 using OpenAI.Responses;
+using Scribe.Core.Infrastructure;
 using FoundryConfiguration = Microsoft.AI.Foundry.Local.Configuration;
 using FoundryLogLevel = Microsoft.AI.Foundry.Local.LogLevel;
 
@@ -52,7 +53,10 @@ internal sealed class TextCleanupService : ITextCleanupService
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
     private const int InitProbeTimeoutSeconds = 30;
-    private const int InitProbeMaxOutputTokens = 8;
+    // Azure rejects anything below 16 with "integer_below_min_value", so the probe would have failed
+    // on every Azure endpoint and marked cleanup Unavailable. The probe only needs the call to
+    // succeed, not to produce useful text, so the minimum accepted value is the right choice.
+    private const int InitProbeMaxOutputTokens = 16;
 
     // How much of the cloud budget one attempt may spend. Measured cleanups on a real deployment
     // run around 2s and peak near 12s, so 25s is far beyond any healthy call and leaves 20s to
@@ -141,6 +145,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
 
     private readonly ILogger<TextCleanupService> _log;
+    private readonly string _foundryDemotionsPath;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
@@ -155,6 +160,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     private OpenAIClient? _openAiClient;
     private bool _managerReady;
     private bool _epsRegistered;
+    private string[] _availableExecutionProviders = ["CPUExecutionProvider"];
 
     // The active cleanup agent (Agent Framework). Rebuilt whenever the provider/model/endpoint
     // changes; null until initialization completes or after the feature is disabled.
@@ -189,7 +195,11 @@ internal sealed class TextCleanupService : ITextCleanupService
     internal bool DisableRetries { get; set; }
     internal Action<UsageDetails>? UsageObserver { get; set; }
 
-    public TextCleanupService(ILogger<TextCleanupService> log) => _log = log;
+    public TextCleanupService(ILogger<TextCleanupService> log, AppPaths? paths = null)
+    {
+        _log = log;
+        _foundryDemotionsPath = Path.Combine((paths ?? new AppPaths()).RootDir, "foundry-local-demotions.json");
+    }
 
     public CleanupStatus Status
     {
@@ -210,7 +220,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             return;
         }
 
-        var effective = Normalize(options ?? CleanupOptions.Disabled);
+        var effective = ApplyPersistedFoundryDemotion(Normalize(options ?? CleanupOptions.Disabled));
 
         bool startInit = false;
         bool nowDisabled = false;
@@ -452,7 +462,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         AIAgent agent;
-        CleanupProvider provider;
+        CleanupOptions options;
         lock (_gate)
         {
             // Reuse the initialized client's agent factory, but with the caller's own system prompt
@@ -463,8 +473,8 @@ internal sealed class TextCleanupService : ITextCleanupService
                 return null;
             }
 
-            provider = _options.Provider;
-            agent = factory(systemPrompt); // pure object construction against the initialized client
+            options = _options;
+            agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt)); // pure object construction against the initialized client
         }
 
         try
@@ -473,7 +483,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
 
             var chatOptions = new ChatOptions { MaxOutputTokens = AuxiliaryCompletionMaxTokens };
-            if (provider == CleanupProvider.FoundryLocal)
+            if (options.Provider == CleanupProvider.FoundryLocal)
             {
                 chatOptions.Temperature = CleanupTemperature;
             }
@@ -486,7 +496,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             // suggestions, both of which surface free-form model prose in Settings. Cleanup output is
             // covered by TrySanitize, which this path deliberately skips (it has no raw transcript to
             // compare against), so without this the house style would hold for dictation but not here.
-            return string.IsNullOrWhiteSpace(result.Text) ? null : DashNormalizer.Normalize(result.Text);
+            return SanitizeAuxiliaryCompletion(result.Text);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -807,6 +817,15 @@ internal sealed class TextCleanupService : ITextCleanupService
                   $"a different model variant. {detail}".TrimEnd();
         }
 
+        if (IsExecutionProviderUnavailable(ex))
+        {
+            return provider == CleanupProvider.FoundryLocal
+                ? $"This model variant requires an execution provider that is not available on this PC. " +
+                  $"Pick a different model in Settings. {detail}".TrimEnd()
+                : $"This model variant requires an execution provider that is not available on the endpoint. " +
+                  $"Pick a different model variant. {detail}".TrimEnd();
+        }
+
         // The endpoint's own message is appended where it adds something; it is empty often enough
         // (a transport failure has no response body) that every branch has to survive without it.
         var described = status switch
@@ -885,6 +904,17 @@ internal sealed class TextCleanupService : ITextCleanupService
                text.Contains("compute pipeline", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool MentionsExecutionProviderUnavailable(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return text.Contains("Cannot load model", StringComparison.OrdinalIgnoreCase) &&
+               text.Contains("execution provider, which is not available", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsGpuShaderIncompatibility(Exception? ex)
     {
         for (var current = ex; current is not null; current = current.InnerException)
@@ -903,6 +933,112 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         return false;
+    }
+
+    private static bool IsExecutionProviderUnavailable(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (MentionsExecutionProviderUnavailable(current.Message) ||
+                MentionsExecutionProviderUnavailable(ReadResponseBody(current)))
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate &&
+                aggregate.InnerExceptions.Any(inner => IsExecutionProviderUnavailable(inner)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryParseRequiredExecutionProvider(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (TryParseRequiredExecutionProvider(current.Message) is { } parsed)
+            {
+                return parsed;
+            }
+
+            if (TryParseRequiredExecutionProvider(ReadResponseBody(current)) is { } bodyParsed)
+            {
+                return bodyParsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryParseRequiredExecutionProvider(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        const string requires = "it requires the";
+        const string unavailable = "execution provider, which is not available";
+        var start = text.IndexOf(requires, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        start += requires.Length;
+        var end = text.IndexOf(unavailable, start, StringComparison.OrdinalIgnoreCase);
+        if (end <= start)
+        {
+            return null;
+        }
+
+        return text[start..end].Trim().Trim('\'', '"');
+    }
+
+    private static string[] TryParseAvailableExecutionProviders(Exception? ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (TryParseAvailableExecutionProviders(current.Message) is { Length: > 0 } parsed)
+            {
+                return parsed;
+            }
+
+            if (TryParseAvailableExecutionProviders(ReadResponseBody(current)) is { Length: > 0 } bodyParsed)
+            {
+                return bodyParsed;
+            }
+        }
+
+        return [];
+    }
+
+    private static string[] TryParseAvailableExecutionProviders(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return [];
+        }
+
+        const string marker = "Available EPs:";
+        var start = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return [];
+        }
+
+        var open = text.IndexOf('[', start);
+        var close = open >= 0 ? text.IndexOf(']', open + 1) : -1;
+        if (open < 0 || close <= open)
+        {
+            return [];
+        }
+
+        return text[(open + 1)..close]
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     // Never throws: reading a raw response can fail on a non-buffered or already-disposed response, and
@@ -1056,7 +1192,8 @@ internal sealed class TextCleanupService : ITextCleanupService
                 options.Add(new FoundryModelOption(
                     model.Alias,
                     cachedAliases.Contains(model.Alias),
-                    loadedAliases.Contains(model.Alias)));
+                    loadedAliases.Contains(model.Alias),
+                    FoundryModelVariant.Classify(model.Alias)));
             }
 
             // Loaded first, then downloaded, then the rest; alphabetical within each tier.
@@ -1357,12 +1494,34 @@ internal sealed class TextCleanupService : ITextCleanupService
             acquired = true;
             ct.ThrowIfCancellationRequested();
 
-            var agent = options.Provider switch
+            AIAgent? agent;
+            try
             {
-                CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
-                CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
-                _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
-            };
+                agent = options.Provider switch
+                {
+                    CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
+                    CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
+                    _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
+                };
+            }
+            catch (Exception ex) when (options.Provider == CleanupProvider.FoundryLocal &&
+                                       IsExecutionProviderUnavailable(ex))
+            {
+                if (await TryDemoteFoundryLoadFailureAsync(options, ex, ct).ConfigureAwait(false) is { } demotion)
+                {
+                    agent = demotion.Agent;
+                    options = demotion.Options;
+                }
+                else
+                {
+                    var message = await DescribeFoundryExecutionProviderFailureAsync(options.FoundryModelAlias, ex, ct)
+                        .ConfigureAwait(false);
+                    _log.LogWarning(ex, "Foundry Local model {Alias} could not load because an execution provider is unavailable.",
+                        options.FoundryModelAlias);
+                    SetStatus(CleanupStatus.Unavailable, message);
+                    return;
+                }
+            }
 
             if (agent is null)
             {
@@ -1372,29 +1531,37 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } probeFailure)
             {
-                lock (_gate)
+                if (await TryDemoteFoundryGpuAsync(options, probeFailure, ct).ConfigureAwait(false) is { } demotion)
                 {
-                    if (!_options.Enabled || _options != options)
-                    {
-                        return;
-                    }
-
-                    DropAgents();
-                    _pendingFactory = null;
-                }
-
-                if (probeFailure.Exception is { } ex)
-                {
-                    _log.LogWarning(ex, "AI cleanup initialization probe failed ({Provider}).", options.Provider);
+                    agent = demotion.Agent;
+                    options = demotion.Options;
                 }
                 else
                 {
-                    _log.LogWarning("AI cleanup initialization probe failed ({Provider}): {Message}",
-                        options.Provider, probeFailure.Message);
-                }
+                    lock (_gate)
+                    {
+                        if (!_options.Enabled || _options != options)
+                        {
+                            return;
+                        }
 
-                SetStatus(CleanupStatus.Unavailable, probeFailure.Message);
-                return;
+                        DropAgents();
+                        _pendingFactory = null;
+                    }
+
+                    if (probeFailure.Exception is { } ex)
+                    {
+                        _log.LogWarning(ex, "AI cleanup initialization probe failed ({Provider}).", options.Provider);
+                    }
+                    else
+                    {
+                        _log.LogWarning("AI cleanup initialization probe failed ({Provider}): {Message}",
+                            options.Provider, probeFailure.Message);
+                    }
+
+                    SetStatus(CleanupStatus.Unavailable, probeFailure.Message);
+                    return;
+                }
             }
 
             lock (_gate)
@@ -1405,6 +1572,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     return;
                 }
 
+                _options = options;
                 _agent = agent;
                 _agentFactory = _pendingFactory;
                 _styleAgents.Clear();
@@ -1432,6 +1600,67 @@ internal sealed class TextCleanupService : ITextCleanupService
     }
 
     private sealed record AgentProbeFailure(string Message, Exception? Exception);
+
+    private sealed record FoundryDemotionResult(CleanupOptions Options, AIAgent Agent);
+
+    private sealed record FoundryExecutionProviderFailure(
+        string? RequiredProvider,
+        IReadOnlyList<string> AvailableProviders);
+
+    private static IChatClient DisableStoredOutput(IChatClient client) =>
+        new StoredOutputDisabledChatClient(client);
+
+    internal static ChatOptions WithStoredOutputDisabled(ChatOptions? options)
+    {
+        var clone = options?.Clone() ?? new ChatOptions();
+        var innerFactory = clone.RawRepresentationFactory;
+        clone.RawRepresentationFactory = client =>
+        {
+            var raw = innerFactory?.Invoke(client);
+#pragma warning disable OPENAI001
+            if (raw is CreateResponseOptions responseOptions)
+            {
+                responseOptions.StoredOutputEnabled = false;
+                return responseOptions;
+            }
+
+            // Fail CLOSED. Passing an unrecognised object through would let Azure fall back to its
+            // store=true default and silently retain dictated text, which is the exact outcome this
+            // exists to prevent. Nothing in Scribe sets a factory today, so this only triggers if a
+            // future package version starts supplying one, and a privacy control must not lapse on a
+            // dependency bump.
+            return new CreateResponseOptions { StoredOutputEnabled = false };
+#pragma warning restore OPENAI001
+        };
+        return clone;
+    }
+
+    private sealed class StoredOutputDisabledChatClient(IChatClient inner) : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            inner.GetResponseAsync(messages, WithStoredOutputDisabled(options), cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default) =>
+            inner.GetStreamingResponseAsync(messages, WithStoredOutputDisabled(options), cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null) =>
+            inner.GetService(serviceType, serviceKey);
+
+        public void Dispose()
+        {
+            if (inner is IDisposable disposable)
+            {
+                disposable.Dispose();
+            }
+        }
+
+    }
 
     private async Task<AgentProbeFailure?> ProbeAgentAsync(AIAgent agent, CleanupOptions options, CancellationToken ct)
     {
@@ -1469,6 +1698,246 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
+    /// <summary>
+    /// The GPU alias to demote from, or null when nothing GPU-shaped is in play. The configured
+    /// alias is usually a family name like "qwen3-1.7b" that Foundry resolves to a hardware variant
+    /// such as "qwen3-1.7b-generic-gpu:2", so the resolved id has to be consulted first. Checking
+    /// only the configured alias silently disables demotion for every curated model, which is all of
+    /// them.
+    /// </summary>
+    private async Task<string?> ResolveGpuSourceAliasAsync(CleanupOptions options, CancellationToken ct)
+    {
+        if (_catalog is null)
+        {
+            return null;
+        }
+
+        string? resolvedId = null;
+        try
+        {
+            var selectedModel = await _catalog.GetModelAsync(options.FoundryModelAlias, ct).ConfigureAwait(false);
+            resolvedId = selectedModel?.Id;
+        }
+        catch (Exception ex)
+        {
+            // The catalog read is a lookup for a better alias, never a reason to abandon a demotion
+            // that could still succeed from the configured name.
+            _log.LogDebug(ex, "Could not resolve the Foundry Local variant id for {Alias}.", options.FoundryModelAlias);
+        }
+
+        if (FoundryModelVariant.IsGpuAlias(resolvedId))
+        {
+            return resolvedId;
+        }
+
+        return FoundryModelVariant.IsGpuAlias(options.FoundryModelAlias) ? options.FoundryModelAlias : null;
+    }
+
+    private async Task<FoundryDemotionResult?> TryDemoteFoundryLoadFailureAsync(
+        CleanupOptions options,
+        Exception loadFailure,
+        CancellationToken ct)
+    {
+        if (_catalog is null)
+        {
+            return null;
+        }
+
+        var sourceAlias = await ResolveGpuSourceAliasAsync(options, ct).ConfigureAwait(false);
+        if (sourceAlias is null)
+        {
+            return null;
+        }
+
+        var catalogModels = await _catalog.ListModelsAsync(ct).ConfigureAwait(false);
+        var cpuAlias = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            sourceAlias,
+            BuildVariantCandidates(catalogModels));
+        if (cpuAlias is null)
+        {
+            _log.LogWarning(
+                loadFailure,
+                "Foundry Local GPU model {GpuAlias} could not load, but no CPU counterpart was found in the catalog.",
+                sourceAlias);
+            return null;
+        }
+
+        var demotedOptions = options with { FoundryModelAlias = cpuAlias };
+        _log.LogWarning(
+            loadFailure,
+            "Foundry Local GPU model {GpuAlias} could not load because an execution provider is unavailable. Retrying once with CPU model {CpuAlias}.",
+            sourceAlias,
+            cpuAlias);
+
+        AIAgent? agent;
+        try
+        {
+            agent = await InitFoundryAsync(demotedOptions, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Foundry Local CPU demotion load failed for {CpuAlias}.", cpuAlias);
+            return null;
+        }
+
+        if (agent is null)
+        {
+            return null;
+        }
+
+        RememberFoundryDemotion(options.FoundryModelAlias, cpuAlias);
+        lock (_gate)
+        {
+            if (_options != options)
+            {
+                return null;
+            }
+
+            _options = demotedOptions;
+        }
+
+        return new FoundryDemotionResult(demotedOptions, agent);
+    }
+
+    private async Task<FoundryDemotionResult?> TryDemoteFoundryGpuAsync(
+        CleanupOptions options,
+        AgentProbeFailure probeFailure,
+        CancellationToken ct)
+    {
+        if (options.Provider != CleanupProvider.FoundryLocal ||
+            probeFailure.Exception is null ||
+            !IsGpuShaderIncompatibility(probeFailure.Exception) ||
+            _catalog is null)
+        {
+            return null;
+        }
+
+        var sourceAlias = await ResolveGpuSourceAliasAsync(options, ct).ConfigureAwait(false);
+        if (sourceAlias is null)
+        {
+            return null;
+        }
+
+        var catalogModels = await _catalog.ListModelsAsync(ct).ConfigureAwait(false);
+        var cpuAlias = FoundryModelVariant.ResolveCpuCounterpartAlias(
+            sourceAlias,
+            BuildVariantCandidates(catalogModels));
+        if (cpuAlias is null)
+        {
+            _log.LogWarning(
+                "Foundry Local GPU model {GpuAlias} failed the shader probe, but no CPU counterpart was found in the catalog.",
+                sourceAlias);
+            return null;
+        }
+
+        var demotedOptions = options with { FoundryModelAlias = cpuAlias };
+        _log.LogWarning(
+            probeFailure.Exception,
+            "Foundry Local GPU model {GpuAlias} failed the shader probe. Retrying once with CPU model {CpuAlias}.",
+            sourceAlias,
+            cpuAlias);
+
+        var agent = await InitFoundryAsync(demotedOptions, ct).ConfigureAwait(false);
+        if (agent is null)
+        {
+            return null;
+        }
+
+        if (await ProbeAgentAsync(agent, demotedOptions, ct).ConfigureAwait(false) is { } cpuFailure)
+        {
+            // Report the CPU failure, not the original GPU one. Falling back through here and then
+            // telling the user to "pick a CPU variant" would be advising the exact action that just
+            // failed in front of them.
+            if (cpuFailure.Exception is { } ex)
+            {
+                _log.LogWarning(ex,
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe.",
+                    cpuAlias, sourceAlias);
+            }
+            else
+            {
+                _log.LogWarning(
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe: {Message}",
+                    cpuAlias, sourceAlias, cpuFailure.Message);
+            }
+
+            SetStatus(CleanupStatus.Unavailable,
+                $"Neither the GPU nor the CPU build of this model would run. Pick a different model in Settings. {cpuFailure.Message}".TrimEnd());
+            return null;
+        }
+
+        RememberFoundryDemotion(options.FoundryModelAlias, cpuAlias);
+        lock (_gate)
+        {
+            if (_options != options)
+            {
+                return null;
+            }
+
+            _options = demotedOptions;
+        }
+
+        return new FoundryDemotionResult(demotedOptions, agent);
+    }
+
+    private static IEnumerable<FoundryModelVariantCandidate> BuildVariantCandidates(IEnumerable<IModel> models)
+    {
+        foreach (var model in models)
+        {
+            yield return new FoundryModelVariantCandidate(model.Id, model.Info?.Runtime?.ExecutionProvider);
+            yield return new FoundryModelVariantCandidate(model.Alias, model.Info?.Runtime?.ExecutionProvider);
+
+            foreach (var variant in model.Variants)
+            {
+                yield return new FoundryModelVariantCandidate(variant.Id, variant.Info?.Runtime?.ExecutionProvider);
+                yield return new FoundryModelVariantCandidate(variant.Alias, variant.Info?.Runtime?.ExecutionProvider);
+            }
+        }
+    }
+
+    private async Task<string> DescribeFoundryExecutionProviderFailureAsync(
+        string alias,
+        Exception ex,
+        CancellationToken ct)
+    {
+        var failure = await GetFoundryExecutionProviderFailureAsync(alias, ex, ct).ConfigureAwait(false);
+        var required = string.IsNullOrWhiteSpace(failure.RequiredProvider)
+            ? "an execution provider that is not available"
+            : failure.RequiredProvider;
+        var available = failure.AvailableProviders.Count == 0
+            ? "none reported"
+            : string.Join(", ", failure.AvailableProviders);
+
+        return $"Model '{alias}' requires {required}, but this PC has {available}. Pick a different model in Settings.";
+    }
+
+    private async Task<FoundryExecutionProviderFailure> GetFoundryExecutionProviderFailureAsync(
+        string alias,
+        Exception ex,
+        CancellationToken ct)
+    {
+        string? required = null;
+        if (_catalog is not null)
+        {
+            try
+            {
+                var model = await _catalog.GetModelAsync(alias, ct).ConfigureAwait(false);
+                required = model?.Info?.Runtime?.ExecutionProvider;
+            }
+            catch (Exception lookupEx)
+            {
+                _log.LogDebug(lookupEx, "Could not read Foundry model runtime metadata for {Alias}.", alias);
+            }
+        }
+
+        required ??= TryParseRequiredExecutionProvider(ex);
+        var available = _availableExecutionProviders.Length > 0
+            ? _availableExecutionProviders
+            : TryParseAvailableExecutionProviders(ex);
+
+        return new FoundryExecutionProviderFailure(required, available);
+    }
+
     private async Task<AIAgent?> InitFoundryAsync(CleanupOptions options, CancellationToken ct)
     {
         var alias = options.FoundryModelAlias;
@@ -1483,9 +1952,23 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         ct.ThrowIfCancellationRequested();
 
-        var model = await _catalog.GetModelAsync(alias, ct).ConfigureAwait(false);
+        var model = await ResolveFoundryModelAsync(alias, ct).ConfigureAwait(false);
         if (model is null)
         {
+            // A persisted demotion points at an exact variant that a Foundry Local update can
+            // retire. Without this the marker would pin cleanup to a model that no longer exists
+            // and the user would have no way back short of deleting a JSON file they never knew
+            // about, so a missing demotion target forgets itself and retries the original.
+            if (ForgetFoundryDemotionTarget(alias) is { } restoredAlias)
+            {
+                _log.LogWarning(
+                    "The demoted Foundry Local model {MissingAlias} is no longer in the catalog. Clearing the demotion and retrying {OriginalAlias}.",
+                    alias,
+                    restoredAlias);
+                return await InitFoundryAsync(options with { FoundryModelAlias = restoredAlias }, ct)
+                    .ConfigureAwait(false);
+            }
+
             SetStatus(CleanupStatus.Unavailable, $"Model '{alias}' was not found in the Foundry catalog.");
             return null;
         }
@@ -1510,6 +1993,36 @@ internal sealed class TextCleanupService : ITextCleanupService
         var chatClient = _openAiClient.GetChatClient(model.Id);
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
         return _pendingFactory(BuildSystemPrompt(options));
+    }
+
+    private async Task<IModel?> ResolveFoundryModelAsync(string alias, CancellationToken ct)
+    {
+        if (_catalog is null)
+        {
+            return null;
+        }
+
+        var model = await _catalog.GetModelAsync(alias, ct).ConfigureAwait(false);
+        if (model is not null && !string.IsNullOrWhiteSpace(model.Id))
+        {
+            return model;
+        }
+
+        var catalogModels = await _catalog.ListModelsAsync(ct).ConfigureAwait(false);
+        foreach (var parent in catalogModels)
+        {
+            foreach (var variant in parent.Variants)
+            {
+                if (string.Equals(variant.Id, alias, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(variant.Alias, alias, StringComparison.OrdinalIgnoreCase))
+                {
+                    parent.SelectVariant(variant);
+                    return parent;
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1560,16 +2073,19 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         var instructions = BuildSystemPrompt(options);
         var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
+        var networkTimeout = CleanupTimeoutOverride is { } timeout
+            ? timeout + TimeSpan.FromSeconds(5)
+            : (TimeSpan?)null;
 
         // A Microsoft Foundry *project* endpoint (…/api/projects/…) has a different shape from a
-        // classic Azure OpenAI account endpoint and is handled natively by the Agent Framework.
+        // classic Azure OpenAI account endpoint and needs the project Responses client.
         var isProject = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase);
 
         AIAgent agent;
         if (isProject && !useKey)
         {
-            // Native Foundry path: the project client turns the endpoint + deployment into an agent
-            // directly (a code-first "responses" agent; no server-side agent resource is created).
+            // Native Foundry path: the project client uses the project data plane directly without
+            // creating a server-side agent resource.
             // The project data-plane requires an AAD token, so this path is AAD-only.
             var credential = AzureCredentialFactory.Create(new AzureCredentialRequest(
                 options.AzureAuthMode,
@@ -1578,7 +2094,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                 options.AzureClientId,
                 options.AzureClientSecret));
             var project = new AIProjectClient(endpointUri, credential);
-            _pendingFactory = i => project.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
+            _pendingFactory = i => project.AsAIAgent(
+                model: options.AzureDeployment!,
+                instructions: i,
+                name: AgentName,
+                clientFactory: DisableStoredOutput);
             agent = _pendingFactory(instructions);
         }
         else
@@ -1591,12 +2111,6 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             // When the user supplies an API key, authenticate with it directly; otherwise reuse the
             // existing Azure CLI sign-in, pinned to the selected subscription when one is saved.
-            // Benchmark runs may intentionally measure models beyond the SDK's 100-second default.
-            // The app never sets this override, so its normal transport and cleanup budgets stay put.
-            var networkTimeout = CleanupTimeoutOverride is { } timeout
-                ? timeout + TimeSpan.FromSeconds(5)
-                : (TimeSpan?)null;
-
             // Route cleanup through the Azure OpenAI **Responses API** rather than Chat Completions.
             // Responses is the forward-looking surface and is the only one that serves the newest
             // reasoning models (e.g. gpt-5.x "pro"/o-series); Chat Completions returns HTTP 400
@@ -1619,7 +2133,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                         options.AzureClientSecret)),
                     networkTimeout,
                     DisableRetries);
-            _pendingFactory = i => responses.AsAIAgent(model: options.AzureDeployment!, instructions: i, name: AgentName);
+            _pendingFactory = i => responses.AsAIAgent(
+                model: options.AzureDeployment!,
+                instructions: i,
+                name: AgentName,
+                clientFactory: DisableStoredOutput);
 #pragma warning restore OPENAI001
             agent = _pendingFactory(instructions);
         }
@@ -1788,15 +2306,78 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try
         {
-            _manager!.DiscoverEps();
-            await _manager.DownloadAndRegisterEpsAsync(ct).ConfigureAwait(false);
+            var discovered = _manager!.DiscoverEps();
+            var result = await _manager.DownloadAndRegisterEpsAsync(ct).ConfigureAwait(false);
+            _availableExecutionProviders = MergeAvailableExecutionProviders(
+                discovered,
+                result.RegisteredEps,
+                _manager.DiscoverEps());
         }
         catch (Exception ex)
         {
             _log.LogInformation(ex, "Foundry execution-provider setup was skipped; continuing on available providers.");
+            try
+            {
+                _availableExecutionProviders = MergeAvailableExecutionProviders(_manager!.DiscoverEps());
+            }
+            catch (Exception discoverEx)
+            {
+                _log.LogDebug(discoverEx, "Could not enumerate Foundry execution providers.");
+            }
         }
 
         _epsRegistered = true;
+    }
+
+    private static string[] MergeAvailableExecutionProviders(
+        EpInfo[]? discovered,
+        string[]? registered = null,
+        EpInfo[]? afterRegistration = null)
+    {
+        var providers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "CPUExecutionProvider",
+        };
+
+        void Add(string? provider)
+        {
+            if (!string.IsNullOrWhiteSpace(provider))
+            {
+                providers.Add(provider.Trim());
+            }
+        }
+
+        if (discovered is not null)
+        {
+            foreach (var ep in discovered)
+            {
+                if (ep.IsRegistered)
+                {
+                    Add(ep.Name);
+                }
+            }
+        }
+
+        if (afterRegistration is not null)
+        {
+            foreach (var ep in afterRegistration)
+            {
+                if (ep.IsRegistered)
+                {
+                    Add(ep.Name);
+                }
+            }
+        }
+
+        if (registered is not null)
+        {
+            foreach (var ep in registered)
+            {
+                Add(ep);
+            }
+        }
+
+        return providers.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private async Task EnsureManagerAsync(CancellationToken ct)
@@ -1877,21 +2458,44 @@ internal sealed class TextCleanupService : ITextCleanupService
         // Local aliases and to BYO endpoints (Ollama etc.) serving a qwen3 model. (Measured: on the
         // small default qwen3-1.7b, letting it reason did not improve cleanup quality, so we keep the
         // directive on both prompt paths for the lower, more predictable dictation latency.)
-        var qwen3 = options.Provider switch
-        {
-            CleanupProvider.FoundryLocal =>
-                options.FoundryModelAlias.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase),
-            CleanupProvider.OpenAiCompatible =>
-                options.CustomModel?.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase) == true,
-            _ => false,
-        };
-        if (qwen3)
+        if (IsQwen3Family(options))
         {
             prompt += " /no_think";
         }
 
         return prompt;
     }
+
+    internal static string BuildAuxiliarySystemPrompt(CleanupOptions options, string systemPrompt)
+    {
+        var prompt = systemPrompt;
+        if (IsQwen3Family(options) && !prompt.TrimEnd().EndsWith("/no_think", StringComparison.OrdinalIgnoreCase))
+        {
+            prompt += " /no_think";
+        }
+
+        return prompt;
+    }
+
+    internal static string? SanitizeAuxiliaryCompletion(string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        var cleaned = ThinkBlock.Replace(candidate, string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? null : DashNormalizer.Normalize(cleaned);
+    }
+
+    private static bool IsQwen3Family(CleanupOptions options) => options.Provider switch
+    {
+        CleanupProvider.FoundryLocal =>
+            options.FoundryModelAlias.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase),
+        CleanupProvider.OpenAiCompatible =>
+            options.CustomModel?.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase) == true,
+        _ => false,
+    };
 
     // The per-call user message: just the delimited transcript, nothing else. ASR output never
     // contains angle-bracket tags, so the delimiters cannot be spoofed by speech.
@@ -2181,6 +2785,132 @@ internal sealed class TextCleanupService : ITextCleanupService
             CustomEndpoint = customEndpoint,
             CustomModel = customModel,
         };
+    }
+
+    private CleanupOptions ApplyPersistedFoundryDemotion(CleanupOptions options)
+    {
+        if (!options.Enabled ||
+            options.Provider != CleanupProvider.FoundryLocal)
+        {
+            return options;
+        }
+
+        if (ReadFoundryDemotions().TryGetValue(options.FoundryModelAlias, out var cpuAlias) &&
+            !string.IsNullOrWhiteSpace(cpuAlias))
+        {
+            _log.LogInformation(
+                "Foundry Local model {GpuAlias} was previously demoted after a GPU compatibility failure. Using {CpuAlias}.",
+                options.FoundryModelAlias,
+                cpuAlias);
+            return options with { FoundryModelAlias = cpuAlias.Trim() };
+        }
+
+        return options;
+    }
+
+    /// <summary>
+    /// Drops any demotion whose CPU target is <paramref name="missingAlias"/> and returns the
+    /// original alias to retry, or null when no demotion pointed there. Self-healing matters
+    /// because the marker is invisible to the user: a stale target would otherwise leave cleanup
+    /// permanently unavailable with no in-app way to recover.
+    /// </summary>
+    private string? ForgetFoundryDemotionTarget(string missingAlias)
+    {
+        if (string.IsNullOrWhiteSpace(missingAlias))
+        {
+            return null;
+        }
+
+        try
+        {
+            var demotions = ReadFoundryDemotions();
+            var match = demotions.FirstOrDefault(pair =>
+                string.Equals(pair.Value?.Trim(), missingAlias.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (match.Key is null)
+            {
+                return null;
+            }
+
+            demotions.Remove(match.Key);
+            WriteFoundryDemotions(demotions);
+            return match.Key;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not clear the stale Foundry Local demotion marker.");
+            return null;
+        }
+    }
+
+    private void RememberFoundryDemotion(string gpuAlias, string cpuAlias)
+    {
+        if (string.IsNullOrWhiteSpace(gpuAlias) || string.IsNullOrWhiteSpace(cpuAlias))
+        {
+            return;
+        }
+
+        try
+        {
+            var demotions = ReadFoundryDemotions();
+            demotions[gpuAlias.Trim()] = cpuAlias.Trim();
+            WriteFoundryDemotions(demotions);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not persist the Foundry Local model demotion marker.");
+        }
+    }
+
+    // Written through a temp file and moved into place: a second Scribe process, or a crash
+    // mid-write, would otherwise leave a truncated file. Reads already recover from that, but a
+    // torn write silently discards every marker rather than the one being added.
+    private void WriteFoundryDemotions(Dictionary<string, string> demotions)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_foundryDemotionsPath)!);
+        var staging = _foundryDemotionsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(staging, JsonSerializer.Serialize(demotions));
+            File.Move(staging, _foundryDemotionsPath, overwrite: true);
+        }
+        catch
+        {
+            try
+            {
+                if (File.Exists(staging))
+                {
+                    File.Delete(staging);
+                }
+            }
+            catch
+            {
+                // The unique staging name cannot block a later write, so cleanup is best effort.
+            }
+
+            throw;
+        }
+    }
+
+    private Dictionary<string, string> ReadFoundryDemotions()
+    {
+        try
+        {
+            if (!File.Exists(_foundryDemotionsPath))
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var values = JsonSerializer.Deserialize<Dictionary<string, string>>(
+                File.ReadAllText(_foundryDemotionsPath));
+            return values is null
+                ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not read the Foundry Local model demotion marker.");
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private void SetStatus(CleanupStatus status, string? detail)

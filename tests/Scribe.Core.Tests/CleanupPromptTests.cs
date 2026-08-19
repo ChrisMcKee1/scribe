@@ -261,10 +261,36 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
+    public void Qwen3_foundry_local_auxiliary_prompt_gets_the_no_think_directive()
+    {
+        var prompt = TextCleanupService.BuildAuxiliarySystemPrompt(Foundry("qwen3-1.7b"), "Return JSON only.");
+
+        Assert.Equal("Return JSON only. /no_think", prompt);
+    }
+
+    [Fact]
+    public void Existing_auxiliary_no_think_directive_is_not_duplicated()
+    {
+        var prompt = TextCleanupService.BuildAuxiliarySystemPrompt(Foundry("qwen3-1.7b"), "Return JSON only. /no_think");
+
+        Assert.Equal("Return JSON only. /no_think", prompt);
+    }
+
+    [Fact]
     public void Non_qwen3_and_azure_do_not_get_the_no_think_directive()
     {
         var phi = TextCleanupService.BuildSystemPrompt(Foundry("phi-3.5-mini"));
         var azure = TextCleanupService.BuildSystemPrompt(Azure());
+
+        Assert.DoesNotContain("/no_think", phi);
+        Assert.DoesNotContain("/no_think", azure);
+    }
+
+    [Fact]
+    public void Non_qwen3_and_azure_auxiliary_prompts_do_not_get_the_no_think_directive()
+    {
+        var phi = TextCleanupService.BuildAuxiliarySystemPrompt(Foundry("phi-3.5-mini"), "Return JSON only.");
+        var azure = TextCleanupService.BuildAuxiliarySystemPrompt(Azure(), "Return JSON only.");
 
         Assert.DoesNotContain("/no_think", phi);
         Assert.DoesNotContain("/no_think", azure);

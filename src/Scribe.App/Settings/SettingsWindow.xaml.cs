@@ -2,8 +2,12 @@
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -90,6 +94,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _azureManualConfiguration;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
+    private bool _azureApiKeyVerified;
     private bool _transcriptionModelOp;
 
     private HotkeyBinding _pendingBinding;
@@ -176,6 +181,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AboutLogsPathBox.Text = _paths.LogsDir;
         AboutDatabasePathBox.Text = _paths.DatabasePath;
         AboutStoreLinkBox.Text = ScribeLinks.StoreWeb;
+        if (_paths.IsFallbackRoot)
+        {
+            AboutDataPathWarning.Text =
+                $"Scribe could not use {_paths.PreferredRootDir}. It is currently using this fallback location. {_paths.CreationFailureMessage}";
+            AboutDataPathWarning.Visibility = Visibility.Visible;
+        }
     }
 
     // --- Updates card (General) --------------------------------------------------------------
@@ -789,8 +800,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureDeploymentBox.Text = _settings.AiCleanupAzureDeployment ?? string.Empty;
         AzureApiKeyBox.Password = _settings.AiCleanupAzureApiKey ?? string.Empty;
         AzureTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
-        AzureAuthModeBox.SelectedIndex =
-            _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
+        AzureAuthModeBox.SelectedIndex = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey)
+            ? 2
+            : _settings.AiCleanupAzureAuthMode == AzureAuthMode.ServicePrincipal ? 1 : 0;
         SpTenantBox.Text = _settings.AiCleanupAzureTenantId ?? string.Empty;
         SpClientIdBox.Text = _settings.AiCleanupAzureClientId ?? string.Empty;
         SpClientSecretBox.Password = _settings.AiCleanupAzureClientSecret ?? string.Empty;
@@ -800,10 +812,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CustomModelBox.Text = _settings.AiCleanupCustomModel ?? string.Empty;
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
 
-        // Open Advanced automatically when manual auth is configured, so an override isn't hidden away.
-        AzureAdvancedExpander.IsExpanded =
-            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureApiKey) ||
-            !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureTenantId);
+        // Open optional details automatically only when its remaining field has a saved value.
+        AzureAdvancedExpander.IsExpanded = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureTenantId);
 
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
@@ -836,6 +846,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiEnabledState();
         UpdateAiModelHint();
         UpdateAzureDeploymentHint();
+        UpdateAzureProjectApiKeyHint();
 
         // Best-effort: merge the live on-device catalog + loaded status in without blocking window open.
         if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.FoundryLocal)
@@ -1893,7 +1904,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // Prefer the Foundry project endpoint (Microsoft's recommended shape, routed natively
             // through AIProjectClient). Its data plane is Entra-only, so a user working with an API
             // key gets the classic account endpoint instead.
-            var usingApiKey = !string.IsNullOrWhiteSpace(AzureApiKeyBox.Password);
+            var usingApiKey = IsAzureApiKeySelected && !string.IsNullOrWhiteSpace(AzureApiKeyBox.Password);
             AzureEndpointBox.Text = deployment.EndpointFor(usingApiKey);
             AzureDeploymentBox.Text = deployment.DeploymentName;
         }
@@ -2040,6 +2051,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private async void AzureRefreshButton_Click(object sender, RoutedEventArgs e)
     {
+        if (IsAzureApiKeySelected)
+        {
+            await VerifyAzureApiKeyAsync();
+            return;
+        }
+
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             await VerifyServicePrincipalAsync();
@@ -2055,11 +2072,85 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void AzureManualButton_Click(object sender, RoutedEventArgs e)
     {
         _azureManualConfiguration = true;
-        AzureAdvancedExpander.IsExpanded = true;
+        AzureAuthModeBox.SelectedIndex = 2;
         ApplyAzureSettingsAccess();
+        UpdateAzureProjectApiKeyHint();
         AzureStatusText.Text =
             "Manual setup is open. Enter an endpoint, deployment name, and API key.";
         AzureEndpointBox.Focus();
+    }
+
+    private void AzureEndpointBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        InvalidateAzureApiKeyVerification("The endpoint changed. Verify the API key again.");
+        ApplyAzureSettingsAccess();
+        UpdateAzureProjectApiKeyHint();
+    }
+
+    private void AzureDeploymentBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        InvalidateAzureApiKeyVerification("The deployment changed. Verify the API key again.");
+        ApplyAzureSettingsAccess();
+    }
+
+    private void AzureApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi)
+        {
+            return;
+        }
+
+        _azureManualConfiguration = true;
+        InvalidateAzureApiKeyVerification("The API key changed. Verify it again.");
+        ApplyAzureSettingsAccess();
+        UpdateAzureDeploymentHint();
+        UpdateAzureProjectApiKeyHint();
+    }
+
+    private void InvalidateAzureApiKeyVerification(string message)
+    {
+        if (!IsAzureApiKeySelected)
+        {
+            return;
+        }
+
+        ++_azureSignInProbeVersion;
+        _azureApiKeyVerified = false;
+        _azureSignInStatus = new AzureSignInStatus(false, null);
+
+        // Bumping the version supersedes any in-flight verify, whose finally block then declines to
+        // clear the busy flag because the version no longer matches. Clearing it here keeps the
+        // Verify button usable: editing the endpoint mid-probe would otherwise disable it for the
+        // rest of the settings session, with no way back in API key mode.
+        SetAzureConnectionBusy(false);
+
+        if (AzureStatusText is not null && CanVerifyAzureApiKey)
+        {
+            AzureStatusText.Text = message;
+        }
+    }
+
+    private void UpdateAzureProjectApiKeyHint()
+    {
+        if (AzureProjectApiKeyHint is null)
+        {
+            return;
+        }
+
+        var projectEndpointWithKey = IsAzureApiKeySelected
+            && !string.IsNullOrWhiteSpace(AzureEndpointBox?.Text)
+            && AzureEndpointBox.Text.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase);
+        AzureProjectApiKeyHint.Visibility = projectEndpointWithKey ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void AzureTenantBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -2092,6 +2183,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Best-effort and non-blocking; runs when the Azure panel is shown.
     private Task ProbeAzureSignInAsync()
     {
+        if (IsAzureApiKeySelected)
+        {
+            if (AzureStatusText is not null)
+            {
+                AzureStatusText.Text = CanVerifyAzureApiKey
+                    ? "Verify the API key before saving this Microsoft Foundry configuration."
+                    : "Enter the endpoint, deployment name, and API key.";
+            }
+
+            ApplyAzureSettingsAccess();
+            return Task.CompletedTask;
+        }
+
         if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             _azureConnectionKnown = true;
@@ -2122,10 +2226,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         bool listModels,
         bool forceListModels = false)
     {
-        // Everything below probes Azure CLI specifically. In service principal mode a valid CLI
-        // session would otherwise mark the panel signed in, making an unverified app registration
-        // look verified and revealing configuration that its identity may not actually reach.
-        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        // Everything below probes Azure CLI specifically. In API-key or service-principal mode a
+        // valid CLI session would otherwise make the other identity look verified.
+        if (IsAzureApiKeySelected || SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
             return;
         }
@@ -2282,6 +2385,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ApplyAzureSettingsAccess();
     }
 
+    private bool IsAzureApiKeySelected => AzureAuthModeBox?.SelectedIndex == 2;
+
+    private string SelectedAzureApiKey => IsAzureApiKeySelected ? AzureApiKeyBox?.Password ?? string.Empty : string.Empty;
+
+    private bool CanVerifyAzureApiKey =>
+        IsAzureApiKeySelected &&
+        !string.IsNullOrWhiteSpace(AzureEndpointBox?.Text) &&
+        !string.IsNullOrWhiteSpace(AzureDeploymentBox?.Text) &&
+        !string.IsNullOrWhiteSpace(SelectedAzureApiKey);
+
     private AzureAuthMode SelectedAzureAuthMode =>
         AzureAuthModeBox?.SelectedIndex == 1 ? AzureAuthMode.ServicePrincipal : AzureAuthMode.AzureCli;
 
@@ -2296,8 +2409,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AzureSettingsAccess.Resolve(
             _azureCliInstalled,
             _azureSignInStatus.IsSignedIn,
-            _azureManualConfiguration,
-            !string.IsNullOrWhiteSpace(AzureApiKeyBox?.Password),
+            _azureManualConfiguration || IsAzureApiKeySelected,
+            !string.IsNullOrWhiteSpace(SelectedAzureApiKey),
             SelectedAzureAuthMode,
             CurrentServicePrincipal is not null);
 
@@ -2314,16 +2427,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         var access = CurrentAzureSettingsAccess;
         var servicePrincipal = access.ShowServicePrincipalFields;
+        var apiKeyMode = IsAzureApiKeySelected;
         AzureCliSetupPanel.Visibility =
-            _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
-        AzureDiscoveryPanel.Visibility = access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
-        AzureConfigurationPanel.Visibility = access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
+            !apiKeyMode && _azureConnectionKnown && access.ShowCliSetup ? Visibility.Visible : Visibility.Collapsed;
+        AzureDiscoveryPanel.Visibility = !apiKeyMode && access.ShowDiscovery ? Visibility.Visible : Visibility.Collapsed;
+        AzureConfigurationPanel.Visibility = apiKeyMode || access.ShowConfiguration ? Visibility.Visible : Visibility.Collapsed;
         AzureManualButton.Visibility =
-            access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
+            !apiKeyMode && access.ShowManualConfigurationAction ? Visibility.Visible : Visibility.Collapsed;
 
         if (AzureServicePrincipalPanel is not null)
         {
-            AzureServicePrincipalPanel.Visibility = servicePrincipal ? Visibility.Visible : Visibility.Collapsed;
+            AzureServicePrincipalPanel.Visibility = !apiKeyMode && servicePrincipal ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (AzureApiKeyPanel is not null)
+        {
+            AzureApiKeyPanel.Visibility = apiKeyMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // The optional CLI tenant box pins the az login account to a tenant. In service principal
@@ -2331,24 +2450,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // controls claiming the same setting.
         if (AzureCliTenantPanel is not null)
         {
-            AzureCliTenantPanel.Visibility = servicePrincipal ? Visibility.Collapsed : Visibility.Visible;
+            AzureCliTenantPanel.Visibility = apiKeyMode || servicePrincipal ? Visibility.Collapsed : Visibility.Visible;
         }
 
         if (AzureStatusTitle is not null)
         {
-            AzureStatusTitle.Text = servicePrincipal ? "Use a service principal" : "Use your Azure sign-in";
+            AzureStatusTitle.Text = apiKeyMode
+                ? "Use an API key"
+                : servicePrincipal ? "Use a service principal" : "Use your Azure sign-in";
         }
 
-        AzureRefreshButton.Content = servicePrincipal
+        AzureRefreshButton.Visibility = Visibility.Visible;
+        AzureRefreshButton.Content = apiKeyMode
+            ? _azureApiKeyVerified ? "Re-verify" : "Verify API key"
+            : servicePrincipal
             ? _azureSignInStatus.IsSignedIn ? "Re-verify" : "Verify service principal"
             : _azureSignInStatus.IsSignedIn ? "Refresh models" : "Sign in & find models";
 
         // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
         // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
-        AzureRefreshButton.IsEnabled = !_azureConnectionBusy && access.CanStartSignIn &&
-            (servicePrincipal || _azureConnectionKnown);
+        AzureRefreshButton.IsEnabled = !_azureConnectionBusy && (
+            apiKeyMode
+                ? CanVerifyAzureApiKey
+                : access.CanStartSignIn && (servicePrincipal || _azureConnectionKnown));
 
-        UpdateServicePrincipalValidation(servicePrincipal);
+        UpdateServicePrincipalValidation(!apiKeyMode && servicePrincipal);
+        UpdateAzureProjectApiKeyHint();
     }
 
     // Shows the first unmet requirement while the user is still typing, but stays quiet on an
@@ -2389,22 +2516,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Both modes ultimately write one tenant setting, so carry the current value across rather
-        // than making the user retype it. Copy unconditionally: only syncing into a blank box would
-        // leave the destination holding a stale tenant that Save would then persist over the edit
-        // the user actually made.
-        if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        if (!IsAzureApiKeySelected)
         {
-            if (SpTenantBox is not null && AzureTenantBox is not null
-                && !string.IsNullOrWhiteSpace(AzureTenantBox.Text))
+            // Both Entra modes ultimately write one tenant setting, so carry the current value across
+            // rather than making the user retype it.
+            if (SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
             {
-                SpTenantBox.Text = AzureTenantBox.Text;
+                if (SpTenantBox is not null && AzureTenantBox is not null
+                    && !string.IsNullOrWhiteSpace(AzureTenantBox.Text))
+                {
+                    SpTenantBox.Text = AzureTenantBox.Text;
+                }
             }
-        }
-        else if (AzureTenantBox is not null && SpTenantBox is not null
-                 && !string.IsNullOrWhiteSpace(SpTenantBox.Text))
-        {
-            AzureTenantBox.Text = SpTenantBox.Text;
+            else if (AzureTenantBox is not null && SpTenantBox is not null
+                     && !string.IsNullOrWhiteSpace(SpTenantBox.Text))
+            {
+                AzureTenantBox.Text = SpTenantBox.Text;
+            }
         }
 
         // The previous mode's verification says nothing about this one's identity, so drop it and
@@ -2420,15 +2548,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         SetAzureConnectionBusy(false);
         if (AzureStatusText is not null)
         {
-            AzureStatusText.Text = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
-                ? "Enter the service principal details, then verify them."
-                : "Checking your Azure CLI sign-in before showing cloud resources.";
+            AzureStatusText.Text = IsAzureApiKeySelected
+                ? "Enter the endpoint, deployment name, and API key."
+                : SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal
+                    ? "Enter the service principal details, then verify them."
+                    : "Checking your Azure CLI sign-in before showing cloud resources.";
         }
 
         ApplyAzureSettingsAccess();
 
         // Returning to the CLI needs a fresh probe; nothing else re-runs it on this path.
-        if (SelectedAzureAuthMode == AzureAuthMode.AzureCli)
+        if (!IsAzureApiKeySelected && SelectedAzureAuthMode == AzureAuthMode.AzureCli)
         {
             _ = RefreshAzureConnectionAsync(
                 allowInteractiveLogin: false, listModels: true, forceListModels: false);
@@ -2562,6 +2692,190 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             TryLog(ex, failureMessage);
             ShowInfo(failureMessage, Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
+    }
+
+    /// <summary>
+    /// Verifies the entered API key by making a real Responses API call to the configured deployment.
+    /// </summary>
+    private async Task VerifyAzureApiKeyAsync()
+    {
+        if (!CanVerifyAzureApiKey)
+        {
+            AzureStatusText.Text = "Enter the endpoint, deployment name, and API key.";
+            ApplyAzureSettingsAccess();
+            return;
+        }
+
+        var endpoint = AzureEndpointBox.Text.Trim();
+        var deployment = AzureDeploymentBox.Text.Trim();
+        var apiKey = SelectedAzureApiKey.Trim();
+        var operationVersion = ++_azureSignInProbeVersion;
+        SetAzureConnectionBusy(true);
+        AzureStatusText.Text = "Verifying the API key…";
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, cts.Token);
+            if (operationVersion != _azureSignInProbeVersion)
+            {
+                return;
+            }
+
+            _azureApiKeyVerified = result.Success;
+            _azureSignInStatus = result.Success
+                ? new AzureSignInStatus(true, null)
+                : new AzureSignInStatus(false, result.Message);
+            AzureStatusText.Text = result.Message;
+        }
+        catch (OperationCanceledException)
+        {
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureApiKeyVerified = false;
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                AzureStatusText.Text = "Verifying the API key timed out. Check the endpoint host and try again.";
+            }
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not verify the Azure API key.");
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                _azureApiKeyVerified = false;
+                _azureSignInStatus = new AzureSignInStatus(false, null);
+                AzureStatusText.Text = "The API key could not be verified. Check the endpoint, deployment name, and key.";
+            }
+        }
+        finally
+        {
+            if (operationVersion == _azureSignInProbeVersion)
+            {
+                SetAzureConnectionBusy(false);
+            }
+        }
+    }
+
+    private async Task<AzureApiKeyProbeResult> ProbeAzureApiKeyAsync(
+        string endpoint,
+        string deployment,
+        string apiKey,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
+        {
+            return AzureApiKeyProbeResult.Fail("The Azure endpoint is not a valid URL.");
+        }
+
+        var accountEndpoint = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase)
+            ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
+            : endpointUri;
+        var responsesEndpoint = new Uri(
+            $"{accountEndpoint.GetLeftPart(UriPartial.Authority).TrimEnd('/')}/openai/v1/responses");
+        using var request = new HttpRequestMessage(HttpMethod.Post, responsesEndpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.TryAddWithoutValidation("api-key", apiKey);
+        request.Content = new StringContent(
+            JsonSerializer.Serialize(new
+            {
+                model = deployment,
+                input = "ok",
+                max_output_tokens = 16,
+                store = false,
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        try
+        {
+            using var response = await client.SendAsync(request, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            return response.IsSuccessStatusCode
+                ? AzureApiKeyProbeResult.Ok("API key verified. AI cleanup is ready to use.")
+                : AzureApiKeyProbeResult.Fail(DescribeAzureApiKeyFailure(response.StatusCode, deployment, body));
+        }
+        catch (HttpRequestException ex)
+        {
+            TryLog(ex, "Could not reach the Azure API-key endpoint.");
+            return AzureApiKeyProbeResult.Fail(
+                "Couldn't reach the Azure endpoint. Check the URL and network connection.");
+        }
+    }
+
+    private static string DescribeAzureApiKeyFailure(HttpStatusCode statusCode, string deployment, string responseBody)
+    {
+        var status = (int)statusCode;
+        return statusCode switch
+        {
+            HttpStatusCode.Unauthorized =>
+                "Azure rejected the API key (401). Check that the key belongs to this resource.",
+
+            HttpStatusCode.Forbidden =>
+                "Azure accepted the API key but denied access (403). Check that this key can call the resource.",
+
+            HttpStatusCode.NotFound =>
+                $"Azure could not find the deployment '{deployment}' (404). Check the endpoint and exact deployment name.",
+
+            HttpStatusCode.TooManyRequests =>
+                "Azure is throttling requests (429). The deployment is reachable but over quota. Wait and retry.",
+
+            _ when status >= 500 =>
+                $"Azure returned a server error ({status}). This is usually transient; try again shortly.",
+
+            _ => BuildAzureApiKeyFallback(status, deployment, responseBody),
+        };
+    }
+
+    private static string BuildAzureApiKeyFallback(int status, string deployment, string responseBody)
+    {
+        var serverMessage = ExtractAzureErrorMessage(responseBody);
+        if (serverMessage.Contains("deployment", StringComparison.OrdinalIgnoreCase) ||
+            serverMessage.Contains("model", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"Azure could not use deployment '{deployment}' ({status}). {serverMessage}";
+        }
+
+        return string.IsNullOrWhiteSpace(serverMessage)
+            ? $"Azure returned HTTP {status}. Check the endpoint, deployment name, and API key."
+            : $"Azure returned HTTP {status}. {serverMessage}";
+    }
+
+    private static string ExtractAzureErrorMessage(string responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            if (document.RootElement.TryGetProperty("error", out var error) &&
+                error.TryGetProperty("message", out var message) &&
+                message.GetString() is { Length: > 0 } text)
+            {
+                return FlattenStatusMessage(text);
+            }
+        }
+        catch (JsonException)
+        {
+            return FlattenStatusMessage(responseBody);
+        }
+
+        return FlattenStatusMessage(responseBody);
+    }
+
+    private static string FlattenStatusMessage(string value)
+    {
+        var line = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return line.Length <= 220 ? line : line[..220].TrimEnd() + "...";
+    }
+
+    private sealed record AzureApiKeyProbeResult(bool Success, string Message)
+    {
+        public static AzureApiKeyProbeResult Ok(string message) => new(true, message);
+
+        public static AzureApiKeyProbeResult Fail(string message) => new(false, message);
     }
 
     /// <summary>
@@ -3576,7 +3890,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             enabled: AiCleanupCheck.IsChecked == true,
             usesAzureProvider: SelectedProvider == CleanupProvider.AzureFoundry,
             signedIn: _azureSignInStatus.IsSignedIn,
-            apiKey: AzureApiKeyBox.Password,
+            apiKey: SelectedAzureApiKey,
             endpoint: AzureEndpointBox.Text,
             deployment: AzureDeploymentBox.Text,
             authMode: SelectedAzureAuthMode,
@@ -3588,6 +3902,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ShowSection(SectionAi);
             var message = azureValidation switch
             {
+                AzureSettingsAccess.ValidationIssue.AuthenticationRequired when IsAzureApiKeySelected =>
+                    "Enter an API key before enabling Microsoft Foundry cleanup with key authentication.",
                 AzureSettingsAccess.ValidationIssue.AuthenticationRequired =>
                     "Sign in to Azure, or use an endpoint and API key, before enabling Microsoft Foundry cleanup.",
                 AzureSettingsAccess.ValidationIssue.ServicePrincipalIncomplete =>
@@ -3638,7 +3954,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
             _settings.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
             _settings.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
-            _settings.AiCleanupAzureApiKey = NullIfBlank(AzureApiKeyBox.Password);
+            _settings.AiCleanupAzureApiKey = NullIfBlank(SelectedAzureApiKey);
             _settings.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
             // One tenant setting, edited from whichever box the active mode shows.
             _settings.AiCleanupAzureTenantId = SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal

@@ -58,6 +58,23 @@ public sealed class SanitizeTests
     }
 
     [Fact]
+    public void Auxiliary_completion_strips_think_blocks()
+    {
+        var text = TextCleanupService.SanitizeAuxiliaryCompletion(
+            "<think>reasoning that must not be shown</think>\n[{\"spoken\":\"a p i\",\"written\":\"API\"}]");
+
+        Assert.Equal("[{\"spoken\":\"a p i\",\"written\":\"API\"}]", text);
+    }
+
+    [Fact]
+    public void Auxiliary_think_only_completion_returns_null()
+    {
+        var text = TextCleanupService.SanitizeAuxiliaryCompletion("<think>reasoning only</think>");
+
+        Assert.Null(text);
+    }
+
+    [Fact]
     public void Empty_code_fence_is_rejected()
     {
         Assert.False(TextCleanupService.TrySanitize("```\n```", "raw", out var text));
