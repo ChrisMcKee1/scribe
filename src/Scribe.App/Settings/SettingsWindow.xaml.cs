@@ -1920,14 +1920,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
-            AiStatusText.Text = available
-                ? "Foundry Local is available. The selected model downloads on first use (about 1 to 2 GB)."
-                : "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
-
-            if (available)
+            if (!available)
             {
-                await RefreshFoundryModelsAsync();
+                AiStatusText.Text = "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
+                return;
             }
+
+            // The old message said the check had passed and stopped there, while the real work
+            // (repopulating the picker) happened invisibly. Reporting the counts is what makes the
+            // button's effect observable, since the list it refreshes is behind a closed dropdown.
+            var count = await RefreshFoundryModelsAsync();
+            var loaded = _foundryExecutionBuilds.Values.FirstOrDefault(m => m.Loaded);
+            var running = loaded is null
+                ? "No model is loaded yet; the one you pick downloads on first use."
+                : $"{loaded.Alias} is loaded and running on the {loaded.DeviceLabel ?? "default device"}.";
+
+            AiStatusText.Text = count switch
+            {
+                null => $"Foundry Local is running, but its model list could not be read. {running}",
+                0 => "Foundry Local is running but reported no models. Check that it finished starting, then check again.",
+                _ => $"Foundry Local is running. {count} models are in the dropdown above. {running}",
+            };
         }
         catch
         {
@@ -1941,7 +1954,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Merges the live Foundry Local catalog into the searchable picker and refreshes the loaded-model
     // status. Best-effort: if Foundry Local isn't installed the curated alias list stays in place.
-    private async Task RefreshFoundryModelsAsync()
+    // Returns how many models the catalog reported, or null when the catalog could not be read, so
+    // the caller can tell "no models" apart from "could not ask".
+    private async Task<int?> RefreshFoundryModelsAsync()
     {
         try
         {
@@ -1970,24 +1985,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
 
             UpdateAiModelHint();
-            UpdateFoundryLoadedText(models.FirstOrDefault(m => m.Loaded)?.Alias);
+            var loaded = models.FirstOrDefault(m => m.Loaded);
+            UpdateFoundryLoadedText(loaded?.Alias, loaded?.DeviceLabel);
+            return models.Count;
         }
         catch
         {
             // Leave the curated list and existing status untouched on any failure.
+            return null;
         }
     }
 
-    private void UpdateFoundryLoadedText(string? loadedAlias)
+    private void UpdateFoundryLoadedText(string? loadedAlias, string? deviceLabel = null)
     {
         if (AiLoadedModelText is null)
         {
             return;
         }
 
+        // The device belongs on the loaded line rather than only in the picker hint: this is the
+        // one line that states what is running right now, which is exactly what the user is asking
+        // when they want to know whether cleanup is on the NPU, the GPU or the CPU.
         AiLoadedModelText.Text = string.IsNullOrWhiteSpace(loadedAlias)
             ? "No on-device model is loaded yet."
-            : $"Loaded: {loadedAlias}";
+            : string.IsNullOrWhiteSpace(deviceLabel)
+                ? $"Loaded: {loadedAlias}"
+                : $"Loaded: {loadedAlias}, running on the {deviceLabel}";
 
         if (AiUnloadButton is not null)
         {
@@ -2008,12 +2031,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AiUnloadButton.IsEnabled = false;
         try
         {
-            var progress = new Progress<string>(message => AiStatusText.Text = message);
+            // The service reports the real reason through progress (a missing execution provider,
+            // a model absent from the catalog). Replacing that with a generic line would throw away
+            // the only actionable detail the user gets, so the last reported message wins.
+            string? lastMessage = null;
+            var progress = new Progress<string>(message =>
+            {
+                lastMessage = message;
+                AiStatusText.Text = message;
+            });
             using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
             var ok = await _cleanup.LoadFoundryModelAsync(alias, progress, cts.Token);
             if (!ok)
             {
-                AiStatusText.Text = $"Couldn't load {alias}. Make sure Foundry Local is installed.";
+                AiStatusText.Text = string.IsNullOrWhiteSpace(lastMessage)
+                    ? $"Couldn't load {alias}. Make sure Foundry Local is installed."
+                    : lastMessage;
             }
         }
         catch

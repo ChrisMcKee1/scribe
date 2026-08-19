@@ -53,6 +53,11 @@ internal sealed class TextCleanupService : ITextCleanupService
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
     private const int InitProbeTimeoutSeconds = 30;
+    // A local model's first inference includes warm-up, and that grows with parameter count: a 14B
+    // model on the CPU cleared 30s, so cleanup was marked Unavailable for a model that then worked
+    // fine. The probe runs once per configuration change, so waiting longer here costs nothing on
+    // the dictation path and is far better than a false negative the user cannot explain.
+    private const int LocalInitProbeTimeoutSeconds = 180;
     // Azure rejects anything below 16 with "integer_below_min_value", so the probe would have failed
     // on every Azure endpoint and marked cleanup Unavailable. The probe only needs the call to
     // succeed, not to produce useful text, so the minimum accepted value is the right choice.
@@ -1256,14 +1261,22 @@ internal sealed class TextCleanupService : ITextCleanupService
         alias = alias.Trim();
         var acquired = false;
         var reconcile = false;
+        var cancelledConfigure = false;
+        string[]? loadedIdentifiers = null;
         try
         {
+            // An explicit Load must not queue behind a background readiness probe, which can hold
+            // the lock for minutes on a large on-device model. Cancelling the in-flight
+            // initialization releases it promptly; the reconcile at the end of this method rebuilds
+            // the agent once the requested model is resident, so nothing is lost.
+            cancelledConfigure = CancelPendingConfigure();
+
             // Serialize with InitializeAsync and other load/unload calls so the runtime is never asked
             // to hold two models at once.
+            progress?.Report("Starting Foundry Local…");
             await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             acquired = true;
 
-            progress?.Report("Starting Foundry Local…");
             await EnsureManagerAsync(cancellationToken).ConfigureAwait(false);
             if (_catalog is null)
             {
@@ -1271,7 +1284,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                 return false;
             }
 
-            var model = await _catalog.GetModelAsync(alias, cancellationToken).ConfigureAwait(false);
+            var model = await ResolveFoundryModelAsync(alias, cancellationToken).ConfigureAwait(false);
             if (model is null)
             {
                 progress?.Report($"Model '{alias}' was not found in the Foundry catalog.");
@@ -1297,17 +1310,28 @@ internal sealed class TextCleanupService : ITextCleanupService
             progress?.Report($"Loading {alias}…");
             await model.LoadAsync(cancellationToken).ConfigureAwait(false);
             progress?.Report($"{alias} is loaded and ready.");
+            loadedIdentifiers = [model.Id, model.Alias];
             reconcile = true;
             return true;
         }
         catch (OperationCanceledException)
         {
+            // Reported so the caller has a terminal message: without one the UI would be left
+            // showing "Loading x…" forever after a cancelled or timed-out load.
+            progress?.Report($"Loading {alias} was cancelled.");
             return false;
         }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Loading Foundry Local model {Alias} failed.", alias);
-            progress?.Report($"Couldn't load {alias}. Make sure Foundry Local is installed.");
+
+            // "Make sure Foundry Local is installed" was reported for every failure, including the
+            // common one where Foundry Local is plainly installed and running but selected a variant
+            // needing an execution provider this PC does not have. Naming the provider turns a dead
+            // end into an action the user can take.
+            progress?.Report(TryParseRequiredExecutionProvider(ex) is { } required
+                ? $"Couldn't load {alias}: it needs {required}, which this PC does not have. Pick a different model."
+                : $"Couldn't load {alias}. Make sure Foundry Local is installed.");
             return false;
         }
         finally
@@ -1319,9 +1343,24 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             // Reconcile outside the init lock: loading a different model evicts the one cleanup was
             // using, and reloading the configured model should turn cleanup back on.
+            var recovered = false;
             if (reconcile)
             {
-                ReconcileCleanupAfterResidentChange(loadedAlias: alias, unloadedAlias: null, unloadedAll: false);
+                recovered = ReconcileCleanupAfterResidentChange(
+                    loadedAlias: alias,
+                    unloadedAlias: null,
+                    unloadedAll: false,
+                    loadedIdentifiers: loadedIdentifiers,
+                    afterCancelledInit: cancelledConfigure);
+            }
+
+            // Recovery keys off whether anything published a terminal status, not off whether the
+            // load succeeded. A load while cleanup points at a cloud provider returns from reconcile
+            // immediately, and a failed load never reconciles at all; both would otherwise leave
+            // cleanup stuck on "Applying new settings…" and silently emitting raw text.
+            if (cancelledConfigure && !recovered)
+            {
+                RestartCancelledConfigure();
             }
         }
     }
@@ -1432,11 +1471,61 @@ internal sealed class TextCleanupService : ITextCleanupService
     // CleanAsync can't call an unloaded model, and rebuild it when the configured model is loaded back
     // in, all without forcing a settings save. No-op for Azure or disabled cleanup. Must be called
     // WITHOUT holding _initLock, because a rebuild starts a background InitializeAsync that takes it.
-    private void ReconcileCleanupAfterResidentChange(string? loadedAlias, string? unloadedAlias, bool unloadedAll)
+    /// <summary>
+    /// Cancels an initialization already in flight and reports whether it did. Used when an
+    /// explicit user action must take the init lock without waiting out a probe.
+    /// <para>
+    /// The caller must pass the result to <see cref="ReconcileCleanupAfterResidentChange"/> as
+    /// <c>forceRebuild</c>. <see cref="InitializeAsync"/> swallows cancellation on the assumption
+    /// that a newer Configure owns the status from then on, which is true when Configure cancels
+    /// but not here: nothing else would move the status off Initializing, and the reconcile refuses
+    /// to rebuild while it reads Initializing, so cleanup would sit there forever.
+    /// </para>
+    /// </summary>
+    private bool CancelPendingConfigure()
+    {
+        lock (_gate)
+        {
+            if (_configureCts is { IsCancellationRequested: false } cts)
+            {
+                cts.Cancel();
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Re-runs the configuration that <see cref="CancelPendingConfigure"/> interrupted. Configure
+    /// restarts initialization whenever the current status is anything but Ready, so passing the
+    /// live options back through it recovers an interrupted run; when the status is already Ready
+    /// (the cancelled token belonged to a run that had finished) it correctly does nothing.
+    /// </summary>
+    private void RestartCancelledConfigure()
+    {
+        CleanupOptions options;
+        lock (_gate)
+        {
+            options = _options;
+        }
+
+        if (options.Enabled && options.IsActionable)
+        {
+            Configure(options);
+        }
+    }
+
+    private bool ReconcileCleanupAfterResidentChange(
+        string? loadedAlias,
+        string? unloadedAlias,
+        bool unloadedAll,
+        IReadOnlyCollection<string>? loadedIdentifiers = null,
+        bool afterCancelledInit = false)
     {
         if (_disposed)
         {
-            return;
+            return false;
         }
 
         var invalidate = false;
@@ -1449,7 +1538,7 @@ internal sealed class TextCleanupService : ITextCleanupService
             options = _options;
             if (options.Provider != CleanupProvider.FoundryLocal || !options.Enabled || !options.IsActionable)
             {
-                return;
+                return false;
             }
 
             var active = options.FoundryModelAlias;
@@ -1457,18 +1546,30 @@ internal sealed class TextCleanupService : ITextCleanupService
                 !string.IsNullOrWhiteSpace(candidate) &&
                 string.Equals(candidate, active, StringComparison.OrdinalIgnoreCase);
 
+            // One model answers to several names: the family alias the user typed, the concrete
+            // variant id, and the alias a persisted demotion pinned. Comparing only the requested
+            // name would read a successful load of the configured model as "a different model was
+            // loaded" and tear down a perfectly good agent.
+            bool MatchesLoaded() =>
+                Matches(loadedAlias) || (loadedIdentifiers?.Any(Matches) ?? false);
+
             // The configured model is gone if everything was unloaded, if it was the unload target, or
             // if a *different* model was just loaded (loading one model evicts all others).
-            var evicted = unloadedAll || Matches(unloadedAlias) || (loadedAlias is not null && !Matches(loadedAlias));
-            var nowResident = Matches(loadedAlias);
+            var evicted = unloadedAll || Matches(unloadedAlias) || (loadedAlias is not null && !MatchesLoaded());
+            var nowResident = MatchesLoaded();
 
-            if (evicted && _agent is not null)
+            // Normally an agent-less state means some other path already owns the status. That is
+            // not true after this caller cancelled an initialization: the agent was dropped and the
+            // status left on Initializing by a run that no longer exists, so both branches have to
+            // treat that as stale rather than as somebody else's business.
+            if (evicted && (_agent is not null || afterCancelledInit))
             {
                 DropAgents();
                 invalidate = true;
             }
             else if (nowResident && _agent is null &&
-                     _status is not (CleanupStatus.Ready or CleanupStatus.Initializing or CleanupStatus.Downloading))
+                     (afterCancelledInit ||
+                      _status is not (CleanupStatus.Ready or CleanupStatus.Initializing or CleanupStatus.Downloading)))
             {
                 _configureCts?.Cancel();
                 _configureCts = new CancellationTokenSource();
@@ -1489,6 +1590,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             _log.LogInformation("Rebuilding cleanup agent after its Foundry Local model was reloaded.");
             _ = Task.Run(() => InitializeAsync(options, initToken));
         }
+
+        // Whether this call published a terminal status. The caller uses it to decide if cleanup
+        // still needs recovering after an initialization it cancelled.
+        return invalidate || rebuild;
     }
 
     private async Task InitializeAsync(CleanupOptions options, CancellationToken ct)
@@ -1672,7 +1777,7 @@ internal sealed class TextCleanupService : ITextCleanupService
     {
         ct.ThrowIfCancellationRequested();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(InitProbeTimeoutSeconds));
+        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));
 
         try
         {
@@ -1703,6 +1808,20 @@ internal sealed class TextCleanupService : ITextCleanupService
             return new AgentProbeFailure(DescribeFailure(ex, options.Provider), ex);
         }
     }
+
+    /// <summary>
+    /// How long the readiness probe waits for a first response.
+    /// <para>
+    /// An on-device model pays its warm-up on this very first call, and that cost scales with the
+    /// model. A 14B model on the CPU took longer than the cloud budget and was declared unavailable
+    /// even though it went on to work, so a large local model gets the longer allowance rather than
+    /// having a cloud-shaped timeout applied to it.
+    /// </para>
+    /// </summary>
+    private static int ProbeTimeoutSecondsFor(CleanupOptions options) =>
+        options.Provider == CleanupProvider.FoundryLocal
+            ? LocalInitProbeTimeoutSeconds
+            : InitProbeTimeoutSeconds;
 
     /// <summary>
     /// The GPU alias to demote from, or null when nothing GPU-shaped is in play. The configured
@@ -2011,6 +2130,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         var model = await _catalog.GetModelAsync(alias, ct).ConfigureAwait(false);
         if (model is not null && !string.IsNullOrWhiteSpace(model.Id))
         {
+            SelectRunnableVariant(model, alias);
             return model;
         }
 
@@ -2022,6 +2142,10 @@ internal sealed class TextCleanupService : ITextCleanupService
                 if (string.Equals(variant.Id, alias, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(variant.Alias, alias, StringComparison.OrdinalIgnoreCase))
                 {
+                    // An exact variant id is an explicit user choice, so it is honoured as-is even
+                    // if its execution provider looks unavailable. Overriding a name the user typed
+                    // or picked from the list would be the same silent substitution this method
+                    // exists to correct.
                     parent.SelectVariant(variant);
                     return parent;
                 }
@@ -2029,6 +2153,75 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Repoints a curated family alias at a variant this PC can actually run.
+    /// <para>
+    /// Foundry Local normally selects the variant itself, but that choice can name an execution
+    /// provider the machine does not have: an RTX box reporting
+    /// [CPU, WebGpu, NvTensorRTRTX] was handed <c>qwen3-1.7b-cuda-gpu</c>, which fails to load every
+    /// time. Because Scribe's default is a family alias, that left first-run cleanup dead while the
+    /// same model loaded fine once the user picked a concrete variant by hand.
+    /// </para>
+    /// <para>
+    /// This filters, it never reorders: the SDK's own variant order is preserved and only entries
+    /// whose provider is positively known to be missing are skipped, so the SDK keeps making the
+    /// choice wherever it can. A variant that does not report a provider is left alone, since
+    /// absence of evidence is not evidence the variant is broken.
+    /// </para>
+    /// </summary>
+    private void SelectRunnableVariant(IModel model, string requestedAlias)
+    {
+        try
+        {
+            var variants = model.Variants;
+            if (variants is null || variants.Count == 0)
+            {
+                return;
+            }
+
+            var selected = model.Info?.Runtime?.ExecutionProvider;
+            if (string.IsNullOrWhiteSpace(selected) || IsExecutionProviderAvailable(selected))
+            {
+                return;
+            }
+
+            var runnable = variants.FirstOrDefault(variant =>
+                IsExecutionProviderAvailable(variant?.Info?.Runtime?.ExecutionProvider));
+            if (runnable is null)
+            {
+                _log.LogWarning(
+                    "Foundry Local selected {SelectedProvider} for {Alias}, which this PC does not have ({Available}), and no variant reported an available provider.",
+                    selected,
+                    requestedAlias,
+                    string.Join(", ", _availableExecutionProviders));
+                return;
+            }
+
+            model.SelectVariant(runnable);
+            _log.LogInformation(
+                "Foundry Local selected {SelectedProvider} for {Alias}, which this PC does not have ({Available}). Using variant {VariantId} on {VariantProvider} instead.",
+                selected,
+                requestedAlias,
+                string.Join(", ", _availableExecutionProviders),
+                runnable.Id,
+                runnable.Info?.Runtime?.ExecutionProvider);
+        }
+        catch (Exception ex)
+        {
+            // Variant inspection is an optimization over the SDK's own choice. If it throws, the
+            // original selection is still there to attempt, and a real load failure reports a far
+            // better diagnostic than an exception thrown while trying to avoid one.
+            _log.LogDebug(ex, "Could not check Foundry Local variant compatibility for {Alias}.", requestedAlias);
+        }
+    }
+
+    private bool IsExecutionProviderAvailable(string? executionProvider)
+    {
+        var provider = executionProvider?.Trim();
+        return !string.IsNullOrEmpty(provider) &&
+            _availableExecutionProviders.Contains(provider, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

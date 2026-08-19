@@ -694,8 +694,9 @@
                                                         <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                                                    Text="The selected model downloads automatically on first use (about 1 to 2 GB)."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check &amp; list models"
+                                                    <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check status"
                                                                MinWidth="76" VerticalAlignment="Center"
+                                                               ToolTip="Checks that Foundry Local is running and refreshes the model dropdown above."
                                                                Click="AiCheckButton_Click"/>
                                                 </Grid>
                                             </Border>

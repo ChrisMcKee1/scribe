@@ -247,6 +247,14 @@ public sealed class AppSettings
     public bool HasRetiredSeedVocabulary { get; set; }
 
     /// <summary>
+    /// Set once the saved Foundry Local GPU demotions have been cleared. Those markers were written
+    /// for any load failure, including a variant needing an absent execution provider, which Scribe
+    /// now avoids outright. The gate keeps the clear to one launch so a genuinely broken GPU is not
+    /// re-probed every time.
+    /// </summary>
+    public bool HasResetFoundryDemotions { get; set; }
+
+    /// <summary>
     /// A settings object for a brand new install. Distinct from <c>new AppSettings()</c>: this is
     /// where first-run opt-ins live, so deserializing an existing install can never acquire them.
     /// </summary>

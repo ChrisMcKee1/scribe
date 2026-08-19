@@ -56,6 +56,27 @@ public static class FoundryExecutionProviders
         return $"Runs on {device}{parenthetical}.";
     }
 
+    /// <summary>
+    /// Just the device name ("NPU", "GPU", "CPU"), for places that need a badge rather than a
+    /// sentence, or null when the SDK reports no usable device.
+    /// </summary>
+    public static string? ShortDevice(string? deviceType)
+    {
+        var device = deviceType?.Trim();
+        if (string.IsNullOrEmpty(device) ||
+            device.Equals("Invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // Upper-cased only for the three the SDK actually names, so an unrecognized device is
+        // repeated exactly as reported rather than mangled into a shape it never had.
+        if (device.Equals("NPU", StringComparison.OrdinalIgnoreCase)) return "NPU";
+        if (device.Equals("GPU", StringComparison.OrdinalIgnoreCase)) return "GPU";
+        if (device.Equals("CPU", StringComparison.OrdinalIgnoreCase)) return "CPU";
+        return device;
+    }
+
     private static string Friendly(string? executionProvider)
     {
         var name = executionProvider?.Trim();

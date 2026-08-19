@@ -13,9 +13,11 @@ namespace Scribe.Core.Persistence;
 /// </summary>
 public sealed class ScribeDatabase : IDisposable
 {
-    // bundle_e_sqlite3 3.0.3 ships native SQLite 3.50.4 (well past the CVE-2025-6965 fix in
-    // 3.50.2). The runtime smoke test asserts this exact version to prove the pinned native loads.
-    public const string ExpectedSqliteVersion = "3.50.4";
+    // bundle_e_sqlite3 3.0.5 ships native SQLite 3.53.4, well past the CVE-2025-6965 fix in 3.50.2.
+    // The runtime smoke test asserts this exact version, so a transitive bundle silently replacing
+    // the pinned native fails the build rather than shipping. Bump this constant deliberately
+    // alongside the package, and never downgrade it below 3.50.2.
+    public const string ExpectedSqliteVersion = "3.53.4";
 
     private const int BusyTimeoutMs = 10_000;
     private const int SchemaVersion = 6;

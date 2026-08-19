@@ -59,6 +59,13 @@ internal sealed class DictationController : IDisposable
     private bool _started;
     private bool _disposed;
 
+    // The cleanup configuration most recently handed to the service, and the announcement waiting
+    // for it to become Ready. Both are touched from the UI thread and from the service's status
+    // callback, so they are guarded rather than relying on the caller's thread.
+    private readonly object _announceGate = new();
+    private CleanupOptions? _announcedCleanupOptions;
+    private string? _pendingAnnouncement;
+
     // Silence auto-stop (toggle mode, opt-in): tracks live input levels while recording and ends
     // the dictation when the speaker goes quiet, so a forgotten toggle never leaves the mic hot.
     private SilenceAutoStopTracker? _silenceTracker;
@@ -127,6 +134,13 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public event Action? InjectionFailed;
 
+    /// <summary>
+    /// Raised after a settings save changes the AI cleanup configuration and the new provider is
+    /// genuinely serving requests. Deliberately not raised at startup: the swap is what users
+    /// cannot otherwise observe, whereas a toast on every launch would be noise.
+    /// </summary>
+    public event Action<string>? CleanupProviderChanged;
+
     /// <summary>True while dictation is suspended (the hotkey is ignored).</summary>
     public bool IsPaused
     {
@@ -155,7 +169,17 @@ internal sealed class DictationController : IDisposable
 
         _settings = _settingsRepository.Load();
         _postProcessor.Reload();
-        _cleanup.Configure(BuildCleanupOptions(_settings));
+        var startupOptions = BuildCleanupOptions(_settings);
+        lock (_announceGate)
+        {
+            // Seeded so the first save is measured against the startup configuration. Startup
+            // itself is deliberately silent: a toast on every launch would be noise, and the swap
+            // is the only part a user cannot otherwise observe.
+            _announcedCleanupOptions = startupOptions;
+        }
+
+        _cleanup.StatusChanged += OnCleanupStatusChangedForAnnouncement;
+        _cleanup.Configure(startupOptions);
 
         _hotkeys.UpdateBindings(_settings.Hotkey, _settings.DictationOnlyHotkey);
         _hotkeys.Activated += OnActivated;
@@ -185,8 +209,111 @@ internal sealed class DictationController : IDisposable
             _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
         _postProcessor.Reload();
-        _cleanup.Configure(BuildCleanupOptions(settings));
+
+        var previous = _announcedCleanupOptions;
+        var next = BuildCleanupOptions(settings);
+        _cleanup.Configure(next);
+        AnnounceCleanupChange(previous, next);
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
+    }
+
+    /// <summary>
+    /// Records the reconfigured provider and announces it once it is genuinely serving.
+    /// <para>
+    /// Waiting for Ready matters: the provider swap is asynchronous, so announcing at save time
+    /// would claim success before the model had loaded and would still say "running" when it went
+    /// on to fail. A failure is left to the existing status UI rather than being reported here as
+    /// though it had worked.
+    /// </para>
+    /// </summary>
+    private void AnnounceCleanupChange(CleanupOptions? previous, CleanupOptions next)
+    {
+        // Value equality, not reference: every save builds a fresh record, so an unrelated save
+        // (a hotkey change) while a swap is still initializing must not be read as a new
+        // configuration and cancel the announcement that is still pending.
+        var changed = previous is not null && previous != next;
+
+        lock (_announceGate)
+        {
+            _announcedCleanupOptions = next;
+            if (!changed || !next.Enabled || CleanupActivationMessage.ForReady(next) is null)
+            {
+                // Nothing to announce on Ready. Drop any pending announcement so a superseded
+                // configuration cannot fire later.
+                _pendingAnnouncement = null;
+            }
+            else
+            {
+                _pendingAnnouncement = CleanupActivationMessage.ForReady(next);
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        if (!next.Enabled)
+        {
+            if (CleanupActivationMessage.ForDisabled(next) is { } offMessage)
+            {
+                CleanupProviderChanged?.Invoke(offMessage);
+            }
+
+            return;
+        }
+
+        // Ready can arrive before this method finishes (a prompt-only edit, or a provider that was
+        // already serving), so the pending announcement is flushed here as well as from the event.
+        FlushCleanupAnnouncement();
+    }
+
+    /// <summary>
+    /// Single, permanent status subscription. A per-save closure was tried and leaked: if the
+    /// service never reached a terminal status the handler stayed attached forever, and a Ready
+    /// raised between the status check and the subscription was missed entirely.
+    /// </summary>
+    private void OnCleanupStatusChangedForAnnouncement()
+    {
+        switch (_cleanup.Status)
+        {
+            case CleanupStatus.Ready:
+                FlushCleanupAnnouncement();
+                break;
+
+            // The reconfigured provider failed. The status UI already explains why, and announcing
+            // "is running" for something that just failed would be worse than staying quiet.
+            case CleanupStatus.Unavailable:
+            case CleanupStatus.Disabled:
+                lock (_announceGate)
+                {
+                    _pendingAnnouncement = null;
+                }
+
+                break;
+        }
+    }
+
+    private void FlushCleanupAnnouncement()
+    {
+        if (_cleanup.Status != CleanupStatus.Ready)
+        {
+            return;
+        }
+
+        string message;
+        lock (_announceGate)
+        {
+            if (_pendingAnnouncement is null)
+            {
+                return;
+            }
+
+            message = _pendingAnnouncement;
+            _pendingAnnouncement = null;
+        }
+
+        CleanupProviderChanged?.Invoke(message);
     }
 
     /// <summary>
@@ -928,6 +1055,7 @@ internal sealed class DictationController : IDisposable
             _hotkeys.Activated -= OnActivated;
             _hotkeys.Deactivated -= OnDeactivated;
             _hotkeys.Stop();
+            _cleanup.StatusChanged -= OnCleanupStatusChangedForAnnouncement;
         }
 
         Task? processing;

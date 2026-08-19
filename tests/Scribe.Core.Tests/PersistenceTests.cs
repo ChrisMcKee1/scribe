@@ -17,8 +17,8 @@ public class PersistenceTests
 
         var version = (string?)command.ExecuteScalar();
 
-        // Proves the pinned SQLitePCLRaw.bundle_e_sqlite3 3.0.3 native (3.50.4) is the one in use,
-        // not an older transitive bundle flagged by CVE-2025-6965.
+        // Proves the pinned SQLitePCLRaw.bundle_e_sqlite3 native is the one in use, not an older
+        // transitive bundle flagged by CVE-2025-6965.
         Assert.Equal(ScribeDatabase.ExpectedSqliteVersion, version);
     }
 

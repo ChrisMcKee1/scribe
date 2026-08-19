@@ -610,9 +610,10 @@ inference and the provider-unavailable failure at load, and remembers it.
 **Never:**
 - Commit secrets, API keys, private keys, certificate bundles, or the downloaded models
   (`src/Scribe.App/models`).
-- Remove the SQLite pin: `SQLitePCLRaw.bundle_e_sqlite3 3.0.3` overrides a transitive build
-  affected by **CVE‑2025‑6965** (pulls patched `e_sqlite3` 3.50.4). Don't remove without an
-  equivalent fix.
+- Remove the SQLite pin: `SQLitePCLRaw.bundle_e_sqlite3` is referenced directly to override a
+  transitive bundle affected by **CVE-2025-6965**. It must stay at or above 3.0.3, whose native
+  `e_sqlite3` is past the 3.50.2 fix. `ScribeDatabase.ExpectedSqliteVersion` asserts the exact
+  native version at runtime, so bump that constant deliberately whenever the package moves.
 - Reintroduce a WPF transparent/layered‑window pill, or revert the overlay to in‑process;
   that bug is solved by the out‑of‑process WinUI 3 design.
 - Let a logging failure reach a destructive catch (process kill, teardown).

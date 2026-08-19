@@ -80,4 +80,7 @@ public sealed record FoundryModelOption(
     /// offering a choice we do not actually control.
     /// </summary>
     public string? ExecutionBuildLabel => FoundryExecutionProviders.Describe(DeviceType, ExecutionProvider);
+
+    /// <summary>Device badge ("NPU", "GPU", "CPU") for the loaded-model line, or null.</summary>
+    public string? DeviceLabel => FoundryExecutionProviders.ShortDevice(DeviceType);
 }

@@ -22,11 +22,11 @@
     <!-- Audio capture -->
     <PackageVersion Include="NAudio" Version="2.3.0" />
 
-    <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 3.0.3 is pinned directly to pull the
-         patched native e_sqlite3 3.50.4 and override Microsoft.Data.Sqlite's transitive
-         2.1.11 bundle, which is flagged by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
+    <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 is pinned directly to pull a patched native
+         e_sqlite3 and override Microsoft.Data.Sqlite's transitive 2.1.11 bundle, which is flagged
+         by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). Keep this pin at or above 3.0.3. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
 
     <!-- Hosting / DI / logging / options -->
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />

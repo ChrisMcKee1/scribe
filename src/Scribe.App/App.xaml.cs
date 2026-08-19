@@ -144,12 +144,18 @@ public partial class App : Application
         // Install the seed dictionary on first run so post-processing is useful out of the box, then
         // retire the entries older versions seeded that replaced ordinary words.
         var dictionary = services.GetRequiredService<IDictionaryRepository>();
+        var settingsRepository = services.GetRequiredService<ISettingsRepository>();
         dictionary.SeedIfEmpty(DefaultVocabulary.Entries);
         SeedVocabularyRetirement.Apply(
-            services.GetRequiredService<ISettingsRepository>(),
+            settingsRepository,
             dictionary,
             DefaultVocabulary.RetiredEntries,
             log);
+
+        // Older builds demoted a model to its CPU build on any load failure, including a variant
+        // needing an execution provider this PC never had. Scribe now avoids that up front, so the
+        // saved markers only pin cleanup to the CPU for no reason.
+        FoundryDemotionReset.Apply(settingsRepository, services.GetRequiredService<AppPaths>(), log);
 
         _tray = new TrayIconHost();
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
@@ -203,6 +209,18 @@ public partial class App : Application
             OnRecordingWarning("Microphone muted");
         };
         _controller.CleanupFailed += OnCleanupFailed;
+        _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            // Best-effort, exactly like the other tray balloons: a notification failure must never
+            // propagate back into a settings save.
+            try
+            {
+                _tray?.ShowNotification(message);
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug(ex, "Could not show the AI cleanup provider notification.");            }
+        }));
         _controller.InjectionFailed += () =>
         {
             // The failed dictation survives in LastTranscriptStore; a balloon closes the loop so
@@ -265,7 +283,6 @@ public partial class App : Application
 
         // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
         // if the app was moved, and clears if the user disabled it elsewhere.
-        var settingsRepository = services.GetRequiredService<ISettingsRepository>();
         if (!settingsRepository.LastLoadFailed)
         {
             StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
