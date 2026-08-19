@@ -107,7 +107,23 @@ jobs:
           $token = $env:GITHUB_TOKEN
           # One release, one tag, one channel upload per architecture. --merge lets the second
           # upload attach to the release the first one created instead of failing on a conflict.
+          #
+          # A channel already present is not an error. AGENTS.md documents publishing by hand when
+          # hosted runners are unavailable, and that path pushes the same tag, which starts this
+          # job. vpk cannot merge an existing releases.<channel>.json and fails hard, so the tag of
+          # a perfectly good manual release would be marked failed. Checking first keeps the two
+          # documented paths compatible, and still uploads a channel the manual run missed.
           foreach ($channel in 'win-x64', 'win-arm64') {
+              $manifest = "releases.$channel.json"
+              $existing = gh release view "v$env:VERSION" --repo "${{ github.repository }}" `
+                  --json assets --jq ".assets[] | select(.name == `"$manifest`") | .name" 2>$null
+              $global:LASTEXITCODE = 0
+
+              if ($existing) {
+                  Write-Host "::notice::$channel is already published on v$env:VERSION; leaving it as is."
+                  continue
+              }
+
               vpk upload github `
                   --repoUrl "https://github.com/${{ github.repository }}" `
                   --publish `
@@ -120,6 +136,8 @@ jobs:
                   --merge
               if ($LASTEXITCODE -ne 0) { throw "vpk upload failed for $channel." }
           }
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Upload release artifacts for manual run
         if: github.event_name == 'workflow_dispatch'
