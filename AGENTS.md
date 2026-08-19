@@ -41,7 +41,11 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
 
 ## Tech stack (be specific, versions matter)
 
-- **Language / runtime:** C# / **.NET 10** (`net10.0-windows`), **.NET 10 SDK 10.0.301+**.
+- **Language / runtime:** C# / **.NET 10**, targeting **Windows 11** (`net10.0-windows10.0.22000.0`),
+  **.NET 10 SDK 10.0.301+**. Scribe optimizes for current Windows and does not carry a Windows 10
+  compatibility story: the Store package refuses to install below 19041 and the product is Windows 11
+  only, so do not lower `SupportedOSPlatformVersion` to "widen support". It buys nothing real and
+  blocks Windows 11 APIs and WinML hardware acceleration.
 - **App shell:** **WPF** tray app (`src/Scribe.App`), **`win-x64` and `win-arm64`**, self-contained.
 - **Recording overlay:** **WinUI 3 / Windows App SDK 2.2.0** as a *separate* unpackaged,
   self-contained process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`), built for the same
@@ -52,11 +56,32 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
   (Apache‑2.0) on CPU. **VAD:** Silero (MIT). Native runtime is per-architecture; see
   [Architecture support](#architecture-support-x64-and-arm64).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
-  **Foundry Local** and cloud **Microsoft Foundry**.
+  **Foundry Local** (`Microsoft.AI.Foundry.Local.WinML`) and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
   in `Directory.Build.props`. Read `<VersionPrefix>` from that file rather than trusting a
   number quoted here; a version pinned in prose is stale the next time anyone ships.
+
+### Dependency rules learned the hard way
+
+- **Do not wrap an SDK capability that already exists.** If Foundry Local, Agent Framework or
+  Extensions.AI exposes something, call it. Helper types that re-derive information the SDK already
+  states (parsing model aliases, guessing hardware) are how correctness bugs get built.
+- **Query the NuGet feed for versions, never a web search.** `dotnet package search <id>
+  --exact-match --format json` is authoritative; a search result claimed 1.17.0 when the feed had
+  1.18.0.
+- **`OpenAI` is pinned at 2.12.0 on purpose.** `Microsoft.Extensions.AI.OpenAI` declares
+  `[2.12.0, 2.13.0)`, so 2.13.0 breaks restore with NU1608. This also forces the stored-output
+  workaround below: `ProjectResponsesClient` needs a constructor that only exists in 2.13.0, so it
+  throws `MissingMethodException` at runtime while compiling perfectly.
+
+### Cloud cleanup stores nothing (keep it that way)
+
+The Azure **Responses API defaults to `store=true`**, which retains every cleaned dictation
+server-side. Scribe sets `StoredOutputEnabled = false` through `ChatOptions.RawRepresentationFactory`
+on both the project and account paths, and **fails closed** if it meets a raw representation it does
+not recognize. This is a privacy control, not a preference: if it silently stops applying, Scribe
+breaks its own promise. There is a test pinning the fail-closed behaviour; do not relax it.
 
 ## Commands (run these, including the flags)
 
@@ -108,6 +133,23 @@ dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 
 **Always run `dotnet build Scribe.slnx -c Debug` and the tests before declaring work done.**
 Target 0 warnings / 0 errors; warnings are treated seriously.
+
+### A green build proves very little here
+
+Three separate defects in one release compiled warning-clean and only appeared at runtime: a
+`MissingMethodException` from a package version conflict, a probe token limit Azure rejects, and a
+theme watcher that threw and silently forced the wrong theme. For anything touching a provider SDK,
+a settings window, or startup:
+
+1. **Run the app and read the log** at `%LOCALAPPDATA%\ScribeData\logs\scribe-<date>.log`. A XAML
+   parse error, a runtime binding failure, and a swallowed exception are all invisible to the
+   compiler.
+2. **Verifying a string is present in a shipped DLL requires decoding UTF-16 at BOTH byte
+   alignments** (offset 0 and 1). A single-alignment scan misses roughly half of .NET's metadata
+   strings and will tell you a fix is missing when it is right there.
+3. **Arm64 cannot be validated on an x64 box.** Cross-build and assert payload purity locally, then
+   let the `windows-11-arm` CI runner exercise it on real hardware. Opening a PR is the cheapest way
+   to get that.
 
 ## Project structure
 
@@ -473,26 +515,68 @@ mechanically rather than by review.
   rewrite "three thirty" as "3.30", which scores as a mismatch and blunts the threshold that is
   meant to catch a broken native.
 
-### NPU: detected, deliberately not used
+### NPU: used for cleanup, deliberately not for speech
+
+Two different engines run on this machine and they make opposite choices, so be precise about which
+one a question is about.
+
+**Speech decoding (sherpa-onnx / Parakeet) stays on the CPU on every machine**, and that is a
+measured decision, not an omission. A Hexagon HTP port of our exact model exists
+(`trsdn/parakeet-tdt-0.6b-v3-htp-int8-16s`) and benchmarks at **23-26x realtime for short audio
+versus ~25x for CPU INT8 on the same chip**, and no faster for push-to-talk. It only wins on long
+audio via chunking. The cost to adopt it would be: encoder only (decoder and mel preprocessing stay
+on CPU), a 631 MB context binary on top of what we ship, a fixed 16 s window forcing
+chunk-and-stitch, six helper DLLs where a missing one crashes with `STATUS_STACK_BUFFER_OVERRUN`,
+and a binary device-gated to Snapdragon X Elite that will not run on other Qualcomm parts without
+recompiling through Qualcomm AI Hub. **Do not re-derive "we should use the NPU" from the fact that
+one exists.** The real NPU win is power draw, not latency; revisit if a shorter-window encoder lands.
+
+**AI cleanup (Foundry Local) does use the GPU or NPU when one is available**, but Scribe never
+chooses: the SDK performs hardware detection and picks the execution provider itself. See the
+Foundry Local section below.
 
 `ComputeCapabilityReport` reports process/OS architecture, emulation, and any NPU Windows lists
 under the `ComputeAccelerator` device class (`{f01a9d53-3ff6-48d2-9f97-c8a7004be10c}`), which every
 vendor registers into. **An empty result is the normal answer on most PCs and is never an error.**
 
-Decoding stays on the CPU on every machine, and that is a measured decision, not an omission.
-A Hexagon HTP port of our exact model exists (`trsdn/parakeet-tdt-0.6b-v3-htp-int8-16s`) and
-benchmarks at **23-26x realtime for short audio versus ~25x for CPU INT8 on the same chip**, and no
-faster for push-to-talk. It only wins on long audio via chunking. The cost to adopt it would be:
-encoder only (decoder and mel preprocessing stay on CPU), a 631 MB context binary on top of what we
-ship, a fixed 16 s window forcing chunk-and-stitch, six helper DLLs where a missing one crashes with
-`STATUS_STACK_BUFFER_OVERRUN`, and a binary device-gated to Snapdragon X Elite that will not run on
-other Qualcomm parts without recompiling through Qualcomm AI Hub. **Do not re-derive "we should use
-the NPU" from the fact that one exists.** The real NPU win is power draw, not latency; revisit if a
-shorter-window encoder lands.
-
 The one genuinely actionable case the report drives is **emulation**: an x64 build on an ARM64 OS
 gets a warning in the log and a caution line in Settings, Diagnostics telling the user to install the
 Arm64 build.
+
+## Foundry Local (on-device cleanup)
+
+**The SDK owns hardware selection. Do not try to take it back.** Microsoft's architecture reference
+is explicit: "The Core API automatically identifies available hardware and chooses the best
+execution provider for each model." There is no supported override, so Scribe *reports* the choice
+rather than offering one. Supported providers and their device types:
+
+| Execution provider | Device |
+| --- | --- |
+| NVIDIA CUDA, NvTensorRTRTX | GPU |
+| WebGPU (via Dawn), Intel OpenVINO | GPU |
+| Qualcomm QNN, AMD Vitis AI | **NPU** |
+| CPU | always available as fallback |
+
+**Use `Microsoft.AI.Foundry.Local.WinML`, not the cross-platform package.** Same API surface, but EP
+plugins are sourced from the OS and Windows Update with driver compatibility negotiation, which is
+what reaches an NPU at all. The cross-platform package also carries Linux and macOS payloads Scribe
+can never run. The WinML package requires build 18362 or later, which is why the tree targets
+Windows 11; `net10.0-windows` on its own silently means `net10.0-windows7.0` and will not resolve it.
+
+**Read the execution provider from the SDK (`model.Info.Runtime.ExecutionProvider`), never from the
+alias text.** `FoundryExecutionProviders` maps a provider to a device type for display. Alias
+suffixes only ever spell `cpu` or `gpu`, so inferring from them cannot express an NPU at all. The
+alias-shape helpers in `FoundryModelVariant` exist only for the case where a variant has already
+failed to load and the SDK's answer is unavailable.
+
+**Curated aliases are family names.** `qwen3-1.7b` resolves at load time to a hardware variant such
+as `qwen3-1.7b-generic-gpu:2`. Anything matching on the configured alias will miss every real user,
+which is exactly how the first GPU fallback shipped broken.
+
+**The WebGPU shader crash is real and not vendor specific.** A `QuickGelu` / "Failed to create a
+WebGPU compute pipeline" failure reproduced on Snapdragon Adreno and on Intel Lunar Lake with
+different models. Scribe demotes to the CPU build automatically, on both the shader failure at
+inference and the provider-unavailable failure at load, and remembers it.
 
 ## Git workflow
 
