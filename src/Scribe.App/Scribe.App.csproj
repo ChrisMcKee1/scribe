@@ -44,11 +44,14 @@
     <OutputType>WinExe</OutputType>
     <!-- Windows-version-specific TFM so the app can call WinRT (Windows.Services.Store) for
          Microsoft Store update checks. This is the documented .NET 6+ approach; the
-         Microsoft.Windows.SDK.Contracts package is explicitly not recommended here. The version
-         selects which APIs compile, not the OS the app runs on, so SupportedOSPlatformVersion
-         keeps older Windows 10 builds supported. -->
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+         Microsoft.Windows.SDK.Contracts package is explicitly not recommended here.
+         SupportedOSPlatformVersion is the Windows 11 floor (build 22000) because that is what
+         Scribe actually targets. Scribe optimizes for current Windows rather than carrying a
+         compatibility story for Windows 10: the higher floor is what lets the platform analyzer
+         allow Windows 11 APIs without a guard, and it clears the build 18362 minimum that WinML
+         needs to acquire hardware execution providers for GPU and NPU acceleration. -->
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
