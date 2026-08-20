@@ -132,6 +132,18 @@ jobs:
               --clientId "${{ secrets.STORE_CLIENT_ID }}" `
               --clientSecret "${{ secrets.STORE_CLIENT_SECRET }}"
 
+      # Printed before the attempt, because the failure it explains is otherwise cryptic. The
+      # Ingestion API refuses to touch a submission that was created in the Partner Center
+      # dashboard, and the message it returns does not say which submission it means or that a
+      # human has to go and delete it.
+      - name: Report the current submission state
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Write-Host 'Submission status before publishing:'
+          msstore submission status "${{ secrets.STORE_PRODUCT_ID }}"
+          $global:LASTEXITCODE = 0
+
       - name: Submit to the Microsoft Store
         shell: pwsh
         run: |
@@ -142,7 +154,39 @@ jobs:
           # -nc creates or updates the draft without committing it for certification.
           if ($env:DRAFT_ONLY -eq 'true') { $publishArgs += '-nc' }
 
-          msstore @publishArgs
-          if ($LASTEXITCODE -ne 0) { throw "msstore publish failed with exit code $LASTEXITCODE." }
+          # Captured rather than streamed, so the known-cause check below can read it. Tee-Object
+          # keeps it visible in the log at the same time.
+          $output = msstore @publishArgs 2>&1 | Tee-Object -Variable captured
+          $exit = $LASTEXITCODE
+
+          if ($exit -ne 0) {
+              $text = ($captured | Out-String)
+
+              # The first-run failure, every time. The product has a submission that was created in
+              # the Partner Center dashboard, and the API is not allowed to update, delete or commit
+              # it. Only a human can clear it, so say exactly that instead of an exit code.
+              if ($text -match 'created\s+through the API') {
+                  # An array joined at the end, NOT a PowerShell here-string. A here-string has to
+                  # be closed at column 0, which is impossible inside a YAML block scalar.
+                  $guidance = @(
+                      'This product has an in-progress submission that was created in the Partner'
+                      'Center dashboard, and the Store Ingestion API is not allowed to modify or'
+                      'delete it.'
+                      ''
+                      'To fix, in Partner Center:'
+                      '  1. Open the app > Submissions and find the submission that is in progress'
+                      '     (draft, or in certification). The PUBLISHED version is unaffected.'
+                      '  2. Delete or discard that in-progress submission.'
+                      '  3. Re-run this workflow. The API then creates the submission itself and'
+                      '     can manage it from then on.'
+                      ''
+                      'After that, manage submissions through this workflow only. Editing an'
+                      'API-created submission in Partner Center puts it back into this same state.'
+                  )
+                  throw ($guidance -join [Environment]::NewLine)
+              }
+
+              throw "msstore publish failed with exit code $exit."
+          }
         env:
           DRAFT_ONLY: ${{ inputs.draft_only }}

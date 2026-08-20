@@ -370,10 +370,19 @@ gh workflow run store.yml -f tag=v0.3.11 -f draft_only=true
 
 Constraints worth knowing before you rely on this:
 
-- **Never mix the two paths for one release.** Once a submission is created through the API it must
-  not be edited in Partner Center, or the API can no longer commit it. Set the repository
-  **variable** `STORE_AUTO_SUBMIT` to `false` to suspend the automation and go back to uploading by
-  hand.
+- **Never mix the two paths for one release.** The rule cuts both ways, and the second half is the
+  one that bites on the very first automated run:
+  - A submission created **in the Partner Center dashboard** cannot be updated, deleted or
+    committed by the API. It fails with *"Ingestion API can only update, delete, and commit
+    submissions that are created through the API."*
+  - A submission created **through the API** must not be edited in Partner Center, or the API can
+    no longer commit it.
+
+  So before the first automated submission, **the product must have no in-progress submission**.
+  Delete or discard whatever draft is sitting in Partner Center (the published version is
+  unaffected) and re-run; the API then creates its own and can manage it. The workflow detects this
+  exact failure and prints the steps. Set the repository **variable** `STORE_AUTO_SUBMIT` to
+  `false` to suspend the automation and go back to uploading by hand.
 - The API **cannot** be used on a product with mandatory app updates enabled; it returns HTTP 409.
 - The app needs **one completed manual submission** first, including the age rating questionnaire.
 - Certification still takes as long as it takes. The workflow submits; it does not shorten review.
