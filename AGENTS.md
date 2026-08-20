@@ -497,10 +497,12 @@ per release, the workflow or a manual upload, never both. Set the repository **v
 Repository secrets it needs (Settings > Secrets and variables > Actions):
 `STORE_TENANT_ID`, `STORE_SELLER_ID`, `STORE_CLIENT_ID`, `STORE_CLIENT_SECRET`, `STORE_PRODUCT_ID`
 (the 12-character Store ID from Partner Center > Product management > Product identity). The first
-four come from an Entra app registration associated with the Partner Center account under
-**Account settings > Users** (Partner Center renamed this from "User management > Azure AD
-applications"); the client secret itself is generated in the Azure portal under the app
-registration's Certificates & secrets. **No PAT is involved.** Until all five exist the workflow
+four come from an Entra app registration associated with the Partner Center account. Two different
+Partner Center pages are involved and they are easy to confuse: the tenant is linked under
+**Account settings > Tenants**, and the application is added under **Account settings > User
+management > Microsoft Entra applications**. The client secret can be generated on either that
+Partner Center page ("Add new key") or in the Azure portal under the app registration's
+Certificates & secrets. **No PAT is involved.** Until all five exist the workflow
 fails fast, before packaging, with the list of what is missing. `release.yml` skips the hand-off
 entirely when they are absent and leaves a warning annotation on the run.
 
