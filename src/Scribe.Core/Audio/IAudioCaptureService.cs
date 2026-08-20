@@ -33,6 +33,18 @@ public interface IAudioCaptureService : IDisposable
     /// </summary>
     bool LastCaptureWasSilent { get; }
 
+    /// <summary>
+    /// Measured shape of the most recent completed capture: levels in dBFS, clipping, DC offset,
+    /// and per-channel contributions taken before the downmix. Null until a capture completes.
+    /// <para>
+    /// <see cref="LastCaptureWasSilent"/> only answers "were these literally zeros", which is a
+    /// -60 dBFS bar and tells you almost nothing about why a decode failed. This is what separates
+    /// a working microphone from one running 40 dB too quiet, clipping, or averaging a live channel
+    /// against a dead one. Statistics only; no audio and no content.
+    /// </para>
+    /// </summary>
+    CaptureSignalReport? LastSignalReport { get; }
+
     /// <summary>Enumerates active input devices, flagging the system default.</summary>
     IReadOnlyList<AudioDevice> GetInputDevices();
 

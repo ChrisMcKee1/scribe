@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 
 namespace Scribe.Core.Infrastructure;
 
@@ -42,23 +42,39 @@ public sealed class AppPaths
             ? Path.Combine(localAppData, LegacyAppFolderName)
             : null;
 
-        LogsDir = Path.Combine(RootDir, "logs");
+        // Store builds up to 0.3.10 ran with AppData write virtualization on, so the ScribeData
+        // folder they created was written into the package's LocalCache and never appeared at the
+        // path the app reports. The manifest now excludes ScribeData from virtualization, which
+        // means an updated Store install starts reading the real path and would otherwise look
+        // brand new. This is where that data is carried forward from.
+        VirtualizedRootDir = usingDefaultRoot
+            ? WindowsPackageIdentity.TryGetVirtualizedLocalAppData(localAppData) is { } virtualLocal
+                ? Path.Combine(virtualLocal, AppFolderName)
+                : null
+            : null;
+
+        LogsDir = Path.Combine(RootDir, LogsFolderName);
         ModelsDir = Path.Combine(RootDir, "models");
-        LibrariesDir = Path.Combine(RootDir, "libraries");
+        LibrariesDir = Path.Combine(RootDir, LibrariesFolderName);
         DatabasePath = Path.Combine(RootDir, DatabaseFileName);
         PreferredRootDir = RootDir;
+
+        // Honest default until EnsureCreated probes for redirection. A caller that never creates
+        // the directories still gets a usable path rather than an empty string.
+        EffectiveRootDir = RootDir;
     }
 
     private AppPaths(string rootDir, string? legacyRootDir, string preferredRootDir, string creationFailureMessage)
     {
         RootDir = rootDir;
         LegacyRootDir = legacyRootDir;
-        LogsDir = Path.Combine(RootDir, "logs");
+        LogsDir = Path.Combine(RootDir, LogsFolderName);
         ModelsDir = Path.Combine(RootDir, "models");
-        LibrariesDir = Path.Combine(RootDir, "libraries");
+        LibrariesDir = Path.Combine(RootDir, LibrariesFolderName);
         DatabasePath = Path.Combine(RootDir, DatabaseFileName);
         PreferredRootDir = preferredRootDir;
         CreationFailureMessage = creationFailureMessage;
+        EffectiveRootDir = RootDir;
     }
 
     /// <summary>Root writable directory (<c>%LOCALAPPDATA%\ScribeData</c>).</summary>
@@ -70,6 +86,15 @@ public sealed class AppPaths
     /// effect. Only used to migrate the database forward once.
     /// </summary>
     public string? LegacyRootDir { get; }
+
+    /// <summary>
+    /// Where a virtualized Store build's data physically landed
+    /// (<c>%LOCALAPPDATA%\Packages\&lt;family&gt;\LocalCache\Local\ScribeData</c>), or
+    /// <see langword="null"/> when this process is unpackaged or running on an explicit root.
+    /// Migrated forward once, then only reported so support can tell a user which folder an older
+    /// build's logs are in.
+    /// </summary>
+    public string? VirtualizedRootDir { get; }
 
     /// <summary>Log output directory.</summary>
     public string LogsDir { get; }
@@ -95,8 +120,40 @@ public sealed class AppPaths
     /// <summary>SQLite database file name, shared by the live path and the migration probes.</summary>
     public const string DatabaseFileName = "scribe.db";
 
+    /// <summary>Imported-library subfolder name, shared by the live path and the migration probes.</summary>
+    public const string LibrariesFolderName = "libraries";
+
+    /// <summary>Log subfolder name, shared by the live path and the outside-the-container path.</summary>
+    public const string LogsFolderName = "logs";
+
     /// <summary>True when Scribe is using a fallback data root for this process.</summary>
     public bool IsFallbackRoot => CreationFailureMessage is not null;
+
+    /// <summary>
+    /// True when this process's writes under <see cref="RootDir"/> are being redirected by Windows
+    /// into the package's private store. Determined by <b>probing</b>, not by inference: see
+    /// <see cref="ResolveEffectiveRoot"/>.
+    /// </summary>
+    public bool WritesAreVirtualized { get; private set; }
+
+    /// <summary>
+    /// The root as it exists <b>outside</b> this process: the path a user can type into File
+    /// Explorer, quote in a support thread, or back up. Equal to <see cref="RootDir"/> unless
+    /// Windows is redirecting the app's writes, in which case it is the package's private store.
+    /// <para>
+    /// This is a <b>display and hand-off</b> path. Scribe's own file I/O must keep using
+    /// <see cref="RootDir"/> and <see cref="LogsDir"/>, because inside the container those resolve
+    /// through the merged view and are correct either way. Pointing internal I/O at the private
+    /// store instead would work today and break the moment redirection is turned off.
+    /// </para>
+    /// </summary>
+    public string EffectiveRootDir { get; private set; }
+
+    /// <summary>Log folder as it exists outside this process. See <see cref="EffectiveRootDir"/>.</summary>
+    public string EffectiveLogsDir => Path.Combine(EffectiveRootDir, LogsFolderName);
+
+    /// <summary>Database file as it exists outside this process. See <see cref="EffectiveRootDir"/>.</summary>
+    public string EffectiveDatabasePath => Path.Combine(EffectiveRootDir, DatabaseFileName);
 
     /// <summary>
     /// Creates startup paths, falling back to a sibling folder when the preferred root fails.
@@ -184,9 +241,20 @@ public sealed class AppPaths
         Directory.CreateDirectory(RootDir);
         Directory.CreateDirectory(LogsDir);
         Directory.CreateDirectory(LibrariesDir);
+        ResolveEffectiveRoot();
         if (LegacyRootDir is not null)
         {
             TryMigrateDatabase(LegacyRootDir, RootDir);
+        }
+
+        // Ordered after the legacy migration on purpose. Both are no-ops once a database exists at
+        // the new root, so whichever source ran first wins and the second cannot overwrite it. A
+        // machine that has been through both channels keeps the Velopack data, which is the copy
+        // its user has been looking at all along.
+        if (VirtualizedRootDir is not null)
+        {
+            TryMigrateDatabase(VirtualizedRootDir, RootDir);
+            TryMigrateLibraries(Path.Combine(VirtualizedRootDir, LibrariesFolderName), LibrariesDir);
         }
     }
 
@@ -265,6 +333,119 @@ public sealed class AppPaths
         {
             // Best-effort: leave the destination absent so the next launch retries migration.
             TryDelete(stagedDb);
+        }
+    }
+
+    /// <summary>
+    /// Works out where this process's writes physically land, and records it in
+    /// <see cref="EffectiveRootDir"/> / <see cref="WritesAreVirtualized"/>.
+    /// <para>
+    /// This is a <b>probe</b>, not a deduction, and that is the point. A packaged app cannot tell
+    /// from its own paths whether Windows is redirecting its AppData writes: the merged read view
+    /// hands back exactly the same path either way, which is precisely how a Store build shipped
+    /// telling users to open a folder that was not there. Whether redirection applies depends on
+    /// the package manifest, the OS build, and whether the folder already existed, so anything
+    /// short of writing a file and looking for it is a guess.
+    /// </para>
+    /// <para>
+    /// Cost is one file create, one existence check and one delete per launch, all best effort. On
+    /// an unpackaged build the whole thing short-circuits before touching the disk.
+    /// </para>
+    /// </summary>
+    private void ResolveEffectiveRoot()
+    {
+        EffectiveRootDir = RootDir;
+        WritesAreVirtualized = false;
+
+        try
+        {
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (ComposeVirtualTwin(RootDir, localAppData) is not { } twin)
+            {
+                return; // unpackaged, or a root Windows does not virtualize
+            }
+
+            // A unique name, so a leftover marker from a previous launch (or from the other
+            // architecture's build running side by side) can never be mistaken for this one's.
+            var markerName = $".scribe-virtualization-probe-{Guid.NewGuid():N}";
+            var marker = Path.Combine(RootDir, markerName);
+            try
+            {
+                File.WriteAllBytes(marker, []);
+                if (File.Exists(Path.Combine(twin, markerName)))
+                {
+                    EffectiveRootDir = twin;
+                    WritesAreVirtualized = true;
+                }
+            }
+            finally
+            {
+                TryDelete(marker);
+            }
+        }
+        catch
+        {
+            // A failed probe leaves the honest default: report the path the app itself uses. Worst
+            // case a packaged user is shown the path they were shown before this existed.
+        }
+    }
+
+    /// <summary>
+    /// The location Windows redirects writes to <paramref name="rootDir"/> into, or
+    /// <see langword="null"/> when this process is unpackaged or the root is not under
+    /// <paramref name="localAppData"/> (only AppData is virtualized).
+    /// </summary>
+    private static string? ComposeVirtualTwin(string rootDir, string localAppData)
+    {
+        if (string.IsNullOrWhiteSpace(localAppData)
+            || WindowsPackageIdentity.TryGetVirtualizedLocalAppData(localAppData) is not { } virtualLocal)
+        {
+            return null;
+        }
+
+        var prefix = localAppData.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!rootDir.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        // Redirection preserves the path relative to LocalAppData, so ScribeData.fallback and any
+        // other sibling root map across without needing to be enumerated here.
+        return Path.Combine(virtualLocal, rootDir[prefix.Length..]);
+    }
+
+    /// <summary>
+    /// One-time, best-effort copy of imported dictionary-library CSVs from a previous data root.
+    /// Copies only files the destination does not already have, so it never overwrites a library
+    /// the user has edited since, and re-running it is harmless.
+    /// </summary>
+    internal static void TryMigrateLibraries(string legacyLibrariesDir, string newLibrariesDir)
+    {
+        if (string.Equals(legacyLibrariesDir, newLibrariesDir, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!Directory.Exists(legacyLibrariesDir))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(newLibrariesDir);
+            foreach (var source in Directory.GetFiles(legacyLibrariesDir, "*.csv", SearchOption.TopDirectoryOnly))
+            {
+                var destination = Path.Combine(newLibrariesDir, Path.GetFileName(source));
+                if (!File.Exists(destination))
+                {
+                    File.Copy(source, destination);
+                }
+            }
+        }
+        catch
+        {
+            // Best-effort: the libraries are re-importable and must never block startup.
         }
     }
 

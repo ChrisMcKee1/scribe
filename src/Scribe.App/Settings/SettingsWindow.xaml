@@ -2000,7 +2000,27 @@
                                         <TextBlock Text="Diagnostic logs" Style="{StaticResource SettingTitle}"
                                                    FontSize="13" Margin="0,16,0,0"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                   Text="One file per day, recording app events, timings and errors. Logs are not designed to hold your audio or complete transcripts, but they do record the name of the focused app, your audio device, any endpoints you configured, and error details. Read one before sharing it."/>
+                                                   Text="One file per day, kept for 7 days, recording app events, timings and errors. Logs never contain your dictations, but they do record the name of the focused app, your audio device, and error details. Read one before sharing it."/>
+
+                                        <!-- Reporting a bug is the whole point of this card, so the
+                                             action that produces an attachable file leads, and the
+                                             raw folder path stays available underneath for anyone
+                                             who wants to read a log in place. -->
+                                        <Grid Margin="0,10,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Style="{StaticResource SettingHint}"
+                                                       VerticalAlignment="Center" TextWrapping="Wrap"
+                                                       Margin="0,0,12,0"
+                                                       Text="Reporting a problem? Save every kept log plus a summary of this PC into one zip you can attach to a GitHub issue."/>
+                                            <ui:Button Grid.Column="1" Content="Save diagnostics…"
+                                                       Appearance="Primary" MinWidth="150"
+                                                       Click="AboutSaveDiagnostics_Click"
+                                                       ToolTip="Write the logs and a system summary to a zip file."/>
+                                        </Grid>
+
                                         <Grid Margin="0,8,0,0">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>

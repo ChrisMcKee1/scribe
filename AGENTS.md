@@ -114,6 +114,11 @@ dotnet publish src/Scribe.App/Scribe.App.csproj -c Release -r win-arm64 --self-c
 pwsh ./scripts/New-SpeechFixtures.ps1
 dotnet run --project tools/Scribe.AsrCheck
 
+# Characterise the recogniser rather than just smoke-test it. See "What the recogniser is not".
+dotnet run --project tools/Scribe.AsrCheck -- --long-audio    # duration sweep, 5 s to 90 s
+dotnet run --project tools/Scribe.AsrCheck -- --channel-mix   # what the multi-channel downmix costs
+dotnet run --project tools/Scribe.AsrCheck -- --degraded      # SNR and reverb against duration
+
 # Offline AI-cleanup quality eval (no network, no judge model)
 dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
@@ -246,6 +251,58 @@ cause of one.**
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.
+
+### What the log has to contain (added 0.3.11)
+
+The file sink runs at **`Debug`**, with `Microsoft`/`System`/`Azure` filtered to `Warning`. Detail
+is the point: this is a tray app with no console, reports arrive days later, and the failures that
+matter are intermittent and hardware‑specific.
+
+- **Every session opens with a banner** (`SessionBanner`, written from `SessionDiagnostics`):
+  session id, pid, version, install channel, package family, OS/arch/runtime, cores/RAM, resolved
+  paths, model and whether its files are actually on disk, audio devices, and the hotkey/pipeline/
+  cleanup/injection settings. A daily file rolls at midnight, so without this the file a user hands
+  over frequently has no record of how the process started. `OnExit` writes the matching
+  `session end` line; its absence before the next banner means the process died.
+- **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app),
+  its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`)
+  and the hold duration. `DictationController` warns when the captured audio is shorter
+  than the hold, because WASAPI ends a stream cleanly with **no exception** when the endpoint is
+  reconfigured mid‑capture and nothing else in the pipeline can see it.
+- **Retention is bounded and enforced** (`LogRetentionPolicy`): 7 days, 16 MB per day, 64 MB total.
+  Swept at startup and at each midnight rollover. Today's file is never swept.
+- **Privacy is a contract, not a habit.** No transcripts, dictionary entries, snippet bodies,
+  prompts, endpoints or keys. Report shapes instead: counts, enum names, `configured`/`unset`.
+  `SessionBannerTests.Banner_never_contains_a_secret` asserts it; keep it passing.
+- **Users export logs from Settings > About > "Save diagnostics…"** (`DiagnosticsBundle`), which
+  writes the retained logs plus `report.txt` to a zip wherever they choose. Never add `scribe.db`
+  to that bundle: it holds every dictation and the saved API keys.
+
+## What the recogniser is NOT (measured, 0.3.11)
+
+A user on 0.3.10 reported that dictation "cut out after seven to ten seconds". Their log showed the
+opposite of what that sounds like: **audio captured fine, all 37 seconds of it**, and the recogniser
+then returned an **empty string**. Three of their six dictations were lost that way, every capture
+over ~13 s failed, and everything under ~11 s decoded. It is tempting to conclude Parakeet cannot
+handle long audio. It can. Three hypotheses were tested against the real engine with
+`tools/Scribe.AsrCheck`, and **all three were wrong**:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Long single-shot decodes collapse | `--long-audio`, 5 s to 90 s | 13.2-13.9 chars/s at **every** length, including 90 s |
+| The channel downmix ruins the signal | `--channel-mix` | silent 2nd channel: **100 %** of baseline; foreign 2nd channel: **95 %** |
+| Low SNR or room reverb breaks it | `--degraded`, SNR x duration | **0 dB SNR + heavy reverb at 40 s still decodes at ~13 chars/s** |
+
+So: do not "fix" long-audio decoding, do not rewrite the downmix, and do not assume a noisy room is
+the problem. sherpa-onnx does document VAD-segmented decoding for long audio
+(`sherpa-onnx-vad-with-offline-asr`) and moving to it would make a collapse cost one segment instead
+of the whole dictation, but the measurements above say it is not the cause here.
+
+**The cause is still unknown**, and that is the point: the log could not distinguish the candidates,
+because the only thing it said about the audio was "peak audio was present", which means nothing
+more than "not digital silence" (a -60 dBFS bar). `CaptureSignalAnalyzer` now records the measurable
+shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel levels taken before
+the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
 ## Overlay architecture (read before touching the pill)
 
@@ -451,9 +508,53 @@ Both installers are kept on purpose. The Store is the recommended path (Microsof
 there is no SmartScreen friction), but Store certification adds latency to a hotfix, a low-level
 keyboard hook plus microphone capture is the kind of profile that attracts policy review, and many
 managed corporate devices block the Store outright. The direct download is the escape hatch for all
-three. Both installs share `%LOCALAPPDATA%\ScribeData`, because `AppPaths` resolves
-`Environment.GetFolderPath(LocalApplicationData)`, which is not virtualized for a packaged Win32
-app, so a user can move between channels without losing settings, dictionary, or history.
+three. Both installs share `%LOCALAPPDATA%\ScribeData`, so a user can move between channels
+without losing settings, dictionary, or history.
+
+### AppData write virtualization (this section was wrong until 0.3.11)
+
+Earlier revisions of this file claimed `Environment.GetFolderPath(LocalApplicationData)` "is not
+virtualized for a packaged Win32 app". **That is false.** On Windows 10 1903 and later, a folder a
+packaged app *creates* under `AppData` is redirected into
+`%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\`. Reads come back through a merged view, so the
+app sees its own path and everything works, but File Explorer, running outside the container, sees
+nothing at `%LOCALAPPDATA%\ScribeData`.
+
+Verified directly against the shipped 0.3.10 Store package:
+
+```powershell
+Invoke-CommandInDesktopPackage -PackageFamilyName '53984VeteranApps.ScribeAI_e3jkm6dfkwwbm' `
+  -AppId 'Scribe' -Command 'cmd.exe' -Args '/c mkdir "%LOCALAPPDATA%\Probe"'
+# %LOCALAPPDATA%\Probe                                     -> does not exist
+# %LOCALAPPDATA%\Packages\<family>\LocalCache\Local\Probe   -> exists
+```
+
+The cost was a support dead end: a Store user asked for `%LOCALAPPDATA%\ScribeData\logs` correctly
+reported that the folder was not there, and the bug behind the request went uninvestigated. It
+never reproduced on a dev machine because redirection only applies to **new** folders, and any
+machine that has also run the Velopack build already has a real `ScribeData` for the package to
+write straight into.
+
+The fix is a `virtualization:ExcludedDirectory` for `$(KnownFolder:LocalAppData)\ScribeData` in
+`build/pack-msix.ps1`, which requires the `unvirtualizedResources` restricted capability, plus a
+one-time migration in `AppPaths` (`VirtualizedRootDir`) so existing Store users keep their data.
+**Do not remove either.**
+
+**Two families of path, and they are not interchangeable.** `AppPaths` exposes `RootDir`/`LogsDir`/
+`DatabasePath` alongside `EffectiveRootDir`/`EffectiveLogsDir`/`EffectiveDatabasePath`:
+
+- **Scribe's own file I/O uses the plain ones.** Inside the container the merged view resolves them
+  correctly whether or not redirection is on. Pointing internal I/O at the package store would work
+  today and break the moment redirection is turned off.
+- **Anything handed outside the process uses the `Effective` ones**: the About page text boxes, the
+  Copy buttons, `OpenFolder`, and the session banner. Explorer and the clipboard live outside the
+  container, so the plain path is the one that reads as "that folder isn't there".
+
+`EffectiveRootDir` comes from an actual **probe** in `EnsureCreated` (write a uniquely named marker
+through `RootDir`, look for it at the package-store twin, delete it), not from inference. It has to
+be, because the answer differs per machine: redirection applies to folders the app *creates*, so a
+PC that has also run the direct-download build already has a real `ScribeData` and is not
+redirected, while a Store-only PC is. Both cases verified against the live 0.3.10 package.
 
 ## GitHub release automation
 

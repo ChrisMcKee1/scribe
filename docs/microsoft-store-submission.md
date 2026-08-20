@@ -14,7 +14,7 @@ Last reviewed: July 27, 2026.
 | Privacy policy | Ready | Use the public `PRIVACY.md` URL listed below and answer **Yes** for personal information. |
 | Store-managed updates | Ready | Packaged Store installs now bypass the Velopack/GitHub updater. |
 | Package build | Ready | Store identity, reserved display name, and public publisher are recorded in `Directory.Build.props`. |
-| Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
+| Restricted capability | Conditional | Explain `runFullTrust` and `unvirtualizedResources` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
 | Screenshots | Refresh needed | Nine existing screenshots meet the Desktop size requirement, but they show an older build and navigation. Capture the final UI before upload. |
@@ -176,6 +176,20 @@ The package declares:
 
 - `microphone`, required to capture dictation audio
 - `runFullTrust`, required for the packaged WPF/Win32 application
+- `unvirtualizedResources`, required by the one folder exempted from AppData write virtualization
+
+### Why `unvirtualizedResources` is declared
+
+The manifest exempts a single directory, `$(KnownFolder:LocalAppData)\ScribeData`, from AppData
+write virtualization. Without the exemption Windows redirects the folder Scribe creates into
+`%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\`, where File Explorer, running outside the
+package container, cannot see it. That is not a theoretical problem: a 0.3.10 Store user asked to
+send a diagnostic log correctly reported that the folder the app named did not exist, and the bug
+they were reporting could not be investigated. It also means a user cannot back up their own
+dictation history, and cannot move between the Store and direct-download builds without losing it.
+
+The exemption is scoped to that one directory. `desktop6:FileSystemWriteVirtualization`, which
+would unvirtualize the whole of AppData and HKCU, is deliberately not used.
 
 ## Store listing
 
@@ -275,6 +289,12 @@ Paste and adjust the following text. Keep the date current:
 > push-to-talk hook, captures microphone input, inserts Unicode text into the foreground desktop
 > application, maintains a tray icon, and launches its separate recording-overlay process. It does
 > not request elevation or install a service or driver.
+>
+> It declares unvirtualizedResources to exempt one directory, %LOCALAPPDATA%\ScribeData, from
+> AppData write virtualization. Scribe stores its dictation history, dictionary and diagnostic logs
+> there. Users need to open that folder in File Explorer to collect a log file when reporting a
+> problem and to back up their own data, and virtualization places it where they cannot find it. No
+> other location is unvirtualized, and no data is shared with any other application.
 >
 > To quit, open the tray menu and select Quit. Privacy policy:
 > https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md

@@ -51,6 +51,7 @@ public partial class App : Application
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
     private UpdateService? _updates;
+    private SessionDiagnostics? _diagnostics;
     private ILogger? _appLog;
     private int _learningFromHistory;
 
@@ -97,11 +98,23 @@ public partial class App : Application
         builder.Services.AddScribeCore();
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<AzureCliInstaller>();
+        builder.Services.AddSingleton<SessionDiagnostics>();
         builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new FileLoggerProvider(paths.LogsDir));
         builder.Logging.AddDebug();
-        builder.Logging.SetMinimumLevel(LogLevel.Information);
+
+        // Debug, not Information. The log is the only diagnostic channel this app has: it is a tray
+        // app with no console, users report problems days later, and the failures that matter are
+        // intermittent and hardware-specific. Retention (7 days, budgeted) is what keeps the extra
+        // detail from costing anyone disk space, so there is no reason left to log less.
+        builder.Logging.SetMinimumLevel(LogLevel.Debug);
+
+        // Except for the framework's own chatter, which at Debug is thousands of lines of hosting
+        // and HTTP internals per session and would bury the pipeline events entirely.
+        builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+        builder.Logging.AddFilter("System", LogLevel.Warning);
+        builder.Logging.AddFilter("Azure", LogLevel.Warning);
 
         _host = builder.Build();
         _host.Start();
@@ -109,6 +122,14 @@ public partial class App : Application
         var services = _host.Services;
         var log = services.GetRequiredService<ILogger<App>>();
         _appLog = log;
+
+        // First thing in the file, before anything can fail. A log that opens mid-story is the
+        // reason a 0.3.10 report about dictation cutting out short could not be investigated at
+        // all: nothing recorded which build, which install channel, which microphone or which
+        // settings were in play, and the daily file had rolled over since the process started.
+        _diagnostics = services.GetRequiredService<SessionDiagnostics>();
+        _diagnostics.WriteBanner(log);
+
         WireGlobalExceptionLogging(log);
         InitializeApplicationTheme(log);
         if (paths.IsFallbackRoot)
@@ -290,14 +311,12 @@ public partial class App : Application
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
-        // Architecture and accelerator inventory. Recorded once at startup because "which build is
-        // this and what silicon is under it" is the first question on any Arm64 or Copilot+ PC bug
-        // report, and it is not otherwise recoverable from the log.
+        // The accelerator inventory itself is on the session banner above ("compute: ..."); only
+        // the advice is repeated here, because a recommendation deserves its own Warning line
+        // rather than being buried in a banner a reader skims past.
         try
         {
-            var capability = Scribe.Core.Diagnostics.ComputeCapabilityReport.Detect();
-            log.LogInformation("Compute capability: {Capability}", capability.Describe());
-            if (capability.Recommendation is { } advice)
+            if (Scribe.Core.Diagnostics.ComputeCapabilityReport.Detect().Recommendation is { } advice)
             {
                 log.LogWarning("{Advice}", advice);
             }
@@ -611,7 +630,8 @@ public partial class App : Application
                 _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
             },
             capturing => _controller?.SetHotkeyCaptureMode(capturing),
-            _updates);
+            _updates,
+            services.GetRequiredService<SessionDiagnostics>());
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
@@ -1064,6 +1084,17 @@ public partial class App : Application
     {
         try
         {
+            // Closes the story the banner opened. A log covering several restarts is otherwise a
+            // run of session banners with no way to tell an orderly quit from a crash: the absence
+            // of this line before the next banner is the signal that the process died.
+            if (_diagnostics is { } diagnostics)
+            {
+                _appLog?.LogInformation(
+                    "===== Scribe session end ===== session={Session} uptime={Uptime:hh\\:mm\\:ss}",
+                    diagnostics.Session.Id,
+                    DateTimeOffset.Now - diagnostics.Session.StartedLocal);
+            }
+
             // Stage any downloaded update first so the updater is waiting as the process exits.
             _updates?.ApplyPendingOnExit();
 
