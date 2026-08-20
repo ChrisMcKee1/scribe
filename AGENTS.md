@@ -482,16 +482,27 @@ never covers; note it builds SmartScreen reputation over weeks rather than grant
 
 `.github/workflows/store.yml` builds the MSIX and submits it through the
 [Microsoft Store Developer CLI](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/overview).
-It is **manual dispatch only**, deliberately: a submission goes to Microsoft for certification, and
-once a submission is created through the API it must not be edited in Partner Center or it can no
-longer be committed by the API. Run it after the GitHub release for the same version so both
-channels ship the same build.
+**It runs automatically after a successful Release**, and can also be dispatched by hand.
+
+The hand-off is a `gh workflow run` call at the end of `release.yml`, **not** an `on: release`
+trigger here. That is load-bearing: the release is created with `GITHUB_TOKEN`, and events raised
+by `GITHUB_TOKEN` do not start new workflow runs. `workflow_dispatch` and `repository_dispatch` are
+the only two exceptions. An `on: release` trigger would read as correct and never fire once.
+
+Still true, and the reason the workflow used to be manual: once a submission is created through the
+API it **must not** be edited in Partner Center, or the API can no longer commit it. Pick one path
+per release, the workflow or a manual upload, never both. Set the repository **variable**
+`STORE_AUTO_SUBMIT` to `false` to go back to manual uploads without touching any YAML.
 
 Repository secrets it needs (Settings > Secrets and variables > Actions):
 `STORE_TENANT_ID`, `STORE_SELLER_ID`, `STORE_CLIENT_ID`, `STORE_CLIENT_SECRET`, `STORE_PRODUCT_ID`
-(the 12-character Store ID from Partner Center > Product identity). The first four come from an
-Entra app registration associated with the Partner Center account under Account settings > User
-management > Azure AD applications.
+(the 12-character Store ID from Partner Center > Product management > Product identity). The first
+four come from an Entra app registration associated with the Partner Center account under
+**Account settings > Users** (Partner Center renamed this from "User management > Azure AD
+applications"); the client secret itself is generated in the Azure portal under the app
+registration's Certificates & secrets. **No PAT is involved.** Until all five exist the workflow
+fails fast, before packaging, with the list of what is missing. `release.yml` skips the hand-off
+entirely when they are absent and leaves a warning annotation on the run.
 
 Constraints that are easy to trip over:
 - The API **cannot** be used on a product that uses **mandatory app updates**; it returns HTTP 409.
