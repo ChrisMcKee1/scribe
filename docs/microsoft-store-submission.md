@@ -383,6 +383,13 @@ Constraints worth knowing before you rely on this:
   unaffected) and re-run; the API then creates its own and can manage it. The workflow detects this
   exact failure and prints the steps. Set the repository **variable** `STORE_AUTO_SUBMIT` to
   `false` to suspend the automation and go back to uploading by hand.
+- **The msstore CLI version is pinned to `v0.3.9` on purpose.** v0.4.0 regressed the upload
+  progress callback (reads a disposed `FileStream` from a thread pool callback) and fails every
+  publish with *"Error while uploading the application package"* the moment the Azure blob upload
+  reaches 0%. Confusingly, the upload itself may already have succeeded when it crashes, so the
+  package can appear in Partner Center despite the failed run. See
+  [msstore-cli#154](https://github.com/microsoft/msstore-cli/issues/154); re-test `latest` once
+  the fix ships.
 - The API **cannot** be used on a product with mandatory app updates enabled; it returns HTTP 409.
 - The app needs **one completed manual submission** first, including the age rating questionnaire.
 - Certification still takes as long as it takes. The workflow submits; it does not shorten review.
