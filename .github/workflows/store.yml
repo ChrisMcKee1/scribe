@@ -123,8 +123,19 @@ jobs:
           $full = (Resolve-Path $bundle).Path
           "MSIX_PATH=$full" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
+      # Pinned, not `latest`. msstore CLI v0.4.0 regressed the upload progress callback: it reads
+      # the FileStream length from a thread pool callback after the stream is disposed, throws
+      # ObjectDisposedException, and reports "Error while uploading the application package" right
+      # as the Azure blob upload reaches 0%. That is exactly the failure this repository hit on its
+      # first real submission. v0.3.9 is the last version without it.
+      # https://github.com/microsoft/msstore-cli/issues/154
+      #
+      # Worth re-testing `latest` once the fix in msstore-cli#155 ships, because a pin left in
+      # place forever eventually becomes its own bug.
       - name: Set up Microsoft Store Developer CLI
         uses: microsoft/microsoft-store-apppublisher@v1.4
+        with:
+          version: v0.3.9
 
       - name: Configure Partner Center credentials
         shell: pwsh
