@@ -313,6 +313,57 @@ Paste and adjust the following text. Keep the date current:
 9. Submit for certification.
 10. After certification, test acquisition using the Store path before selecting Publish now.
 
+## Automating submissions (one-time setup)
+
+After the first manual submission, every later release can go to the Store on its own. The
+`Store submission` workflow builds the MSIX and submits it, and `release.yml` hands off to it
+automatically when a `v*` tag finishes publishing. **The only thing standing between you and that
+is five repository secrets**; the workflow has existed since 0.2.x and has never run because they
+were never created.
+
+**No personal access token is involved.** The Store submission API authenticates with an Entra ID
+app registration associated with your Partner Center account.
+
+1. **Associate a Microsoft Entra ID directory with Partner Center**, if you have not already:
+   Partner Center > **Account settings > Users**. If your organisation already uses Microsoft 365
+   you have a directory; otherwise Partner Center can create one at no cost.
+2. **Add the Entra application** under Account settings > Users, and give it the **Manager** role.
+   Partner Center can create the app registration for you if one does not exist yet.
+3. **Copy the Tenant ID and Client ID** from that application's page in Partner Center.
+4. **Generate the client secret** in the Azure portal: Microsoft Entra ID > App registrations >
+   your app > **Certificates & secrets** > New client secret. Copy the value immediately, it is
+   shown once. Microsoft recommends an expiry under 12 months, so **put a calendar reminder on it**;
+   an expired secret shows up as a failed release, not as a warning.
+5. **Find your Seller ID** in Partner Center under Account settings.
+6. **Find the Store ID** (12 characters) under your app's Product management > Product identity.
+
+Then add all five under repository **Settings > Secrets and variables > Actions**:
+
+| Secret | Where it comes from |
+| --- | --- |
+| `STORE_TENANT_ID` | Entra application page in Partner Center |
+| `STORE_CLIENT_ID` | Entra application page in Partner Center |
+| `STORE_CLIENT_SECRET` | Azure portal > App registrations > Certificates & secrets |
+| `STORE_SELLER_ID` | Partner Center > Account settings |
+| `STORE_PRODUCT_ID` | Product management > Product identity (12-character Store ID) |
+
+Verify with a dry run before trusting it, which creates or updates the draft without sending it for
+certification:
+
+```
+gh workflow run store.yml -f tag=v0.3.11 -f draft_only=true
+```
+
+Constraints worth knowing before you rely on this:
+
+- **Never mix the two paths for one release.** Once a submission is created through the API it must
+  not be edited in Partner Center, or the API can no longer commit it. Set the repository
+  **variable** `STORE_AUTO_SUBMIT` to `false` to suspend the automation and go back to uploading by
+  hand.
+- The API **cannot** be used on a product with mandatory app updates enabled; it returns HTTP 409.
+- The app needs **one completed manual submission** first, including the age rating questionnaire.
+- Certification still takes as long as it takes. The workflow submits; it does not shorten review.
+
 ## After publication
 
 - Add the Microsoft Store product URL to the in-app About page.

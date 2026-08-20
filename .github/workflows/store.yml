@@ -1,9 +1,17 @@
 name: Store submission
 
-# Manual on purpose. A Store submission goes to Microsoft for certification and, once created
-# through the API, must not be edited in Partner Center or it can no longer be committed by the
-# API. Firing that automatically on every tag would be a surprise with real consequences, so the
-# GitHub release stays automatic and this one is a deliberate click.
+# Runs automatically after a successful Release, and can also be dispatched by hand.
+#
+# The Release workflow hands off to this one with `gh workflow run` rather than this workflow
+# carrying an `on: release` trigger. That is not a style choice: the release is created with
+# GITHUB_TOKEN, and events raised by GITHUB_TOKEN do not start new workflow runs, so an
+# `on: release` trigger here would look correct and never fire. workflow_dispatch is one of the
+# two documented exceptions.
+#
+# Still worth knowing before changing anything here: once a submission is created through the API
+# it must NOT be edited in Partner Center, or the API can no longer commit it. So pick one path
+# per release, this workflow or a manual upload, never both. Set the STORE_AUTO_SUBMIT repository
+# variable to `false` to go back to manual uploads without editing any YAML.
 on:
   workflow_dispatch:
     inputs:
@@ -35,6 +43,28 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
+
+      # Before the build, not after it. Without this the first run on an unconfigured repository
+      # spends twenty minutes packaging 1.3 GB and then dies on an opaque msstore auth error.
+      - name: Verify Partner Center credentials are configured
+        shell: pwsh
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_SELLER_ID: ${{ secrets.STORE_SELLER_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
+        run: |
+          $missing = @('STORE_TENANT_ID','STORE_SELLER_ID','STORE_CLIENT_ID','STORE_CLIENT_SECRET','STORE_PRODUCT_ID') |
+              Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) {
+              throw "Missing repository secret(s): $($missing -join ', '). " +
+                  'The first four come from an Entra app registration associated with the Partner ' +
+                  'Center account (Account settings > Users); STORE_PRODUCT_ID is the 12-character ' +
+                  'Store ID from Product management > Product identity. See ' +
+                  'docs/microsoft-store-submission.md.'
+          }
+          Write-Host 'All five Partner Center secrets are present.'
 
       - name: Resolve version
         shell: pwsh
@@ -105,8 +135,14 @@ jobs:
       - name: Submit to the Microsoft Store
         shell: pwsh
         run: |
+          # Built as an array. A bare $noCommit holding '' would be passed to msstore as an
+          # empty argument rather than omitted, which is a parse error, not a no-op.
+          $publishArgs = @('publish', $env:MSIX_PATH, '-id', '${{ secrets.STORE_PRODUCT_ID }}')
+
           # -nc creates or updates the draft without committing it for certification.
-          $noCommit = if ($env:DRAFT_ONLY -eq 'true') { '-nc' } else { '' }
-          msstore publish "$env:MSIX_PATH" -id "${{ secrets.STORE_PRODUCT_ID }}" $noCommit
+          if ($env:DRAFT_ONLY -eq 'true') { $publishArgs += '-nc' }
+
+          msstore @publishArgs
+          if ($LASTEXITCODE -ne 0) { throw "msstore publish failed with exit code $LASTEXITCODE." }
         env:
           DRAFT_ONLY: ${{ inputs.draft_only }}

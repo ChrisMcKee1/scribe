@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: write        # needed to hand off to the Store submission workflow; see the last step
 
 concurrency:
   group: release-${{ github.ref }}
@@ -138,6 +139,49 @@ jobs:
           }
         env:
           GH_TOKEN: ${{ github.token }}
+
+      # Hands the same tag to the Store workflow so a release ships to both channels from one
+      # push, instead of the Store half waiting on somebody remembering to click it.
+      #
+      # A workflow_dispatch, not an `on: release` trigger in store.yml. The release above is
+      # created with GITHUB_TOKEN, and events raised by GITHUB_TOKEN deliberately do not start new
+      # workflow runs; workflow_dispatch and repository_dispatch are the two documented exceptions.
+      # An `on: release` trigger would look correct and simply never fire.
+      # https://docs.github.com/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
+      - name: Submit to the Microsoft Store
+        if: |
+          startsWith(github.ref, 'refs/tags/v') &&
+          vars.STORE_AUTO_SUBMIT != 'false' &&
+          secrets.STORE_CLIENT_ID != '' &&
+          secrets.STORE_PRODUCT_ID != ''
+        shell: pwsh
+        run: |
+          # Fire and forget. A Store certification cycle takes hours, so blocking this job on it
+          # would only make the release look stuck; the Store run reports itself.
+          gh workflow run store.yml `
+              --repo "${{ github.repository }}" `
+              --ref main `
+              -f tag="v$env:VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not start the Store submission workflow.' }
+          Write-Host "::notice::Store submission dispatched for v$env:VERSION."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Says so loudly rather than silently skipping, because "I thought that was automated" is
+      # exactly how a Store release gets missed for a week.
+      - name: Note that the Store submission was skipped
+        if: |
+          startsWith(github.ref, 'refs/tags/v') &&
+          (vars.STORE_AUTO_SUBMIT == 'false' || secrets.STORE_CLIENT_ID == '' || secrets.STORE_PRODUCT_ID == '')
+        shell: pwsh
+        run: |
+          $reason = if ('${{ vars.STORE_AUTO_SUBMIT }}' -eq 'false') {
+              'the STORE_AUTO_SUBMIT repository variable is set to false'
+          } else {
+              'the Partner Center secrets are not configured on this repository'
+          }
+          Write-Host "::warning::No Store submission was made for v$env:VERSION because $reason. " +
+              "The GitHub release is published; the Store still needs a manual upload."
 
       - name: Upload release artifacts for manual run
         if: github.event_name == 'workflow_dispatch'
