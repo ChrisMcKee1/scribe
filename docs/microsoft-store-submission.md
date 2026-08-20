@@ -324,18 +324,32 @@ were never created.
 **No personal access token is involved.** The Store submission API authenticates with an Entra ID
 app registration associated with your Partner Center account.
 
-1. **Associate a Microsoft Entra ID directory with Partner Center**, if you have not already:
-   Partner Center > **Account settings > Users**. If your organisation already uses Microsoft 365
-   you have a directory; otherwise Partner Center can create one at no cost.
-2. **Add the Entra application** under Account settings > Users, and give it the **Manager** role.
-   Partner Center can create the app registration for you if one does not exist yet.
+This works on an **individual** developer account as well as a company one. The documentation
+places no account-type restriction on it, and an individual developer who has no Entra tenant can
+have Partner Center create one at no cost. The **Manager** role below is assigned to the *Entra
+application*, not to you: as Primary Owner of the account you already have full access.
+
+1. **Link a Microsoft Entra ID tenant**, if you have not already: Partner Center > **Account
+   settings > Tenants** > *Associate Microsoft Entra ID with your Partner Center account*. If you
+   already use Microsoft 365 you have a tenant; otherwise choose *Create a new Microsoft Entra ID
+   tenant* on the same page, which is free. **User management does not appear until a tenant is
+   linked**, which is the usual reason this looks unavailable.
+2. **Add the application**: Account settings > **User management** > **Microsoft Entra applications**
+   tab > *Add Microsoft Entra application*. Choose *Create* if the app registration does not exist
+   yet. In **Roles applicable to developer programs**, tick **Manager**.
 3. **Copy the Tenant ID and Client ID** from that application's page in Partner Center.
-4. **Generate the client secret** in the Azure portal: Microsoft Entra ID > App registrations >
-   your app > **Certificates & secrets** > New client secret. Copy the value immediately, it is
-   shown once. Microsoft recommends an expiry under 12 months, so **put a calendar reminder on it**;
-   an expired secret shows up as a failed release, not as a warning.
+4. **Generate the client secret**, either on that same Partner Center page via *Add new key*, or in
+   the Azure portal under Microsoft Entra ID > App registrations > your app > **Certificates &
+   secrets**. Copy the value immediately; it is shown once. Microsoft caps the expiry at 24 months
+   and recommends under 12, so **put a calendar reminder on it**. An expired secret surfaces as a
+   failed release, not as a warning.
 5. **Find your Seller ID** in Partner Center under Account settings.
 6. **Find the Store ID** (12 characters) under your app's Product management > Product identity.
+
+Adding or creating the application requires signing in with a Manager account that also holds
+**global administrator** permission on the Entra tenant. On a single-person setup with a
+Partner-Center-created tenant that is the same identity, so it is usually invisible; on a tenant
+that belongs to an employer it is the step most likely to need somebody else.
 
 Then add all five under repository **Settings > Secrets and variables > Actions**:
 
