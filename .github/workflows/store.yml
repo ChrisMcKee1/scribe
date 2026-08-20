@@ -118,7 +118,10 @@ jobs:
                   throw "Manifest for $runtime declares ProcessorArchitecture '$architecture', expected '$expected'."
               }
           }
-          "MSIX_PATH=$bundle" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          # Absolute. msstore resolves this argument itself rather than treating it as relative to
+          # the working directory, and Microsoft's own GitHub Actions example passes a full path.
+          $full = (Resolve-Path $bundle).Path
+          "MSIX_PATH=$full" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Set up Microsoft Store Developer CLI
         uses: microsoft/microsoft-store-apppublisher@v1.4
@@ -154,10 +157,13 @@ jobs:
           # -nc creates or updates the draft without committing it for certification.
           if ($env:DRAFT_ONLY -eq 'true') { $publishArgs += '-nc' }
 
-          # Captured rather than streamed, so the known-cause check below can read it. Tee-Object
-          # keeps it visible in the log at the same time.
-          $output = msstore @publishArgs 2>&1 | Tee-Object -Variable captured
+          # NOT assigned to a variable. `$x = cmd | Tee-Object -Variable y` sends the pipeline to
+          # $x and prints nothing, which is how the first failure here showed a bare exit code and
+          # no message. Unassigned, Tee-Object both prints and captures.
+          Write-Host "Running: msstore $($publishArgs -join ' ')"
+          msstore @publishArgs 2>&1 | Tee-Object -Variable captured
           $exit = $LASTEXITCODE
+          Write-Host "msstore exited with $exit."
 
           if ($exit -ne 0) {
               $text = ($captured | Out-String)
