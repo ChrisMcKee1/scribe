@@ -54,6 +54,12 @@ internal sealed class DictationController : IDisposable
     private nint _captureTargetWindow;
     private string? _captureTargetApp;
     private long _captureStartedTimestamp;
+
+    // Per-dictation ordinal, stamped on every line of one capture's story. A busy log interleaves
+    // the controller, the audio service and the out-of-process overlay, and without an id the only
+    // way to tell two adjacent dictations apart is by reading timestamps and guessing.
+    private long _dictationSeq;
+    private long _dictationId;
     private Task? _processingTask;
     private bool _paused;
     private bool _started;
@@ -407,7 +413,7 @@ internal sealed class DictationController : IDisposable
         if (stopRecording)
         {
             _hotkeys.CancelToggle();
-            StopAndProcess();
+            StopAndProcess(DictationStopReason.Paused);
         }
         else if (raiseState)
         {
@@ -438,13 +444,43 @@ internal sealed class DictationController : IDisposable
             _captureTargetWindow = GetForegroundWindow();
             _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
             _captureStartedTimestamp = Stopwatch.GetTimestamp();
+            _dictationId = Interlocked.Increment(ref _dictationSeq);
         }
 
         try
         {
             _audio.CaptureFaulted += OnCaptureFaulted;
+            var openTimer = Stopwatch.StartNew();
             _audio.Start(settings.InputDeviceId);
-            _log.LogInformation("Recording started ({Trigger}).", e.Trigger);
+            openTimer.Stop();
+
+            // Opening the endpoint blocks this path, and nothing is recorded until it returns. A
+            // support log caught a USB speakerphone taking 5.19 s on the first press after launch:
+            // the user held the key, saw no overlay, gave up, and the dictation came back as "no
+            // audio from your microphone". The cold-open cost is invisible everywhere else.
+            if (openTimer.Elapsed.TotalMilliseconds > 400)
+            {
+                _log.LogWarning(
+                    "#{Id} the microphone '{Device}' took {Ms} ms to start. Nothing spoken before it " +
+                    "opened was recorded.",
+                    _dictationId, _audio.LastDeviceName ?? "unknown", (long)openTimer.Elapsed.TotalMilliseconds);
+            }
+
+            // Everything a "my dictation cut out" report needs to be answerable: which press, which
+            // mode (a hold that ends early and a toggle that auto-stops look identical to the user
+            // but have completely different causes), and which app was focused.
+            _log.LogInformation(
+                "#{Id} recording started: trigger={Trigger} mode={Mode} key='{Key}' device='{Device}' " +
+                "target={App} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup}",
+                _dictationId,
+                e.Trigger,
+                settings.Hotkey.Mode,
+                settings.Hotkey.DisplayName ?? "custom",
+                _audio.LastDeviceName ?? "unknown",
+                _captureTargetApp ?? "unknown",
+                settings.AutoStopOnSilence,
+                settings.UseVoiceActivityDetection,
+                settings.EnableAiCleanup);
             Raise(DictationState.Recording);
 
             // Muted endpoints (headset mute, Win11 taskbar mic mute during a meeting) still record,
@@ -475,13 +511,14 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) => StopAndProcess();
+    private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) =>
+        StopAndProcess(DictationStopReason.HotkeyReleased);
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {
-        _log.LogError(error, "The active microphone stopped unexpectedly.");
+        _log.LogError(error, "#{Id} the active microphone stopped unexpectedly.", _dictationId);
         Error?.Invoke("microphone disconnected");
-        StopAndProcess();
+        StopAndProcess(DictationStopReason.MicrophoneFault);
     }
 
     // Fired on the audio capture thread for every level sample while subscribed.
@@ -493,16 +530,53 @@ internal sealed class DictationController : IDisposable
             return;
         }
 
-        _log.LogInformation("Silence auto-stop: ending the toggle dictation.");
+        // Which of the tracker's two rules fired changes the advice completely: "you paused and it
+        // ended" is working as designed, while "it never heard you at all" is a device or gain
+        // problem that reads to the user as an unexplained cut-off a few seconds in.
+        if (tracker.HeardSpeech)
+        {
+            _log.LogInformation(
+                "#{Id} silence auto-stop: the speaker went quiet (peak level {Peak:F4}).",
+                _dictationId, tracker.PeakLevel);
+        }
+        else
+        {
+            _log.LogWarning(
+                "#{Id} silence auto-stop: no speech was ever detected on '{Device}' (peak level " +
+                "{Peak:F4} never reached the threshold). Recording ended on the lead-in limit, not " +
+                "on anything the user did.",
+                _dictationId, _audio.LastDeviceName ?? "unknown", tracker.PeakLevel);
+        }
 
         // Reset the hook's toggle flag so the next press starts a new dictation rather than being
         // swallowed as the "toggle off" for the dictation we just ended ourselves.
         _hotkeys.CancelToggle();
-        StopAndProcess();
+        StopAndProcess(DictationStopReason.SilenceAutoStop);
     }
 
-    /// <summary>Shared stop path for the hotkey release/toggle-off and the silence auto-stop.</summary>
-    private void StopAndProcess()
+    /// <summary>Why a recording ended. Written to the log on every stop, without exception.</summary>
+    internal enum DictationStopReason
+    {
+        /// <summary>The user released the hold key, or pressed the toggle key a second time.</summary>
+        HotkeyReleased,
+
+        /// <summary>Toggle mode with auto-stop enabled decided the speaker had gone quiet.</summary>
+        SilenceAutoStop,
+
+        /// <summary>The capture stream faulted: device removed, format change, driver reset.</summary>
+        MicrophoneFault,
+
+        /// <summary>Dictation was paused from the tray while a recording was live.</summary>
+        Paused,
+    }
+
+    /// <summary>
+    /// Shared stop path for the hotkey release/toggle-off, the silence auto-stop, a capture fault
+    /// and pause. The reason is logged with the hold duration, because "it stopped after about ten
+    /// seconds" is the single most common way a dictation problem gets reported and the four causes
+    /// are indistinguishable from the outside.
+    /// </summary>
+    private void StopAndProcess(DictationStopReason reason)
     {
         UnsubscribeSilence();
 
@@ -512,6 +586,10 @@ internal sealed class DictationController : IDisposable
         {
             if (_state != DictationState.Recording)
             {
+                // A redundant stop (both the hook release and a fault racing to end the same
+                // capture) is normal and harmless. Logged at Debug so the reason is still visible
+                // when chasing a double-stop, without a Recording line every user sees.
+                _log.LogDebug("#{Id} stop ignored while {State}: reason={Reason}", _dictationId, _state, reason);
                 return;
             }
 
@@ -520,10 +598,17 @@ internal sealed class DictationController : IDisposable
                 _captureSettings ?? _settings.Clone(),
                 _captureTargetWindow,
                 _captureTargetApp,
-                _captureStartedTimestamp);
+                _captureStartedTimestamp,
+                reason);
             completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _processingTask = completion.Task;
         }
+
+        _log.LogInformation(
+            "#{Id} recording stopped after {Held:F2}s of hold: reason={Reason}",
+            _dictationId,
+            Stopwatch.GetElapsedTime(session.StartedTimestamp).TotalSeconds,
+            reason);
 
         _audio.CaptureFaulted -= OnCaptureFaulted;
         _audio.RequestStop();
@@ -569,7 +654,42 @@ internal sealed class DictationController : IDisposable
             var captured = _audio.Stop();
             report.CaptureDuration = captured.Duration;
             activity?.SetTag(ScribeTelemetry.TagCaptureSeconds, Math.Round(captured.Duration.TotalSeconds, 2));
-            _log.LogInformation("Captured {Seconds:F2}s of audio.", captured.Duration.TotalSeconds);
+
+            var heldSeconds = Stopwatch.GetElapsedTime(session.StartedTimestamp).TotalSeconds;
+            _log.LogInformation(
+                "#{Id} captured {Seconds:F2}s of audio from a {Held:F2}s hold (device='{Device}' " +
+                "silent={Silent} muted={Muted} stop={Reason}).",
+                _dictationId,
+                captured.Duration.TotalSeconds,
+                heldSeconds,
+                _audio.LastDeviceName ?? "unknown",
+                _audio.LastCaptureWasSilent,
+                _audio.LastDeviceMuted,
+                session.StopReason);
+
+            // The shape of "I couldn't talk for more than a few seconds". If the capture is much
+            // shorter than the hold, the microphone stream ended on its own part-way through: a
+            // device the OS reconfigured mid-capture (Studio Effects engaging, a meeting app taking
+            // exclusive mode, a Bluetooth profile switch) rather than anything the user did. WASAPI
+            // reports that as a clean stop with no exception, so nothing else in the pipeline
+            // notices, and the user simply loses everything they said after it happened.
+            //
+            // The allowance covers the honest gap: the stop handshake and the final buffer flush.
+            var shortfall = heldSeconds - captured.Duration.TotalSeconds;
+            if (session.StopReason == DictationStopReason.HotkeyReleased
+                && heldSeconds > 2
+                && shortfall > 1.0)
+            {
+                _log.LogWarning(
+                    "#{Id} the microphone stream ended {Shortfall:F2}s before the key was released " +
+                    "({Captured:F2}s captured of a {Held:F2}s hold on '{Device}'). Everything spoken " +
+                    "after the stream stopped was lost.",
+                    _dictationId,
+                    shortfall,
+                    captured.Duration.TotalSeconds,
+                    heldSeconds,
+                    _audio.LastDeviceName ?? "unknown");
+            }
 
             if (captured.IsEmpty)
             {
@@ -580,12 +700,21 @@ internal sealed class DictationController : IDisposable
                 // never engaged (seen with AirPods Max: the endpoint opens but streams nothing).
                 // This must be loud: a silent return here looks to the user like dictation died.
                 var device = _audio.LastDeviceName;
-                _log.LogWarning("Capture from '{Device}' produced no audio.", device ?? "default device");
+                _log.LogWarning(
+                    "#{Id} capture from '{Device}' produced no audio after a {Held:F2}s hold.",
+                    _dictationId, device ?? "default device", heldSeconds);
                 report.Fail("Audio capture", "The microphone produced no audio.");
                 RaisePipelineReport(report);
-                Error?.Invoke(device is null
-                    ? "no audio captured. Check your microphone in Settings"
-                    : $"no audio from '{device}'. Pick a different microphone in Settings");
+
+                // A press too brief to record anything is not a broken microphone, and telling
+                // somebody to go and change devices over it sends them to fix the wrong thing. A
+                // support log showed this exact misdirection: the device took five seconds to open,
+                // the user let go, and Scribe blamed their hardware.
+                Error?.Invoke(heldSeconds < 1.0
+                    ? "that was too quick, hold the key while you speak"
+                    : device is null
+                        ? "no audio captured. Check your microphone in Settings"
+                        : $"no audio from '{device}'. Pick a different microphone in Settings");
                 return;
             }
 
@@ -658,10 +787,17 @@ internal sealed class DictationController : IDisposable
                 // signal, the pipeline report, goes solely to the Playground page in Settings,
                 // which is normally closed. The overlay simply vanished and the dictation was gone.
                 // Production logs show 34 of these across 22 days, none of them reported.
+                // "Peak audio was present" on its own means only "not digital silence", a -60 dBFS
+                // bar that a support log proved useless: a user lost three of six dictations here
+                // and there was no way to tell a quiet microphone from a bad one from a decoder
+                // that simply gave up. The measured signal shape is what makes those separable.
                 _log.LogWarning(
-                    "Speech recognition returned no text for a {Seconds:F2}s capture that was not " +
-                    "silent (peak audio was present). The dictation was lost.",
-                    audio.Duration.TotalSeconds);
+                    "#{Id} speech recognition returned no text for a {Seconds:F2}s capture that was " +
+                    "not silent. The dictation was lost. Device='{Device}' signal: {Signal}",
+                    _dictationId,
+                    audio.Duration.TotalSeconds,
+                    _audio.LastDeviceName ?? "unknown",
+                    _audio.LastSignalReport?.Describe() ?? "unavailable");
                 report.Fail("Speech recognition", "No speech was recognized.");
                 RaisePipelineReport(report);
                 Error?.Invoke("nothing was recognised, try again");
@@ -1080,7 +1216,8 @@ internal sealed class DictationController : IDisposable
         AppSettings Settings,
         nint TargetWindow,
         string? TargetApp,
-        long StartedTimestamp);
+        long StartedTimestamp,
+        DictationStopReason StopReason);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

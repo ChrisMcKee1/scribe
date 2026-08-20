@@ -206,13 +206,17 @@ function New-ScribeMsix {
     # --- 4. Write the manifest ---------------------------------------------------------------------
     # runFullTrust is required for a desktop Win32 app. The microphone capability is declared because
     # dictation captures audio; nothing is transmitted, which the Store listing states explicitly.
+    #
+    # unvirtualizedResources exempts ONE folder from AppData write virtualization; see the Properties
+    # block below for why that is not optional for this app.
     $manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
+  IgnorableNamespaces="uap rescap virtualization">
 
   <Identity
     Name="$IdentityName"
@@ -225,6 +229,30 @@ function New-ScribeMsix {
     <PublisherDisplayName>$publisherDisplay</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Private, fully offline push-to-talk voice dictation for Windows.</Description>
+
+    <!-- Exempt ScribeData from AppData write virtualization.
+
+         Without this, a packaged app that CREATES a folder under %LOCALAPPDATA% has that write
+         redirected into %LOCALAPPDATA%\Packages\<family>\LocalCache\Local (Windows 10 1903 and
+         later; see msix-src/desktop/desktop-to-uwp-behind-the-scenes.md). The app still reads its
+         own path back through the merged view, so everything works and Settings > About shows
+         %LOCALAPPDATA%\ScribeData\logs. But File Explorer, running outside the container, sees
+         nothing there. That is exactly what happened to a 0.3.10 Store user asked for a log file:
+         the folder they were sent to did not exist, and the report died there.
+
+         It does not reproduce on a machine that also has the direct-download build, because
+         ScribeData already exists at the real path and redirection only applies to NEW folders.
+         That is why the behaviour survived to a release.
+
+         The narrow virtualization: form is the one that matters (Windows 11 is the floor here); the
+         desktop6 form is not used because it would unvirtualize the whole of AppData and HKCU for
+         no benefit. AppPaths migrates data written by earlier packaged builds forward on first run.
+    -->
+    <virtualization:FileSystemWriteVirtualization>
+      <virtualization:ExcludedDirectories>
+        <virtualization:ExcludedDirectory>`$(KnownFolder:LocalAppData)\ScribeData</virtualization:ExcludedDirectory>
+      </virtualization:ExcludedDirectories>
+    </virtualization:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
@@ -254,6 +282,11 @@ function New-ScribeMsix {
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <!-- Required by the virtualization:FileSystemWriteVirtualization exclusion above. Like
+         runFullTrust it is a restricted capability, so the submission carries a justification:
+         Scribe writes one folder that the user must be able to open in File Explorer to collect
+         diagnostics and to back up their own dictation history. -->
+    <rescap:Capability Name="unvirtualizedResources" />
     <DeviceCapability Name="microphone" />
   </Capabilities>
 </Package>

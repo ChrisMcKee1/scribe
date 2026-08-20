@@ -35,11 +35,28 @@ public sealed class SilenceAutoStopTracker
     }
 
     /// <summary>
+    /// True once any sample has crossed the speech threshold. After a stop it distinguishes the two
+    /// very different reasons this tracker fires: the speaker finished and went quiet, or the input
+    /// never rose above the noise floor at all (a muted or wrong device, or a gain so low that real
+    /// speech reads as silence). Those look identical to the user and need opposite fixes, so the
+    /// log records which one happened.
+    /// </summary>
+    public bool HeardSpeech => _heardSpeech;
+
+    /// <summary>Loudest level seen, for judging how far under the threshold a quiet mic sat.</summary>
+    public float PeakLevel { get; private set; }
+
+    /// <summary>
     /// Feeds one level sample. Returns true when the dictation should stop: the speaker has been
     /// silent for the hold window after speaking, or never spoke within the lead-in limit.
     /// </summary>
     public bool Update(float level, long timestampMs)
     {
+        if (level > PeakLevel)
+        {
+            PeakLevel = level;
+        }
+
         if (level >= _silenceThreshold)
         {
             _heardSpeech = true;

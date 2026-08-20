@@ -52,6 +52,35 @@ public sealed class SilenceAutoStopTrackerTests
     }
 
     [Fact]
+    public void Reports_whether_it_ever_heard_speech_and_how_loud_the_input_got()
+    {
+        // The two stops look identical to the user ("it cut out after a few seconds") and need
+        // opposite fixes: one is the feature working, the other is a microphone that never
+        // delivered a usable level. The log says which, so this is what it reads.
+        var wentQuiet = new SilenceAutoStopTracker(startedMs: 0, silenceHoldMs: 4_000);
+        wentQuiet.Update(Voice, 500);
+        Assert.True(wentQuiet.Update(Quiet, 4_500));
+        Assert.True(wentQuiet.HeardSpeech);
+        Assert.Equal(Voice, wentQuiet.PeakLevel);
+
+        var neverHeard = new SilenceAutoStopTracker(startedMs: 0, leadInLimitMs: 10_000);
+        Assert.True(neverHeard.Update(Quiet, 10_000));
+        Assert.False(neverHeard.HeardSpeech);
+        Assert.Equal(Quiet, neverHeard.PeakLevel);
+    }
+
+    [Fact]
+    public void Peak_level_survives_a_quiet_sample_after_a_loud_one()
+    {
+        var tracker = new SilenceAutoStopTracker(startedMs: 0);
+
+        tracker.Update(0.42f, 100);
+        tracker.Update(Quiet, 200);
+
+        Assert.Equal(0.42f, tracker.PeakLevel);
+    }
+
+    [Fact]
     public void Lead_in_is_longer_than_the_post_speech_hold()
     {
         // A thinking pause before the first word must not cut the dictation off at the (shorter)

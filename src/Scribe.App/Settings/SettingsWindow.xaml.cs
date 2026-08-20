@@ -55,6 +55,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ICleanupFailureLog _failureLog;
     private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
     private readonly AppPaths _paths;
+    private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action<bool> _setHotkeyCaptureMode;
@@ -124,7 +125,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action<bool>? setHotkeyCaptureMode = null,
-        UpdateService? updates = null)
+        UpdateService? updates = null,
+        SessionDiagnostics? diagnostics = null)
     {
         _settingsRepository = settingsRepository;
         _audio = audio;
@@ -142,6 +144,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
+        _diagnostics = diagnostics;
         _log = log;
 
         _settings = settingsRepository.Load();
@@ -179,13 +182,40 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
-        AboutLogsPathBox.Text = _paths.LogsDir;
-        AboutDatabasePathBox.Text = _paths.DatabasePath;
+        // Effective, not configured. These boxes exist so a user can paste the path into File
+        // Explorer or a support thread, and Explorer runs outside the package container: showing
+        // the path Scribe itself uses is what sent a Store user hunting for a folder Windows had
+        // redirected somewhere else. AppPaths probes for the real location at startup.
+        AboutLogsPathBox.Text = _paths.EffectiveLogsDir;
+        AboutDatabasePathBox.Text = _paths.EffectiveDatabasePath;
         AboutStoreLinkBox.Text = ScribeLinks.StoreWeb;
         if (_paths.IsFallbackRoot)
         {
             AboutDataPathWarning.Text =
                 $"Scribe could not use {_paths.PreferredRootDir}. It is currently using this fallback location. {_paths.CreationFailureMessage}";
+            AboutDataPathWarning.Visibility = Visibility.Visible;
+        }
+        else if (_paths.WritesAreVirtualized)
+        {
+            // Windows is redirecting this packaged build's writes into the package's private store.
+            // The paths below are already the redirected ones, but they look nothing like the
+            // documented location, so a user comparing them against a README or an older support
+            // thread needs to be told which one is real before they conclude the app is broken.
+            AboutDataPathWarning.Text =
+                "Windows stores this installation's files inside its app package folder rather than " +
+                $"at {_paths.RootDir}. The paths below are the real locations. Copy one of them if " +
+                "you have been asked for a log file, or use Save diagnostics.";
+            AboutDataPathWarning.Visibility = Visibility.Visible;
+        }
+        else if (_paths.VirtualizedRootDir is { } stranded && Directory.Exists(stranded))
+        {
+            // Not virtualized now, but an earlier build of this install was, so its logs are still
+            // sitting in the package folder. Those are the logs covering whatever the user is most
+            // likely reporting, so say where they are rather than leave them hunting for a path
+            // that no longer matches what they were told before.
+            AboutDataPathWarning.Text =
+                "An earlier version of this installation stored its files, including its logs, at " +
+                $"{stranded}. Your settings and history have been carried across to the paths below.";
             AboutDataPathWarning.Visibility = Visibility.Visible;
         }
     }
@@ -2665,20 +2695,74 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // never drift from where the files actually are. A portable profile (SCRIBE_DATA_DIR) or a
     // Store install both resolve correctly for free.
 
+    // Every one of these hands a path to something OUTSIDE this process (the clipboard, Explorer),
+    // so they all use the effective path rather than the one Scribe writes through.
+
     private void AboutCopyLogsPath_Click(object sender, RoutedEventArgs e) =>
-        CopyPathToClipboard(_paths.LogsDir, "log folder path");
+        CopyPathToClipboard(_paths.EffectiveLogsDir, "log folder path");
 
     private void AboutCopyDatabasePath_Click(object sender, RoutedEventArgs e) =>
-        CopyPathToClipboard(_paths.DatabasePath, "data file path");
+        CopyPathToClipboard(_paths.EffectiveDatabasePath, "data file path");
 
     private void AboutOpenLogsFolder_Click(object sender, RoutedEventArgs e) =>
-        OpenFolder(_paths.LogsDir);
+        OpenFolder(_paths.EffectiveLogsDir);
+
+    /// <summary>
+    /// Writes every retained log file plus an environment report into one zip the user chooses the
+    /// location of.
+    /// <para>
+    /// This is the path that actually gets diagnostics out of a user's machine. Copying a path and
+    /// asking somebody to navigate to a hidden folder fails for reasons that are nothing to do with
+    /// them: AppData is hidden by default, the folder is empty until the app has run, and on a
+    /// packaged build predating the manifest fix it was not at the advertised path at all. A file on
+    /// their Desktop that they can read before attaching has none of those failure modes.
+    /// </para>
+    /// </summary>
+    private void AboutSaveDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Save Scribe diagnostics",
+            Filter = "Zip archive (*.zip)|*.zip",
+            DefaultExt = ".zip",
+            FileName = DiagnosticsBundle.SuggestedFileName(DateTimeOffset.Now),
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            OverwritePrompt = true,
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var report = _diagnostics?.ComposeReport()
+                ?? "Environment details were unavailable when this bundle was created.";
+            var result = DiagnosticsBundle.Create(
+                _paths.LogsDir, dialog.FileName, report, DateOnly.FromDateTime(DateTime.Now));
+
+            _log.LogInformation(
+                "Wrote a diagnostics bundle with {Count} log file(s), {Bytes} bytes.",
+                result.LogFileCount, result.Bytes);
+
+            ShowInfo(result.LogFileCount == 0
+                ? $"Saved {System.IO.Path.GetFileName(result.Path)}, but no log files were found to include."
+                : $"Saved {System.IO.Path.GetFileName(result.Path)} with {result.LogFileCount} day(s) of logs " +
+                  $"({result.Bytes / 1024.0:F0} KB). Open it and read report.txt before sharing.");
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not write the diagnostics bundle.");
+            ShowInfo($"Couldn't save the diagnostics: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
+    }
 
     // Opens the containing folder rather than selecting scribe.db. Selecting a file invites
     // dragging it straight into an email or issue, and that file holds every dictation the user
     // has ever made plus their saved API keys.
     private void AboutOpenDataFolder_Click(object sender, RoutedEventArgs e) =>
-        OpenFolder(_paths.RootDir);
+        OpenFolder(_paths.EffectiveRootDir);
 
     private void CopyPathToClipboard(string path, string label)
     {

@@ -48,6 +48,13 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public bool LastCaptureWasSilent => _capturePeak < SilentCapturePeak;
 
+    /// <summary>
+    /// Measured shape of the most recent completed capture: levels, clipping, DC offset and what
+    /// each channel contributed before the downmix. Null until a capture has completed. Statistics
+    /// only, never audio.
+    /// </summary>
+    public CaptureSignalReport? LastSignalReport { get; private set; }
+
     public event EventHandler<float>? LevelChanged;
 
     public event EventHandler<Exception>? CaptureFaulted;
@@ -195,13 +202,26 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 return CapturedAudio.Empty;
             }
 
+            // Measured on the RAW buffer, before the downmix, so per-channel levels are still
+            // visible. Once channels are averaged the evidence is gone, and "what was on the other
+            // channel" is the question a multi-channel headset or speakerphone always raises.
+            LastSignalReport = AnalyzeSafely(raw, format);
+
             float[] samples = ResampleToTarget(raw.GetBuffer(), (int)raw.Length, format);
             var captured = new CapturedAudio(samples, TargetSampleRate);
+
+            // The signal shape is on this line deliberately. It separates failure modes that produce
+            // an identical-looking capture: a stream that stopped delivering, a microphone that was
+            // never live, a gain so low the recognizer sees nothing usable, and a channel being
+            // averaged away. None of those are distinguishable from a duration alone.
             _logger.LogInformation(
-                "Capture complete: {Seconds:F2}s ({Samples} samples @ {Rate} Hz).",
+                "Capture complete: {Seconds:F2}s ({Samples} samples @ {Rate} Hz) from {Signal}",
                 captured.Duration.TotalSeconds,
                 samples.Length,
-                TargetSampleRate);
+                TargetSampleRate,
+                LastSignalReport.Describe());
+
+            WarnAboutSignalProblems(LastSignalReport);
             return captured;
         }
         finally
@@ -238,7 +258,114 @@ public sealed class AudioCaptureService : IAudioCaptureService
         _stopped?.Set();
         if (e.Exception is not null)
         {
+            _logger.LogError(e.Exception, "The capture stream on '{Device}' faulted.", LastDeviceName ?? "unknown");
             CaptureFaulted?.Invoke(this, e.Exception);
+            return;
+        }
+
+        if (_stopRequested)
+        {
+            _logger.LogDebug("Capture on '{Device}' stopped as requested.", LastDeviceName ?? "unknown");
+            return;
+        }
+
+        // WASAPI ended the stream cleanly without anyone asking. Nothing above this point can tell:
+        // there is no exception, so CaptureFaulted does not fire, and the controller keeps believing
+        // it is recording until the user releases the key. Everything spoken from here on is gone.
+        // Windows does this when the endpoint is reconfigured under a live capture: an effects
+        // pipeline engaging, another app taking exclusive mode, a Bluetooth profile switch, or a
+        // driver reset. It is logged loudly because it is invisible everywhere else.
+        _logger.LogWarning(
+            "The capture stream on '{Device}' ended on its own after {Seconds:F2}s without an error " +
+            "and without being asked to stop. Audio spoken after this point was not recorded.",
+            LastDeviceName ?? "unknown",
+            CapturedSecondsSoFar());
+    }
+
+    private CaptureSignalReport AnalyzeSafely(MemoryStream raw, WaveFormat format)
+    {
+        try
+        {
+            return CaptureSignalAnalyzer.Analyze(raw.GetBuffer().AsSpan(0, (int)raw.Length), format);
+        }
+        catch (Exception ex)
+        {
+            // Diagnostics never break a dictation: a capture the analyzer cannot describe is still
+            // a capture the user wants transcribed.
+            _logger.LogDebug(ex, "Could not analyze the capture signal.");
+            return new CaptureSignalReport(format.Channels, format.SampleRate, 0, 0, 0, 0, 0, []);
+        }
+    }
+
+    /// <summary>
+    /// Calls out the signal problems that silently ruin a decode. Each of these leaves a capture
+    /// that looks perfectly healthy from the outside: the level meter moves, the duration is right,
+    /// and the recognizer then returns little or nothing.
+    /// </summary>
+    private void WarnAboutSignalProblems(CaptureSignalReport signal)
+    {
+        if (signal.PerChannel.Count == 0)
+        {
+            return;
+        }
+
+        if (signal.HasSilentChannel)
+        {
+            _logger.LogWarning(
+                "Capture device '{Device}' delivered {Channels} channels and at least one carries no " +
+                "audio. Scribe averages channels, so the speech reaching the recognizer is quieter " +
+                "than the microphone actually recorded. Signal: {Signal}",
+                LastDeviceName ?? "unknown", signal.Channels, signal.Describe());
+        }
+        else if (signal.ChannelsDiverge)
+        {
+            _logger.LogWarning(
+                "Capture device '{Device}' delivered channels with very different levels, which is " +
+                "what a reference or echo-cancellation channel looks like. Averaging them mixes that " +
+                "channel into the speech. Signal: {Signal}",
+                LastDeviceName ?? "unknown", signal.Describe());
+        }
+
+        // -45 dBFS peak over a whole utterance is far below anything a working microphone produces
+        // for someone speaking to it, and well above the digital-silence floor that is all
+        // LastCaptureWasSilent can detect.
+        if (signal.Peak > 0 && signal.PeakDbfs < -45)
+        {
+            _logger.LogWarning(
+                "Capture from '{Device}' peaked at only {Peak:F1} dBFS. Recognition is unreliable at " +
+                "this level; the input gain is very low, or the speaker is far from the microphone. " +
+                "Signal: {Signal}",
+                LastDeviceName ?? "unknown", signal.PeakDbfs, signal.Describe());
+        }
+
+        if (signal.ClippedFraction > 0.01)
+        {
+            _logger.LogWarning(
+                "Capture from '{Device}' clipped on {Fraction:P1} of samples. Signal: {Signal}",
+                LastDeviceName ?? "unknown", signal.ClippedFraction, signal.Describe());
+        }
+    }
+
+    /// <summary>
+    /// Seconds of audio buffered so far, derived from the raw byte count. Used only for diagnostics,
+    /// so a torn read of the stream length is acceptable and never worth a lock on a callback path.
+    /// </summary>
+    private double CapturedSecondsSoFar()
+    {
+        try
+        {
+            var raw = _raw;
+            var format = _captureFormat;
+            if (raw is null || format is null || format.AverageBytesPerSecond <= 0)
+            {
+                return 0;
+            }
+
+            return raw.Length / (double)format.AverageBytesPerSecond;
+        }
+        catch
+        {
+            return 0;
         }
     }
 

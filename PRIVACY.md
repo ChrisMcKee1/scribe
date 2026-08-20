@@ -77,11 +77,23 @@ clipboard content.
 
 Scribe writes diagnostic logs locally. Logs may include application lifecycle
 events, the selected audio device, the name of the focused application,
-performance measurements, model and provider configuration identifiers,
-network endpoint addresses, and error details. Scribe does not intentionally
-write microphone audio or complete transcripts to its diagnostic log files.
+performance measurements, model and provider configuration identifiers, and
+error details. Scribe does not write microphone audio, transcripts, dictionary
+entries, snippet contents, custom prompts, API keys, or service-principal
+secrets to its diagnostic log files. Configured endpoint addresses are recorded
+only as configured or unset, never as the address itself.
 
-Diagnostic logs remain in Scribe's local data directory until you delete them.
+Diagnostic logs are kept for seven days and then deleted automatically. The log
+folder is also size-limited, so it cannot grow without bound: the oldest days
+are removed first once it exceeds its budget. You can delete the logs yourself
+at any time from the folder shown in Settings, under About.
+
+Settings, under About, includes "Save diagnostics", which writes the kept log
+files and a summary of your PC into a single zip file at a location you choose.
+That file is intended to be attached to a bug report. It never includes
+`scribe.db`, which holds your dictation history and saved credentials. The zip
+contains a `report.txt` describing exactly what is inside, so you can read it
+before sharing it with anyone.
 
 Advanced users may configure an OpenTelemetry endpoint through the
 `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable. When configured, Scribe
