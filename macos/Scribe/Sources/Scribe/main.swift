@@ -358,10 +358,17 @@ private enum CommandLineTranscriptionTool {
             return false
         }
 
-        guard command == "--transcribe-file" || command == "--transcribe-wav" else {
+        switch command {
+        case "--transcribe-file", "--transcribe-wav":
+            return runTranscribe(arguments: arguments)
+        case "--cleanup-text":
+            return runCleanup(arguments: arguments)
+        default:
             return false
         }
+    }
 
+    private static func runTranscribe(arguments: [String]) -> Bool {
         guard arguments.count == 2 else {
             fputs("Usage: Scribe --transcribe-wav <wav-path>\n", stderr)
             exit(EXIT_FAILURE)
@@ -378,5 +385,42 @@ private enum CommandLineTranscriptionTool {
             fputs("Transcription failed: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
+    }
+
+    private static func runCleanup(arguments: [String]) -> Bool {
+        guard arguments.count == 2 else {
+            fputs("Usage: Scribe --cleanup-text <raw-transcript>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        let rawTranscript = arguments[1]
+        let provider = CleanupProviderResolver.resolveDefaultProvider()
+        fputs("Using cleanup provider: \(provider.displayName) (\(provider.id))\n", stderr)
+
+        final class ExitBox: @unchecked Sendable {
+            var code: Int32 = EXIT_SUCCESS
+        }
+        let exitBox = ExitBox()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        Task {
+            do {
+                let response = try await provider.clean(CleanupRequest(transcript: rawTranscript))
+                fputs("\(response.cleanedText)\n", stdout)
+                fputs(
+                    "(\(response.providerID)/\(response.modelID), \(String(format: "%.2f", response.latency))s)\n",
+                    stderr)
+            } catch {
+                fputs("Cleanup failed: \(error.localizedDescription)\n", stderr)
+                exitBox.code = EXIT_FAILURE
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if exitBox.code != EXIT_SUCCESS {
+            exit(exitBox.code)
+        }
+        return true
     }
 }
