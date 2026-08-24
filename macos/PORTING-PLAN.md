@@ -21,7 +21,7 @@
 | AI cleanup, OpenAI-compatible endpoint | Not Started | Platform | Build a `URLSession` chat client for OpenAI-compatible `/v1/chat/completions`, covering Ollama, LM Studio, OpenRouter, and similar endpoints. |
 | AI cleanup, Microsoft Foundry cloud | Not Started | Platform | Call the REST API directly, support Azure CLI and service principal auth, and store secrets in Keychain. |
 | AI cleanup, on-device local runtime | Not Started | Platform | Add a managed Ollama-backed provider for one-click local cleanup, while still exposing generic endpoint mode for user-managed local servers. |
-| Silence auto-stop for toggle mode | Not Started | Backend | Combine VAD state with a configurable silence timer in the capture session controller. |
+| Silence auto-stop for toggle mode | Done (stopgap) | Backend | `SilenceAutoStopDetector` implements an energy-threshold RMS detector (armed only for menu/toggle capture, never push-to-talk) firing after 2.0s below -45 dBFS once real speech was observed; unit-tested with XCTest. A trained Silero ONNX VAD (matching Windows exactly) is a follow-up, not yet done. |
 | Playground, raw recognition view | Not Started | Frontend | Add a SwiftUI playground window that runs the normal dictation pipeline and shows raw transcript output. |
 | Playground, replacement highlights | Not Started | Frontend | Show dictionary, snippet, and cleanup diffs inline by pipeline stage. |
 | Playground, per-step timings | Not Started | Backend | Emit timing events for capture, VAD, ASR, replacements, cleanup, and injection, then bind them into the playground UI. |
@@ -46,7 +46,7 @@
 |---|---|---|---|
 | Global hotkey capture | In Progress | Platform | Push-to-talk parity depends on a reliable event tap before any higher-level feature matters. |
 | Audio capture and VAD | In Progress | Backend | Every dictation feature depends on a stable `AVAudioEngine` capture path plus silence detection. |
-| ASR wrapper and transcript session model | In Progress | Backend | A stopgap local `whisper-cli` bridge transcribes captured 16 kHz mono audio end to end from Swift today; `foundry transcribe -m parakeet-tdt-0.6b-v2` has since been verified as a real, higher-parity replacement (see ASR strategy decision below) and is now the target follow-up instead of a hand-rolled sherpa-onnx C bridge. |
+| ASR wrapper and transcript session model | Done (production path) | Backend | `TranscriptionEngine.swift` now defaults to Foundry Local's `parakeet-tdt-0.6b-v2` via `foundry transcribe -m <alias> -f <wav> -o json`, verified end to end through the real `Scribe` binary. `whisper-cli` remains as a documented fallback (`SCRIBE_ASR_BACKEND=whisper`), still verified working. |
 | Text injection | In Progress | Platform | macOS accessibility-backed text insertion is a platform-specific core dependency. |
 | Shared persistence layer | In Progress | Backend | Dictionary, snippets, profiles, recovery, diagnostics, and usage insights all need one local store. |
 | Settings and navigation IA | In Progress | Frontend | The shell exists, but the full multi-section settings product still needs to be built. |

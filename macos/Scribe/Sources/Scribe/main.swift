@@ -35,6 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logSink: { message in AppDelegate.writeLogLine(message) })
     private var dictationMenuItem: NSMenuItem?
     private var capturedSamples: [Float] = []
+    /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
+    /// on hotkey release and must never be preempted by a silence auto-stop.
+    private var silenceAutoStopDetector: SilenceAutoStopDetector?
+
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
@@ -147,10 +151,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 chunk.level.rmsDbfs,
                 chunk.buffer.frameLength)
             Self.writeLogLine(message)
+
+            if let detector = self.silenceAutoStopDetector, detector.observe(level: chunk.level) {
+                let message = String(
+                    format: "Silence auto-stop triggered after %.1f s below %.0f dBFS.",
+                    detector.requiredSilenceDuration,
+                    detector.silenceThresholdDbfs)
+                Self.writeLogLine(message)
+                self.silenceAutoStopDetector = nil
+                Task { @MainActor [weak self] in
+                    self?.stopActiveCapture(source: .menu)
+                }
+            }
         }
 
         audioCaptureEngine.onCaptureError = { [weak self] error in
             Task { @MainActor in
+                self?.silenceAutoStopDetector = nil
                 self?.dictationMenuItem?.title = "Start Test Dictation"
                 self?.presentErrorAlert(
                     title: "Audio Capture Stopped",
@@ -186,8 +203,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             capturedSamples.removeAll(keepingCapacity: true)
             try audioCaptureEngine.start()
+            // Menu-triggered capture is toggle mode: there is no release gesture, so silence
+            // auto-stop is armed. Push-to-talk (hotkeyManager) never arms it; see
+            // configureHotkeyManager and HotkeyManager.startCaptureOnMainThread.
+            silenceAutoStopDetector = SilenceAutoStopDetector()
             dictationMenuItem?.title = "Stop Test Dictation"
-            Self.writeLogLine("Started live test dictation capture.")
+            Self.writeLogLine("Started live test dictation capture (toggle mode, silence auto-stop armed).")
         } catch let error as AudioCaptureEngineError {
             handleCaptureStartError(error)
         } catch {
@@ -196,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopActiveCapture(source: CaptureStopSource) {
+        silenceAutoStopDetector = nil
         let summary = audioCaptureEngine.stop()
         handleCaptureStopped(summary, source: source)
     }
@@ -292,7 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func transcribeAndInject(samples: [Float], source: CaptureStopSource) async {
         guard let transcriptionEngine else {
             dictationMenuItem?.title = "Start Test Dictation"
-            let message = "ASR backend is not configured. Install whisper-cpp and the local model first."
+            let message = "ASR backend is not configured. Install Foundry Local (brew install microsoft/foundrylocal/foundrylocal) or whisper-cpp as a fallback."
             Self.writeLogLine(message)
             presentErrorAlert(title: "ASR Not Ready", message: message)
             return
