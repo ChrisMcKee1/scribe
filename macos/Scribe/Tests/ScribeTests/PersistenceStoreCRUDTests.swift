@@ -109,4 +109,29 @@ final class PersistenceStoreCRUDTests: XCTestCase {
         try store.deleteAppProfile(id: id)
         XCTAssertTrue(try store.fetchAppProfiles().isEmpty)
     }
+
+    // MARK: - Dictation history
+
+    func testRecordAndFetchDictationHistoryRoundTripsTargetApp() throws {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try store.recordDictation(
+            startedAt: startedAt,
+            durationSeconds: 3.5,
+            sampleCount: 56_000,
+            decodeMilliseconds: 120,
+            cleanupMilliseconds: nil,
+            transcriptText: "deploy to azure",
+            targetApp: "com.apple.Terminal")
+
+        let record = try XCTUnwrap(try store.fetchDictationHistory().first)
+        XCTAssertEqual(record.targetApp, "com.apple.Terminal")
+        XCTAssertEqual(record.transcriptText, "deploy to azure")
+    }
+
+    func testFetchDictationHistorySurfacesNilTargetAppForOlderRows() throws {
+        try store.recordDictation(startedAt: Date(), durationSeconds: 1, sampleCount: 16_000)
+
+        let record = try XCTUnwrap(try store.fetchDictationHistory().first)
+        XCTAssertNil(record.targetApp)
+    }
 }

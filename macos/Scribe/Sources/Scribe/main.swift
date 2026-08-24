@@ -534,7 +534,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         summary: AudioCaptureSummary,
         decodeMilliseconds: Double?,
         cleanupMilliseconds: Double?,
-        transcriptText: String? = nil
+        transcriptText: String? = nil,
+        targetApp: String? = nil
     ) {
         do {
             try persistenceStore.recordDictation(
@@ -543,7 +544,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decodeMilliseconds,
                 cleanupMilliseconds: cleanupMilliseconds,
-                transcriptText: transcriptText)
+                transcriptText: transcriptText,
+                targetApp: targetApp)
         } catch {
             Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
             logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
@@ -750,7 +752,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 summary: summary,
                 decodeMilliseconds: decodeMilliseconds,
                 cleanupMilliseconds: nil,
-                transcriptText: processedText)
+                transcriptText: processedText,
+                targetApp: bundleIdentifier ?? processName)
             lastTranscriptStore.set(processedText)
 
             let injectionStart = DispatchTime.now()

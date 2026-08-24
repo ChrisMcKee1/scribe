@@ -14,6 +14,10 @@ struct DictationHistoryRecord {
     /// schema) or captures with no resampled audio surface as `nil`. Feeds
     /// `DictionarySuggestionMiner`, mirroring Windows' `HistoryEntry.Text`.
     let transcriptText: String?
+    /// The frontmost app's bundle identifier or process name at injection time, when recorded.
+    /// Older rows predate this column and surface as `nil` (grouped under "Unknown app" by
+    /// `UsageAnalyzer`), mirroring Windows' `HistoryEntry.TargetApp`.
+    let targetApp: String?
 
     init(
         startedAt: Date,
@@ -21,7 +25,8 @@ struct DictationHistoryRecord {
         sampleCount: Int,
         decodeMilliseconds: Double? = nil,
         cleanupMilliseconds: Double? = nil,
-        transcriptText: String? = nil
+        transcriptText: String? = nil,
+        targetApp: String? = nil
     ) {
         self.startedAt = startedAt
         self.durationSeconds = durationSeconds
@@ -29,6 +34,7 @@ struct DictationHistoryRecord {
         self.decodeMilliseconds = decodeMilliseconds
         self.cleanupMilliseconds = cleanupMilliseconds
         self.transcriptText = transcriptText
+        self.targetApp = targetApp
     }
 
     /// Audio duration in milliseconds, mirroring Windows' `AudioMilliseconds`.

@@ -61,6 +61,11 @@ final class PersistenceStore {
             if !existingColumns.contains("transcript_text") {
                 try execute("ALTER TABLE dictation_history ADD COLUMN transcript_text TEXT;", database: database)
             }
+            // Backs usage insights' "top apps" attribution (UsageAnalyzer); older rows predate
+            // this column and surface as a nil targetApp (grouped under "Unknown app").
+            if !existingColumns.contains("target_app") {
+                try execute("ALTER TABLE dictation_history ADD COLUMN target_app TEXT;", database: database)
+            }
 
             try execute(
                 """
@@ -108,13 +113,14 @@ final class PersistenceStore {
         sampleCount: Int,
         decodeMilliseconds: Double? = nil,
         cleanupMilliseconds: Double? = nil,
-        transcriptText: String? = nil
+        transcriptText: String? = nil,
+        targetApp: String? = nil
     ) throws {
         try withConnection { database in
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text) VALUES (?, ?, ?, ?, ?, ?);",
+                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text, target_app) VALUES (?, ?, ?, ?, ?, ?, ?);",
                 -1,
                 &statement,
                 nil)
@@ -146,6 +152,11 @@ final class PersistenceStore {
             } else {
                 sqlite3_bind_null(statement, 6)
             }
+            if let targetApp {
+                sqlite3_bind_text(statement, 7, targetApp, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 7)
+            }
 
             guard sqlite3_step(statement) == SQLITE_DONE else {
                 throw PersistenceError.sqlite(message: sqliteMessage(from: database))
@@ -157,9 +168,10 @@ final class PersistenceStore {
             "Saved dictation history row for \(startedAtText, privacy: .public) with \(sampleCount) samples.")
     }
 
-    /// Fetches dictation history rows for the Diagnostics panel (`DictationStats`). Rows with a
-    /// null decode/cleanup time (older schema, or a run before this feature existed) surface as
-    /// `nil`, matching the Windows `HistoryEntry` shape.
+    /// Fetches dictation history rows for the Diagnostics panel (`DictationStats`) and Usage
+    /// Insights (`UsageAnalyzer`). Rows with a null decode/cleanup time or target app (older
+    /// schema, or a run before that feature existed) surface as `nil`, matching the Windows
+    /// `HistoryEntry` shape.
     func fetchDictationHistory() throws -> [DictationHistoryRecord] {
         var records: [DictationHistoryRecord] = []
 
@@ -167,7 +179,7 @@ final class PersistenceStore {
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text FROM dictation_history ORDER BY id ASC;",
+                "SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text, target_app FROM dictation_history ORDER BY id ASC;",
                 -1,
                 &statement,
                 nil)
@@ -200,6 +212,9 @@ final class PersistenceStore {
                 let transcriptText: String? = sqlite3_column_type(statement, 5) == SQLITE_NULL
                     ? nil
                     : sqlite3_column_text(statement, 5).map { String(cString: $0) }
+                let targetApp: String? = sqlite3_column_type(statement, 6) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_text(statement, 6).map { String(cString: $0) }
 
                 records.append(
                     DictationHistoryRecord(
@@ -208,7 +223,8 @@ final class PersistenceStore {
                         sampleCount: sampleCount,
                         decodeMilliseconds: decodeMs,
                         cleanupMilliseconds: cleanupMs,
-                        transcriptText: transcriptText))
+                        transcriptText: transcriptText,
+                        targetApp: targetApp))
             }
         }
 

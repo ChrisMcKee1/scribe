@@ -1,4 +1,5 @@
 import AppKit
+import Charts
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -26,6 +27,8 @@ struct SettingsView: View {
                 .tabItem { Label("Playground", systemImage: "wand.and.rays") }
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
                 .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
+            UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+                .tabItem { Label("Usage Insights", systemImage: "chart.bar.xaxis") }
             AboutView(persistenceStore: persistenceStore)
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
@@ -883,6 +886,256 @@ private struct DiagnosticsSettingsTab: View {
             let history = try persistenceStore.fetchDictationHistory()
             let since = Date().addingTimeInterval(-windowDays * 86400)
             snapshot = DictationStats.compute(entries: history, since: since)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Usage Insights tab
+
+/// Local-only usage totals, a trend chart, top apps, and recurring-term mining, backed by
+/// `UsageAnalyzer`. The AI summary section is the one part of this tab that leaves the device: it
+/// is opt-in per generation (never automatic) and sends only the aggregate `UsageInsight` payload
+/// (counts and dictionary-covered term labels), never raw transcripts. Mirrors Windows' Usage
+/// Insights page, split across the totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
+private struct UsageInsightsSettingsTab: View {
+    let persistenceStore: PersistenceStore
+    let onChanged: () -> Void
+
+    @State private var snapshot: UsageAnalyzer.Snapshot?
+    @State private var errorMessage: String?
+    @State private var windowDays: Double = 30
+
+    @State private var aiSummaryText: String?
+    @State private var aiSummaryError: String?
+    @State private var isGeneratingSummary = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Usage Insights")
+                    .font(.headline)
+                Spacer()
+                Picker("Window", selection: $windowDays) {
+                    Text("7 days").tag(7.0)
+                    Text("30 days").tag(30.0)
+                    Text("90 days").tag(90.0)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+                .onChange(of: windowDays) { _ in reload() }
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .foregroundStyle(.red)
+            }
+
+            if let snapshot {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        totalsSection(snapshot)
+                        Divider()
+                        trendSection(snapshot)
+                        Divider()
+                        topAppsSection(snapshot)
+                        Divider()
+                        termsSection(snapshot)
+                        Divider()
+                        aiSummarySection(snapshot)
+                    }
+                }
+            } else {
+                Text("No dictations in this window yet.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .onAppear(perform: reload)
+    }
+
+    // MARK: Totals
+
+    private func totalsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Totals")
+                .font(.subheadline.bold())
+            metricRow(label: "Dictations", value: "\(snapshot.dictations)")
+            metricRow(label: "Words", value: "\(snapshot.words)")
+            metricRow(label: "Active days", value: "\(snapshot.activeDays)")
+            metricRow(label: "Speech time", value: String(format: "%.1f min", snapshot.speechSeconds / 60.0))
+            metricRow(label: "Average words / dictation", value: String(format: "%.1f", snapshot.averageWords))
+        }
+    }
+
+    // MARK: Trend
+
+    private func trendSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(snapshot.granularity == .daily ? "Trend (daily)" : "Trend (weekly)")
+                .font(.subheadline.bold())
+            if snapshot.trend.isEmpty {
+                Text("Not enough history to chart a trend yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(snapshot.trend, id: \.start) { point in
+                    BarMark(
+                        x: .value("Period", String(format: "%04d-%02d-%02d", point.start.year, point.start.month, point.start.day)),
+                        y: .value("Dictations", point.dictations))
+                }
+                .frame(height: 160)
+            }
+        }
+    }
+
+    // MARK: Top apps
+
+    private func topAppsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Top apps")
+                .font(.subheadline.bold())
+            if snapshot.topApps.isEmpty {
+                Text("No app usage recorded yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(snapshot.topApps, id: \.name) { app in
+                    HStack {
+                        Text(app.name)
+                        Spacer()
+                        Text("\(app.dictations) dictations, \(app.words) words")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Recurring terms
+
+    private func termsSection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recurring terms")
+                .font(.subheadline.bold())
+            if snapshot.terms.isEmpty {
+                Text("No recurring terms found yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(snapshot.terms, id: \.text) { term in
+                    HStack {
+                        Text(term.text)
+                        Text("(\(term.dictations) dictations, \(term.occurrences)x)")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                        Spacer()
+                        if term.covered {
+                            Text("In dictionary")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        } else {
+                            Button("Add to Dictionary") { addTermToDictionary(term) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func addTermToDictionary(_ term: UsageAnalyzer.TermUsage) {
+        do {
+            _ = try persistenceStore.insertDictionaryEntry(
+                DictionaryEntry(pattern: term.text, replacement: term.text, wholeWord: true, enabled: true))
+            onChanged()
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: AI summary (opt-in, sends aggregate counts only, never raw transcripts)
+
+    private func aiSummarySection(_ snapshot: UsageAnalyzer.Snapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("AI summary")
+                .font(.subheadline.bold())
+            Text("Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup provider. Novel terms and raw transcripts never leave this device.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Button(isGeneratingSummary ? "Generating..." : "Generate AI Summary") {
+                    generateSummary(snapshot)
+                }
+                .disabled(isGeneratingSummary)
+                if isGeneratingSummary {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if let aiSummaryError {
+                Text(aiSummaryError)
+                    .foregroundStyle(.red)
+            }
+
+            if let aiSummaryText {
+                Text(aiSummaryText)
+                    .textSelection(.enabled)
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private func generateSummary(_ snapshot: UsageAnalyzer.Snapshot) {
+        isGeneratingSummary = true
+        aiSummaryError = nil
+        let payload = UsageInsight.buildSummary(snapshot)
+        Task {
+            do {
+                let provider = CleanupProviderResolver.resolveDefaultProvider()
+                let response = try await provider.clean(
+                    CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
+                let parsed = UsageInsight.parse(response.cleanedText)
+                await MainActor.run {
+                    aiSummaryText = parsed ?? "The AI provider returned no usable summary."
+                    isGeneratingSummary = false
+                }
+            } catch {
+                await MainActor.run {
+                    aiSummaryError = error.localizedDescription
+                    isGeneratingSummary = false
+                }
+            }
+        }
+    }
+
+    private func metricRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .monospacedDigit()
+        }
+    }
+
+    private func reload() {
+        do {
+            let history = try persistenceStore.fetchDictationHistory()
+            let knownTerms = try persistenceStore.fetchAllDictionaryEntries()
+            let now = Date()
+            let since = now.addingTimeInterval(-windowDays * 86400)
+            let entries = history.map {
+                UsageAnalyzer.Entry(
+                    timestampUtc: $0.startedAt,
+                    text: $0.transcriptText ?? "",
+                    audioMilliseconds: $0.audioMilliseconds,
+                    targetApp: $0.targetApp)
+            }
+            snapshot = UsageAnalyzer.compute(entries: entries, knownTerms: knownTerms, sinceUtc: since, nowUtc: now)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
