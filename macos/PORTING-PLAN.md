@@ -12,9 +12,10 @@
 |---|---|---|---|
 | Overlay pill with 9-anchor position picker | Not Started | Frontend | Build a borderless non-activating floating panel plus settings preview, anchored from `NSScreen.visibleFrame` and persisted in SQLite. |
 | Overlay live recording state and meter | Not Started | Frontend | Drive the pill from a shared observable dictation session model fed by the audio pipeline. |
+| User dictionary, core substitution | Done | Backend | `TextPostProcessor` applies whole-word, case-insensitive dictionary substitutions from a new SQLite `dictionary_entries` table, matching Windows' single-pass, longest-match-first semantics. Unit-tested; verified end to end via `Scribe --post-process-text`. CSV import/export and history-mined suggestions remain separate follow-ups below. |
 | Dictionary CSV import/export | Not Started | Platform | Reuse the SQLite schema shape, use `NSOpenPanel` and `NSSavePanel`, and keep import merge rules in a pure Swift core module. |
 | Dictionary history-mined suggestions | Not Started | Backend | Mine recurring corrections and transcript terms from local history, then surface ranked suggestions in Settings. |
-| Voice snippets | Not Started | Backend | Store spoken trigger to template pairs in SQLite and apply them during post-ASR replacement before injection. |
+| Voice snippets | Done | Backend | `Snippet`/`snippets` SQLite table plus `TextPostProcessor` expand spoken trigger phrases into (possibly multi-line) templates before dictionary canonicalization runs, matching Windows' snippets-first ordering. Verified with a multi-line template via `Scribe --post-process-text`. |
 | Per-app profiles by focused app | Not Started | Platform | Key profiles by bundle identifier and process name via `NSWorkspace.shared.frontmostApplication`. |
 | Per-app writing style override | Not Started | Platform | Resolve global plus profile cleanup settings before provider dispatch, matching Windows precedence. |
 | Per-app newline mode | Not Started | Platform | Track per-target single-line vs multi-line injection behavior and fold it into the cleanup request and injector. |

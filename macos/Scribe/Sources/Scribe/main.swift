@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logSink: { message in AppDelegate.writeLogLine(message) })
     private lazy var textInjector = TextInjector(
         logSink: { message in AppDelegate.writeLogLine(message) })
+    private let textPostProcessor = TextPostProcessor()
     private var dictationMenuItem: NSMenuItem?
     private var capturedSamples: [Float] = []
     /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
@@ -193,9 +194,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func initializePersistenceStore() {
         do {
             try persistenceStore.initialize()
+            reloadPostProcessorRules()
         } catch {
             Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
             logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func reloadPostProcessorRules() {
+        do {
+            let dictionaryEntries = try persistenceStore.fetchEnabledDictionaryEntries()
+            let snippets = try persistenceStore.fetchEnabledSnippets()
+            textPostProcessor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets)
+            Self.writeLogLine(
+                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies) and \(snippets.count) snippet(s).")
+        } catch {
+            Self.writeLogLine("Failed to load dictionary/snippets: \(error.localizedDescription)")
+            logger.error("Failed to load dictionary/snippets: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -326,7 +341,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sampleRate: AudioCaptureEngine.targetSampleRate)
             Self.writeLogLine("Real transcript (\(source)): \(transcript)")
 
-            let injectionResult = textInjector.inject(text: transcript)
+            let processedText = textPostProcessor.process(transcript)
+            if processedText != transcript {
+                Self.writeLogLine("Post-processed transcript: \(processedText)")
+            }
+
+            let injectionResult = textInjector.inject(text: processedText)
             handleInjectionResult(injectionResult)
         } catch {
             dictationMenuItem?.title = "Start Test Dictation"
@@ -363,6 +383,8 @@ private enum CommandLineTranscriptionTool {
             return runTranscribe(arguments: arguments)
         case "--cleanup-text":
             return runCleanup(arguments: arguments)
+        case "--post-process-text":
+            return runPostProcess(arguments: arguments)
         default:
             return false
         }
@@ -422,5 +444,42 @@ private enum CommandLineTranscriptionTool {
             exit(exitBox.code)
         }
         return true
+    }
+
+    /// Manual verification for the dictionary + snippet pipeline: seeds the real SQLite store
+    /// (respecting SCRIBE_STORE_DB_PATH-less default location, same as the live app) with a couple
+    /// of fixed entries if it's empty, then runs the given transcript through TextPostProcessor.
+    /// Usage: Scribe --post-process-text "raw text"
+    private static func runPostProcess(arguments: [String]) -> Bool {
+        guard arguments.count == 2 else {
+            fputs("Usage: Scribe --post-process-text <raw-transcript>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        let store = PersistenceStore()
+        do {
+            try store.initialize()
+
+            var dictionaryEntries = try store.fetchEnabledDictionaryEntries()
+            var snippets = try store.fetchEnabledSnippets()
+
+            if dictionaryEntries.isEmpty && snippets.isEmpty {
+                fputs("No dictionary/snippet rows found; seeding verification fixtures.\n", stderr)
+                _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "sherpa onnx", replacement: "sherpa-onnx"))
+                _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "github", replacement: "GitHub"))
+                _ = try store.insertSnippet(Snippet(phrase: "sign off block", template: "Best regards,\nScribe Team"))
+                dictionaryEntries = try store.fetchEnabledDictionaryEntries()
+                snippets = try store.fetchEnabledSnippets()
+            }
+
+            let processor = TextPostProcessor()
+            processor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets)
+            let result = processor.process(arguments[1])
+            fputs("\(result)\n", stdout)
+            return true
+        } catch {
+            fputs("Post-process failed: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
     }
 }

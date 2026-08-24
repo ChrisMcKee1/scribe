@@ -39,6 +39,29 @@ final class PersistenceStore {
                 );
                 """,
                 database: database)
+
+            try execute(
+                """
+                CREATE TABLE IF NOT EXISTS dictionary_entries(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pattern TEXT NOT NULL,
+                    replacement TEXT NOT NULL,
+                    whole_word INTEGER NOT NULL DEFAULT 1,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
+                """,
+                database: database)
+
+            try execute(
+                """
+                CREATE TABLE IF NOT EXISTS snippets(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phrase TEXT NOT NULL,
+                    template TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
+                """,
+                database: database)
         }
 
         logger.info("SQLite store ready at \(self.databaseURL.path(percentEncoded: false), privacy: .public)")
@@ -75,6 +98,120 @@ final class PersistenceStore {
         let startedAtText = iso8601Formatter.string(from: startedAt)
         logger.info(
             "Saved dictation history row for \(startedAtText, privacy: .public) with \(sampleCount) samples.")
+    }
+
+    // MARK: - Dictionary entries
+
+    func insertDictionaryEntry(_ entry: DictionaryEntry) throws -> Int64 {
+        var insertedID: Int64 = 0
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "INSERT INTO dictionary_entries(pattern, replacement, whole_word, enabled) VALUES (?, ?, ?, ?);",
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            sqlite3_bind_text(statement, 1, entry.pattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, entry.replacement, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(statement, 3, entry.wholeWord ? 1 : 0)
+            sqlite3_bind_int(statement, 4, entry.enabled ? 1 : 0)
+
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            insertedID = sqlite3_last_insert_rowid(database)
+        }
+        logger.info("Inserted dictionary entry \(insertedID): '\(entry.pattern, privacy: .private)'")
+        return insertedID
+    }
+
+    func fetchEnabledDictionaryEntries() throws -> [DictionaryEntry] {
+        var results: [DictionaryEntry] = []
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;",
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let id = sqlite3_column_int64(statement, 0)
+                let pattern = String(cString: sqlite3_column_text(statement, 1))
+                let replacement = String(cString: sqlite3_column_text(statement, 2))
+                let wholeWord = sqlite3_column_int(statement, 3) != 0
+                let enabled = sqlite3_column_int(statement, 4) != 0
+                results.append(DictionaryEntry(id: id, pattern: pattern, replacement: replacement, wholeWord: wholeWord, enabled: enabled))
+            }
+        }
+        return results
+    }
+
+    // MARK: - Snippets
+
+    func insertSnippet(_ snippet: Snippet) throws -> Int64 {
+        var insertedID: Int64 = 0
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "INSERT INTO snippets(phrase, template, enabled) VALUES (?, ?, ?);",
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            sqlite3_bind_text(statement, 1, snippet.phrase, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, snippet.template, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(statement, 3, snippet.enabled ? 1 : 0)
+
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            insertedID = sqlite3_last_insert_rowid(database)
+        }
+        logger.info("Inserted snippet \(insertedID): '\(snippet.phrase, privacy: .private)'")
+        return insertedID
+    }
+
+    func fetchEnabledSnippets() throws -> [Snippet] {
+        var results: [Snippet] = []
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;",
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let id = sqlite3_column_int64(statement, 0)
+                let phrase = String(cString: sqlite3_column_text(statement, 1))
+                let template = String(cString: sqlite3_column_text(statement, 2))
+                let enabled = sqlite3_column_int(statement, 3) != 0
+                results.append(Snippet(id: id, phrase: phrase, template: template, enabled: enabled))
+            }
+        }
+        return results
     }
 
     private func withConnection(_ body: (OpaquePointer?) throws -> Void) throws {
