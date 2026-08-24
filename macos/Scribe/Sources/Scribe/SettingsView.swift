@@ -81,6 +81,7 @@ private struct DictionarySettingsTab: View {
     @State private var newReplacement = ""
     @State private var errorMessage: String?
     @State private var statusMessage: String?
+    @State private var isLearning = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -100,6 +101,8 @@ private struct DictionarySettingsTab: View {
                 Button("Export CSV\u{2026}", action: exportCsv)
                     .disabled(entries.isEmpty)
                 Button("Get Template\u{2026}", action: saveTemplate)
+                Button("Learn from History", action: learnFromHistory)
+                    .disabled(isLearning)
                 Spacer()
             }
 
@@ -271,6 +274,40 @@ private struct DictionarySettingsTab: View {
             statusMessage = "Saved the template to \(url.lastPathComponent)."
         } catch {
             errorMessage = "Couldn't save the template: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Learn from history
+
+    /// Mines recent dictation history for recurring jargon (`DictionaryHistoryLearner`) and adds
+    /// any newly discovered entries. Guarded by `isLearning` because the mining scan, while quick,
+    /// still shouldn't be re-entrant if the user clicks twice.
+    private func learnFromHistory() {
+        guard !isLearning else { return }
+        isLearning = true
+        errorMessage = nil
+        statusMessage = nil
+
+        defer { isLearning = false }
+
+        do {
+            let history = try persistenceStore.fetchDictationHistory()
+            let learned = DictionaryHistoryLearner.buildEntries(history: history, existing: entries)
+
+            guard !learned.isEmpty else {
+                statusMessage = "No new recurring terms found in your dictation history yet."
+                return
+            }
+
+            for entry in learned {
+                _ = try persistenceStore.insertDictionaryEntry(entry)
+            }
+
+            reload()
+            onChanged()
+            statusMessage = "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
+        } catch {
+            errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
         }
     }
 }

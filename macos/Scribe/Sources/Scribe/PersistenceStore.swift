@@ -55,6 +55,12 @@ final class PersistenceStore {
             if !existingColumns.contains("cleanup_ms") {
                 try execute("ALTER TABLE dictation_history ADD COLUMN cleanup_ms REAL;", database: database)
             }
+            // Backs dictionary history-mining (DictionarySuggestionMiner): the final,
+            // post-processed transcript text is what a recurring-jargon miner needs to see, and
+            // older rows predate this column so it must be probed for like the timing columns.
+            if !existingColumns.contains("transcript_text") {
+                try execute("ALTER TABLE dictation_history ADD COLUMN transcript_text TEXT;", database: database)
+            }
 
             try execute(
                 """
@@ -101,13 +107,14 @@ final class PersistenceStore {
         durationSeconds: Double,
         sampleCount: Int,
         decodeMilliseconds: Double? = nil,
-        cleanupMilliseconds: Double? = nil
+        cleanupMilliseconds: Double? = nil,
+        transcriptText: String? = nil
     ) throws {
         try withConnection { database in
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count, decode_ms, cleanup_ms) VALUES (?, ?, ?, ?, ?);",
+                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text) VALUES (?, ?, ?, ?, ?, ?);",
                 -1,
                 &statement,
                 nil)
@@ -134,6 +141,11 @@ final class PersistenceStore {
             } else {
                 sqlite3_bind_null(statement, 5)
             }
+            if let transcriptText {
+                sqlite3_bind_text(statement, 6, transcriptText, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 6)
+            }
 
             guard sqlite3_step(statement) == SQLITE_DONE else {
                 throw PersistenceError.sqlite(message: sqliteMessage(from: database))
@@ -155,7 +167,7 @@ final class PersistenceStore {
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms FROM dictation_history ORDER BY id ASC;",
+                "SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text FROM dictation_history ORDER BY id ASC;",
                 -1,
                 &statement,
                 nil)
@@ -185,6 +197,9 @@ final class PersistenceStore {
                 let cleanupMs: Double? = sqlite3_column_type(statement, 4) == SQLITE_NULL
                     ? nil
                     : sqlite3_column_double(statement, 4)
+                let transcriptText: String? = sqlite3_column_type(statement, 5) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_text(statement, 5).map { String(cString: $0) }
 
                 records.append(
                     DictationHistoryRecord(
@@ -192,7 +207,8 @@ final class PersistenceStore {
                         durationSeconds: durationSeconds,
                         sampleCount: sampleCount,
                         decodeMilliseconds: decodeMs,
-                        cleanupMilliseconds: cleanupMs))
+                        cleanupMilliseconds: cleanupMs,
+                        transcriptText: transcriptText))
             }
         }
 

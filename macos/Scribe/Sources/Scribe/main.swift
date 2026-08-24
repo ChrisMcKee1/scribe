@@ -529,7 +529,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private func recordDictationHistory(
         summary: AudioCaptureSummary,
         decodeMilliseconds: Double?,
-        cleanupMilliseconds: Double?
+        cleanupMilliseconds: Double?,
+        transcriptText: String? = nil
     ) {
         do {
             try persistenceStore.recordDictation(
@@ -537,7 +538,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 durationSeconds: summary.durationSeconds,
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decodeMilliseconds,
-                cleanupMilliseconds: cleanupMilliseconds)
+                cleanupMilliseconds: cleanupMilliseconds,
+                transcriptText: transcriptText)
         } catch {
             Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
             logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
@@ -731,7 +733,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             // rows). Tracked as a follow-up alongside live cleanup wiring, not a per-app-profiles
             // gap specifically.
 
-            recordDictationHistory(summary: summary, decodeMilliseconds: decodeMilliseconds, cleanupMilliseconds: nil)
+            recordDictationHistory(
+                summary: summary,
+                decodeMilliseconds: decodeMilliseconds,
+                cleanupMilliseconds: nil,
+                transcriptText: processedText)
             lastTranscriptStore.set(processedText)
 
             let injectionResult = textInjector.inject(text: processedText)

@@ -10,6 +10,26 @@ struct DictationHistoryRecord {
     let sampleCount: Int
     let decodeMilliseconds: Double?
     let cleanupMilliseconds: Double?
+    /// The final, post-processed transcript text, when recorded. Older rows (pre-history-mining
+    /// schema) or captures with no resampled audio surface as `nil`. Feeds
+    /// `DictionarySuggestionMiner`, mirroring Windows' `HistoryEntry.Text`.
+    let transcriptText: String?
+
+    init(
+        startedAt: Date,
+        durationSeconds: Double,
+        sampleCount: Int,
+        decodeMilliseconds: Double? = nil,
+        cleanupMilliseconds: Double? = nil,
+        transcriptText: String? = nil
+    ) {
+        self.startedAt = startedAt
+        self.durationSeconds = durationSeconds
+        self.sampleCount = sampleCount
+        self.decodeMilliseconds = decodeMilliseconds
+        self.cleanupMilliseconds = cleanupMilliseconds
+        self.transcriptText = transcriptText
+    }
 
     /// Audio duration in milliseconds, mirroring Windows' `AudioMilliseconds`.
     var audioMilliseconds: Double {
