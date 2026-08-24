@@ -82,6 +82,9 @@ private struct DictionarySettingsTab: View {
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var isLearning = false
+    @State private var isCleaning = false
+    @State private var cleanupReport: DictionaryUsageReport?
+    @State private var cleanupSelection: Set<Int64> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -103,6 +106,8 @@ private struct DictionarySettingsTab: View {
                 Button("Get Template\u{2026}", action: saveTemplate)
                 Button("Learn from History", action: learnFromHistory)
                     .disabled(isLearning)
+                Button("Clean Up\u{2026}", action: runCleanup)
+                    .disabled(isCleaning)
                 Spacer()
             }
 
@@ -134,6 +139,20 @@ private struct DictionarySettingsTab: View {
             }
         }
         .onAppear(perform: reload)
+        .sheet(isPresented: Binding(
+            get: { cleanupReport != nil },
+            set: { if !$0 { cleanupReport = nil } }
+        )) {
+            if let report = cleanupReport {
+                DictionaryCleanupView(
+                    report: report,
+                    onApply: { idsToDisable in
+                        applyCleanup(idsToDisable: idsToDisable)
+                        cleanupReport = nil
+                    },
+                    onCancel: { cleanupReport = nil })
+            }
+        }
     }
 
     private func binding(for entry: DictionaryEntry) -> Binding<Bool> {
@@ -309,6 +328,129 @@ private struct DictionarySettingsTab: View {
         } catch {
             errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Clean up unused entries
+
+    /// Scans dictation history for entries that never appear, in either their spoken or written
+    /// form (`DictionaryUsageAnalyzer`), and presents them for review. Nothing is disabled until
+    /// the user confirms in the sheet.
+    private func runCleanup() {
+        guard !isCleaning else { return }
+        isCleaning = true
+        errorMessage = nil
+        statusMessage = nil
+        defer { isCleaning = false }
+
+        do {
+            let history = try persistenceStore.fetchDictationHistory()
+            let transcripts = history.compactMap { $0.transcriptText }
+            let report = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: entries)
+
+            guard report.hasFindings else {
+                statusMessage = report.hasEnoughEvidence
+                    ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
+                    : report.summary
+                return
+            }
+
+            cleanupReport = report
+        } catch {
+            errorMessage = "Couldn't check dictionary usage: \(error.localizedDescription)"
+        }
+    }
+
+    /// Soft-disables the confirmed entries rather than deleting them, mirroring Windows: the
+    /// evidence is a sample of recent history, not proof the term will never be needed again.
+    private func applyCleanup(idsToDisable: Set<Int64>) {
+        guard !idsToDisable.isEmpty else { return }
+        do {
+            for id in idsToDisable {
+                try persistenceStore.setDictionaryEntryEnabled(id: id, enabled: false)
+            }
+            reload()
+            onChanged()
+            statusMessage = "Turned off \(idsToDisable.count) unused entr\(idsToDisable.count == 1 ? "y" : "ies")."
+        } catch {
+            errorMessage = "Couldn't update the dictionary: \(error.localizedDescription)"
+        }
+    }
+}
+
+/// Review sheet for `DictionaryUsageAnalyzer`'s findings. Shows the evidence behind every proposed
+/// disable and never applies anything on its own: it returns a set of chosen ids, and the caller
+/// is what actually writes to the store.
+private struct DictionaryCleanupView: View {
+    let report: DictionaryUsageReport
+    let onApply: (Set<Int64>) -> Void
+    let onCancel: () -> Void
+
+    @State private var selected: Set<Int64>
+
+    init(report: DictionaryUsageReport, onApply: @escaping (Set<Int64>) -> Void, onCancel: @escaping () -> Void) {
+        self.report = report
+        self.onApply = onApply
+        self.onCancel = onCancel
+        // Everything proposed starts checked; the user unchecks what they want to keep.
+        _selected = State(initialValue: Set(report.unusedEntries.map { $0.entry.id }))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Clean Up Dictionary")
+                .font(.headline)
+            Text(report.summary)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            List {
+                ForEach(report.unusedEntries, id: \.entry.id) { usage in
+                    HStack {
+                        Toggle("", isOn: binding(for: usage.entry.id))
+                            .labelsHidden()
+                        VStack(alignment: .leading) {
+                            Text("\"\(usage.entry.pattern)\" becomes \"\(usage.entry.replacement)\"")
+                            Text(usage.entry.enabled
+                                ? "Currently on. Neither wording came up in your recent dictations."
+                                : "Already off. Neither wording came up in your recent dictations.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            .frame(minHeight: 160)
+
+            Text("Turning a term off is reversible: it stays in your dictionary with its tick "
+                + "cleared and stops being applied. Nothing is written until you confirm below.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Turn Off Selected") {
+                    onApply(selected)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selected.isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 460)
+    }
+
+    private func binding(for id: Int64) -> Binding<Bool> {
+        Binding(
+            get: { selected.contains(id) },
+            set: { isOn in
+                if isOn {
+                    selected.insert(id)
+                } else {
+                    selected.remove(id)
+                }
+            })
     }
 }
 
