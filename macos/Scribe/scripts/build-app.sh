@@ -59,7 +59,23 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 PLIST
 
 if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+    # Signing consistently matters here: macOS's TCC (privacy) database keys Accessibility grants
+    # off the code signature, not the bundle path. Ad-hoc signing ("-") mints a fresh signature on
+    # every build, so a rebuilt app looks like a brand-new binary to TCC and re-prompts for
+    # Accessibility every single time, even though the user already granted it. A stable local
+    # signing identity ("Scribe Local Dev", a self-signed cert created by setup-dev-signing.sh)
+    # keeps the signature identical across rebuilds so one grant sticks.
+    #
+    # Note: `security find-identity -v` filters to identities the system CA policy *trusts*, which
+    # a self-signed dev cert never is, so it always reports 0 even when the identity works fine for
+    # codesign. Check with `find-identity` (no -v) instead, which lists it as CSSMERR_TP_NOT_TRUSTED
+    # but still matches, and codesign accepts it regardless of that trust status.
+    if security find-identity 2>/dev/null | grep -q "Scribe Local Dev"; then
+        codesign --force --deep --sign "Scribe Local Dev" "$APP_DIR" >/dev/null 2>&1 || \
+            codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+    else
+        codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+    fi
 fi
 
 echo "Built app bundle: $APP_DIR"
