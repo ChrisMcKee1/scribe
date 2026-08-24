@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     let persistenceStore: PersistenceStore
     let overlayPanelController: OverlayPanelController
+    let pipelineReportStore: PipelineReportStore
     let onProfilesOrRulesChanged: () -> Void
 
     var body: some View {
@@ -21,6 +22,8 @@ struct SettingsView: View {
                 .tabItem { Label("Snippets", systemImage: "text.append") }
             AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
                 .tabItem { Label("App Profiles", systemImage: "app.badge") }
+            PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
+                .tabItem { Label("Playground", systemImage: "wand.and.rays") }
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
                 .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
             AboutView(persistenceStore: persistenceStore)
@@ -662,6 +665,124 @@ private struct AppProfilesSettingsTab: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Playground tab
+
+/// Live view of the last dictation run through the full pipeline: raw recognition, replacement
+/// highlights, and per-step timings. Mirrors Windows' Playground panel (see
+/// src/Scribe.App/Settings/SettingsWindow.xaml, "Playground" section), which is populated from
+/// `DictationController.PipelineReported`. On macOS the analogous signal is `PipelineReportStore`,
+/// published from `AppDelegate.transcribeAndInject` after every real dictation (hotkey or the
+/// "Start Test Dictation" menu item) — there is no separate "Run" button here because macOS's
+/// push-to-talk hotkey already works regardless of which window is focused, so simply dictating
+/// normally while this tab is open is enough to see a report land.
+private struct PlaygroundSettingsTab: View {
+    @ObservedObject var pipelineReportStore: PipelineReportStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Playground")
+                    .font(.headline)
+                Text("Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw transcript, dictionary/snippet replacements, and per-step timings for the most recent run.")
+                    .foregroundStyle(.secondary)
+
+                if let report = pipelineReportStore.latest {
+                    if let failureStage = report.failureStage {
+                        Label("Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")", systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                    }
+
+                    GroupBox("Raw Recognition") {
+                        Text(report.rawText?.isEmpty == false ? report.rawText! : "(no speech recognized)")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                    }
+
+                    GroupBox("Processed Text (Replacements Highlighted)") {
+                        highlightedText(for: report.postProcessing)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 4)
+                    }
+
+                    GroupBox("Timings") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            timingRow("Capture", report.captureDuration)
+                            timingRow("Speech Recognition (Decode)", report.decodeDuration)
+                            timingRow("Dictionary / Snippets", report.postProcessingDuration)
+                            timingRow("Text Insertion", report.injectionDuration)
+                            Divider()
+                            timingRow("Total", report.totalDuration)
+                            if let rtf = report.realTimeFactor {
+                                Text("Real-time factor: \(String(format: "%.2fx", rtf))")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 4)
+                    }
+
+                    // NOTE: There is no timing row here for "AI cleanup" or a Silero-style "VAD
+                    // decode" stage. macOS's live pipeline does not yet call AI cleanup (only
+                    // reachable via the `--cleanup-text` CLI verb), and macOS's capture uses an
+                    // energy-threshold auto-stop detector rather than a true VAD model with a
+                    // discrete inference step to time. See PORTING-PLAN.md for tracking.
+                } else {
+                    Text("No dictation captured yet this session.")
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 8)
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func timingRow(_ label: String, _ duration: TimeInterval?) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            if let duration {
+                Text(String(format: "%.0f ms", duration * 1_000))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("—")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func highlightedText(for result: TextPostProcessingResult?) -> Text {
+        guard let result, !result.text.isEmpty else {
+            return Text("(no text)")
+        }
+        guard !result.replacements.isEmpty else {
+            return Text(result.text).font(.system(.body, design: .monospaced))
+        }
+
+        let nsText = result.text as NSString
+        var segments: [Text] = []
+        var cursor = 0
+        for replacement in result.replacements.sorted(by: { $0.start < $1.start }) {
+            guard replacement.start >= cursor, replacement.start + replacement.length <= nsText.length else { continue }
+            if replacement.start > cursor {
+                segments.append(Text(nsText.substring(with: NSRange(location: cursor, length: replacement.start - cursor))))
+            }
+            let highlighted = nsText.substring(with: NSRange(location: replacement.start, length: replacement.length))
+            let color: Color = replacement.kind == .dictionary ? .blue : .green
+            segments.append(Text(highlighted).foregroundColor(color).underline())
+            cursor = replacement.start + replacement.length
+        }
+        if cursor < nsText.length {
+            segments.append(Text(nsText.substring(from: cursor)))
+        }
+
+        return segments.reduce(Text("")) { partial, next in partial + next }
+            .font(.system(.body, design: .monospaced))
     }
 }
 

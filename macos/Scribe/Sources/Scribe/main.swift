@@ -15,13 +15,15 @@ application.setActivationPolicy(.accessory)
 application.delegate = delegate
 application.run()
 
+/// How a dictation capture was stopped (menu-driven test dictation, or the real push-to-talk/toggle
+/// hotkey). Shared with `PipelineReport` for the Playground's timing display.
+enum CaptureStopSource {
+    case menu
+    case hotkey
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private enum CaptureStopSource {
-        case menu
-        case hotkey
-    }
-
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
     private var welcomeWindowController: NSWindowController?
@@ -37,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         logSink: { message in AppDelegate.writeLogLine(message) })
     private let textPostProcessor = TextPostProcessor()
     private let lastTranscriptStore = LastTranscriptStore()
+    let pipelineReportStore = PipelineReportStore()
     private var recentDictationsMenuItem: NSMenuItem?
     private var appProfiles: [AppProfile] = []
     /// Global default when no profile overrides it. Not yet Settings-driven (macos-overlay-ui);
@@ -96,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 rootView: SettingsView(
                     persistenceStore: persistenceStore,
                     overlayPanelController: overlayPanelController,
+                    pipelineReportStore: pipelineReportStore,
                     onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() }))
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Scribe Settings"
@@ -694,6 +698,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             Self.writeLogLine(message)
             presentErrorAlert(title: "ASR Not Ready", message: message)
             recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
+            pipelineReportStore.publish(.failure(
+                capturedAt: summary.startedAt,
+                source: source,
+                captureDuration: summary.durationSeconds,
+                stage: .decode,
+                reason: message))
             return
         }
 
@@ -705,7 +715,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             let decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart.uptimeNanoseconds) / 1_000_000.0
             Self.writeLogLine("Real transcript (\(source)): \(transcript)")
 
-            var processedText = textPostProcessor.process(transcript)
+            let postProcessStart = DispatchTime.now()
+            let postProcessing = textPostProcessor.processDetailed(transcript)
+            let postProcessMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - postProcessStart.uptimeNanoseconds) / 1_000_000.0
+            var processedText = postProcessing.text
             if processedText != transcript {
                 Self.writeLogLine("Post-processed transcript: \(processedText)")
             }
@@ -740,7 +753,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 transcriptText: processedText)
             lastTranscriptStore.set(processedText)
 
+            let injectionStart = DispatchTime.now()
             let injectionResult = textInjector.inject(text: processedText)
+            let injectionMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - injectionStart.uptimeNanoseconds) / 1_000_000.0
+
+            let decodeSeconds = decodeMilliseconds / 1_000.0
+            let realTimeFactor = summary.durationSeconds > 0 ? decodeSeconds / summary.durationSeconds : nil
+            pipelineReportStore.publish(PipelineReport(
+                capturedAt: summary.startedAt,
+                source: source,
+                captureDuration: summary.durationSeconds,
+                decodeDuration: decodeSeconds,
+                postProcessingDuration: postProcessMilliseconds / 1_000.0,
+                injectionDuration: injectionMilliseconds / 1_000.0,
+                realTimeFactor: realTimeFactor,
+                rawText: transcript,
+                postProcessing: postProcessing,
+                finalText: processedText,
+                injectionResult: injectionResult,
+                failureStage: nil,
+                failureReason: nil))
+
             handleInjectionResult(injectionResult)
         } catch {
             dictationMenuItem?.title = "Start Test Dictation"
@@ -748,6 +781,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             Self.writeLogLine("ASR transcription failed: \(error.localizedDescription)")
             presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
             recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
+            pipelineReportStore.publish(.failure(
+                capturedAt: summary.startedAt,
+                source: source,
+                captureDuration: summary.durationSeconds,
+                stage: .decode,
+                reason: error.localizedDescription))
         }
     }
 }
