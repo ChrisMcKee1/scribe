@@ -15,7 +15,7 @@ application.delegate = delegate
 application.run()
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private enum CaptureStopSource {
         case menu
         case hotkey
@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
+    private var welcomeWindowController: NSWindowController?
     private let logger = Logger(subsystem: "com.scribe.macos", category: "App")
     private let persistenceStore = PersistenceStore()
     private let audioCaptureEngine = AudioCaptureEngine()
@@ -34,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var textInjector = TextInjector(
         logSink: { message in AppDelegate.writeLogLine(message) })
     private let textPostProcessor = TextPostProcessor()
+    private let lastTranscriptStore = LastTranscriptStore()
+    private var recentDictationsMenuItem: NSMenuItem?
     private var appProfiles: [AppProfile] = []
     /// Global default when no profile overrides it. Not yet Settings-driven (macos-overlay-ui);
     /// SmartFlatten matches Windows' default.
@@ -44,7 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
     /// on hotkey release and must never be preempted by a silence auto-stop.
     private var silenceAutoStopDetector: SilenceAutoStopDetector?
-
+    private static let hasCompletedFirstRunDefaultsKey = "ScribeHasCompletedFirstRun"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
@@ -55,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         requestMicrophoneAccessIfNeeded()
         configureHotkeyManager()
         hotkeyManager.start()
+        showWelcomeIfFirstRun()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -110,10 +114,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.delegate = self
         let dictationItem = NSMenuItem(title: "Start Test Dictation", action: #selector(startTestDictation(_:)), keyEquivalent: "")
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
         menu.addItem(overlayPositionMenuItem())
+        menu.addItem(.separator())
+        let recentItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
+        recentItem.submenu = NSMenu()
+        menu.addItem(recentItem)
+        menu.addItem(NSMenuItem(title: "Welcome...", action: #selector(showWelcome(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q"))
 
@@ -124,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
         dictationMenuItem = dictationItem
+        recentDictationsMenuItem = recentItem
     }
 
     /// Builds the "Overlay Position" submenu: a 9-anchor picker mirroring Windows' overlay
@@ -169,6 +180,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for child in submenu.items {
             applyTargetRecursively(to: child)
         }
+    }
+
+    // MARK: - Recovery: recent dictations menu
+
+    /// Fills the "Recent Dictations" submenu just before it opens, mirroring Windows'
+    /// `PopulateRecentDictations`. Runs on the UI thread via `NSMenuDelegate.menuWillOpen`.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === recentDictationsMenuItem?.submenu else {
+            return
+        }
+        populateRecentDictationsMenu(menu)
+    }
+
+    private func populateRecentDictationsMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+
+        let recent = lastTranscriptStore.recent()
+        // NOTE: dictation_history does not yet store transcript text (only timing/duration), so
+        // there is no durable fallback to seed from on macOS today, unlike Windows' history-backed
+        // CopyLastDictation fallback. The ring only ever reflects the current run's dictations.
+        // Tracked as a follow-up alongside a text-retaining history schema change.
+
+        if recent.isEmpty {
+            let placeholder = NSMenuItem(title: "No recent dictations", action: nil, keyEquivalent: "")
+            placeholder.isEnabled = false
+            menu.addItem(placeholder)
+            return
+        }
+
+        for transcript in recent {
+            let item = NSMenuItem(
+                title: LastTranscriptStore.formatPreview(transcript),
+                action: #selector(copyRecentDictation(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = transcript
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func copyRecentDictation(_ sender: NSMenuItem) {
+        guard let transcript = sender.representedObject as? String else {
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcript, forType: .string)
+        Self.writeLogLine("Copied a recent dictation to the clipboard (\(transcript.count) characters).")
+    }
+
+    // MARK: - Onboarding: first-run welcome
+
+    /// Shows the one-time welcome window (non-modally, so the tray and dictation loop stay live
+    /// behind it), then persists the flag so it never reappears on its own. Mirrors Windows'
+    /// first-run onboarding block in `App.xaml.cs`.
+    private func showWelcomeIfFirstRun() {
+        guard !UserDefaults.standard.bool(forKey: Self.hasCompletedFirstRunDefaultsKey) else {
+            return
+        }
+        showWelcome(nil)
+        UserDefaults.standard.set(true, forKey: Self.hasCompletedFirstRunDefaultsKey)
+    }
+
+    @objc private func showWelcome(_ sender: Any?) {
+        if welcomeWindowController == nil {
+            let hotkeyDisplayName = "Right Control"
+            let hostingController = NSHostingController(
+                rootView: WelcomeView(
+                    hotkeyDisplayName: hotkeyDisplayName,
+                    onOpenSettings: { [weak self] in
+                        self?.openSettings(nil)
+                        self?.welcomeWindowController?.close()
+                    },
+                    onDismiss: { [weak self] in
+                        self?.welcomeWindowController?.close()
+                    }))
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "Welcome to Scribe"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+
+            let controller = NSWindowController(window: window)
+            controller.shouldCascadeWindows = false
+            welcomeWindowController = controller
+        }
+
+        welcomeWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func requestMicrophoneAccessIfNeeded() {
@@ -492,6 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // gap specifically.
 
             recordDictationHistory(summary: summary, decodeMilliseconds: decodeMilliseconds, cleanupMilliseconds: nil)
+            lastTranscriptStore.set(processedText)
 
             let injectionResult = textInjector.inject(text: processedText)
             handleInjectionResult(injectionResult)
