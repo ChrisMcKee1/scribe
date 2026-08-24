@@ -35,10 +35,9 @@ struct TextPostProcessingResult {
 /// phase matches its original input once (no re-scanning generated text within the same phase), and
 /// matching is whole-word aware and case-insensitive by default.
 ///
-/// This macOS port keeps the essential ordering and whole-word semantics but is intentionally
-/// simpler than Windows' `CompiledRule`: it does not yet implement the "replacement contains
-/// pattern" double-expansion guard (relevant once AI cleanup glossary injection exists on macOS,
-/// which it does not yet; see PORTING-PLAN.md), nor the AI-cleanup glossary source-text pass.
+/// This macOS port keeps the essential ordering, whole-word semantics, and the "replacement
+/// contains pattern" double-expansion guard from Windows' `CompiledRule`; it does not yet implement
+/// the AI-cleanup glossary source-text pass (see PORTING-PLAN.md).
 final class TextPostProcessor {
     private var dictionaryEntries: [DictionaryEntry] = []
     private var snippets: [Snippet] = []
@@ -91,6 +90,28 @@ final class TextPostProcessor {
         return TextPostProcessingResult(text: finalText, replacements: replacements)
     }
 
+    /// Runs one dictionary rule over already-finalized text, using the same normalization and
+    /// matcher as the live pipeline. Exists so the quick-add popup can repair the transcript a
+    /// correction came from, without a private copy of the matcher drifting from
+    /// `processDetailed(_:)`'s real behavior. Only the one rule is applied, since the text has
+    /// already been through every other rule. Mirrors Windows' `TextPostProcessor.ApplyRule`.
+    static func applyRule(_ text: String?, entry: DictionaryEntry?) -> String {
+        guard let text, !text.isEmpty, let entry, !entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return text ?? ""
+        }
+
+        let trimmedEntry = DictionaryEntry(
+            id: entry.id,
+            pattern: entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines),
+            replacement: entry.replacement,
+            wholeWord: entry.wholeWord,
+            enabled: entry.enabled)
+
+        let normalized = normalizeWhitespace(text)
+        let (result, _) = TextPostProcessor().applySinglePass(normalized, rules: [DictionaryRule(entry: trimmedEntry)], kind: .dictionary)
+        return result
+    }
+
     // MARK: - Rules
 
     private protocol Rule {
@@ -117,25 +138,75 @@ final class TextPostProcessor {
         let order: Int = 0
         var pattern: String { entry.pattern }
         private let regex: NSRegularExpression?
+        // Only an expansion whose replacement is strictly longer than its pattern AND embeds that
+        // pattern (e.g. "york" -> "New York") can double-fire: when AI cleanup is enabled the
+        // glossary biases the model to emit the canonical form first, then this deterministic stage,
+        // which always runs last, would expand the embedded pattern again ("New York" -> "New New
+        // York"). A same-length entry is a pure casing/punctuation fix ("azure" -> "Azure"); it must
+        // keep the plain fast-path replace so the fix actually applies, so the length guard matters,
+        // not just an optimization. Mirrors Windows' `CompiledRule._replacementContainsPattern`.
+        private let replacementContainsPattern: Bool
 
         init(entry: DictionaryEntry) {
             self.entry = entry
             let escaped = NSRegularExpression.escapedPattern(for: entry.pattern)
             let pattern = entry.wholeWord ? "(?<!\\w)\(escaped)(?!\\w)" : escaped
             self.regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            self.replacementContainsPattern = !entry.pattern.isEmpty
+                && entry.replacement.count > entry.pattern.count
+                && entry.replacement.range(of: entry.pattern, options: .caseInsensitive) != nil
         }
 
         func findMatches(in text: String) -> [ReplacementCandidate] {
             guard let regex else { return [] }
             let fullRange = NSRange(text.startIndex..., in: text)
+            let nsText = text as NSString
+            let canonicalStarts = replacementContainsPattern ? Self.collectReplacementStarts(entry.replacement, in: nsText) : []
             return regex.matches(in: text, range: fullRange).compactMap { match in
                 guard let swiftRange = Range(match.range, in: text) else { return nil }
+                let original = String(text[swiftRange])
+                let replacement = !canonicalStarts.isEmpty
+                    && Self.isInsideAnyReplacement(canonicalStarts, matchRange: match.range, replacementLength: (entry.replacement as NSString).length)
+                    ? original
+                    : entry.replacement
                 return ReplacementCandidate(
                     range: match.range,
-                    original: String(text[swiftRange]),
-                    replacement: entry.replacement,
+                    original: original,
+                    replacement: replacement,
                     order: order)
             }
+        }
+
+        // Ascending start offsets of every existing occurrence of the replacement. Case-insensitive
+        // because the AI may emit a different casing than the canonical form; that casing is left
+        // as-is (never corrupted into a double expansion), which is preferable to a risky span
+        // rewrite. Mirrors Windows' `CollectReplacementStarts`.
+        private static func collectReplacementStarts(_ replacement: String, in nsText: NSString) -> [Int] {
+            var starts: [Int] = []
+            var from = 0
+            let replacementLength = (replacement as NSString).length
+            while from <= nsText.length - replacementLength {
+                let searchRange = NSRange(location: from, length: nsText.length - from)
+                let found = nsText.range(of: replacement, options: [.caseInsensitive], range: searchRange)
+                guard found.location != NSNotFound else { break }
+                starts.append(found.location)
+                from = found.location + 1 // allow overlapping occurrences
+            }
+            return starts
+        }
+
+        // Mirrors Windows' `IsInsideAnyReplacement`.
+        private static func isInsideAnyReplacement(_ starts: [Int], matchRange: NSRange, replacementLength: Int) -> Bool {
+            let matchEnd = matchRange.location + matchRange.length
+            for idx in starts {
+                if idx > matchRange.location {
+                    break // ascending: no later occurrence can contain this match
+                }
+                if matchEnd <= idx + replacementLength {
+                    return true
+                }
+            }
+            return false
         }
     }
 
@@ -168,10 +239,12 @@ final class TextPostProcessor {
 
     /// Applies every rule's matches against the *original* input in one pass: matches are sorted by
     /// position (then longest-first, then rule order) and non-overlapping matches are spliced in,
-    /// mirroring Windows' `ApplySinglePass`. Replacement text is never re-scanned within this same
-    /// call, only by the next phase (see `processDetailed(_:)`). Also returns every located span
-    /// whose replacement text actually changed the input, tagged with the rule's pattern, for
-    /// Playground highlighting.
+    /// mirroring Windows' `ApplySinglePass`, including its "tight punctuation" guard: a replacement
+    /// that is entirely comma/period/etc. absorbs the one whitespace character immediately before
+    /// it, so "hello comma world" -> "hello, world" rather than "hello , world". Replacement text is
+    /// never re-scanned within this same call, only by the next phase (see `processDetailed(_:)`).
+    /// Also returns every located span whose replacement text actually changed the input, tagged
+    /// with the rule's pattern, for Playground highlighting.
     private func applySinglePass(_ text: String, rules: [Rule], kind: TextReplacementKind) -> (String, [TextReplacement]) {
         let candidates = rules
             .flatMap { rule in rule.findMatches(in: text).map { ($0, rule.pattern) } }
@@ -194,7 +267,15 @@ final class TextPostProcessor {
 
         for (candidate, pattern) in candidates {
             guard candidate.range.location >= position else { continue } // overlap, skip
-            let prefixRange = NSRange(location: position, length: candidate.range.location - position)
+            var prefixLength = candidate.range.location - position
+            if prefixLength > 0,
+                !candidate.replacement.isEmpty,
+                candidate.replacement.allSatisfy(Self.isTightPunctuation),
+                CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(nsText.character(at: candidate.range.location - 1))!)
+            {
+                prefixLength -= 1
+            }
+            let prefixRange = NSRange(location: position, length: prefixLength)
             result += nsText.substring(with: prefixRange)
             let start = (result as NSString).length
             result += candidate.replacement
@@ -212,8 +293,18 @@ final class TextPostProcessor {
         return (result, replacements)
     }
 
+    private static func isTightPunctuation(_ ch: Character) -> Bool {
+        ch == "," || ch == "." || ch == "!" || ch == "?" || ch == ";" || ch == ":"
+    }
+
+    /// Collapses horizontal whitespace runs to a single space, preserving line breaks. `\v` inside
+    /// an ICU character class (which `NSRegularExpression` uses) expands to the full "vertical
+    /// whitespace" set (`\n`, `\r`, form feed, NEL, LS, PS), unlike .NET's `Regex`, where `\v` inside
+    /// a bracket means only the literal vertical-tab byte. Using `\v` here silently collapsed every
+    /// CRLF/LF in the text to a single space; `\x0B` is the literal-vertical-tab escape that actually
+    /// matches Windows' `NormalizeWhitespace` behavior.
     private static func normalizeWhitespace(_ text: String) -> String {
-        var result = text.replacingOccurrences(of: "[ \\t\\f\\v]+", with: " ", options: .regularExpression)
+        var result = text.replacingOccurrences(of: "[ \\t\\f\\x0B]+", with: " ", options: .regularExpression)
         result = result.replacingOccurrences(of: "[ \\t]+([,.!?;:])", with: "$1", options: .regularExpression)
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }

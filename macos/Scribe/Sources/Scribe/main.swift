@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
     private var welcomeWindowController: NSWindowController?
+    private var quickAddWindowController: NSWindowController?
     private let logger = Logger(subsystem: "com.scribe.macos", category: "App")
     private let persistenceStore = PersistenceStore()
     private let audioCaptureEngine = AudioCaptureEngine()
@@ -120,6 +121,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Opens the quick "Add to Dictionary" popup, mirroring Windows' `ShowQuickAdd()`. Seeds
+    /// `LastTranscriptStore` from durable history the first time the ring is empty (e.g. right
+    /// after launch, before any dictation has happened this run), so the popup has real transcripts
+    /// to pick a word from rather than an empty list.
+    @objc private func openQuickAdd(_ sender: Any?) {
+        if lastTranscriptStore.recent().isEmpty {
+            if let history = try? persistenceStore.fetchDictationHistory() {
+                let texts = history.reversed().compactMap { $0.transcriptText }
+                lastTranscriptStore.seed(texts)
+            }
+        }
+
+        let recent = lastTranscriptStore.recent()
+        let existing = (try? persistenceStore.fetchAllDictionaryEntries()) ?? []
+
+        let hostingController = NSHostingController(
+            rootView: QuickAddView(
+                recentTranscripts: recent,
+                existing: existing,
+                onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
+                onClose: { [weak self] in self?.quickAddWindowController?.close() },
+                persistAction: { [weak self] entry in try self?.persistQuickAddEntry(entry) ?? 0 }))
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Add to Dictionary"
+        window.styleMask.insert(.titled)
+        window.styleMask.insert(.closable)
+        window.isReleasedWhenClosed = false
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        controller.shouldCascadeWindows = false
+        quickAddWindowController = controller
+
+        quickAddWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a
+    /// non-zero id) and returns the row's id, mirroring Windows' `persist` delegate.
+    private func persistQuickAddEntry(_ entry: DictionaryEntry) throws -> Int64 {
+        if entry.id != 0 {
+            try persistenceStore.updateDictionaryEntry(entry)
+            return entry.id
+        }
+        return try persistenceStore.insertDictionaryEntry(entry)
+    }
+
+    /// After a successful save: reloads the post-processor so the new rule takes effect on the
+    /// very next dictation, repairs the retained copy of the transcript the correction came from
+    /// (so "copy last dictation" hands back the corrected wording), and closes the popup.
+    private func handleQuickAddSaved(_ result: QuickAddView.SavedResult) {
+        reloadPostProcessorRules()
+        if let source = result.sourceTranscript, let corrected = result.correctedTranscript {
+            lastTranscriptStore.update(original: source, updated: corrected)
+        }
+        Self.writeLogLine("Saved a dictionary rule from Quick Add: '\(result.entry.pattern)' -> '\(result.entry.replacement)'.")
+        quickAddWindowController?.close()
+    }
+
     @objc private func quit(_ sender: Any?) {
         NSApp.terminate(nil)
     }
@@ -152,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         let recentItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
         recentItem.submenu = NSMenu()
         menu.addItem(recentItem)
+        menu.addItem(NSMenuItem(title: "Quick Add to Dictionary...", action: #selector(openQuickAdd(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Welcome...", action: #selector(showWelcome(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q"))
