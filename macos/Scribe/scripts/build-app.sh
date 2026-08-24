@@ -15,6 +15,12 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Scribe"
 chmod +x "$APP_DIR/Contents/MacOS/Scribe"
 
+# Same brand mark as the Windows build (src/Scribe.App/Assets/scribe.ico) and the Store listing
+# (docs/icon.png), so the app icon doesn't drift between platforms.
+if [ -f "$PACKAGE_DIR/Resources/Scribe.icns" ]; then
+    cp "$PACKAGE_DIR/Resources/Scribe.icns" "$APP_DIR/Contents/Resources/Scribe.icns"
+fi
+
 # Accessibility trust is not declared with an Info.plist usage string on modern macOS.
 # The app must call AXIsProcessTrustedWithOptions so System Settings can surface the prompt or link.
 # NSAppleEventsUsageDescription is not needed here because the injector uses Accessibility and
@@ -30,6 +36,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <string>Scribe</string>
     <key>CFBundleIdentifier</key>
     <string>com.scribe.macos</string>
+    <key>CFBundleIconFile</key>
+    <string>Scribe.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
