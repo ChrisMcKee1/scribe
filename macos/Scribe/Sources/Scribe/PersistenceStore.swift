@@ -62,6 +62,19 @@ final class PersistenceStore {
                 );
                 """,
                 database: database)
+
+            try execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_profiles(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    bundle_identifiers TEXT NOT NULL DEFAULT '',
+                    process_names TEXT NOT NULL DEFAULT '',
+                    writing_style_prompt TEXT,
+                    newline_handling TEXT
+                );
+                """,
+                database: database)
         }
 
         logger.info("SQLite store ready at \(self.databaseURL.path(percentEncoded: false), privacy: .public)")
@@ -214,7 +227,88 @@ final class PersistenceStore {
         return results
     }
 
+    // MARK: - App profiles
+
+    func insertAppProfile(_ profile: AppProfile) throws -> Int64 {
+        var insertedID: Int64 = 0
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                """
+                INSERT INTO app_profiles(name, bundle_identifiers, process_names, writing_style_prompt, newline_handling)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            sqlite3_bind_text(statement, 1, profile.name, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, profile.bundleIdentifiers.joined(separator: ","), -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 3, profile.processNames.joined(separator: ","), -1, SQLITE_TRANSIENT)
+            if let writingStylePrompt = profile.writingStylePrompt {
+                sqlite3_bind_text(statement, 4, writingStylePrompt, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 4)
+            }
+            if let newlineHandling = profile.newlineHandling {
+                sqlite3_bind_text(statement, 5, newlineHandling.rawValue, -1, SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(statement, 5)
+            }
+
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            insertedID = sqlite3_last_insert_rowid(database)
+        }
+        logger.info("Inserted app profile \(insertedID): '\(profile.name, privacy: .public)'")
+        return insertedID
+    }
+
+    func fetchAppProfiles() throws -> [AppProfile] {
+        var results: [AppProfile] = []
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "SELECT name, bundle_identifiers, process_names, writing_style_prompt, newline_handling FROM app_profiles ORDER BY id;",
+                -1,
+                &statement,
+                nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let name = String(cString: sqlite3_column_text(statement, 0))
+                let bundleIdentifiers = String(cString: sqlite3_column_text(statement, 1))
+                    .split(separator: ",").map(String.init).filter { !$0.isEmpty }
+                let processNames = String(cString: sqlite3_column_text(statement, 2))
+                    .split(separator: ",").map(String.init).filter { !$0.isEmpty }
+                let writingStylePrompt = sqlite3_column_text(statement, 3).map { String(cString: $0) }
+                let newlineHandling = sqlite3_column_text(statement, 4)
+                    .map { String(cString: $0) }
+                    .flatMap { NewlineInjectionMode(rawValue: $0) }
+
+                results.append(AppProfile(
+                    name: name,
+                    bundleIdentifiers: bundleIdentifiers,
+                    processNames: processNames,
+                    writingStylePrompt: writingStylePrompt,
+                    newlineHandling: newlineHandling))
+            }
+        }
+        return results
+    }
+
     private func withConnection(_ body: (OpaquePointer?) throws -> Void) throws {
+
         var database: OpaquePointer?
         let openResult = sqlite3_open(databaseURL.path(percentEncoded: false), &database)
         guard openResult == SQLITE_OK else {

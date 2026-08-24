@@ -34,6 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var textInjector = TextInjector(
         logSink: { message in AppDelegate.writeLogLine(message) })
     private let textPostProcessor = TextPostProcessor()
+    private var appProfiles: [AppProfile] = []
+    /// Global default when no profile overrides it. Not yet Settings-driven (macos-overlay-ui);
+    /// SmartFlatten matches Windows' default.
+    private var globalNewlineMode: NewlineInjectionMode = .smartFlatten
     private var dictationMenuItem: NSMenuItem?
     private var capturedSamples: [Float] = []
     /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
@@ -206,11 +210,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let dictionaryEntries = try persistenceStore.fetchEnabledDictionaryEntries()
             let snippets = try persistenceStore.fetchEnabledSnippets()
             textPostProcessor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets)
+            appProfiles = try persistenceStore.fetchAppProfiles()
             Self.writeLogLine(
-                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies) and \(snippets.count) snippet(s).")
+                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies), \(snippets.count) snippet(s), and \(appProfiles.count) app profile(s).")
         } catch {
-            Self.writeLogLine("Failed to load dictionary/snippets: \(error.localizedDescription)")
-            logger.error("Failed to load dictionary/snippets: \(error.localizedDescription, privacy: .public)")
+            Self.writeLogLine("Failed to load dictionary/snippets/profiles: \(error.localizedDescription)")
+            logger.error("Failed to load dictionary/snippets/profiles: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -341,10 +346,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sampleRate: AudioCaptureEngine.targetSampleRate)
             Self.writeLogLine("Real transcript (\(source)): \(transcript)")
 
-            let processedText = textPostProcessor.process(transcript)
+            var processedText = textPostProcessor.process(transcript)
             if processedText != transcript {
                 Self.writeLogLine("Post-processed transcript: \(processedText)")
             }
+
+            let frontmost = NSWorkspace.shared.frontmostApplication
+            let bundleIdentifier = frontmost?.bundleIdentifier
+            let processName = frontmost?.localizedName
+            let matchedProfile = AppProfileMatcher.match(
+                profiles: appProfiles,
+                bundleIdentifier: bundleIdentifier,
+                processName: processName)
+            if let matchedProfile {
+                Self.writeLogLine("Matched app profile '\(matchedProfile.name)' for \(bundleIdentifier ?? processName ?? "unknown app").")
+            }
+
+            let newlineMode = AppProfileMatcher.resolveNewlineMode(
+                profile: matchedProfile,
+                globalDefault: globalNewlineMode,
+                bundleIdentifier: bundleIdentifier)
+            processedText = AppProfileMatcher.applyNewlineMode(newlineMode, to: processedText, bundleIdentifier: bundleIdentifier)
+
+            // NOTE: matchedProfile.writingStylePrompt would override the cleanup provider's system
+            // prompt here once AI cleanup is wired into this live pipeline (currently only
+            // reachable via the `--cleanup-text` CLI verb; see PORTING-PLAN.md cleanup provider
+            // rows). Tracked as a follow-up alongside live cleanup wiring, not a per-app-profiles
+            // gap specifically.
 
             let injectionResult = textInjector.inject(text: processedText)
             handleInjectionResult(injectionResult)
@@ -385,6 +413,8 @@ private enum CommandLineTranscriptionTool {
             return runCleanup(arguments: arguments)
         case "--post-process-text":
             return runPostProcess(arguments: arguments)
+        case "--resolve-profile":
+            return runResolveProfile(arguments: arguments)
         default:
             return false
         }
@@ -479,6 +509,56 @@ private enum CommandLineTranscriptionTool {
             return true
         } catch {
             fputs("Post-process failed: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    /// Manual verification for per-app profile resolution: seeds a couple of fixed profiles into
+    /// the real SQLite store if it's empty, then runs the matcher + newline application against a
+    /// given bundle identifier and sample text.
+    /// Usage: Scribe --resolve-profile <bundle-identifier> "raw text"
+    private static func runResolveProfile(arguments: [String]) -> Bool {
+        guard arguments.count == 3 else {
+            fputs("Usage: Scribe --resolve-profile <bundle-identifier> <raw-text>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        let bundleIdentifier = arguments[1]
+        let rawText = arguments[2]
+
+        let store = PersistenceStore()
+        do {
+            try store.initialize()
+
+            var profiles = try store.fetchAppProfiles()
+            if profiles.isEmpty {
+                fputs("No app profile rows found; seeding verification fixtures.\n", stderr)
+                _ = try store.insertAppProfile(AppProfile(
+                    name: "Terminal",
+                    bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
+                    processNames: ["Terminal", "iTerm2"],
+                    writingStylePrompt: "Be extremely terse. No filler words.",
+                    newlineHandling: .alwaysFlatten))
+                _ = try store.insertAppProfile(AppProfile(
+                    name: "Email",
+                    bundleIdentifiers: ["com.apple.mail", "com.microsoft.Outlook"],
+                    processNames: ["Mail", "Microsoft Outlook"],
+                    writingStylePrompt: "Use a formal, professional tone with complete sentences.",
+                    newlineHandling: .keepNewlines))
+                profiles = try store.fetchAppProfiles()
+            }
+
+            let matched = AppProfileMatcher.match(profiles: profiles, bundleIdentifier: bundleIdentifier, processName: nil)
+            let mode = AppProfileMatcher.resolveNewlineMode(profile: matched, globalDefault: .smartFlatten, bundleIdentifier: bundleIdentifier)
+            let result = AppProfileMatcher.applyNewlineMode(mode, to: rawText, bundleIdentifier: bundleIdentifier)
+
+            fputs("Matched profile: \(matched?.name ?? "none")\n", stderr)
+            fputs("Writing style override: \(matched?.writingStylePrompt ?? "(none, using global)")\n", stderr)
+            fputs("Newline mode: \(mode)\n", stderr)
+            fputs("\(result)\n", stdout)
+            return true
+        } catch {
+            fputs("Profile resolution failed: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
     }
