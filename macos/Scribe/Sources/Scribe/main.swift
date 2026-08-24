@@ -72,6 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
+        // The tray icon reflects paused state as a distinct glyph (mic.slash.fill), but the
+        // status item doesn't exist until setUpStatusItem() runs above, so a persisted pause
+        // from a prior session can only be reflected here, once the button is available. Without
+        // this, relaunching into an already-paused state left the mic.fill icon showing even
+        // though hotkeyManager.isPaused (and the menu checkmark) were correctly restored.
+        updateStatusIcon(paused: hotkeyManager.isPaused)
         configureNotifications()
         promptForAccessibilityAccess()
         requestMicrophoneAccessIfNeeded()
