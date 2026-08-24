@@ -126,8 +126,11 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
 }
 
 // MARK: - Wire format
+//
+// Shared with MicrosoftFoundryCleanupProvider, which targets Azure's OpenAI-compatible chat
+// completions endpoint and reuses this same JSON shape rather than duplicating it.
 
-private struct ChatCompletionRequest: Encodable {
+struct ChatCompletionRequest: Encodable {
     struct Message: Encodable {
         let role: String
         let content: String
@@ -139,7 +142,7 @@ private struct ChatCompletionRequest: Encodable {
     let stream: Bool
 }
 
-private struct ChatCompletionResponse: Decodable {
+struct ChatCompletionResponse: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable {
             let content: String

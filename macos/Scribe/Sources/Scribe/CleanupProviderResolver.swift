@@ -5,9 +5,15 @@ import Foundation
 /// uses for ASR backend selection, since the Settings UI (macos-overlay-ui todo) doesn't exist yet
 /// in this port. Defaults to Foundry Local, matching the recommendation in PORTING-PLAN.md.
 enum CleanupProviderResolver {
+    /// Keychain service name for the Microsoft Foundry service-principal client secret; the account
+    /// is the client id itself, so switching Entra app registrations never reads a stale secret.
+    static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
+
     static func resolveDefaultProvider() -> CleanupProvider {
         let environment = ProcessInfo.processInfo.environment
         switch environment["SCRIBE_CLEANUP_PROVIDER"] {
+        case "microsoft-foundry":
+            return resolveMicrosoftFoundryProvider(environment: environment)
         case "ollama":
             let model = environment["SCRIBE_OLLAMA_MODEL"] ?? "qwen2.5:3b"
             return ManagedOllamaCleanupProvider(model: model)
@@ -29,5 +35,53 @@ enum CleanupProviderResolver {
             let modelAlias = environment["SCRIBE_FOUNDRY_CLEANUP_MODEL"] ?? "qwen2.5-1.5b"
             return FoundryLocalCleanupProvider(modelAlias: modelAlias)
         }
+    }
+
+    /// Configuration for `SCRIBE_CLEANUP_PROVIDER=microsoft-foundry`:
+    ///
+    /// - `SCRIBE_AZURE_FOUNDRY_ENDPOINT` (required): e.g. `https://my-resource.cognitiveservices.azure.com`
+    /// - `SCRIBE_AZURE_FOUNDRY_DEPLOYMENT` (required): the deployed model name
+    /// - `SCRIBE_AZURE_AUTH_MODE`: "cli" (default) or "service-principal"
+    /// - `SCRIBE_AZURE_TENANT_ID`: required for service-principal; optional hint for `az` CLI mode
+    /// - `SCRIBE_AZURE_CLIENT_ID`: required for service-principal; also the Keychain lookup key for
+    ///   the secret, which is set out of band via `Scribe --set-azure-client-secret <client-id>`
+    ///   (never via an environment variable, per AGENTS.md).
+    private static func resolveMicrosoftFoundryProvider(environment: [String: String]) -> CleanupProvider {
+        guard
+            let endpointString = environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
+            let endpoint = URL(string: endpointString),
+            let deployment = environment["SCRIBE_AZURE_FOUNDRY_DEPLOYMENT"]
+        else {
+            fatalError(
+                "SCRIBE_CLEANUP_PROVIDER=microsoft-foundry requires SCRIBE_AZURE_FOUNDRY_ENDPOINT and SCRIBE_AZURE_FOUNDRY_DEPLOYMENT")
+        }
+
+        let authMode = AzureAuthMode(rawValue: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal" ? "servicePrincipal" : "azureCli")
+            ?? .azureCli
+        let tenantId = environment["SCRIBE_AZURE_TENANT_ID"]
+
+        let credentialProvider: AzureCredentialProvider
+        switch authMode {
+        case .servicePrincipal:
+            guard let clientId = environment["SCRIBE_AZURE_CLIENT_ID"] else {
+                fatalError("SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_CLIENT_ID")
+            }
+            let secret = try? KeychainStore.get(service: azureClientSecretKeychainService, account: clientId)
+            guard
+                let principal = AzureServicePrincipal.tryCreate(
+                    tenantId: tenantId, clientId: clientId, clientSecret: secret ?? nil)
+            else {
+                fatalError(
+                    "SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_TENANT_ID, SCRIBE_AZURE_CLIENT_ID, and a secret saved via 'Scribe --set-azure-client-secret \(clientId)'")
+            }
+            credentialProvider = AzureServicePrincipalCredentialProvider(principal: principal)
+        case .azureCli:
+            credentialProvider = AzureCliCredentialProvider(tenantId: tenantId)
+        }
+
+        return MicrosoftFoundryCleanupProvider(
+            endpoint: endpoint,
+            deployment: deployment,
+            credentialProvider: credentialProvider)
     }
 }

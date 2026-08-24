@@ -873,8 +873,37 @@ private enum CommandLineTranscriptionTool {
             return runResolveProfile(arguments: arguments)
         case "--diagnostics":
             return runDiagnostics(arguments: arguments)
+        case "--set-azure-client-secret":
+            return runSetAzureClientSecret(arguments: arguments)
         default:
             return false
+        }
+    }
+
+    /// Saves the Microsoft Foundry service-principal client secret to the Keychain, keyed by
+    /// client id. Reads the secret from stdin rather than argv, so it never appears in shell
+    /// history or `ps` output; per AGENTS.md, it must never be passed as an environment variable.
+    /// Usage: echo "<secret>" | Scribe --set-azure-client-secret <client-id>
+    private static func runSetAzureClientSecret(arguments: [String]) -> Bool {
+        guard arguments.count == 2 else {
+            fputs("Usage: echo \"<secret>\" | Scribe --set-azure-client-secret <client-id>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        let clientId = arguments[1]
+        guard let secret = readLine(strippingNewline: true), !secret.isEmpty else {
+            fputs("No secret provided on stdin.\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        do {
+            try KeychainStore.set(
+                secret, service: CleanupProviderResolver.azureClientSecretKeychainService, account: clientId)
+            fputs("Saved client secret for client id \(clientId) to the Keychain.\n", stdout)
+            return true
+        } catch {
+            fputs("Failed to save secret: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
         }
     }
 
