@@ -7,6 +7,7 @@ import Foundation
 enum PipelineFailureStage: String {
     case capture
     case decode
+    case cleanup
     case postProcessing
     case injection
 }
@@ -16,24 +17,28 @@ enum PipelineFailureStage: String {
 /// tab so testers can see raw recognition, replacement highlights, and per-step timings without
 /// digging through the log file.
 ///
-/// This is a macOS-scoped analog of Windows' `DictationPipelineReport`. Two Windows stages are
-/// intentionally not represented: "AI cleanup" (macOS has no live AI cleanup wired into the
-/// interactive pipeline yet; only reachable via the `--cleanup-text` CLI verb) and a true "VAD
-/// decode" duration (macOS uses an energy-threshold auto-stop detector, not a trained Silero VAD
-/// model, so there is no discrete VAD inference step to time the way Windows has).
+/// This is a macOS-scoped analog of Windows' `DictationPipelineReport`. One Windows stage is
+/// intentionally not represented: a true "VAD decode" duration (macOS uses an energy-threshold
+/// auto-stop detector, not a trained Silero VAD model, so there is no discrete VAD inference step
+/// to time the way Windows has). AI cleanup IS now wired into the live pipeline (see
+/// `AppDelegate.transcribeAndInject`), tracked via `cleanupDuration`/`cleanupApplied` below.
 struct PipelineReport {
     let capturedAt: Date
     let source: CaptureStopSource
     let captureDuration: TimeInterval
     let decodeDuration: TimeInterval?
+    let cleanupDuration: TimeInterval?
     let postProcessingDuration: TimeInterval?
     let injectionDuration: TimeInterval?
     var totalDuration: TimeInterval {
-        captureDuration + (decodeDuration ?? 0) + (postProcessingDuration ?? 0) + (injectionDuration ?? 0)
+        captureDuration + (decodeDuration ?? 0) + (cleanupDuration ?? 0) + (postProcessingDuration ?? 0) + (injectionDuration ?? 0)
     }
     let realTimeFactor: Double?
 
     let rawText: String?
+    /// Whether AI cleanup actually ran and changed the text this dictation (false when disabled,
+    /// unconfigured, or the provider failed and raw/post-processed text was used as a fallback).
+    let cleanupApplied: Bool
     let postProcessing: TextPostProcessingResult?
     let finalText: String?
     let injectionResult: InjectionResult?
@@ -54,10 +59,12 @@ struct PipelineReport {
             source: source,
             captureDuration: captureDuration,
             decodeDuration: nil,
+            cleanupDuration: nil,
             postProcessingDuration: nil,
             injectionDuration: nil,
             realTimeFactor: nil,
             rawText: rawText,
+            cleanupApplied: false,
             postProcessing: nil,
             finalText: nil,
             injectionResult: nil,

@@ -10,10 +10,26 @@ enum CleanupProviderResolver {
     static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
 
     static func resolveDefaultProvider() -> CleanupProvider {
+        do {
+            return try tryResolveDefaultProvider()
+        } catch let CleanupProviderError.notConfigured(message) {
+            fatalError(message)
+        } catch {
+            fatalError("Failed to resolve cleanup provider: \(error.localizedDescription)")
+        }
+    }
+
+    /// Non-fatal variant for the live dictation pipeline: a misconfigured optional AI-cleanup
+    /// provider must never crash mid-dictation (see AGENTS.md's offline-first guarantee, ported
+    /// conceptually here), so this throws `CleanupProviderError.notConfigured` instead of calling
+    /// `fatalError`. The CLI verbs (`--cleanup-text`, usage-insight summaries) keep using the
+    /// fatal `resolveDefaultProvider()` above since a hard failure there is fine (and more visible)
+    /// for a one-shot command-line invocation.
+    static func tryResolveDefaultProvider() throws -> CleanupProvider {
         let environment = ProcessInfo.processInfo.environment
         switch environment["SCRIBE_CLEANUP_PROVIDER"] {
         case "microsoft-foundry":
-            return resolveMicrosoftFoundryProvider(environment: environment)
+            return try resolveMicrosoftFoundryProviderThrowing(environment: environment)
         case "ollama":
             let model = environment["SCRIBE_OLLAMA_MODEL"] ?? "qwen2.5:3b"
             return ManagedOllamaCleanupProvider(model: model)
@@ -23,7 +39,8 @@ enum CleanupProviderResolver {
                 let baseURL = URL(string: baseURLString),
                 let model = environment["SCRIBE_CLEANUP_MODEL"]
             else {
-                fatalError("SCRIBE_CLEANUP_PROVIDER=openai-compatible requires SCRIBE_CLEANUP_BASE_URL and SCRIBE_CLEANUP_MODEL")
+                throw CleanupProviderError.notConfigured(
+                    "SCRIBE_CLEANUP_PROVIDER=openai-compatible requires SCRIBE_CLEANUP_BASE_URL and SCRIBE_CLEANUP_MODEL")
             }
             return OpenAICompatibleCleanupProvider(
                 id: "openai-compatible",
@@ -46,13 +63,13 @@ enum CleanupProviderResolver {
     /// - `SCRIBE_AZURE_CLIENT_ID`: required for service-principal; also the Keychain lookup key for
     ///   the secret, which is set out of band via `Scribe --set-azure-client-secret <client-id>`
     ///   (never via an environment variable, per AGENTS.md).
-    private static func resolveMicrosoftFoundryProvider(environment: [String: String]) -> CleanupProvider {
+    private static func resolveMicrosoftFoundryProviderThrowing(environment: [String: String]) throws -> CleanupProvider {
         guard
             let endpointString = environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
             let endpoint = URL(string: endpointString),
             let deployment = environment["SCRIBE_AZURE_FOUNDRY_DEPLOYMENT"]
         else {
-            fatalError(
+            throw CleanupProviderError.notConfigured(
                 "SCRIBE_CLEANUP_PROVIDER=microsoft-foundry requires SCRIBE_AZURE_FOUNDRY_ENDPOINT and SCRIBE_AZURE_FOUNDRY_DEPLOYMENT")
         }
 
@@ -64,14 +81,14 @@ enum CleanupProviderResolver {
         switch authMode {
         case .servicePrincipal:
             guard let clientId = environment["SCRIBE_AZURE_CLIENT_ID"] else {
-                fatalError("SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_CLIENT_ID")
+                throw CleanupProviderError.notConfigured("SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_CLIENT_ID")
             }
             let secret = try? KeychainStore.get(service: azureClientSecretKeychainService, account: clientId)
             guard
                 let principal = AzureServicePrincipal.tryCreate(
                     tenantId: tenantId, clientId: clientId, clientSecret: secret ?? nil)
             else {
-                fatalError(
+                throw CleanupProviderError.notConfigured(
                     "SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_TENANT_ID, SCRIBE_AZURE_CLIENT_ID, and a secret saved via 'Scribe --set-azure-client-secret \(clientId)'")
             }
             credentialProvider = AzureServicePrincipalCredentialProvider(principal: principal)

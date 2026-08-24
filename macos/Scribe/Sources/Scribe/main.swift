@@ -803,16 +803,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 bundleIdentifier: bundleIdentifier)
             processedText = AppProfileMatcher.applyNewlineMode(newlineMode, to: processedText, bundleIdentifier: bundleIdentifier)
 
-            // NOTE: matchedProfile.writingStylePrompt would override the cleanup provider's system
-            // prompt here once AI cleanup is wired into this live pipeline (currently only
-            // reachable via the `--cleanup-text` CLI verb; see PORTING-PLAN.md cleanup provider
-            // rows). Tracked as a follow-up alongside live cleanup wiring, not a per-app-profiles
-            // gap specifically.
+            // Optional AI cleanup runs after dictionary/snippet post-processing, mirroring the
+            // order the Playground CLI verbs already document (post-process, then cleanup), and
+            // after per-app newline flattening so a terminal profile's flattened text is what gets
+            // cleaned. A misconfigured or failing provider must never crash or block a dictation
+            // (this is an optional online feature; see AGENTS.md's offline-first guarantee), so any
+            // failure here just falls back to the already-good post-processed text.
+            var cleanupMilliseconds: Double?
+            var cleanupApplied = false
+            if isAiCleanupEnabled {
+                let cleanupStart = DispatchTime.now()
+                do {
+                    let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
+                    let writingStyle = matchedProfile?.writingStylePrompt ?? CleanupPrompt.defaultWritingStyle
+                    let response = try await provider.clean(
+                        CleanupRequest(transcript: processedText, writingStylePrompt: writingStyle))
+                    cleanupMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - cleanupStart.uptimeNanoseconds) / 1_000_000.0
+                    if response.cleanedText != processedText {
+                        Self.writeLogLine("AI cleanup refined the transcription.")
+                    }
+                    processedText = response.cleanedText
+                    cleanupApplied = true
+                } catch {
+                    cleanupMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - cleanupStart.uptimeNanoseconds) / 1_000_000.0
+                    Self.writeLogLine("AI cleanup failed (\(error.localizedDescription)); using post-processed transcription.")
+                }
+            }
 
             recordDictationHistory(
                 summary: summary,
                 decodeMilliseconds: decodeMilliseconds,
-                cleanupMilliseconds: nil,
+                cleanupMilliseconds: cleanupMilliseconds,
                 transcriptText: processedText,
                 targetApp: bundleIdentifier ?? processName)
             lastTranscriptStore.set(processedText)
@@ -828,10 +849,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 source: source,
                 captureDuration: summary.durationSeconds,
                 decodeDuration: decodeSeconds,
+                cleanupDuration: cleanupMilliseconds.map { $0 / 1_000.0 },
                 postProcessingDuration: postProcessMilliseconds / 1_000.0,
                 injectionDuration: injectionMilliseconds / 1_000.0,
                 realTimeFactor: realTimeFactor,
                 rawText: transcript,
+                cleanupApplied: cleanupApplied,
                 postProcessing: postProcessing,
                 finalText: processedText,
                 injectionResult: injectionResult,

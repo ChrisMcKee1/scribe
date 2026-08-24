@@ -718,6 +718,9 @@ private struct PlaygroundSettingsTab: View {
                             timingRow("Capture", report.captureDuration)
                             timingRow("Speech Recognition (Decode)", report.decodeDuration)
                             timingRow("Dictionary / Snippets", report.postProcessingDuration)
+                            if let cleanupDuration = report.cleanupDuration {
+                                timingRow(report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)", cleanupDuration)
+                            }
                             timingRow("Text Insertion", report.injectionDuration)
                             Divider()
                             timingRow("Total", report.totalDuration)
