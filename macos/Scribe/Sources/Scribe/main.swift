@@ -1,0 +1,360 @@
+import AppKit
+import ApplicationServices
+import AVFoundation
+import OSLog
+import SwiftUI
+
+if CommandLineTranscriptionTool.runIfRequested() {
+    exit(EXIT_SUCCESS)
+}
+
+let application = NSApplication.shared
+let delegate = AppDelegate()
+application.setActivationPolicy(.accessory)
+application.delegate = delegate
+application.run()
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private enum CaptureStopSource {
+        case menu
+        case hotkey
+    }
+
+    private var statusItem: NSStatusItem?
+    private var settingsWindowController: NSWindowController?
+    private let logger = Logger(subsystem: "com.scribe.macos", category: "App")
+    private let persistenceStore = PersistenceStore()
+    private let audioCaptureEngine = AudioCaptureEngine()
+    private lazy var transcriptionEngine = try? TranscriptionEngine(
+        logSink: { message in AppDelegate.writeLogLine(message) })
+    private lazy var hotkeyManager = HotkeyManager(
+        audioCaptureEngine: audioCaptureEngine,
+        logSink: { message in AppDelegate.writeLogLine(message) })
+    private lazy var textInjector = TextInjector(
+        logSink: { message in AppDelegate.writeLogLine(message) })
+    private var dictationMenuItem: NSMenuItem?
+    private var capturedSamples: [Float] = []
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        configureAudioCaptureEngine()
+        initializePersistenceStore()
+        setUpStatusItem()
+        promptForAccessibilityAccess()
+        requestMicrophoneAccessIfNeeded()
+        configureHotkeyManager()
+        hotkeyManager.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        hotkeyManager.stop()
+    }
+
+    @objc private func startTestDictation(_ sender: Any?) {
+        if audioCaptureEngine.isCapturing {
+            stopActiveCapture(source: .menu)
+        } else {
+            startCapture()
+        }
+    }
+
+    @objc private func openSettings(_ sender: Any?) {
+        if settingsWindowController == nil {
+            let hostingController = NSHostingController(rootView: SettingsView())
+            let window = NSWindow(contentViewController: hostingController)
+            window.title = "Scribe Settings"
+            window.setContentSize(NSSize(width: 480, height: 220))
+            window.styleMask.insert(.titled)
+            window.styleMask.insert(.closable)
+            window.styleMask.insert(.miniaturizable)
+            window.isReleasedWhenClosed = false
+            window.center()
+
+            let controller = NSWindowController(window: window)
+            controller.shouldCascadeWindows = false
+            settingsWindowController = controller
+        }
+
+        settingsWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func quit(_ sender: Any?) {
+        NSApp.terminate(nil)
+    }
+
+    private func setUpStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.toolTip = "Scribe"
+            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Scribe")
+            if button.image == nil {
+                button.title = "Scribe"
+            }
+        }
+
+        let menu = NSMenu()
+        let dictationItem = NSMenuItem(title: "Start Test Dictation", action: #selector(startTestDictation(_:)), keyEquivalent: "")
+        menu.addItem(dictationItem)
+        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q"))
+
+        for item in menu.items where item.action != nil {
+            item.target = self
+        }
+
+        item.menu = menu
+        statusItem = item
+        dictationMenuItem = dictationItem
+    }
+
+    private func requestMicrophoneAccessIfNeeded() {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            break
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                let outcome = granted ? "granted" : "denied"
+                fputs("Microphone permission \(outcome).\n", stdout)
+            }
+        case .denied, .restricted:
+            fputs("Microphone permission already denied or restricted.\n", stdout)
+        @unknown default:
+            fputs("Microphone permission state is unknown.\n", stdout)
+        }
+    }
+
+    private func promptForAccessibilityAccess() {
+        let trusted = textInjector.promptForAccessibilityAccessIfNeeded()
+        if trusted {
+            Self.writeLogLine("Accessibility permission already granted.")
+        }
+    }
+
+    private func configureAudioCaptureEngine() {
+        audioCaptureEngine.onChunk = { chunk in
+            if
+                let channelData = chunk.buffer.floatChannelData?[0]
+            {
+                let frameCount = Int(chunk.buffer.frameLength)
+                self.capturedSamples.append(contentsOf: UnsafeBufferPointer(start: channelData, count: frameCount))
+            }
+
+            let message = String(
+                format: "Live capture meter: peak %.1f dBFS, rms %.1f dBFS, total chunk samples %u",
+                chunk.level.peakDbfs,
+                chunk.level.rmsDbfs,
+                chunk.buffer.frameLength)
+            Self.writeLogLine(message)
+        }
+
+        audioCaptureEngine.onCaptureError = { [weak self] error in
+            Task { @MainActor in
+                self?.dictationMenuItem?.title = "Start Test Dictation"
+                self?.presentErrorAlert(
+                    title: "Audio Capture Stopped",
+                    message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func configureHotkeyManager() {
+        self.hotkeyManager.onCaptureStarted = { [weak self] in
+            self?.dictationMenuItem?.title = "Stop Test Dictation"
+        }
+
+        self.hotkeyManager.onCaptureStopped = { [weak self] summary in
+            self?.handleCaptureStopped(summary, source: .hotkey)
+        }
+
+        self.hotkeyManager.onCaptureStartError = { [weak self] error in
+            self?.handleCaptureStartError(error)
+        }
+    }
+
+    private func initializePersistenceStore() {
+        do {
+            try persistenceStore.initialize()
+        } catch {
+            Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
+            logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func startCapture() {
+        do {
+            capturedSamples.removeAll(keepingCapacity: true)
+            try audioCaptureEngine.start()
+            dictationMenuItem?.title = "Stop Test Dictation"
+            Self.writeLogLine("Started live test dictation capture.")
+        } catch let error as AudioCaptureEngineError {
+            handleCaptureStartError(error)
+        } catch {
+            handleCaptureStartError(.engineStartFailed(error.localizedDescription))
+        }
+    }
+
+    private func stopActiveCapture(source: CaptureStopSource) {
+        let summary = audioCaptureEngine.stop()
+        handleCaptureStopped(summary, source: source)
+    }
+
+    private func handleCaptureStopped(
+        _ summary: AudioCaptureSummary?,
+        source: CaptureStopSource
+    ) {
+        guard let summary else {
+            dictationMenuItem?.title = "Start Test Dictation"
+            return
+        }
+
+        dictationMenuItem?.title = "Transcribing Test Dictation..."
+        Self.writeLogLine(
+            String(
+                format: "Stopped live test dictation. Duration %.2f s, sample count %d",
+                summary.durationSeconds,
+                summary.sampleCount))
+
+        do {
+            try persistenceStore.recordDictation(
+                startedAt: summary.startedAt,
+                durationSeconds: summary.durationSeconds,
+                sampleCount: summary.sampleCount)
+        } catch {
+            Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
+            logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
+        }
+
+        let samples = capturedSamples
+        capturedSamples.removeAll(keepingCapacity: true)
+
+        guard !samples.isEmpty else {
+            dictationMenuItem?.title = "Start Test Dictation"
+            Self.writeLogLine("Capture stopped without any resampled audio samples to transcribe.")
+            return
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.transcribeAndInject(samples: samples, source: source)
+        }
+    }
+
+    private func handleCaptureStartError(_ error: AudioCaptureEngineError) {
+        dictationMenuItem?.title = "Start Test Dictation"
+
+        switch error {
+        case .microphoneNotAuthorized(let status):
+            let detail = "Microphone access is required before live capture can start. Current authorization status: \(status.rawValue)."
+            Self.writeLogLine("Microphone capture blocked by authorization status \(status.rawValue).")
+            presentErrorAlert(title: "Microphone Access Needed", message: detail)
+        default:
+            Self.writeLogLine("Audio capture failed to start: \(error.localizedDescription)")
+            presentErrorAlert(title: "Audio Capture Failed", message: error.localizedDescription)
+        }
+    }
+
+    private func presentErrorAlert(title: String, message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func handleInjectionResult(_ result: InjectionResult) {
+        dictationMenuItem?.title = "Start Test Dictation"
+
+        switch result {
+        case .success:
+            Self.writeLogLine("Text injection succeeded via the Accessibility value path.")
+        case .fallbackUsed:
+            Self.writeLogLine("Text injection succeeded via the pasteboard fallback path.")
+        case .accessibilityDenied:
+            let message = "Accessibility permission is required for text injection. Enable it in System Settings > Privacy & Security > Accessibility, then relaunch Scribe."
+            Self.writeLogLine(message)
+            presentErrorAlert(title: "Accessibility Access Needed", message: message)
+        case .noFocusedElement:
+            let message = "Scribe could not find a focused text field in the frontmost app to inject into."
+            Self.writeLogLine(message)
+            presentErrorAlert(title: "No Focused Text Field", message: message)
+        }
+    }
+
+    nonisolated private static func writeLogLine(_ message: String) {
+        let line = "\(message)\n"
+        fputs(line, stderr)
+    }
+
+    private func transcribeAndInject(samples: [Float], source: CaptureStopSource) async {
+        guard let transcriptionEngine else {
+            dictationMenuItem?.title = "Start Test Dictation"
+            let message = "ASR backend is not configured. Install whisper-cpp and the local model first."
+            Self.writeLogLine(message)
+            presentErrorAlert(title: "ASR Not Ready", message: message)
+            return
+        }
+
+        do {
+            let transcript = try transcriptionEngine.transcribe(
+                samples: samples,
+                sampleRate: AudioCaptureEngine.targetSampleRate)
+            Self.writeLogLine("Real transcript (\(source)): \(transcript)")
+
+            let injectionResult = textInjector.inject(text: transcript)
+            handleInjectionResult(injectionResult)
+        } catch {
+            dictationMenuItem?.title = "Start Test Dictation"
+            Self.writeLogLine("ASR transcription failed: \(error.localizedDescription)")
+            presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
+        }
+    }
+}
+
+private struct SettingsView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Scribe for macOS - early scaffold")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("The macOS menu bar shell is running. Hold Right Option for push-to-talk, or use Start Test Dictation from the menu to exercise live microphone capture, real local transcription, meter logging, SQLite history persistence, and text injection.")
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private enum CommandLineTranscriptionTool {
+    static func runIfRequested() -> Bool {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        guard let command = arguments.first else {
+            return false
+        }
+
+        guard command == "--transcribe-file" || command == "--transcribe-wav" else {
+            return false
+        }
+
+        guard arguments.count == 2 else {
+            fputs("Usage: Scribe --transcribe-wav <wav-path>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        let inputURL = URL(fileURLWithPath: arguments[1])
+
+        do {
+            let engine = try TranscriptionEngine(logSink: { message in fputs("\(message)\n", stderr) })
+            let transcript = try engine.transcribeAudioFile(at: inputURL)
+            fputs("\(transcript)\n", stdout)
+            return true
+        } catch {
+            fputs("Transcription failed: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+    }
+}

@@ -1,0 +1,5 @@
+.build/
+dist/
+.DS_Store
+# Downloaded ASR models: never commit model weights (matches AGENTS.md convention for src/Scribe.App/models)
+Models/
