@@ -19,6 +19,8 @@ enum NewlineInjectionMode: String, Equatable {
 /// identity for an app) with process name as a secondary/fallback match, since macOS apps don't
 /// have the Windows-style ".exe process name" as their primary identity.
 struct AppProfile: Equatable {
+    /// Row id once persisted; 0 for a not-yet-saved profile (mirrors `DictionaryEntry`/`Snippet`).
+    var id: Int64 = 0
     /// Display name shown in the settings list (e.g. "Email", "Chat", "Terminal").
     var name: String
     /// Bundle identifiers this profile applies to (e.g. "com.apple.Terminal", "com.tinyspeck.slackmacgap").

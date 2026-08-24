@@ -11,16 +11,20 @@ final class PersistenceStore {
 
     let databaseURL: URL
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, databaseURL overrideDatabaseURL: URL? = nil) {
         self.fileManager = fileManager
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         self.iso8601Formatter = formatter
 
-        let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let scribeDirectoryURL = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
-        self.databaseURL = scribeDirectoryURL.appendingPathComponent("scribe.db", isDirectory: false)
+        if let overrideDatabaseURL {
+            self.databaseURL = overrideDatabaseURL
+        } else {
+            let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            let scribeDirectoryURL = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
+            self.databaseURL = scribeDirectoryURL.appendingPathComponent("scribe.db", isDirectory: false)
+        }
     }
 
     func initialize() throws {
@@ -145,15 +149,23 @@ final class PersistenceStore {
     }
 
     func fetchEnabledDictionaryEntries() throws -> [DictionaryEntry] {
+        try fetchDictionaryEntries(enabledOnly: true)
+    }
+
+    /// Returns every dictionary entry, including disabled ones, for display in the Settings UI
+    /// (where the user needs to see and re-enable disabled rows, not just what's actively applied).
+    func fetchAllDictionaryEntries() throws -> [DictionaryEntry] {
+        try fetchDictionaryEntries(enabledOnly: false)
+    }
+
+    private func fetchDictionaryEntries(enabledOnly: Bool) throws -> [DictionaryEntry] {
         var results: [DictionaryEntry] = []
         try withConnection { database in
             var statement: OpaquePointer?
-            let prepareResult = sqlite3_prepare_v2(
-                database,
-                "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;",
-                -1,
-                &statement,
-                nil)
+            let sql = enabledOnly
+                ? "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;"
+                : "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries ORDER BY id;"
+            let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
             guard prepareResult == SQLITE_OK, let statement else {
                 throw PersistenceError.sqlite(message: sqliteMessage(from: database))
             }
@@ -169,6 +181,19 @@ final class PersistenceStore {
             }
         }
         return results
+    }
+
+    func setDictionaryEntryEnabled(id: Int64, enabled: Bool) throws {
+        try executeStatement("UPDATE dictionary_entries SET enabled = ? WHERE id = ?;") { statement in
+            sqlite3_bind_int(statement, 1, enabled ? 1 : 0)
+            sqlite3_bind_int64(statement, 2, id)
+        }
+    }
+
+    func deleteDictionaryEntry(id: Int64) throws {
+        try executeStatement("DELETE FROM dictionary_entries WHERE id = ?;") { statement in
+            sqlite3_bind_int64(statement, 1, id)
+        }
     }
 
     // MARK: - Snippets
@@ -202,15 +227,22 @@ final class PersistenceStore {
     }
 
     func fetchEnabledSnippets() throws -> [Snippet] {
+        try fetchSnippets(enabledOnly: true)
+    }
+
+    /// Returns every snippet, including disabled ones, for the Settings UI.
+    func fetchAllSnippets() throws -> [Snippet] {
+        try fetchSnippets(enabledOnly: false)
+    }
+
+    private func fetchSnippets(enabledOnly: Bool) throws -> [Snippet] {
         var results: [Snippet] = []
         try withConnection { database in
             var statement: OpaquePointer?
-            let prepareResult = sqlite3_prepare_v2(
-                database,
-                "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;",
-                -1,
-                &statement,
-                nil)
+            let sql = enabledOnly
+                ? "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;"
+                : "SELECT id, phrase, template, enabled FROM snippets ORDER BY id;"
+            let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
             guard prepareResult == SQLITE_OK, let statement else {
                 throw PersistenceError.sqlite(message: sqliteMessage(from: database))
             }
@@ -225,6 +257,19 @@ final class PersistenceStore {
             }
         }
         return results
+    }
+
+    func setSnippetEnabled(id: Int64, enabled: Bool) throws {
+        try executeStatement("UPDATE snippets SET enabled = ? WHERE id = ?;") { statement in
+            sqlite3_bind_int(statement, 1, enabled ? 1 : 0)
+            sqlite3_bind_int64(statement, 2, id)
+        }
+    }
+
+    func deleteSnippet(id: Int64) throws {
+        try executeStatement("DELETE FROM snippets WHERE id = ?;") { statement in
+            sqlite3_bind_int64(statement, 1, id)
+        }
     }
 
     // MARK: - App profiles
@@ -276,7 +321,7 @@ final class PersistenceStore {
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "SELECT name, bundle_identifiers, process_names, writing_style_prompt, newline_handling FROM app_profiles ORDER BY id;",
+                "SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling FROM app_profiles ORDER BY id;",
                 -1,
                 &statement,
                 nil)
@@ -286,17 +331,19 @@ final class PersistenceStore {
             defer { sqlite3_finalize(statement) }
 
             while sqlite3_step(statement) == SQLITE_ROW {
-                let name = String(cString: sqlite3_column_text(statement, 0))
-                let bundleIdentifiers = String(cString: sqlite3_column_text(statement, 1))
+                let id = sqlite3_column_int64(statement, 0)
+                let name = String(cString: sqlite3_column_text(statement, 1))
+                let bundleIdentifiers = String(cString: sqlite3_column_text(statement, 2))
                     .split(separator: ",").map(String.init).filter { !$0.isEmpty }
-                let processNames = String(cString: sqlite3_column_text(statement, 2))
+                let processNames = String(cString: sqlite3_column_text(statement, 3))
                     .split(separator: ",").map(String.init).filter { !$0.isEmpty }
-                let writingStylePrompt = sqlite3_column_text(statement, 3).map { String(cString: $0) }
-                let newlineHandling = sqlite3_column_text(statement, 4)
+                let writingStylePrompt = sqlite3_column_text(statement, 4).map { String(cString: $0) }
+                let newlineHandling = sqlite3_column_text(statement, 5)
                     .map { String(cString: $0) }
                     .flatMap { NewlineInjectionMode(rawValue: $0) }
 
                 results.append(AppProfile(
+                    id: id,
                     name: name,
                     bundleIdentifiers: bundleIdentifiers,
                     processNames: processNames,
@@ -305,6 +352,32 @@ final class PersistenceStore {
             }
         }
         return results
+    }
+
+    func deleteAppProfile(id: Int64) throws {
+        try executeStatement("DELETE FROM app_profiles WHERE id = ?;") { statement in
+            sqlite3_bind_int64(statement, 1, id)
+        }
+    }
+
+    /// Shared helper for one-shot mutating statements (UPDATE/DELETE) that only need parameter
+    /// binding, no result rows. Cuts the prepare/bind/step/finalize boilerplate that was
+    /// previously repeated per-table.
+    private func executeStatement(_ sql: String, bind: (OpaquePointer?) -> Void) throws {
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(database, sql, -1, &statement, nil)
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            bind(statement)
+
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+        }
     }
 
     private func withConnection(_ body: (OpaquePointer?) throws -> Void) throws {

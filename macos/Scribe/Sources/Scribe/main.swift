@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Global default when no profile overrides it. Not yet Settings-driven (macos-overlay-ui);
     /// SmartFlatten matches Windows' default.
     private var globalNewlineMode: NewlineInjectionMode = .smartFlatten
+    private let overlayPanelController = OverlayPanelController()
     private var dictationMenuItem: NSMenuItem?
     private var capturedSamples: [Float] = []
     /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
@@ -48,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
         initializePersistenceStore()
+        loadOverlayAnchorPreference()
         setUpStatusItem()
         promptForAccessibilityAccess()
         requestMicrophoneAccessIfNeeded()
@@ -69,13 +71,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings(_ sender: Any?) {
         if settingsWindowController == nil {
-            let hostingController = NSHostingController(rootView: SettingsView())
+            let hostingController = NSHostingController(
+                rootView: SettingsView(
+                    persistenceStore: persistenceStore,
+                    overlayPanelController: overlayPanelController,
+                    onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() }))
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Scribe Settings"
-            window.setContentSize(NSSize(width: 480, height: 220))
+            window.setContentSize(NSSize(width: 640, height: 480))
             window.styleMask.insert(.titled)
             window.styleMask.insert(.closable)
             window.styleMask.insert(.miniaturizable)
+            window.styleMask.insert(.resizable)
             window.isReleasedWhenClosed = false
             window.center()
 
@@ -106,16 +113,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dictationItem = NSMenuItem(title: "Start Test Dictation", action: #selector(startTestDictation(_:)), keyEquivalent: "")
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
+        menu.addItem(overlayPositionMenuItem())
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit(_:)), keyEquivalent: "q"))
 
-        for item in menu.items where item.action != nil {
-            item.target = self
+        for item in menu.items {
+            applyTargetRecursively(to: item)
         }
 
         item.menu = menu
         statusItem = item
         dictationMenuItem = dictationItem
+    }
+
+    /// Builds the "Overlay Position" submenu: a 9-anchor picker mirroring Windows' overlay
+    /// position picker, checked against the currently persisted anchor.
+    private func overlayPositionMenuItem() -> NSMenuItem {
+        let submenuItem = NSMenuItem(title: "Overlay Position", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for anchor in OverlayAnchor.allCases {
+            let item = NSMenuItem(
+                title: anchor.displayName,
+                action: #selector(selectOverlayAnchor(_:)),
+                keyEquivalent: "")
+            item.target = self
+            item.representedObject = anchor.rawValue
+            item.state = anchor == overlayPanelController.anchor ? .on : .off
+            submenu.addItem(item)
+        }
+        submenuItem.submenu = submenu
+        return submenuItem
+    }
+
+    @objc private func selectOverlayAnchor(_ sender: NSMenuItem) {
+        guard
+            let raw = sender.representedObject as? String,
+            let anchor = OverlayAnchor(rawValue: raw)
+        else {
+            return
+        }
+        setOverlayAnchor(anchor)
+        for item in sender.menu?.items ?? [] {
+            item.state = item === sender ? .on : .off
+        }
+    }
+
+    /// `NSMenu.items where item.action != nil` above only targets top-level items; submenu items
+    /// (like the overlay anchor picker) need their own target set individually, which happens in
+    /// `overlayPositionMenuItem()`. This walks the tree defensively in case future submenus forget.
+    private func applyTargetRecursively(to item: NSMenuItem) {
+        if item.action != nil {
+            item.target = self
+        }
+        guard let submenu = item.submenu else { return }
+        for child in submenu.items {
+            applyTargetRecursively(to: child)
+        }
     }
 
     private func requestMicrophoneAccessIfNeeded() {
@@ -156,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 chunk.level.rmsDbfs,
                 chunk.buffer.frameLength)
             Self.writeLogLine(message)
+            self.overlayPanelController.update(state: .listening(levelDbfs: chunk.level.rmsDbfs))
 
             if let detector = self.silenceAutoStopDetector, detector.observe(level: chunk.level) {
                 let message = String(
@@ -174,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 self?.silenceAutoStopDetector = nil
                 self?.dictationMenuItem?.title = "Start Test Dictation"
+                self?.overlayPanelController.hide()
                 self?.presentErrorAlert(
                     title: "Audio Capture Stopped",
                     message: error.localizedDescription)
@@ -184,6 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureHotkeyManager() {
         self.hotkeyManager.onCaptureStarted = { [weak self] in
             self?.dictationMenuItem?.title = "Stop Test Dictation"
+            self?.overlayPanelController.show(state: .listening(levelDbfs: -120))
         }
 
         self.hotkeyManager.onCaptureStopped = { [weak self] summary in
@@ -203,6 +259,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
             logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Stopgap persistence for the overlay position: a single UserDefaults value rather than a
+    /// full settings model, since macos-overlay-ui doesn't yet have a general Settings/SQLite
+    /// preferences story beyond dictionary/snippets/profiles. Revisit once Settings UI grows a
+    /// general key-value preferences table.
+    private static let overlayAnchorDefaultsKey = "ScribeOverlayAnchor"
+
+    private func loadOverlayAnchorPreference() {
+        if
+            let raw = UserDefaults.standard.string(forKey: Self.overlayAnchorDefaultsKey),
+            let anchor = OverlayAnchor(rawValue: raw)
+        {
+            overlayPanelController.anchor = anchor
+        }
+    }
+
+    private func setOverlayAnchor(_ anchor: OverlayAnchor) {
+        overlayPanelController.anchor = anchor
+        UserDefaults.standard.set(anchor.rawValue, forKey: Self.overlayAnchorDefaultsKey)
+        Self.writeLogLine("Overlay position set to \(anchor.displayName).")
     }
 
     private func reloadPostProcessorRules() {
@@ -228,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // configureHotkeyManager and HotkeyManager.startCaptureOnMainThread.
             silenceAutoStopDetector = SilenceAutoStopDetector()
             dictationMenuItem?.title = "Stop Test Dictation"
+            overlayPanelController.show(state: .listening(levelDbfs: -120))
             Self.writeLogLine("Started live test dictation capture (toggle mode, silence auto-stop armed).")
         } catch let error as AudioCaptureEngineError {
             handleCaptureStartError(error)
@@ -248,10 +326,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) {
         guard let summary else {
             dictationMenuItem?.title = "Start Test Dictation"
+            overlayPanelController.hide()
             return
         }
 
         dictationMenuItem?.title = "Transcribing Test Dictation..."
+        overlayPanelController.update(state: .processing)
         Self.writeLogLine(
             String(
                 format: "Stopped live test dictation. Duration %.2f s, sample count %d",
@@ -273,6 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard !samples.isEmpty else {
             dictationMenuItem?.title = "Start Test Dictation"
+            overlayPanelController.hide()
             Self.writeLogLine("Capture stopped without any resampled audio samples to transcribe.")
             return
         }
@@ -285,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleCaptureStartError(_ error: AudioCaptureEngineError) {
         dictationMenuItem?.title = "Start Test Dictation"
+        overlayPanelController.hide()
 
         switch error {
         case .microphoneNotAuthorized(let status):
@@ -313,16 +395,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch result {
         case .success:
             Self.writeLogLine("Text injection succeeded via the Accessibility value path.")
+            overlayPanelController.hide()
         case .fallbackUsed:
             Self.writeLogLine("Text injection succeeded via the pasteboard fallback path.")
+            overlayPanelController.hide()
         case .accessibilityDenied:
             let message = "Accessibility permission is required for text injection. Enable it in System Settings > Privacy & Security > Accessibility, then relaunch Scribe."
             Self.writeLogLine(message)
+            showFailedThenHideOverlay()
             presentErrorAlert(title: "Accessibility Access Needed", message: message)
         case .noFocusedElement:
             let message = "Scribe could not find a focused text field in the frontmost app to inject into."
             Self.writeLogLine(message)
+            showFailedThenHideOverlay()
             presentErrorAlert(title: "No Focused Text Field", message: message)
+        }
+    }
+
+    /// Briefly flashes the pill's failed state (mirrors Windows' overlay `Failed` state) before
+    /// hiding it, so the user gets a visual cue distinct from a silent, successful completion.
+    private func showFailedThenHideOverlay() {
+        overlayPanelController.update(state: .failed)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            self?.overlayPanelController.hide()
         }
     }
 
@@ -334,6 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func transcribeAndInject(samples: [Float], source: CaptureStopSource) async {
         guard let transcriptionEngine else {
             dictationMenuItem?.title = "Start Test Dictation"
+            showFailedThenHideOverlay()
             let message = "ASR backend is not configured. Install Foundry Local (brew install microsoft/foundrylocal/foundrylocal) or whisper-cpp as a fallback."
             Self.writeLogLine(message)
             presentErrorAlert(title: "ASR Not Ready", message: message)
@@ -378,24 +475,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             handleInjectionResult(injectionResult)
         } catch {
             dictationMenuItem?.title = "Start Test Dictation"
+            showFailedThenHideOverlay()
             Self.writeLogLine("ASR transcription failed: \(error.localizedDescription)")
             presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
         }
-    }
-}
-
-private struct SettingsView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Scribe for macOS - early scaffold")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("The macOS menu bar shell is running. Hold Right Option for push-to-talk, or use Start Test Dictation from the menu to exercise live microphone capture, real local transcription, meter logging, SQLite history persistence, and text injection.")
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
