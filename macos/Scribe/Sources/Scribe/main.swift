@@ -338,16 +338,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 summary.durationSeconds,
                 summary.sampleCount))
 
-        do {
-            try persistenceStore.recordDictation(
-                startedAt: summary.startedAt,
-                durationSeconds: summary.durationSeconds,
-                sampleCount: summary.sampleCount)
-        } catch {
-            Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
-            logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
-        }
-
         let samples = capturedSamples
         capturedSamples.removeAll(keepingCapacity: true)
 
@@ -355,12 +345,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dictationMenuItem?.title = "Start Test Dictation"
             overlayPanelController.hide()
             Self.writeLogLine("Capture stopped without any resampled audio samples to transcribe.")
+            recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
             return
         }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.transcribeAndInject(samples: samples, source: source)
+            await self.transcribeAndInject(samples: samples, summary: summary, source: source)
+        }
+    }
+
+    /// Writes one `dictation_history` row per capture, mirroring Windows' per-dictation history
+    /// used by `DictationStats`. Decode/cleanup timings are optional: a capture that never made it
+    /// to transcription (e.g. no audio) still counts toward total audio/duration stats, just with
+    /// nil timing columns.
+    private func recordDictationHistory(
+        summary: AudioCaptureSummary,
+        decodeMilliseconds: Double?,
+        cleanupMilliseconds: Double?
+    ) {
+        do {
+            try persistenceStore.recordDictation(
+                startedAt: summary.startedAt,
+                durationSeconds: summary.durationSeconds,
+                sampleCount: summary.sampleCount,
+                decodeMilliseconds: decodeMilliseconds,
+                cleanupMilliseconds: cleanupMilliseconds)
+        } catch {
+            Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
+            logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -427,20 +440,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fputs(line, stderr)
     }
 
-    private func transcribeAndInject(samples: [Float], source: CaptureStopSource) async {
+    private func transcribeAndInject(
+        samples: [Float],
+        summary: AudioCaptureSummary,
+        source: CaptureStopSource
+    ) async {
         guard let transcriptionEngine else {
             dictationMenuItem?.title = "Start Test Dictation"
             showFailedThenHideOverlay()
             let message = "ASR backend is not configured. Install Foundry Local (brew install microsoft/foundrylocal/foundrylocal) or whisper-cpp as a fallback."
             Self.writeLogLine(message)
             presentErrorAlert(title: "ASR Not Ready", message: message)
+            recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
             return
         }
 
         do {
+            let decodeStart = DispatchTime.now()
             let transcript = try transcriptionEngine.transcribe(
                 samples: samples,
                 sampleRate: AudioCaptureEngine.targetSampleRate)
+            let decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart.uptimeNanoseconds) / 1_000_000.0
             Self.writeLogLine("Real transcript (\(source)): \(transcript)")
 
             var processedText = textPostProcessor.process(transcript)
@@ -471,6 +491,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // rows). Tracked as a follow-up alongside live cleanup wiring, not a per-app-profiles
             // gap specifically.
 
+            recordDictationHistory(summary: summary, decodeMilliseconds: decodeMilliseconds, cleanupMilliseconds: nil)
+
             let injectionResult = textInjector.inject(text: processedText)
             handleInjectionResult(injectionResult)
         } catch {
@@ -478,6 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showFailedThenHideOverlay()
             Self.writeLogLine("ASR transcription failed: \(error.localizedDescription)")
             presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
+            recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
         }
     }
 }
@@ -498,6 +521,8 @@ private enum CommandLineTranscriptionTool {
             return runPostProcess(arguments: arguments)
         case "--resolve-profile":
             return runResolveProfile(arguments: arguments)
+        case "--diagnostics":
+            return runDiagnostics(arguments: arguments)
         default:
             return false
         }
@@ -642,6 +667,55 @@ private enum CommandLineTranscriptionTool {
             return true
         } catch {
             fputs("Profile resolution failed: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+    }
+
+    /// Prints the Diagnostics panel numbers (P50/P95 decode latency, RTF) computed from real
+    /// `dictation_history` rows, mirroring Windows' Diagnostics tab. `--diagnostics [days]`
+    /// defaults to a 7-day window, matching `DictationStats`' typical panel window.
+    private static func runDiagnostics(arguments: [String]) -> Bool {
+        let windowDays: Double
+        if arguments.count >= 2, let parsed = Double(arguments[1]) {
+            windowDays = parsed
+        } else {
+            windowDays = 7
+        }
+
+        let store = PersistenceStore()
+        do {
+            try store.initialize()
+            let history = try store.fetchDictationHistory()
+            let since = Date().addingTimeInterval(-windowDays * 86400)
+            guard let snapshot = DictationStats.compute(entries: history, since: since) else {
+                fputs("No dictations in the last \(windowDays) day(s).\n", stdout)
+                return true
+            }
+
+            fputs("Dictations: \(snapshot.count)\n", stdout)
+            fputs(String(format: "Total audio: %.1f s (longest %.1f s)\n", snapshot.totalAudioSeconds, snapshot.longestAudioSeconds), stdout)
+            if let decodeMs = snapshot.decodeMs {
+                fputs(
+                    String(
+                        format: "Decode ms: avg %.0f, p50 %.0f, p95 %.0f, min %.0f, max %.0f (n=%d)\n",
+                        decodeMs.average, decodeMs.p50, decodeMs.p95, decodeMs.min, decodeMs.max, snapshot.decodeCount),
+                    stdout)
+                fputs(
+                    String(format: "RTF: fastest %.3f, p50 %.3f, p95 %.3f\n", snapshot.fastestRtf, snapshot.rtfP50, snapshot.rtfP95),
+                    stdout)
+            } else {
+                fputs("Decode ms: no timed dictations yet.\n", stdout)
+            }
+            if let cleanupMs = snapshot.cleanupMs {
+                fputs(
+                    String(
+                        format: "Cleanup ms: avg %.0f, min %.0f, max %.0f (n=%d)\n",
+                        cleanupMs.average, cleanupMs.min, cleanupMs.max, snapshot.cleanupCount),
+                    stdout)
+            }
+            return true
+        } catch {
+            fputs("Diagnostics failed: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
     }

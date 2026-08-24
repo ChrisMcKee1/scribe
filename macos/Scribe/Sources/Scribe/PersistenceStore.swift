@@ -39,10 +39,22 @@ final class PersistenceStore {
                     id INTEGER PRIMARY KEY,
                     started_at TEXT NOT NULL,
                     duration_seconds REAL NOT NULL,
-                    sample_count INTEGER NOT NULL
+                    sample_count INTEGER NOT NULL,
+                    decode_ms REAL,
+                    cleanup_ms REAL
                 );
                 """,
                 database: database)
+
+            // Older databases predate the decode/cleanup timing columns used by DictationStats
+            // (the Diagnostics panel). SQLite has no "ADD COLUMN IF NOT EXISTS", so probe first.
+            let existingColumns = try tableColumns("dictation_history", database: database)
+            if !existingColumns.contains("decode_ms") {
+                try execute("ALTER TABLE dictation_history ADD COLUMN decode_ms REAL;", database: database)
+            }
+            if !existingColumns.contains("cleanup_ms") {
+                try execute("ALTER TABLE dictation_history ADD COLUMN cleanup_ms REAL;", database: database)
+            }
 
             try execute(
                 """
@@ -84,12 +96,18 @@ final class PersistenceStore {
         logger.info("SQLite store ready at \(self.databaseURL.path(percentEncoded: false), privacy: .public)")
     }
 
-    func recordDictation(startedAt: Date, durationSeconds: Double, sampleCount: Int) throws {
+    func recordDictation(
+        startedAt: Date,
+        durationSeconds: Double,
+        sampleCount: Int,
+        decodeMilliseconds: Double? = nil,
+        cleanupMilliseconds: Double? = nil
+    ) throws {
         try withConnection { database in
             var statement: OpaquePointer?
             let prepareResult = sqlite3_prepare_v2(
                 database,
-                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count) VALUES (?, ?, ?);",
+                "INSERT INTO dictation_history(started_at, duration_seconds, sample_count, decode_ms, cleanup_ms) VALUES (?, ?, ?, ?, ?);",
                 -1,
                 &statement,
                 nil)
@@ -106,6 +124,16 @@ final class PersistenceStore {
             sqlite3_bind_text(statement, 1, startedAtText, -1, SQLITE_TRANSIENT)
             sqlite3_bind_double(statement, 2, durationSeconds)
             sqlite3_bind_int64(statement, 3, sqlite3_int64(sampleCount))
+            if let decodeMilliseconds {
+                sqlite3_bind_double(statement, 4, decodeMilliseconds)
+            } else {
+                sqlite3_bind_null(statement, 4)
+            }
+            if let cleanupMilliseconds {
+                sqlite3_bind_double(statement, 5, cleanupMilliseconds)
+            } else {
+                sqlite3_bind_null(statement, 5)
+            }
 
             guard sqlite3_step(statement) == SQLITE_DONE else {
                 throw PersistenceError.sqlite(message: sqliteMessage(from: database))
@@ -115,6 +143,83 @@ final class PersistenceStore {
         let startedAtText = iso8601Formatter.string(from: startedAt)
         logger.info(
             "Saved dictation history row for \(startedAtText, privacy: .public) with \(sampleCount) samples.")
+    }
+
+    /// Fetches dictation history rows for the Diagnostics panel (`DictationStats`). Rows with a
+    /// null decode/cleanup time (older schema, or a run before this feature existed) surface as
+    /// `nil`, matching the Windows `HistoryEntry` shape.
+    func fetchDictationHistory() throws -> [DictationHistoryRecord] {
+        var records: [DictationHistoryRecord] = []
+
+        try withConnection { database in
+            var statement: OpaquePointer?
+            let prepareResult = sqlite3_prepare_v2(
+                database,
+                "SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms FROM dictation_history ORDER BY id ASC;",
+                -1,
+                &statement,
+                nil)
+
+            guard prepareResult == SQLITE_OK, let statement else {
+                throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+            }
+
+            defer {
+                sqlite3_finalize(statement)
+            }
+
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let startedAtCString = sqlite3_column_text(statement, 0) else {
+                    continue
+                }
+                let startedAtText = String(cString: startedAtCString)
+                guard let startedAt = iso8601Formatter.date(from: startedAtText) else {
+                    continue
+                }
+
+                let durationSeconds = sqlite3_column_double(statement, 1)
+                let sampleCount = Int(sqlite3_column_int64(statement, 2))
+                let decodeMs: Double? = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_double(statement, 3)
+                let cleanupMs: Double? = sqlite3_column_type(statement, 4) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_double(statement, 4)
+
+                records.append(
+                    DictationHistoryRecord(
+                        startedAt: startedAt,
+                        durationSeconds: durationSeconds,
+                        sampleCount: sampleCount,
+                        decodeMilliseconds: decodeMs,
+                        cleanupMilliseconds: cleanupMs))
+            }
+        }
+
+        return records
+    }
+
+    /// Returns the column names currently present on `table`, used to add missing columns to an
+    /// existing SQLite database without a destructive migration (SQLite lacks
+    /// `ADD COLUMN IF NOT EXISTS`).
+    private func tableColumns(_ table: String, database: OpaquePointer?) throws -> Set<String> {
+        var columns: Set<String> = []
+        var statement: OpaquePointer?
+        let prepareResult = sqlite3_prepare_v2(database, "PRAGMA table_info(\(table));", -1, &statement, nil)
+        guard prepareResult == SQLITE_OK, let statement else {
+            throw PersistenceError.sqlite(message: sqliteMessage(from: database))
+        }
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let nameCString = sqlite3_column_text(statement, 1) {
+                columns.insert(String(cString: nameCString))
+            }
+        }
+
+        return columns
     }
 
     // MARK: - Dictionary entries
