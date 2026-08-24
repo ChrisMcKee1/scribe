@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import OSLog
 
 struct AudioLevelMeasurement {
@@ -182,6 +182,14 @@ final class AudioCaptureEngine {
         using converter: AVAudioConverter,
         outputFormat: AVAudioFormat
     ) throws -> [AVAudioPCMBuffer] {
+        // NOTE: AVAudioConverter's simple `convert(to:from:)` overload enforces
+        // `outputBuffer.frameCapacity >= inputBuffer.frameLength` even when downsampling makes
+        // that requirement nonsensical (e.g. 48kHz -> 16kHz halves the frame count), and throws
+        // an uncaught Objective-C exception (not a Swift `Error`) when violated, crashing the
+        // process. The block-based `convert(to:error:withInputFrom:)` overload is the API Apple
+        // documents for real-time sample-rate conversion and has no such capacity constraint;
+        // it pulls exactly one input buffer via the callback and lets the converter size its own
+        // internal buffering.
         let ratio = outputFormat.sampleRate / inputBuffer.format.sampleRate
         let capacity = max(1, Int(ceil(Double(inputBuffer.frameLength) * ratio)) + 32)
         guard let outputBuffer = AVAudioPCMBuffer(
@@ -190,7 +198,31 @@ final class AudioCaptureEngine {
             throw AudioCaptureEngineError.converterInitializationFailed
         }
 
-        try converter.convert(to: outputBuffer, from: inputBuffer)
+        // Boxed in a reference type (rather than a captured `var`) because the input-provider
+        // closure runs synchronously on this same call stack, but the compiler cannot see that
+        // and otherwise flags a Sendable capture warning; this keeps the build warning-clean.
+        final class ConsumedFlag: @unchecked Sendable {
+            var value = false
+        }
+        let consumed = ConsumedFlag()
+        var conversionError: NSError?
+        let status = converter.convert(to: outputBuffer, error: &conversionError) { _, inputStatus in
+            if consumed.value {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            consumed.value = true
+            inputStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        if let conversionError {
+            throw conversionError
+        }
+        guard status != .error else {
+            throw AudioCaptureEngineError.converterInitializationFailed
+        }
+
         return outputBuffer.frameLength > 0 ? [outputBuffer] : []
     }
 

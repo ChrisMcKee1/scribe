@@ -48,11 +48,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// on hotkey release and must never be preempted by a silence auto-stop.
     private var silenceAutoStopDetector: SilenceAutoStopDetector?
     private static let hasCompletedFirstRunDefaultsKey = "ScribeHasCompletedFirstRun"
+    private static let aiCleanupEnabledDefaultsKey = "ScribeAiCleanupEnabled"
+    private static let isPausedDefaultsKey = "ScribeIsPaused"
+    private var pauseMenuItem: NSMenuItem?
+    private var aiCleanupMenuItem: NSMenuItem?
+    /// Persisted user intent for AI cleanup. Mirrors Windows' `AppSettings.EnableAiCleanup`, but
+    /// macOS has no general settings/preferences table yet (cleanup provider selection is still
+    /// env-var driven; see CleanupProviderResolver), so this is a UserDefaults stopgap consistent
+    /// with the overlay-anchor and first-run patterns. NOTE: AI cleanup itself is not yet wired
+    /// into the live dictation pipeline (only reachable via `--cleanup-text`), so this toggle
+    /// currently only records intent for when that wiring lands; it does not yet change live
+    /// dictation output.
+    private var isAiCleanupEnabled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
         initializePersistenceStore()
         loadOverlayAnchorPreference()
+        loadQuickTogglePreferences()
         setUpStatusItem()
         promptForAccessibilityAccess()
         requestMicrophoneAccessIfNeeded()
@@ -68,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func startTestDictation(_ sender: Any?) {
         if audioCaptureEngine.isCapturing {
             stopActiveCapture(source: .menu)
+        } else if hotkeyManager.isPaused {
+            Self.writeLogLine("Ignoring Start Test Dictation while paused.")
         } else {
             startCapture()
         }
@@ -107,9 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
             button.toolTip = "Scribe"
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Scribe")
+            let symbolName = hotkeyManager.isPaused ? "mic.slash.fill" : "mic.fill"
+            button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Scribe")
             if button.image == nil {
-                button.title = "Scribe"
+                button.title = hotkeyManager.isPaused ? "Scribe (paused)" : "Scribe"
             }
         }
 
@@ -119,6 +135,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
         menu.addItem(overlayPositionMenuItem())
+        menu.addItem(.separator())
+        let aiCleanupItem = NSMenuItem(title: "AI Cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
+        aiCleanupItem.state = isAiCleanupEnabled ? .on : .off
+        menu.addItem(aiCleanupItem)
+        let pauseItem = NSMenuItem(title: "Pause Dictation", action: #selector(togglePaused(_:)), keyEquivalent: "")
+        pauseItem.state = hotkeyManager.isPaused ? .on : .off
+        menu.addItem(pauseItem)
         menu.addItem(.separator())
         let recentItem = NSMenuItem(title: "Recent Dictations", action: nil, keyEquivalent: "")
         recentItem.submenu = NSMenu()
@@ -135,6 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
         dictationMenuItem = dictationItem
         recentDictationsMenuItem = recentItem
+        aiCleanupMenuItem = aiCleanupItem
+        pauseMenuItem = pauseItem
     }
 
     /// Builds the "Overlay Position" submenu: a 9-anchor picker mirroring Windows' overlay
@@ -379,6 +404,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlayPanelController.anchor = anchor
         UserDefaults.standard.set(anchor.rawValue, forKey: Self.overlayAnchorDefaultsKey)
         Self.writeLogLine("Overlay position set to \(anchor.displayName).")
+    }
+
+    // MARK: - Tray quick toggles: AI cleanup, pause
+
+    private func loadQuickTogglePreferences() {
+        isAiCleanupEnabled = UserDefaults.standard.bool(forKey: Self.aiCleanupEnabledDefaultsKey)
+        hotkeyManager.isPaused = UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey)
+    }
+
+    @objc private func toggleAiCleanup(_ sender: NSMenuItem) {
+        isAiCleanupEnabled.toggle()
+        UserDefaults.standard.set(isAiCleanupEnabled, forKey: Self.aiCleanupEnabledDefaultsKey)
+        sender.state = isAiCleanupEnabled ? .on : .off
+        Self.writeLogLine("AI cleanup \(isAiCleanupEnabled ? "enabled" : "disabled") from the tray.")
+    }
+
+    /// Mirrors Windows' `DictationController.SetPaused`: stops an in-flight capture immediately
+    /// if one is running, then blocks new hotkey-triggered captures until resumed. The event tap
+    /// itself stays installed the whole time.
+    @objc private func togglePaused(_ sender: NSMenuItem) {
+        let paused = !hotkeyManager.isPaused
+        hotkeyManager.isPaused = paused
+        UserDefaults.standard.set(paused, forKey: Self.isPausedDefaultsKey)
+        sender.state = paused ? .on : .off
+        updateStatusIcon(paused: paused)
+
+        if paused, audioCaptureEngine.isCapturing {
+            stopActiveCapture(source: .menu)
+        }
+
+        Self.writeLogLine("Dictation \(paused ? "paused" : "resumed") from the tray.")
+    }
+
+    private func updateStatusIcon(paused: Bool) {
+        guard let button = statusItem?.button else { return }
+        let symbolName = paused ? "mic.slash.fill" : "mic.fill"
+        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Scribe")
+        if button.image == nil {
+            button.title = paused ? "Scribe (paused)" : "Scribe"
+        }
+        button.toolTip = paused ? "Scribe: paused" : "Scribe"
     }
 
     private func reloadPostProcessorRules() {

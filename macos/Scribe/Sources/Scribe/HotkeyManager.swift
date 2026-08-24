@@ -15,6 +15,11 @@ final class HotkeyManager {
     private var runLoopSource: CFRunLoopSource?
     private var isPushToTalkHeld = false
 
+    /// Mirrors Windows' `DictationController.IsPaused`: the hook stays installed, but a hotkey
+    /// press is ignored while paused rather than removing the event tap outright, so resuming
+    /// never requires re-granting Input Monitoring.
+    var isPaused = false
+
     var onCaptureStarted: (() -> Void)?
     var onCaptureStopped: ((AudioCaptureSummary?) -> Void)?
     var onCaptureStartError: ((AudioCaptureEngineError) -> Void)?
@@ -172,6 +177,10 @@ final class HotkeyManager {
 
     private func beginPushToTalk() {
         guard !isPushToTalkHeld else {
+            return
+        }
+        guard !isPaused else {
+            logSink("Push-to-talk pressed while paused; ignoring.")
             return
         }
 
