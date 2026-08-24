@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import OSLog
 import SwiftUI
+@preconcurrency import UserNotifications
 
 if CommandLineTranscriptionTool.runIfRequested() {
     exit(EXIT_SUCCESS)
@@ -15,7 +16,7 @@ application.delegate = delegate
 application.run()
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     private enum CaptureStopSource {
         case menu
         case hotkey
@@ -67,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
+        configureNotifications()
         promptForAccessibilityAccess()
         requestMicrophoneAccessIfNeeded()
         configureHotkeyManager()
@@ -582,12 +584,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Self.writeLogLine(message)
             showFailedThenHideOverlay()
             presentErrorAlert(title: "Accessibility Access Needed", message: message)
+            postInjectionFailureNotification()
         case .noFocusedElement:
             let message = "Scribe could not find a focused text field in the frontmost app to inject into."
             Self.writeLogLine(message)
             showFailedThenHideOverlay()
             presentErrorAlert(title: "No Focused Text Field", message: message)
+            postInjectionFailureNotification()
         }
+    }
+
+    // MARK: - Injection failure recovery notification
+
+    private static let injectionFailureCategoryIdentifier = "com.scribe.macos.injectionFailure"
+    private static let copyTranscriptActionIdentifier = "com.scribe.macos.copyTranscript"
+
+    /// Registers the notification category/action once at launch. Best-effort like Windows'
+    /// balloon: authorization is requested but never blocks startup, and every downstream call
+    /// tolerates a denial by silently doing nothing (the modal NSAlert already told the user).
+    private func configureNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+
+        let copyAction = UNNotificationAction(
+            identifier: Self.copyTranscriptActionIdentifier,
+            title: "Copy Transcript",
+            options: [])
+        let category = UNNotificationCategory(
+            identifier: Self.injectionFailureCategoryIdentifier,
+            actions: [copyAction],
+            intentIdentifiers: [],
+            options: [])
+        center.setNotificationCategories([category])
+
+        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error {
+                AppDelegate.writeLogLine("Notification authorization request failed: \(error.localizedDescription)")
+            } else if !granted {
+                AppDelegate.writeLogLine("Notification authorization was denied; injection-failure recovery notifications will not be shown.")
+            }
+        }
+    }
+
+    /// Mirrors Windows' `_controller.InjectionFailed` tray balloon: the failed dictation already
+    /// survives in `lastTranscriptStore` (set before injection is attempted), so this notification
+    /// closes the loop by telling the user it can still be recovered, with a one-tap "Copy
+    /// Transcript" action wired to the same store. Best-effort: any failure here must never
+    /// propagate back into the dictation pipeline.
+    private func postInjectionFailureNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Dictation could not be inserted"
+        content.body = "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it."
+        content.categoryIdentifier = Self.injectionFailureCategoryIdentifier
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil)
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                AppDelegate.writeLogLine("Failed to show the injection recovery notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        if response.actionIdentifier == Self.copyTranscriptActionIdentifier,
+           let transcript = lastTranscriptStore.get() {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(transcript, forType: .string)
+            Self.writeLogLine("Copied the failed dictation from the recovery notification.")
+        }
+        completionHandler()
     }
 
     /// Briefly flashes the pill's failed state (mirrors Windows' overlay `Failed` state) before
