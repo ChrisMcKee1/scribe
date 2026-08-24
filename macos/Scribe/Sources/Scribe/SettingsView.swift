@@ -21,6 +21,8 @@ struct SettingsView: View {
                 .tabItem { Label("App Profiles", systemImage: "app.badge") }
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
                 .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
+            AboutView(persistenceStore: persistenceStore)
+                .tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding(20)
         .frame(minWidth: 560, minHeight: 420)
