@@ -295,6 +295,20 @@ final class PersistenceStore {
         }
     }
 
+    /// Full-row update used by CSV import merges, where an existing entry's replacement,
+    /// whole-word flag, or enabled state changed but its id and pattern are kept.
+    func updateDictionaryEntry(_ entry: DictionaryEntry) throws {
+        try executeStatement(
+            "UPDATE dictionary_entries SET pattern = ?, replacement = ?, whole_word = ?, enabled = ? WHERE id = ?;"
+        ) { statement in
+            sqlite3_bind_text(statement, 1, entry.pattern, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(statement, 2, entry.replacement, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(statement, 3, entry.wholeWord ? 1 : 0)
+            sqlite3_bind_int(statement, 4, entry.enabled ? 1 : 0)
+            sqlite3_bind_int64(statement, 5, entry.id)
+        }
+    }
+
     func deleteDictionaryEntry(id: Int64) throws {
         try executeStatement("DELETE FROM dictionary_entries WHERE id = ?;") { statement in
             sqlite3_bind_int64(statement, 1, id)

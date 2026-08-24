@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Full Settings window replacing the earlier static scaffold text. Tabs mirror the feature areas
 /// already implemented: overlay position, dictionary, snippets, and per-app profiles. Backed
@@ -78,6 +80,7 @@ private struct DictionarySettingsTab: View {
     @State private var newPattern = ""
     @State private var newReplacement = ""
     @State private var errorMessage: String?
+    @State private var statusMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -92,8 +95,19 @@ private struct DictionarySettingsTab: View {
                         || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
+            HStack {
+                Button("Import CSV\u{2026}", action: importCsv)
+                Button("Export CSV\u{2026}", action: exportCsv)
+                    .disabled(entries.isEmpty)
+                Button("Get Template\u{2026}", action: saveTemplate)
+                Spacer()
+            }
+
             if let errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
+            }
+            if let statusMessage {
+                Text(statusMessage).foregroundStyle(.secondary).font(.caption)
             }
 
             List {
@@ -164,6 +178,99 @@ private struct DictionarySettingsTab: View {
             onChanged()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - CSV import/export
+
+    private func importCsv() {
+        errorMessage = nil
+        statusMessage = nil
+
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .plainText]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a dictionary CSV file to import."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let csv = try String(contentsOf: url, encoding: .utf8)
+            let result = DictionaryCsv.parse(csv)
+
+            let existingRows = entries.enumerated().map { index, entry in
+                DictionaryImportMerger.ExistingRow(
+                    index: index,
+                    id: entry.id,
+                    pattern: entry.pattern,
+                    replacement: entry.replacement,
+                    wholeWord: entry.wholeWord,
+                    enabled: entry.enabled)
+            }
+            let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
+
+            for operation in plan.operations {
+                switch operation.kind {
+                case .add:
+                    _ = try persistenceStore.insertDictionaryEntry(operation.entry)
+                case .update:
+                    try persistenceStore.updateDictionaryEntry(operation.entry)
+                }
+            }
+
+            reload()
+            onChanged()
+
+            var summary = "Imported: \(plan.added) added, \(plan.updated) updated, \(plan.unchanged) unchanged."
+            if !result.errors.isEmpty {
+                summary += " \(result.errors.count) row(s) skipped: \(result.errors.joined(separator: "; "))"
+            }
+            statusMessage = summary
+        } catch {
+            errorMessage = "Couldn't import that file: \(error.localizedDescription)"
+        }
+    }
+
+    private func exportCsv() {
+        errorMessage = nil
+        statusMessage = nil
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "scribe-dictionary.csv"
+        panel.message = "Choose where to save the exported dictionary."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            let csv = DictionaryCsv.export(entries)
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            statusMessage = "Exported \(entries.count) entr\(entries.count == 1 ? "y" : "ies") to \(url.lastPathComponent)."
+        } catch {
+            errorMessage = "Couldn't export the dictionary: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveTemplate() {
+        errorMessage = nil
+        statusMessage = nil
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "scribe-dictionary-template.csv"
+        panel.message = "Choose where to save the dictionary import template."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+
+        do {
+            try DictionaryCsv.template.write(to: url, atomically: true, encoding: .utf8)
+            statusMessage = "Saved the template to \(url.lastPathComponent)."
+        } catch {
+            errorMessage = "Couldn't save the template: \(error.localizedDescription)"
         }
     }
 }
