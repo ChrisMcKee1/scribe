@@ -42,8 +42,15 @@ final class TextPostProcessor {
     private var dictionaryEntries: [DictionaryEntry] = []
     private var snippets: [Snippet] = []
 
-    func reload(dictionaryEntries: [DictionaryEntry], snippets: [Snippet]) {
-        self.dictionaryEntries = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
+    /// - Parameter libraryEntries: enabled entries from any switched-on dictionary libraries
+    ///   (see `DictionaryLibraryService`), already filtered to `enabled`. Merged behind the base
+    ///   dictionary so a user's own entry always wins over a library's for the same spoken form.
+    ///   Mirrors Windows' `DictionaryLibraryComposer.Merge` usage in `TextPostProcessor.Reload`.
+    func reload(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry] = []) {
+        let base = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
+        self.dictionaryEntries = libraryEntries.isEmpty
+            ? base
+            : DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: libraryEntries)
         self.snippets = snippets.filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
     }
 

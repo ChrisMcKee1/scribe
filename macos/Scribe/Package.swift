@@ -12,7 +12,10 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Scribe",
-            path: "Sources/Scribe"
+            path: "Sources/Scribe",
+            resources: [
+                .copy("Resources/Libraries")
+            ]
         ),
         .testTarget(
             name: "ScribeTests",

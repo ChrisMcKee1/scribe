@@ -12,6 +12,10 @@ struct AboutView: View {
     private static let privacyPolicyURL = URL(string: "https://github.com/x3nc0n/scribe/blob/main/PRIVACY.md")!
     private static let newIssueURL = URL(string: "https://github.com/x3nc0n/scribe/issues/new")!
 
+    @State private var updateChecker = UpdateChecker()
+    @State private var updateCheckResult: UpdateCheckResult?
+    @State private var isCheckingForUpdate = false
+
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
     }
@@ -20,6 +24,7 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerCard
+                updateCard
                 privacyCard
                 starCard
                 supportCard
@@ -50,6 +55,58 @@ struct AboutView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+            }
+        }
+    }
+
+    private var updateCard: some View {
+        card {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Updates")
+                        .font(.headline)
+                    Text(updateStatusText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 8) {
+                    Button(isCheckingForUpdate ? "Checking..." : "Check for Updates") {
+                        checkForUpdate()
+                    }
+                    .disabled(isCheckingForUpdate)
+                    if case .updateAvailable(_, _, let url) = updateCheckResult {
+                        Button("Download latest") {
+                            NSWorkspace.shared.open(url)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+        }
+    }
+
+    private var updateStatusText: String {
+        switch updateCheckResult {
+        case .none:
+            return "Scribe has no auto-updater yet; check GitHub Releases manually for a newer version."
+        case .upToDate(let current):
+            return "You're up to date (version \(current))."
+        case .updateAvailable(let current, let latest, _):
+            return "Version \(latest) is available (you have \(current))."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    private func checkForUpdate() {
+        isCheckingForUpdate = true
+        let version = appVersion
+        Task {
+            let result = await updateChecker.checkForUpdate(currentVersion: version)
+            await MainActor.run {
+                updateCheckResult = result
+                isCheckingForUpdate = false
             }
         }
     }

@@ -1,0 +1,202 @@
+# name: Software Development
+# category: Software Development
+# description: Everyday developer acronyms, tools, languages, and formats with the spelling devs expect.
+pattern,replacement
+#
+# --- Tools and platforms ---
+github,GitHub
+git hub,GitHub
+gitlab,GitLab
+bitbucket,Bitbucket
+nuget,NuGet
+npm,npm
+pnpm,pnpm
+docker,Docker
+docker compose,Docker Compose
+kubernetes,Kubernetes
+k8s,K8s
+kubectl,kubectl
+kube control,kubectl
+cube control,kubectl
+terraform,Terraform
+ansible,Ansible
+helm,Helm
+kustomize,Kustomize
+argo cd,Argo CD
+gitops,GitOps
+devops,DevOps
+dev sec ops,DevSecOps
+jenkins,Jenkins
+github actions,GitHub Actions
+azure devops,Azure DevOps
+circle ci,CircleCI
+buildkite,Buildkite
+webpack,webpack
+vite,Vite
+msbuild,MSBuild
+gradle,Gradle
+maven,Maven
+#
+# --- Languages and runtimes ---
+typescript,TypeScript
+type script,TypeScript
+javascript,JavaScript
+java script,JavaScript
+python,Python
+golang,Go
+go language,Go
+c sharp,C#
+c plus plus,C++
+node js,Node.js
+nodejs,Node.js
+dot net,.NET
+ruby language,Ruby
+php language,PHP
+kotlin,Kotlin
+swift language,Swift language
+rust language,Rust language
+scala,Scala
+dart language,Dart
+r language,R
+bash shell,Bash
+power shell,PowerShell
+powershell,PowerShell
+#
+# --- Databases ---
+postgresql,PostgreSQL
+postgres,PostgreSQL
+post gres,PostgreSQL
+mysql,MySQL
+my sql,MySQL
+mongodb,MongoDB
+mongo db,MongoDB
+sqlite,SQLite
+redis,Redis
+sql server,SQL Server
+maria db,MariaDB
+mariadb,MariaDB
+dynamo db,DynamoDB
+dynamodb,DynamoDB
+cockroach db,CockroachDB
+elastic search,Elasticsearch
+elasticsearch,Elasticsearch
+open search,OpenSearch
+opensearch,OpenSearch
+neo 4 j,Neo4j
+neo4j,Neo4j
+#
+# --- Web and data formats ---
+json,JSON
+yaml,YAML
+yml,YAML
+xml,XML
+html,HTML
+css,CSS
+scss,SCSS
+graphql,GraphQL
+graph ql,GraphQL
+markdown,Markdown
+toml,TOML
+hcl,HCL
+bson,BSON
+json schema,JSON Schema
+json lines,JSON Lines
+jsonl,JSONL
+ndjson,NDJSON
+utf 8,UTF-8
+ascii,ASCII
+uuid,UUID
+mime,MIME
+open api,OpenAPI
+openapi,OpenAPI
+#
+# --- Core acronyms ---
+api,API
+a p i,API
+apis,APIs
+sdk,SDK
+s d k,SDK
+cli,CLI
+c l i,CLI
+ide,IDE
+gui,GUI
+url,URL
+u r l,URL
+uri,URI
+http,HTTP
+https,HTTPS
+rest,REST
+restful,RESTful
+grpc,gRPC
+oauth,OAuth
+o auth,OAuth
+oauth 2,OAuth 2.0
+jwt,JWT
+crud,CRUD
+orm,ORM
+mvc,MVC
+mvvm,MVVM
+dto,DTO
+abi,ABI
+aot,AOT
+jit,JIT
+gc,GC
+dom,DOM
+web socket,WebSocket
+web sockets,WebSockets
+websocket,WebSocket
+#
+# --- Practices ---
+ci cd,CI/CD
+c i c d,CI/CD
+tdd,TDD
+bdd,BDD
+oop,OOP
+saas,SaaS
+paas,PaaS
+iaas,IaaS
+i a c,IaC
+sre,SRE
+s d l c,SDLC
+sdlc,SDLC
+domain driven design,domain-driven design
+ddd,DDD
+cqrs,CQRS
+solid principles,SOLID principles
+s o l i d,SOLID
+#
+# --- Networking and security ---
+ssh,SSH
+tcp,TCP
+udp,UDP
+dns,DNS
+tls,TLS
+ssl,SSL
+vpn,VPN
+cdn,CDN
+cors,CORS
+csrf,CSRF
+xss,XSS
+oidc,OIDC
+open id connect,OpenID Connect
+saml,SAML
+scim,SCIM
+iam,IAM
+acl,ACL
+pki,PKI
+mtls,mTLS
+hmac,HMAC
+rbac,RBAC
+abac,ABAC
+rebac,ReBAC
+#
+# --- Interface and hardware ---
+ux,UX
+ui,UI
+cpu,CPU
+gpu,GPU
+ssd,SSD
+iot,IoT
+i o t,IoT
+arm 64,ARM64
+x 64,x64

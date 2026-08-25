@@ -1,9 +1,11 @@
 import Foundation
 
-/// Resolves which CleanupProvider to use. Env-var driven for now (SCRIBE_CLEANUP_PROVIDER =
-/// "foundry-local" | "ollama" | "openai-compatible"), the same stopgap pattern TranscriptionEngine
-/// uses for ASR backend selection, since the Settings UI (macos-overlay-ui todo) doesn't exist yet
-/// in this port. Defaults to Foundry Local, matching the recommendation in PORTING-PLAN.md.
+/// Resolves which CleanupProvider to use. `SCRIBE_CLEANUP_PROVIDER` and its related environment
+/// variables take priority when set, preserving the original CLI/scripted-usage contract
+/// (`--cleanup-text`, the offline eval harness) unchanged. Once no such environment variable is
+/// present, resolution falls through to `CleanupSettingsStore`, which is what the Settings
+/// window's "AI Cleanup" tab writes to, so a user can configure everything from the GUI without
+/// ever touching an environment variable.
 enum CleanupProviderResolver {
     /// Keychain service name for the Microsoft Foundry service-principal client secret; the account
     /// is the client id itself, so switching Entra app registrations never reads a stale secret.
@@ -27,9 +29,29 @@ enum CleanupProviderResolver {
     /// for a one-shot command-line invocation.
     static func tryResolveDefaultProvider() throws -> CleanupProvider {
         let environment = ProcessInfo.processInfo.environment
-        switch environment["SCRIBE_CLEANUP_PROVIDER"] {
+        if let envProviderName = environment["SCRIBE_CLEANUP_PROVIDER"] {
+            return try resolveFromEnvironment(envProviderName, environment: environment)
+        }
+        return try resolveFromSettings()
+    }
+
+    /// Configuration via environment variables (legacy/scripted path):
+    ///
+    /// - `SCRIBE_CLEANUP_PROVIDER`: "foundry-local" (default) | "ollama" | "openai-compatible" | "microsoft-foundry"
+    /// - `SCRIBE_FOUNDRY_CLEANUP_MODEL`, `SCRIBE_OLLAMA_MODEL`: model overrides for the two managed local providers
+    /// - `SCRIBE_CLEANUP_BASE_URL`, `SCRIBE_CLEANUP_MODEL`, `SCRIBE_CLEANUP_API_KEY`: openai-compatible config
+    /// - `SCRIBE_AZURE_FOUNDRY_ENDPOINT`, `SCRIBE_AZURE_FOUNDRY_DEPLOYMENT`, `SCRIBE_AZURE_AUTH_MODE`,
+    ///   `SCRIBE_AZURE_TENANT_ID`, `SCRIBE_AZURE_CLIENT_ID`: microsoft-foundry config (secret via Keychain, see below)
+    private static func resolveFromEnvironment(_ providerName: String, environment: [String: String]) throws -> CleanupProvider {
+        switch providerName {
         case "microsoft-foundry":
-            return try resolveMicrosoftFoundryProviderThrowing(environment: environment)
+            return try resolveMicrosoftFoundryProviderThrowing(
+                endpointString: environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
+                deployment: environment["SCRIBE_AZURE_FOUNDRY_DEPLOYMENT"],
+                useServicePrincipal: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal",
+                tenantId: environment["SCRIBE_AZURE_TENANT_ID"],
+                clientId: environment["SCRIBE_AZURE_CLIENT_ID"],
+                notConfiguredHint: "'Scribe --set-azure-client-secret <client-id>'")
         case "ollama":
             let model = environment["SCRIBE_OLLAMA_MODEL"] ?? "qwen2.5:3b"
             return ManagedOllamaCleanupProvider(model: model)
@@ -54,34 +76,65 @@ enum CleanupProviderResolver {
         }
     }
 
-    /// Configuration for `SCRIBE_CLEANUP_PROVIDER=microsoft-foundry`:
-    ///
-    /// - `SCRIBE_AZURE_FOUNDRY_ENDPOINT` (required): e.g. `https://my-resource.cognitiveservices.azure.com`
-    /// - `SCRIBE_AZURE_FOUNDRY_DEPLOYMENT` (required): the deployed model name
-    /// - `SCRIBE_AZURE_AUTH_MODE`: "cli" (default) or "service-principal"
-    /// - `SCRIBE_AZURE_TENANT_ID`: required for service-principal; optional hint for `az` CLI mode
-    /// - `SCRIBE_AZURE_CLIENT_ID`: required for service-principal; also the Keychain lookup key for
-    ///   the secret, which is set out of band via `Scribe --set-azure-client-secret <client-id>`
-    ///   (never via an environment variable, per AGENTS.md).
-    private static func resolveMicrosoftFoundryProviderThrowing(environment: [String: String]) throws -> CleanupProvider {
+    /// Builds a provider from the Settings window's AI Cleanup tab (`CleanupSettingsStore`), used
+    /// whenever no `SCRIBE_CLEANUP_PROVIDER` environment variable is set.
+    private static func resolveFromSettings() throws -> CleanupProvider {
+        switch CleanupSettingsStore.providerKind {
+        case .foundryLocal:
+            return FoundryLocalCleanupProvider(modelAlias: CleanupSettingsStore.foundryLocalModelAlias)
+        case .ollama:
+            return ManagedOllamaCleanupProvider(model: CleanupSettingsStore.ollamaModel)
+        case .openAICompatible:
+            guard
+                !CleanupSettingsStore.openAIBaseURL.isEmpty,
+                let baseURL = URL(string: CleanupSettingsStore.openAIBaseURL),
+                !CleanupSettingsStore.openAIModel.isEmpty
+            else {
+                throw CleanupProviderError.notConfigured(
+                    "Set the endpoint URL and model for the OpenAI-compatible provider in Settings > AI Cleanup.")
+            }
+            return OpenAICompatibleCleanupProvider(
+                id: "openai-compatible",
+                displayName: "OpenAI-compatible endpoint",
+                model: CleanupSettingsStore.openAIModel,
+                apiKey: CleanupSettingsStore.openAIApiKey(),
+                baseURLProvider: { baseURL })
+        case .microsoftFoundry:
+            let clientId = CleanupSettingsStore.azureClientId
+            return try resolveMicrosoftFoundryProviderThrowing(
+                endpointString: CleanupSettingsStore.azureEndpoint,
+                deployment: CleanupSettingsStore.azureDeployment,
+                useServicePrincipal: CleanupSettingsStore.azureAuthMode == .servicePrincipal,
+                tenantId: CleanupSettingsStore.azureTenantId.isEmpty ? nil : CleanupSettingsStore.azureTenantId,
+                clientId: clientId.isEmpty ? nil : clientId,
+                notConfiguredHint: "Settings > AI Cleanup")
+        }
+    }
+
+    /// Shared by both the environment-variable and Settings-store resolution paths. The service
+    /// principal's secret always comes from Keychain (never an env var, a plist, or UserDefaults),
+    /// looked up by `clientId` regardless of which path supplied the id.
+    private static func resolveMicrosoftFoundryProviderThrowing(
+        endpointString: String?,
+        deployment: String?,
+        useServicePrincipal: Bool,
+        tenantId: String?,
+        clientId: String?,
+        notConfiguredHint: String
+    ) throws -> CleanupProvider {
         guard
-            let endpointString = environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
-            let endpoint = URL(string: endpointString),
-            let deployment = environment["SCRIBE_AZURE_FOUNDRY_DEPLOYMENT"]
+            let endpointString, !endpointString.isEmpty, let endpoint = URL(string: endpointString),
+            let deployment, !deployment.isEmpty
         else {
             throw CleanupProviderError.notConfigured(
-                "SCRIBE_CLEANUP_PROVIDER=microsoft-foundry requires SCRIBE_AZURE_FOUNDRY_ENDPOINT and SCRIBE_AZURE_FOUNDRY_DEPLOYMENT")
+                "Microsoft Foundry cleanup requires an endpoint and a deployment name (configure in \(notConfiguredHint)).")
         }
 
-        let authMode = AzureAuthMode(rawValue: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal" ? "servicePrincipal" : "azureCli")
-            ?? .azureCli
-        let tenantId = environment["SCRIBE_AZURE_TENANT_ID"]
-
         let credentialProvider: AzureCredentialProvider
-        switch authMode {
-        case .servicePrincipal:
-            guard let clientId = environment["SCRIBE_AZURE_CLIENT_ID"] else {
-                throw CleanupProviderError.notConfigured("SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_CLIENT_ID")
+        if useServicePrincipal {
+            guard let clientId, !clientId.isEmpty else {
+                throw CleanupProviderError.notConfigured(
+                    "Service-principal auth requires a client id (configure in \(notConfiguredHint)).")
             }
             let secret = try? KeychainStore.get(service: azureClientSecretKeychainService, account: clientId)
             guard
@@ -89,10 +142,10 @@ enum CleanupProviderResolver {
                     tenantId: tenantId, clientId: clientId, clientSecret: secret ?? nil)
             else {
                 throw CleanupProviderError.notConfigured(
-                    "SCRIBE_AZURE_AUTH_MODE=service-principal requires SCRIBE_AZURE_TENANT_ID, SCRIBE_AZURE_CLIENT_ID, and a secret saved via 'Scribe --set-azure-client-secret \(clientId)'")
+                    "Service-principal auth requires a tenant id, client id, and a saved client secret (configure in \(notConfiguredHint)).")
             }
             credentialProvider = AzureServicePrincipalCredentialProvider(principal: principal)
-        case .azureCli:
+        } else {
             credentialProvider = AzureCliCredentialProvider(tenantId: tenantId)
         }
 

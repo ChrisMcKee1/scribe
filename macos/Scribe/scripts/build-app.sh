@@ -8,12 +8,35 @@ APP_DIR="$PACKAGE_DIR/dist/Scribe.app"
 BIN_DIR="$(swift build --package-path "$PACKAGE_DIR" -c "$CONFIGURATION" --show-bin-path)"
 EXECUTABLE="$BIN_DIR/Scribe"
 
+# Single source of truth for the marketing version (mirrors the Windows build's
+# Directory.Build.props/<VersionPrefix> convention): one file, read here for the Info.plist and
+# by make-dmg.sh/notarize.sh for the DMG/artifact names, so nothing else needs editing to release
+# a new version.
+APP_VERSION="$(tr -d '[:space:]' < "$PACKAGE_DIR/VERSION")"
+# The build number must strictly increase across releases for macOS Gatekeeper/Sparkle-style
+# update checks to treat a new build as newer; the commit count is a simple, always-available,
+# monotonically increasing counter that needs no manual bookkeeping.
+if command -v git >/dev/null 2>&1 && BUILD_NUMBER="$(git -C "$PACKAGE_DIR" rev-list --count HEAD 2>/dev/null)" && [ -n "$BUILD_NUMBER" ]; then
+    :
+else
+    BUILD_NUMBER="1"
+fi
+
 swift build --package-path "$PACKAGE_DIR" -c "$CONFIGURATION"
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Scribe"
 chmod +x "$APP_DIR/Contents/MacOS/Scribe"
+
+# SwiftPM's resource-bundle accessor (`Bundle.module`) resolves relative to `Bundle.main.bundleURL`
+# at run time, which for an .app is the .app bundle's own root directory (NOT Contents/Resources;
+# `Bundle.main.bundleURL` is the whole "Scribe.app" folder). It carries the 11 built-in dictionary
+# library CSVs declared as `resources:` in Package.swift.
+RESOURCE_BUNDLE="$BIN_DIR/ScribeMac_Scribe.bundle"
+if [ -d "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$APP_DIR/"
+fi
 
 # Same brand mark as the Windows build (src/Scribe.App/Assets/scribe.ico) and the Store listing
 # (docs/icon.png), so the app icon doesn't drift between platforms.
@@ -25,7 +48,7 @@ fi
 # The app must call AXIsProcessTrustedWithOptions so System Settings can surface the prompt or link.
 # NSAppleEventsUsageDescription is not needed here because the injector uses Accessibility and
 # CGEvent keyboard synthesis, not Apple Events automation.
-cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -45,9 +68,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$BUILD_NUMBER</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -78,4 +101,4 @@ if command -v codesign >/dev/null 2>&1; then
     fi
 fi
 
-echo "Built app bundle: $APP_DIR"
+echo "Built app bundle: $APP_DIR (version $APP_VERSION, build $BUILD_NUMBER)"

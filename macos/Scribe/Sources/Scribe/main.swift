@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private lazy var textInjector = TextInjector(
         logSink: { message in AppDelegate.writeLogLine(message) })
     private let textPostProcessor = TextPostProcessor()
+    let dictionaryLibraryService = DictionaryLibraryService()
     private let lastTranscriptStore = LastTranscriptStore()
     let pipelineReportStore = PipelineReportStore()
     private var recentDictationsMenuItem: NSMenuItem?
@@ -53,22 +54,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// on hotkey release and must never be preempted by a silence auto-stop.
     private var silenceAutoStopDetector: SilenceAutoStopDetector?
     private static let hasCompletedFirstRunDefaultsKey = "ScribeHasCompletedFirstRun"
-    private static let aiCleanupEnabledDefaultsKey = "ScribeAiCleanupEnabled"
     private static let isPausedDefaultsKey = "ScribeIsPaused"
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
-    /// Persisted user intent for AI cleanup. Mirrors Windows' `AppSettings.EnableAiCleanup`, but
-    /// macOS has no general settings/preferences table yet (cleanup provider selection is still
-    /// env-var driven; see CleanupProviderResolver), so this is a UserDefaults stopgap consistent
-    /// with the overlay-anchor and first-run patterns. NOTE: AI cleanup itself is not yet wired
-    /// into the live dictation pipeline (only reachable via `--cleanup-text`), so this toggle
-    /// currently only records intent for when that wiring lands; it does not yet change live
-    /// dictation output.
-    private var isAiCleanupEnabled = false
+    /// Persisted user intent for AI cleanup. Mirrors Windows' `AppSettings.EnableAiCleanup`. Wired
+    /// into the live dictation pipeline in `transcribeAndInject`: when enabled, a provider is
+    /// resolved via `CleanupProviderResolver.tryResolveDefaultProvider()` (which itself checks
+    /// `CleanupSettingsStore`, i.e. the Settings window's "AI Cleanup" tab, or an env var override)
+    /// and its cleaned output is injected instead of the raw post-processed text, falling back to
+    /// the post-processed text on any resolution or request failure. A computed proxy over
+    /// `CleanupSettingsStore.isEnabled` rather than its own cached flag, so the tray checkbox and
+    /// the Settings tab's toggle always agree, however each one was last changed.
+    private var isAiCleanupEnabled: Bool {
+        get { CleanupSettingsStore.isEnabled }
+        set { CleanupSettingsStore.isEnabled = newValue }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
         initializePersistenceStore()
+        seedLastTranscriptStoreFromHistory()
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
@@ -107,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                     persistenceStore: persistenceStore,
                     overlayPanelController: overlayPanelController,
                     pipelineReportStore: pipelineReportStore,
+                    dictionaryLibraryService: dictionaryLibraryService,
                     onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() }))
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Scribe Settings"
@@ -127,17 +133,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Fills `lastTranscriptStore` from durable history on launch, so the "Recent Dictations" tray
+    /// submenu and the Quick Add popup both survive an app restart instead of starting empty, the
+    /// same as Windows' history-backed recovery fallback. `LastTranscriptStore.seed` only ever
+    /// fills an empty ring, so this is safe to call again defensively before Quick Add opens.
+    private func seedLastTranscriptStoreFromHistory() {
+        guard lastTranscriptStore.recent().isEmpty else {
+            return
+        }
+        if let history = try? persistenceStore.fetchDictationHistory() {
+            let texts = history.reversed().compactMap { $0.transcriptText }
+            lastTranscriptStore.seed(texts)
+        }
+    }
+
     /// Opens the quick "Add to Dictionary" popup, mirroring Windows' `ShowQuickAdd()`. Seeds
     /// `LastTranscriptStore` from durable history the first time the ring is empty (e.g. right
     /// after launch, before any dictation has happened this run), so the popup has real transcripts
     /// to pick a word from rather than an empty list.
     @objc private func openQuickAdd(_ sender: Any?) {
-        if lastTranscriptStore.recent().isEmpty {
-            if let history = try? persistenceStore.fetchDictationHistory() {
-                let texts = history.reversed().compactMap { $0.transcriptText }
-                lastTranscriptStore.seed(texts)
-            }
-        }
+        seedLastTranscriptStoreFromHistory()
 
         let recent = lastTranscriptStore.recent()
         let existing = (try? persistenceStore.fetchAllDictionaryEntries()) ?? []
@@ -283,8 +298,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     // MARK: - Recovery: recent dictations menu
 
     /// Fills the "Recent Dictations" submenu just before it opens, mirroring Windows'
-    /// `PopulateRecentDictations`. Runs on the UI thread via `NSMenuDelegate.menuWillOpen`.
+    /// `PopulateRecentDictations`. Also refreshes the "AI Cleanup" checkmark against
+    /// `CleanupSettingsStore` when the top-level tray menu itself opens, so a change made from the
+    /// Settings window's "AI Cleanup" tab is reflected even though this menu item's state isn't
+    /// otherwise bound to that store. Runs on the UI thread via `NSMenuDelegate.menuWillOpen`.
     func menuWillOpen(_ menu: NSMenu) {
+        if menu === statusItem?.menu {
+            aiCleanupMenuItem?.state = isAiCleanupEnabled ? .on : .off
+            return
+        }
         guard menu === recentDictationsMenuItem?.submenu else {
             return
         }
@@ -295,10 +317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         menu.removeAllItems()
 
         let recent = lastTranscriptStore.recent()
-        // NOTE: dictation_history does not yet store transcript text (only timing/duration), so
-        // there is no durable fallback to seed from on macOS today, unlike Windows' history-backed
-        // CopyLastDictation fallback. The ring only ever reflects the current run's dictations.
-        // Tracked as a follow-up alongside a text-retaining history schema change.
+        // Restart-safe: `seedLastTranscriptStoreFromHistory()` runs at launch, so `recent` reflects
+        // durable `dictation_history.transcript_text` rows even before any dictation happens this
+        // run, matching Windows' history-backed `CopyLastDictation` fallback.
 
         if recent.isEmpty {
             let placeholder = NSMenuItem(title: "No recent dictations", action: nil, keyEquivalent: "")
@@ -482,13 +503,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     // MARK: - Tray quick toggles: AI cleanup, pause
 
     private func loadQuickTogglePreferences() {
-        isAiCleanupEnabled = UserDefaults.standard.bool(forKey: Self.aiCleanupEnabledDefaultsKey)
         hotkeyManager.isPaused = UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey)
     }
 
     @objc private func toggleAiCleanup(_ sender: NSMenuItem) {
         isAiCleanupEnabled.toggle()
-        UserDefaults.standard.set(isAiCleanupEnabled, forKey: Self.aiCleanupEnabledDefaultsKey)
         sender.state = isAiCleanupEnabled ? .on : .off
         Self.writeLogLine("AI cleanup \(isAiCleanupEnabled ? "enabled" : "disabled") from the tray.")
     }
@@ -524,10 +543,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         do {
             let dictionaryEntries = try persistenceStore.fetchEnabledDictionaryEntries()
             let snippets = try persistenceStore.fetchEnabledSnippets()
-            textPostProcessor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets)
+            let libraryEntries = dictionaryLibraryService.enabledLibraryEntries()
+            textPostProcessor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets, libraryEntries: libraryEntries)
             appProfiles = try persistenceStore.fetchAppProfiles()
             Self.writeLogLine(
-                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies), \(snippets.count) snippet(s), and \(appProfiles.count) app profile(s).")
+                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies), \(libraryEntries.count) library entr(y/ies), \(snippets.count) snippet(s), and \(appProfiles.count) app profile(s).")
         } catch {
             Self.writeLogLine("Failed to load dictionary/snippets/profiles: \(error.localizedDescription)")
             logger.error("Failed to load dictionary/snippets/profiles: \(error.localizedDescription, privacy: .public)")
@@ -904,6 +924,8 @@ private enum CommandLineTranscriptionTool {
             return runDiagnostics(arguments: arguments)
         case "--set-azure-client-secret":
             return runSetAzureClientSecret(arguments: arguments)
+        case "--list-dictionary-libraries":
+            return runListDictionaryLibraries()
         default:
             return false
         }
@@ -1027,6 +1049,19 @@ private enum CommandLineTranscriptionTool {
             fputs("Post-process failed: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
+    }
+
+    /// Manual verification that the built-in dictionary library CSVs actually loaded from the app
+    /// bundle's resource bundle at run time (not just from `swift test`'s `.build` tree). Prints
+    /// each library's id, name, category, and entry count.
+    /// Usage: Scribe --list-dictionary-libraries
+    private static func runListDictionaryLibraries() -> Bool {
+        let libraries = BuiltInDictionaryLibraries.all
+        fputs("\(libraries.count) built-in dictionary librar(y/ies):\n", stdout)
+        for library in libraries {
+            fputs("  \(library.id): \(library.name) [\(library.category)] (\(library.entries.count) terms)\n", stdout)
+        }
+        return true
     }
 
     /// Manual verification for per-app profile resolution: seeds a couple of fixed profiles into

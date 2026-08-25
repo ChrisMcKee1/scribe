@@ -11,6 +11,7 @@ struct SettingsView: View {
     let persistenceStore: PersistenceStore
     let overlayPanelController: OverlayPanelController
     let pipelineReportStore: PipelineReportStore
+    let dictionaryLibraryService: DictionaryLibraryService
     let onProfilesOrRulesChanged: () -> Void
 
     var body: some View {
@@ -19,10 +20,14 @@ struct SettingsView: View {
                 .tabItem { Label("Overlay", systemImage: "rectangle.on.rectangle") }
             DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+            DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
+                .tabItem { Label("Libraries", systemImage: "books.vertical") }
             SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
                 .tabItem { Label("Snippets", systemImage: "text.append") }
             AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
                 .tabItem { Label("App Profiles", systemImage: "app.badge") }
+            CleanupSettingsTab()
+                .tabItem { Label("AI Cleanup", systemImage: "sparkles") }
             PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
                 .tabItem { Label("Playground", systemImage: "wand.and.rays") }
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
@@ -460,6 +465,139 @@ private struct DictionaryCleanupView: View {
     }
 }
 
+// MARK: - Dictionary Libraries tab
+
+private struct DictionaryLibrariesSettingsTab: View {
+    let dictionaryLibraryService: DictionaryLibraryService
+    let onChanged: () -> Void
+
+    @State private var libraries: [DictionaryLibrary] = []
+    @State private var enabledIds: Set<String> = []
+    @State private var errorMessage: String?
+    @State private var statusMessage: String?
+    @State private var showingImporter = false
+
+    private var groupedByCategory: [(category: String, libraries: [DictionaryLibrary])] {
+        var order: [String] = []
+        var byCategory: [String: [DictionaryLibrary]] = [:]
+        for library in libraries {
+            if byCategory[library.category] == nil {
+                order.append(library.category)
+            }
+            byCategory[library.category, default: []].append(library)
+        }
+        return order.map { ($0, byCategory[$0] ?? []) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Dictionary Libraries")
+                .font(.headline)
+            Text("Switch on ready-made glossaries to canonicalize domain vocabulary (Azure, GitHub, "
+                + "programming languages, and more) without typing every term yourself. Library entries "
+                + "never override your own dictionary.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Import Library CSV\u{2026}") { showingImporter = true }
+                Spacer()
+            }
+
+            if let errorMessage {
+                Text(errorMessage).foregroundStyle(.red).font(.caption)
+            }
+            if let statusMessage {
+                Text(statusMessage).foregroundStyle(.secondary).font(.caption)
+            }
+
+            List {
+                ForEach(groupedByCategory, id: \.category) { group in
+                    Section(group.category) {
+                        ForEach(group.libraries, id: \.id) { library in
+                            HStack(alignment: .top) {
+                                Toggle("", isOn: binding(for: library.id))
+                                    .labelsHidden()
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(library.name).font(.body)
+                                    if let description = library.description, !description.isEmpty {
+                                        Text(description).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Text("\(library.entries.count) term(s)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if !library.builtIn {
+                                    Button(role: .destructive) {
+                                        removeLibrary(library)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear(perform: reload)
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            importLibrary(result)
+        }
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { enabledIds.contains(id) },
+            set: { isOn in
+                DictionaryLibrarySettingsStore.setEnabled(isOn, id: id)
+                enabledIds = DictionaryLibrarySettingsStore.enabledLibraryIds
+                onChanged()
+            })
+    }
+
+    private func reload() {
+        libraries = dictionaryLibraryService.libraries()
+        enabledIds = DictionaryLibrarySettingsStore.enabledLibraryIds
+    }
+
+    private func importLibrary(_ result: Result<URL, Error>) {
+        errorMessage = nil
+        statusMessage = nil
+        switch result {
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        case .success(let url):
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let csv = try String(contentsOf: url, encoding: .utf8)
+                let library = try dictionaryLibraryService.import(
+                    csv: csv, suggestedName: url.deletingPathExtension().lastPathComponent)
+                statusMessage = "Imported \"\(library.name)\" (\(library.entries.count) term(s))."
+                reload()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func removeLibrary(_ library: DictionaryLibrary) {
+        errorMessage = nil
+        do {
+            try dictionaryLibraryService.remove(id: library.id)
+            statusMessage = "Removed \"\(library.name)\"."
+            reload()
+            onChanged()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
 // MARK: - Snippets tab
 
 private struct SnippetsSettingsTab: View {
@@ -667,6 +805,245 @@ private struct AppProfilesSettingsTab: View {
             onChanged()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - AI Cleanup tab
+
+/// Settings surface for AI cleanup: turning it on, picking a provider, and configuring that
+/// provider's connection details and credentials, replacing the original env-var-only
+/// configuration story. Reads and writes `CleanupSettingsStore` directly (no separate view-model
+/// layer, matching every other tab in this file); non-secret fields save on every change, while
+/// the two secret fields (OpenAI-compatible API key, Azure service-principal client secret) are
+/// explicit "Save"/"Clear" actions against Keychain so a partially-typed secret is never persisted.
+private struct CleanupSettingsTab: View {
+    @State private var isEnabled = CleanupSettingsStore.isEnabled
+    @State private var providerKind = CleanupSettingsStore.providerKind
+    @State private var foundryLocalModelAlias = CleanupSettingsStore.foundryLocalModelAlias
+    @State private var ollamaModel = CleanupSettingsStore.ollamaModel
+    @State private var openAIBaseURL = CleanupSettingsStore.openAIBaseURL
+    @State private var openAIModel = CleanupSettingsStore.openAIModel
+    @State private var openAIApiKeyInput = ""
+    @State private var hasSavedOpenAIApiKey = CleanupSettingsStore.openAIApiKey() != nil
+    @State private var azureEndpoint = CleanupSettingsStore.azureEndpoint
+    @State private var azureDeployment = CleanupSettingsStore.azureDeployment
+    @State private var azureAuthMode = CleanupSettingsStore.azureAuthMode
+    @State private var azureTenantId = CleanupSettingsStore.azureTenantId
+    @State private var azureClientId = CleanupSettingsStore.azureClientId
+    @State private var azureClientSecretInput = ""
+    @State private var hasSavedAzureClientSecret = false
+    @State private var statusMessage: String?
+    @State private var errorMessage: String?
+    @State private var isTesting = false
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable AI Cleanup", isOn: $isEnabled)
+                    .onChange(of: isEnabled) { _ in CleanupSettingsStore.isEnabled = isEnabled }
+                Text("Cleans up punctuation and phrasing after each dictation using a locally or "
+                    + "remotely hosted model. Strictly opt-in and off by default: only the "
+                    + "transcribed text is ever sent to a cleanup provider, never audio.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Provider") {
+                Picker("Provider", selection: $providerKind) {
+                    ForEach(CleanupProviderKind.allCases) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .onChange(of: providerKind) { _ in CleanupSettingsStore.providerKind = providerKind }
+                .disabled(!isEnabled)
+            }
+
+            providerConfigurationSection
+
+            Section {
+                HStack {
+                    Button(isTesting ? "Testing\u{2026}" : "Test Connection", action: testConnection)
+                        .disabled(isTesting || !CleanupSettingsStore.isConfigured(for: providerKind))
+                    if isTesting {
+                        ProgressView().controlSize(.small)
+                    }
+                    Spacer()
+                }
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red).font(.caption)
+                } else if let statusMessage {
+                    Text(statusMessage).foregroundStyle(.secondary).font(.caption)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .disabled(!isEnabled)
+        .onAppear { refreshAzureSecretState() }
+    }
+
+    @ViewBuilder
+    private var providerConfigurationSection: some View {
+        switch providerKind {
+        case .foundryLocal:
+            Section("Foundry Local") {
+                TextField("Model alias", text: $foundryLocalModelAlias)
+                    .onChange(of: foundryLocalModelAlias) { _ in
+                        CleanupSettingsStore.foundryLocalModelAlias = foundryLocalModelAlias
+                    }
+                Text("Runs fully on-device via Foundry Local. Requires "
+                    + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
+                    + "first use.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .ollama:
+            Section("Local model (Ollama managed)") {
+                TextField("Model", text: $ollamaModel)
+                    .onChange(of: ollamaModel) { _ in CleanupSettingsStore.ollamaModel = ollamaModel }
+                Text("Runs fully on-device via a local Ollama installation "
+                    + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .openAICompatible:
+            Section("OpenAI-compatible endpoint") {
+                TextField("Base URL (e.g. http://localhost:1234)", text: $openAIBaseURL)
+                    .onChange(of: openAIBaseURL) { _ in CleanupSettingsStore.openAIBaseURL = openAIBaseURL }
+                TextField("Model", text: $openAIModel)
+                    .onChange(of: openAIModel) { _ in CleanupSettingsStore.openAIModel = openAIModel }
+                SecureField(
+                    hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
+                    text: $openAIApiKeyInput)
+                HStack {
+                    Button("Save Key", action: saveOpenAIApiKey)
+                        .disabled(openAIApiKeyInput.isEmpty)
+                    if hasSavedOpenAIApiKey {
+                        Button("Clear Key", role: .destructive, action: clearOpenAIApiKey)
+                    }
+                }
+                Text("For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
+                    + "key, if any, is stored in Keychain, never in plain text.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .microsoftFoundry:
+            Section("Microsoft Foundry (cloud)") {
+                TextField("Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)", text: $azureEndpoint)
+                    .onChange(of: azureEndpoint) { _ in CleanupSettingsStore.azureEndpoint = azureEndpoint }
+                TextField("Deployment name", text: $azureDeployment)
+                    .onChange(of: azureDeployment) { _ in CleanupSettingsStore.azureDeployment = azureDeployment }
+                Picker("Authentication", selection: $azureAuthMode) {
+                    Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
+                    Text("Service principal").tag(AzureAuthMode.servicePrincipal)
+                }
+                .onChange(of: azureAuthMode) { _ in CleanupSettingsStore.azureAuthMode = azureAuthMode }
+
+                if azureAuthMode == .servicePrincipal {
+                    TextField("Tenant ID", text: $azureTenantId)
+                        .onChange(of: azureTenantId) { _ in CleanupSettingsStore.azureTenantId = azureTenantId }
+                    TextField("Client ID", text: $azureClientId)
+                        .onChange(of: azureClientId) { _ in
+                            CleanupSettingsStore.azureClientId = azureClientId
+                            refreshAzureSecretState()
+                        }
+                    SecureField(
+                        hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
+                        text: $azureClientSecretInput)
+                    HStack {
+                        Button("Save Secret", action: saveAzureClientSecret)
+                            .disabled(azureClientSecretInput.isEmpty
+                                || azureClientId.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if hasSavedAzureClientSecret {
+                            Button("Clear Secret", role: .destructive, action: clearAzureClientSecret)
+                        }
+                    }
+                    Text("The client secret is stored in Keychain, never in an environment "
+                        + "variable, a plist, or a script.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Uses the signed-in 'az login' session on this Mac. Install the Azure "
+                        + "CLI and run 'az login' once.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func refreshAzureSecretState() {
+        hasSavedAzureClientSecret = CleanupSettingsStore.azureClientSecret(clientId: azureClientId) != nil
+    }
+
+    private func saveOpenAIApiKey() {
+        do {
+            try CleanupSettingsStore.setOpenAIApiKey(openAIApiKeyInput)
+            openAIApiKeyInput = ""
+            hasSavedOpenAIApiKey = true
+            statusMessage = "API key saved to Keychain."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to save API key: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearOpenAIApiKey() {
+        do {
+            try CleanupSettingsStore.setOpenAIApiKey(nil)
+            hasSavedOpenAIApiKey = false
+            statusMessage = "API key removed."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to remove API key: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveAzureClientSecret() {
+        do {
+            try CleanupSettingsStore.setAzureClientSecret(azureClientSecretInput, clientId: azureClientId)
+            azureClientSecretInput = ""
+            hasSavedAzureClientSecret = true
+            statusMessage = "Client secret saved to Keychain."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to save client secret: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearAzureClientSecret() {
+        do {
+            try CleanupSettingsStore.setAzureClientSecret(nil, clientId: azureClientId)
+            hasSavedAzureClientSecret = false
+            statusMessage = "Client secret removed."
+            errorMessage = nil
+        } catch {
+            errorMessage = "Failed to remove client secret: \(error.localizedDescription)"
+        }
+    }
+
+    /// Builds a provider from current settings and runs its cheap reachability check. Uses
+    /// `CleanupProviderResolver`, so an env-var override (if one happens to be set) is tested
+    /// exactly the same way the live dictation pipeline would resolve it, avoiding a UI that lies
+    /// about which provider is actually about to run.
+    private func testConnection() {
+        isTesting = true
+        statusMessage = nil
+        errorMessage = nil
+        Task {
+            do {
+                let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
+                let snapshot = await provider.healthSnapshot()
+                isTesting = false
+                if snapshot.reachable {
+                    statusMessage = "\(provider.displayName): \(snapshot.detail)"
+                } else {
+                    errorMessage = "\(provider.displayName): \(snapshot.detail)"
+                }
+            } catch {
+                isTesting = false
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

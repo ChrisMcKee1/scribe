@@ -1,0 +1,227 @@
+# name: AI and Machine Learning Terminology
+# category: Data and AI
+# description: Generative AI, RAG, training, inference, and evaluation vocabulary with the casing and hyphenation these terms are written with.
+pattern,replacement
+#
+# --- Model classes ---
+l l m,LLM
+llm,LLM
+l l ms,LLMs
+llms,LLMs
+s l m,SLM
+slm,SLM
+v l m,VLM
+vlm,VLM
+g p t,GPT
+vision language model,vision-language model
+multi modal,multimodal
+#
+# --- Retrieval and RAG ---
+r a g,RAG
+graph r a g,GraphRAG
+graphrag,GraphRAG
+agentic r a g,agentic RAG
+retrieval augmented generation,retrieval-augmented generation
+h n s w,HNSW
+hnsw,HNSW
+b m 25,BM25
+bm25,BM25
+re ranking,reranking
+re ranker,reranker
+h y d e,HyDE
+m m r,MMR
+mmr,MMR
+r r f,RRF
+rrf,RRF
+a n n search,ANN search
+vector db,vector database
+#
+# --- Prompting ---
+c o t,CoT
+chain of thought,chain-of-thought
+r e a c t prompting,ReAct prompting
+few shot,few-shot
+zero shot,zero-shot
+one shot,one-shot
+n shot,n-shot
+in context learning,in-context learning
+jail break,jailbreak
+top p,top-p
+top k,top-k
+log probs,logprobs
+#
+# --- Agents ---
+agentic ai,agentic AI
+m c p,MCP
+model context protocol,Model Context Protocol
+a 2 a,A2A
+agent to agent,Agent-to-Agent
+multi agent,multi-agent
+human in the loop,human-in-the-loop
+h i t l,HITL
+constitutional ai,constitutional AI
+#
+# --- Architecture ---
+self attention,self-attention
+multi head attention,multi-head attention
+grouped query attention,grouped-query attention
+g q a,GQA
+multi query attention,multi-query attention
+m q a,MQA
+flash attention,FlashAttention
+r o p e embedding,RoPE embedding
+encoder decoder,encoder-decoder
+mixture of experts,mixture-of-experts
+m o e,MoE
+k v cache,KV cache
+kv cache,KV cache
+key value cache,key-value cache
+b p e,BPE
+byte pair encoding,byte-pair encoding
+l s t m,LSTM
+lstm,LSTM
+m l p,MLP
+c n n,CNN
+c n n s,CNNs
+r n n,RNN
+g a n,GAN
+b e r t,BERT
+word to vec,Word2Vec
+word2vec,Word2Vec
+c l i p model,CLIP model
+n l p,NLP
+nlp,NLP
+#
+# --- Training and fine-tuning ---
+fine tuning,fine-tuning
+fine tune,fine-tune
+supervised fine tuning,supervised fine-tuning
+instruction fine tuning,instruction fine-tuning
+lora,LoRA
+qlora,QLoRA
+q lora,QLoRA
+peft,PEFT
+p e f t,PEFT
+rlhf,RLHF
+r l h f,RLHF
+dpo,DPO
+sft,SFT
+back propagation,backpropagation
+cross validation,cross-validation
+pre training,pretraining
+post training,post-training
+#
+# --- Quantization and precision ---
+fp16,FP16
+f p 16,FP16
+bf16,BF16
+b f 16,BF16
+fp32,FP32
+f p 32,FP32
+int8,INT8
+int 8,INT8
+int4,INT4
+int 4,INT4
+gptq,GPTQ
+g p t q,GPTQ
+gguf,GGUF
+g g u f,GGUF
+ggml,GGML
+awq,AWQ
+a w q,AWQ
+q four k m,Q4_K_M
+safe tensors,safetensors
+#
+# --- Serving and hardware ---
+vllm,vLLM
+v l l m,vLLM
+tensor r t,TensorRT
+tensorrt,TensorRT
+t g i,TGI
+onnx,ONNX
+o n n x,ONNX
+onnx runtime,ONNX Runtime
+cuda,CUDA
+c u d a,CUDA
+gpu,GPU
+g p u,GPU
+tpu,TPU
+t p u,TPU
+n p u,NPU
+npu,NPU
+mlops,MLOps
+ml ops,MLOps
+llmops,LLMOps
+llm ops,LLMOps
+aiops,AIOps
+ai ops,AIOps
+#
+# --- Evaluation ---
+llm as judge,LLM-as-judge
+l l m as judge,LLM-as-judge
+r o u g e score,ROUGE score
+rouge score,ROUGE score
+bleu score,BLEU score
+roc auc,ROC AUC
+f one score,F1 score
+f 1 score,F1 score
+p c a,PCA
+pca,PCA
+t sne,t-SNE
+tsne,t-SNE
+umap,UMAP
+shap,SHAP
+#
+# --- Speech ---
+asr,ASR
+a s r,ASR
+tts,TTS
+t t s,TTS
+stt,STT
+s t t,STT
+text to speech,text-to-speech
+speech to text,speech-to-text
+v a d,VAD
+vad,VAD
+w e r,WER
+ocr,OCR
+o c r,OCR
+real time factor,real-time factor
+#
+# --- Generation ---
+text to image,text-to-image
+image to text,image-to-text
+text to video,text-to-video
+stable diffusion,Stable Diffusion
+d a l l e,DALL-E
+#
+# --- Responsible AI ---
+responsible ai,responsible AI
+x a i,XAI
+red teaming,red-teaming
+pii,PII
+p i i,PII
+#
+# --- Ecosystem ---
+open a i,OpenAI
+open ai,OpenAI
+hugging face,Hugging Face
+semantic kernel,Semantic Kernel
+agent framework,Agent Framework
+lang chain,LangChain
+langchain,LangChain
+lang graph,LangGraph
+langgraph,LangGraph
+line graph,LangGraph
+llama index,LlamaIndex
+ollama,Ollama
+l m studio,LM Studio
+lm studio,LM Studio
+foundry local,Foundry Local
+microsoft foundry,Microsoft Foundry
+azure a i foundry,Azure AI Foundry
+azure open a i,Azure OpenAI
+open router,OpenRouter
+openrouter,OpenRouter
+dspy,DSPy
+d s p y,DSPy
