@@ -30,12 +30,18 @@ cp "$EXECUTABLE" "$APP_DIR/Contents/MacOS/Scribe"
 chmod +x "$APP_DIR/Contents/MacOS/Scribe"
 
 # SwiftPM's resource-bundle accessor (`Bundle.module`) resolves relative to `Bundle.main.bundleURL`
-# at run time, which for an .app is the .app bundle's own root directory (NOT Contents/Resources;
-# `Bundle.main.bundleURL` is the whole "Scribe.app" folder). It carries the 11 built-in dictionary
-# library CSVs declared as `resources:` in Package.swift.
+# at run time, which for an .app is the .app bundle's own root directory, NOT Contents/Resources.
+# A loose "*.bundle" folder sitting at the app bundle's root is exactly the kind of nonstandard
+# layout modern codesign refuses to seal ("unsealed contents present in the bundle root"), so
+# copying the whole generated bundle there (as an earlier version of this script did) silently
+# left the app ad-hoc signed instead of using the stable "Scribe Local Dev" identity below,
+# defeating the Accessibility-persistence fix entirely. Instead, copy just the CSV payload into
+# the standard, fully-signable Contents/Resources/Libraries location; BuiltInDictionaryLibraries
+# checks that path first and only touches Bundle.module (which requires the app-root layout) as a
+# dev-only fallback when running via `swift build`/`swift run` outside a packaged .app.
 RESOURCE_BUNDLE="$BIN_DIR/ScribeMac_Scribe.bundle"
-if [ -d "$RESOURCE_BUNDLE" ]; then
-    cp -R "$RESOURCE_BUNDLE" "$APP_DIR/"
+if [ -d "$RESOURCE_BUNDLE/Libraries" ]; then
+    cp -R "$RESOURCE_BUNDLE/Libraries" "$APP_DIR/Contents/Resources/Libraries"
 fi
 
 # Same brand mark as the Windows build (src/Scribe.App/Assets/scribe.ico) and the Store listing
