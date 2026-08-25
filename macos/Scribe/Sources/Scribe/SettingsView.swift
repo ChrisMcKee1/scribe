@@ -167,8 +167,15 @@ private struct HotkeySettingsTab: View {
     @State private var isRecording = false
     @State private var localMonitor: Any?
 
+    @State private var availableDevices: [AudioInputDevice] = AudioDeviceStore.availableInputDevices()
+    @State private var selectedDeviceUID: String? = AudioDeviceStore.selectedDeviceUID
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            microphoneSection
+
+            Divider()
+
             Text("Push-to-Talk Key")
                 .font(.headline)
             Text(currentKeyCode == 57
@@ -268,6 +275,40 @@ private struct HotkeySettingsTab: View {
         currentKeyCode = keyCode
         HotkeySettingsStore.keyCode = keyCode
         onHotkeyChanged(keyCode)
+    }
+
+    @ViewBuilder
+    private var microphoneSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Microphone")
+                .font(.headline)
+            Text("Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as soon as macOS lists it here, no extra setup needed.")
+                .foregroundStyle(.secondary)
+
+            Picker("Microphone", selection: Binding(
+                get: { selectedDeviceUID },
+                set: { newValue in
+                    selectedDeviceUID = newValue
+                    let device = availableDevices.first { $0.uid == newValue }
+                    AudioDeviceStore.select(device)
+                }
+            )) {
+                Text("System default (recommended)").tag(String?.none)
+                ForEach(availableDevices) { device in
+                    Text(device.isDefault ? "\(device.name) (default)" : device.name)
+                        .tag(String?.some(device.uid))
+                }
+                if let selectedDeviceUID, !availableDevices.contains(where: { $0.uid == selectedDeviceUID }) {
+                    Text("Unavailable: \(AudioDeviceStore.selectedDeviceName ?? "saved microphone")")
+                        .tag(String?.some(selectedDeviceUID))
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 360)
+        }
+        .onAppear {
+            availableDevices = AudioDeviceStore.availableInputDevices()
+        }
     }
 }
 

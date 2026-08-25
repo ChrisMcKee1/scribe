@@ -1,4 +1,6 @@
+import AudioToolbox
 @preconcurrency import AVFoundation
+import CoreAudio
 import OSLog
 
 struct AudioLevelMeasurement {
@@ -86,6 +88,8 @@ final class AudioCaptureEngine {
         }
 
         let inputNode = audioEngine.inputNode
+        applySelectedInputDeviceIfNeeded(to: inputNode)
+
         let inputFormat = inputNode.inputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioCaptureEngineError.missingInputNodeFormat
@@ -145,6 +149,33 @@ final class AudioCaptureEngine {
         self.sampleCount = 0
 
         return summary
+    }
+
+    /// Points the AUHAL input unit at the user's chosen microphone (via `AudioDeviceStore`)
+    /// instead of leaving it on whatever CoreAudio currently considers the system default. This
+    /// is what makes an explicit in-app microphone choice stick even if the user later changes
+    /// their system-wide default input in System Settings > Sound. Setting no device (the common
+    /// case) is a deliberate no-op: the AUHAL unit already tracks the system default on its own,
+    /// which is also how a Bluetooth microphone works with zero code here, as long as it is the
+    /// current system default input.
+    private func applySelectedInputDeviceIfNeeded(to inputNode: AVAudioInputNode) {
+        guard var deviceID = AudioDeviceStore.resolveSelectedDeviceID() else { return }
+        guard let audioUnit = inputNode.audioUnit else {
+            logger.warning("Could not select the saved microphone: the input node has no underlying audio unit yet.")
+            return
+        }
+
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size))
+
+        if status != noErr {
+            logger.warning("Failed to select the saved microphone (OSStatus \(status, privacy: .public)); falling back to the system default input.")
+        }
     }
 
     private func cleanupCaptureGraph() {
