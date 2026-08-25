@@ -843,8 +843,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 do {
                     let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
                     let writingStyle = matchedProfile?.writingStylePrompt ?? CleanupPrompt.defaultWritingStyle
+                    let systemPrompt = CleanupPrompt.systemPrompt(
+                        writingStyle: writingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt)
                     let response = try await provider.clean(
-                        CleanupRequest(transcript: processedText, writingStylePrompt: writingStyle))
+                        CleanupRequest(
+                            transcript: CleanupPrompt.wrapTranscript(processedText),
+                            writingStylePrompt: systemPrompt))
                     cleanupMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - cleanupStart.uptimeNanoseconds) / 1_000_000.0
                     if response.cleanedText != processedText {
                         Self.writeLogLine("AI cleanup refined the transcription.")
@@ -996,7 +1000,12 @@ private enum CommandLineTranscriptionTool {
 
         Task {
             do {
-                let response = try await provider.clean(CleanupRequest(transcript: rawTranscript))
+                let systemPrompt = CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt)
+                let response = try await provider.clean(
+                    CleanupRequest(
+                        transcript: CleanupPrompt.wrapTranscript(rawTranscript),
+                        writingStylePrompt: systemPrompt))
                 fputs("\(response.cleanedText)\n", stdout)
                 fputs(
                     "(\(response.providerID)/\(response.modelID), \(String(format: "%.2f", response.latency))s)\n",

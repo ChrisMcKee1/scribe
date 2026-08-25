@@ -113,7 +113,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         logger.debug("Cleanup via \(self.model, privacy: .public) completed in \(latency, format: .fixed(precision: 3))s")
 
         return CleanupResponse(
-            cleanedText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+            cleanedText: CleanupPrompt.stripTranscriptTags(text),
             latency: latency,
             providerID: id,
             modelID: model)

@@ -58,6 +58,28 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(response.modelID, "test-model")
     }
 
+    /// A small model occasionally echoes the `<transcript>` tags the guardrail prompt tells it to
+    /// key on. Verifies the response is stripped so those tags never leak into injected text.
+    func testCleanStripsEchoedTranscriptTags() async throws {
+        StubURLProtocol.responseProvider = { request in
+            let body = """
+            {"choices":[{"message":{"content":"<transcript>\\nCleaned sentence.\\n</transcript>"}}]}
+            """.data(using: .utf8)!
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, body)
+        }
+
+        let provider = OpenAICompatibleCleanupProvider(
+            id: "test",
+            displayName: "Test",
+            model: "test-model",
+            session: stubbedSession(),
+            baseURLProvider: { URL(string: "http://127.0.0.1:9999") })
+
+        let response = try await provider.clean(CleanupRequest(transcript: "raw text"))
+        XCTAssertEqual(response.cleanedText, "Cleaned sentence.")
+    }
+
     func testCleanThrowsOnNonSuccessStatus() async {
         StubURLProtocol.responseProvider = { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!

@@ -11,6 +11,10 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     let id = "foundry-local"
     let displayName = "Foundry Local"
 
+    /// Small on-device instruct models follow the terser local guardrail more reliably than the
+    /// frontier prose; see `CleanupPrompt.defaultLocalPrompt`.
+    let usesLocalCleanupPrompt = true
+
     /// `qwen2.5-1.5b` is the benchmarked recommendation: matches Ollama's `qwen2.5:1.5b` on quality
     /// with a flatter, spike-free latency curve. See CLEANUP-MODEL-BENCHMARK.md.
     private let modelAlias: String
