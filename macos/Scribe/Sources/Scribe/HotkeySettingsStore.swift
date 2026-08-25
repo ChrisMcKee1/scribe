@@ -9,8 +9,11 @@ import Foundation
 enum HotkeySettingsStore {
     private static let defaultsKey = "ScribePushToTalkKeyCode"
 
-    /// Right Option: matches the key `HotkeyManager` always used before this became configurable.
-    static let defaultKeyCode: CGKeyCode = 61
+    /// Caps Lock: tapping it once engages the lock (begins capture) and tapping it again
+    /// disengages it (ends capture), mirroring Caps Lock's own toggle gesture rather than the
+    /// hold-and-release behavior every other push-to-talk key uses. See
+    /// `HotkeyManager.isKeyCurrentlyPressed`.
+    static let defaultKeyCode: CGKeyCode = 57
 
     static var keyCode: CGKeyCode {
         get {

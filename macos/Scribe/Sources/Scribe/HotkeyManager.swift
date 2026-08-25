@@ -55,10 +55,17 @@ final class HotkeyManager {
             return manager.handleEvent(type: type, event: event)
         }
 
+        // Deliberately `.listenOnly`, not `.defaultTap`. An active tap can be silently starved of
+        // *all* events (not just the hotkey's) on machines where an MDM-managed endpoint security
+        // agent restricts event-modifying taps from unnotarized third-party apps: verified on a
+        // Microsoft Intune/Defender-managed Mac, where an active tap received zero events (not even
+        // mouse clicks) while an otherwise-identical listen-only tap worked perfectly. None of the
+        // supported push-to-talk keys (modifiers, Caps Lock, F13-F19) have a default system action
+        // worth suppressing, so returning the event unmodified costs nothing here.
         let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
+            options: .listenOnly,
             eventsOfInterest: eventMask,
             callback: callback,
             userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
@@ -142,13 +149,50 @@ final class HotkeyManager {
         }
     }
 
+    /// Per-side modifier bits carried in `CGEvent.flags` (the well-known, historically stable
+    /// `NX_DEVICE*KEYMASK` constants from `IOLLEvent.h`, used by essentially every macOS hotkey/
+    /// remapping tool since these key codes have no dedicated public API). Caps Lock isn't in this
+    /// table: it has no left/right variant and is handled separately via `.maskAlphaShift` below.
+    ///
+    /// This exists because `CGEventSource.keyState(.combinedSessionState, key:)` was found to
+    /// unreliably report `false` immediately after a matching `flagsChanged` event on at least one
+    /// machine (an MDM/endpoint-security-managed Mac), even though the physical key state and the
+    /// event's own `flags` disagreed. Deriving press/release from the event's own flags avoids that
+    /// separate, apparently-untrustworthy system query entirely.
+    private static let deviceKeyMasks: [CGKeyCode: UInt64] = [
+        59: 0x0001, // Left Control
+        56: 0x0002, // Left Shift
+        60: 0x0004, // Right Shift
+        55: 0x0008, // Left Command
+        54: 0x0010, // Right Command
+        58: 0x0020, // Left Option
+        61: 0x0040, // Right Option
+        62: 0x2000, // Right Control
+    ]
+
+    /// Whether `keyCode` is down *as of this event*, read from the event's own flags rather than a
+    /// separate system call. For Caps Lock this reads the lock LED state directly, which means a
+    /// tap engages it (begins capture) and the next tap disengages it (ends capture): the same
+    /// toggle-on/toggle-off gesture Caps Lock already uses for itself, rather than push-to-talk's
+    /// usual hold-and-release.
+    private func isKeyCurrentlyPressed(in event: CGEvent) -> Bool {
+        if keyCode == 57 {
+            return event.flags.contains(.maskAlphaShift)
+        }
+        if let mask = Self.deviceKeyMasks[keyCode] {
+            return UInt64(event.flags.rawValue) & mask != 0
+        }
+        // Defensive fallback; every flagsChanged-eligible key in HotkeyKeyCodeCatalog is covered
+        // above, so this should be unreachable in practice.
+        return CGEventSource.keyState(.combinedSessionState, key: keyCode)
+    }
+
     private func handleFlagsChanged(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         guard isPushToTalkEvent(event) else {
             return Unmanaged.passUnretained(event)
         }
 
-        let isPressed = CGEventSource.keyState(.combinedSessionState, key: keyCode)
-        if isPressed {
+        if isKeyCurrentlyPressed(in: event) {
             beginPushToTalk()
         } else {
             endPushToTalk()

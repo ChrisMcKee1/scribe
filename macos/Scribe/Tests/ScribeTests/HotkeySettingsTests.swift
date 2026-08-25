@@ -34,9 +34,9 @@ final class HotkeySettingsStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultsToRightOptionWhenNothingStored() {
+    func testDefaultsToCapsLockWhenNothingStored() {
         UserDefaults.standard.removeObject(forKey: "ScribePushToTalkKeyCode")
-        XCTAssertEqual(HotkeySettingsStore.keyCode, 61)
+        XCTAssertEqual(HotkeySettingsStore.keyCode, 57)
         XCTAssertEqual(HotkeySettingsStore.keyCode, HotkeySettingsStore.defaultKeyCode)
     }
 
@@ -53,7 +53,7 @@ final class HotkeySettingsStoreTests: XCTestCase {
 /// to change it; `isPushToTalkEvent` reads it live), so this only needs to verify the default and
 /// that assignment sticks, without standing up a real CGEvent tap.
 final class HotkeyManagerKeyCodeTests: XCTestCase {
-    func testDefaultsToRightOptionKeyCode() {
+    func testDefaultsToCapsLockKeyCode() {
         let manager = HotkeyManager(audioCaptureEngine: AudioCaptureEngine(), logSink: { _ in })
         XCTAssertEqual(manager.keyCode, HotkeySettingsStore.defaultKeyCode)
     }

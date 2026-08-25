@@ -171,7 +171,9 @@ private struct HotkeySettingsTab: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Push-to-Talk Key")
                 .font(.headline)
-            Text("Hold this key anywhere on your Mac to start dictating, and release it to stop.")
+            Text(currentKeyCode == 57
+                ? "Tap Caps Lock once to start dictating, and tap it again to stop, just like Caps Lock's own on/off light."
+                : "Hold this key anywhere on your Mac to start dictating, and release it to stop.")
                 .foregroundStyle(.secondary)
             // Input Monitoring is what a global push-to-talk key requires, and is easy to miss
             // since (unlike Microphone/Accessibility) macOS never shows a system prompt for it;
@@ -200,7 +202,7 @@ private struct HotkeySettingsTab: View {
                 }
 
                 if currentKeyCode != HotkeySettingsStore.defaultKeyCode {
-                    Button("Reset to Right Option") {
+                    Button("Reset to \(HotkeyKeyCodeCatalog.displayName(for: HotkeySettingsStore.defaultKeyCode))") {
                         apply(keyCode: HotkeySettingsStore.defaultKeyCode)
                     }
                 }
