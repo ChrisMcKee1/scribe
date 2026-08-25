@@ -931,6 +931,8 @@ private enum CommandLineTranscriptionTool {
             return runSetAzureClientSecret(arguments: arguments)
         case "--list-dictionary-libraries":
             return runListDictionaryLibraries()
+        case "--set-launch-at-login":
+            return runSetLaunchAtLogin(arguments: arguments)
         default:
             return false
         }
@@ -1070,6 +1072,30 @@ private enum CommandLineTranscriptionTool {
         fputs("\(libraries.count) built-in dictionary librar(y/ies):\n", stdout)
         for library in libraries {
             fputs("  \(library.id): \(library.name) [\(library.category)] (\(library.entries.count) terms)\n", stdout)
+        }
+        return true
+    }
+
+    /// Toggles "Open Scribe AI at Login" without going through the Settings UI. Must run from
+    /// inside the installed .app bundle: `SMAppService.mainApp` registers the identity of the
+    /// currently-running process, so this only does something meaningful when invoked as
+    /// `/Applications/Scribe.app/Contents/MacOS/Scribe --set-launch-at-login on`.
+    /// Usage: Scribe --set-launch-at-login <on|off>
+    private static func runSetLaunchAtLogin(arguments: [String]) -> Bool {
+        guard arguments.count == 2, let enabled = ["on": true, "off": false][arguments[1]] else {
+            fputs("Usage: Scribe --set-launch-at-login <on|off>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        guard LoginItemManager.setEnabled(enabled) else {
+            fputs("Failed to \(enabled ? "register" : "unregister") the login item.\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        if enabled && LoginItemManager.requiresApproval {
+            fputs("Registered, but approval is still needed in System Settings > General > Login Items.\n", stdout)
+        } else {
+            fputs("Launch at login is now \(enabled ? "enabled" : "disabled").\n", stdout)
         }
         return true
     }

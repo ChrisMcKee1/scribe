@@ -15,6 +15,8 @@ struct AboutView: View {
     @State private var updateChecker = UpdateChecker()
     @State private var updateCheckResult: UpdateCheckResult?
     @State private var isCheckingForUpdate = false
+    @State private var launchAtLoginEnabled = LoginItemManager.isEnabled
+    @State private var launchAtLoginNeedsApproval = LoginItemManager.requiresApproval
 
     private var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
@@ -24,6 +26,7 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerCard
+                startupCard
                 updateCard
                 privacyCard
                 starCard
@@ -81,6 +84,27 @@ struct AboutView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
+                }
+            }
+        }
+    }
+
+    /// "Open at Login" toggle, backed by `LoginItemManager` (SMAppService). Placed in About
+    /// alongside Updates since this port has no separate "General" settings section yet.
+    private var startupCard: some View {
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Open Scribe AI at Login", isOn: Binding(
+                    get: { launchAtLoginEnabled },
+                    set: { newValue in
+                        launchAtLoginEnabled = LoginItemManager.setEnabled(newValue) ? newValue : launchAtLoginEnabled
+                        launchAtLoginNeedsApproval = LoginItemManager.requiresApproval
+                    }))
+                    .font(.headline)
+                if launchAtLoginNeedsApproval {
+                    Text("Approve Scribe AI in System Settings > General > Login Items to finish enabling this.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

@@ -71,6 +71,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>Scribe</string>
+    <key>CFBundleDisplayName</key>
+    <string>Scribe AI</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
