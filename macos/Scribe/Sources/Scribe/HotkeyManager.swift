@@ -3,10 +3,6 @@ import Foundation
 import OSLog
 
 final class HotkeyManager {
-    private enum Constants {
-        static let rightOptionKeyCode: CGKeyCode = 61
-    }
-
     private let audioCaptureEngine: AudioCaptureEngine
     private let logger = Logger(subsystem: "com.scribe.macos", category: "Hotkey")
     private let logSink: (String) -> Void
@@ -14,6 +10,15 @@ final class HotkeyManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isPushToTalkHeld = false
+
+    /// The push-to-talk virtual key code, configurable from Settings (`HotkeySettingsStore`,
+    /// `HotkeyKeyCodeCatalog`). Defaults to Right Option, matching the previously-hardcoded
+    /// behavior. Changing this while a capture is mid-press deliberately does not affect that
+    /// in-flight press: `handleFlagsChanged`/`isPushToTalkEvent` only compare the *next* event's
+    /// key code, so an already-held key finishes normally via its own release event... except that
+    /// release event will no longer match the new code either. Settings therefore only allows
+    /// recording a new key while no capture is active (see `HotkeySettingsTab`).
+    var keyCode: CGKeyCode = HotkeySettingsStore.keyCode
 
     /// Mirrors Windows' `DictationController.IsPaused`: the hook stays installed, but a hotkey
     /// press is ignored while paused rather than removing the event tap outright, so resuming
@@ -59,7 +64,7 @@ final class HotkeyManager {
             userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()))
 
         guard let tap else {
-            logInputMonitoringDenied("Input Monitoring permission is not granted, so the Right Option push-to-talk event tap could not be created.")
+            logInputMonitoringDenied("Input Monitoring permission is not granted, so the push-to-talk event tap could not be created.")
             return
         }
 
@@ -76,8 +81,8 @@ final class HotkeyManager {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
 
-        logger.info("Global push-to-talk hotkey ready, default key is Right Option.")
-        logSink("Global push-to-talk hotkey ready. Hold Right Option to drive the live microphone capture path.")
+        logger.info("Global push-to-talk hotkey ready, key is \(HotkeyKeyCodeCatalog.displayName(for: self.keyCode), privacy: .public).")
+        logSink("Global push-to-talk hotkey ready. Hold \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) to drive the live microphone capture path.")
     }
 
     func stop() {
@@ -142,7 +147,7 @@ final class HotkeyManager {
             return Unmanaged.passUnretained(event)
         }
 
-        let isPressed = CGEventSource.keyState(.combinedSessionState, key: Constants.rightOptionKeyCode)
+        let isPressed = CGEventSource.keyState(.combinedSessionState, key: keyCode)
         if isPressed {
             beginPushToTalk()
         } else {
@@ -171,8 +176,8 @@ final class HotkeyManager {
     }
 
     private func isPushToTalkEvent(_ event: CGEvent) -> Bool {
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        return keyCode == Constants.rightOptionKeyCode
+        let eventKeyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        return eventKeyCode == keyCode
     }
 
     private func beginPushToTalk() {
@@ -205,7 +210,7 @@ final class HotkeyManager {
         do {
             try audioCaptureEngine.start()
             onCaptureStarted?()
-            logSink("Push-to-talk pressed. Started live microphone capture from the global Right Option hotkey.")
+            logSink("Push-to-talk pressed. Started live microphone capture from the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
         } catch let error as AudioCaptureEngineError {
             onCaptureStartError?(error)
         } catch {
@@ -222,7 +227,7 @@ final class HotkeyManager {
             return
         }
 
-        logSink("Push-to-talk released. Stopped live microphone capture from the global Right Option hotkey.")
+        logSink("Push-to-talk released. Stopped live microphone capture from the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
     }
 
     private func logInputMonitoringDenied(_ message: String) {

@@ -113,10 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                     overlayPanelController: overlayPanelController,
                     pipelineReportStore: pipelineReportStore,
                     dictionaryLibraryService: dictionaryLibraryService,
-                    onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() }))
+                    onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() },
+                    onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode }))
             let window = NSWindow(contentViewController: hostingController)
             window.title = "Scribe Settings"
-            window.setContentSize(NSSize(width: 640, height: 480))
+            window.setContentSize(NSSize(width: 720, height: 520))
             window.styleMask.insert(.titled)
             window.styleMask.insert(.closable)
             window.styleMask.insert(.miniaturizable)

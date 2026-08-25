@@ -1,44 +1,121 @@
 import AppKit
 import Charts
+import CoreGraphics
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Full Settings window replacing the earlier static scaffold text. Tabs mirror the feature areas
-/// already implemented: overlay position, dictionary, snippets, and per-app profiles. Backed
-/// directly by `PersistenceStore` (no separate view-model layer yet; the store's CRUD surface is
-/// already small and synchronous, matching the CLI verbs used to verify each feature).
+/// Full Settings window replacing the earlier static scaffold text. Sections mirror the feature
+/// areas already implemented: overlay position, hotkey, dictionary, snippets, and per-app
+/// profiles. Backed directly by `PersistenceStore` (no separate view-model layer yet; the store's
+/// CRUD surface is already small and synchronous, matching the CLI verbs used to verify each
+/// feature).
+///
+/// Uses a `NavigationSplitView` sidebar rather than `TabView`'s top segmented control: once the
+/// section count reached double digits (Overlay/Hotkey/Dictionary/Libraries/Snippets/App
+/// Profiles/AI Cleanup/Playground/Diagnostics/Usage Insights/About), the segmented strip truncated
+/// labels and became unreadable. A sidebar `List` scales to any number of sections the same way
+/// System Settings itself does.
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case overlay
+    case hotkey
+    case dictionary
+    case libraries
+    case snippets
+    case appProfiles
+    case aiCleanup
+    case playground
+    case diagnostics
+    case usageInsights
+    case about
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .overlay: return "Overlay"
+        case .hotkey: return "Hotkey"
+        case .dictionary: return "Dictionary"
+        case .libraries: return "Libraries"
+        case .snippets: return "Snippets"
+        case .appProfiles: return "App Profiles"
+        case .aiCleanup: return "AI Cleanup"
+        case .playground: return "Playground"
+        case .diagnostics: return "Diagnostics"
+        case .usageInsights: return "Usage Insights"
+        case .about: return "About"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overlay: return "rectangle.on.rectangle"
+        case .hotkey: return "keyboard"
+        case .dictionary: return "character.book.closed"
+        case .libraries: return "books.vertical"
+        case .snippets: return "text.append"
+        case .appProfiles: return "app.badge"
+        case .aiCleanup: return "sparkles"
+        case .playground: return "wand.and.rays"
+        case .diagnostics: return "waveform.path.ecg"
+        case .usageInsights: return "chart.bar.xaxis"
+        case .about: return "info.circle"
+        }
+    }
+}
+
 struct SettingsView: View {
     let persistenceStore: PersistenceStore
     let overlayPanelController: OverlayPanelController
     let pipelineReportStore: PipelineReportStore
     let dictionaryLibraryService: DictionaryLibraryService
     let onProfilesOrRulesChanged: () -> Void
+    let onHotkeyChanged: (CGKeyCode) -> Void
+
+    @State private var selection: SettingsSection? = .overlay
 
     var body: some View {
-        TabView {
-            OverlaySettingsTab(overlayPanelController: overlayPanelController)
-                .tabItem { Label("Overlay", systemImage: "rectangle.on.rectangle") }
-            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
-                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
-            DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
-                .tabItem { Label("Libraries", systemImage: "books.vertical") }
-            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
-                .tabItem { Label("Snippets", systemImage: "text.append") }
-            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
-                .tabItem { Label("App Profiles", systemImage: "app.badge") }
-            CleanupSettingsTab()
-                .tabItem { Label("AI Cleanup", systemImage: "sparkles") }
-            PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
-                .tabItem { Label("Playground", systemImage: "wand.and.rays") }
-            DiagnosticsSettingsTab(persistenceStore: persistenceStore)
-                .tabItem { Label("Diagnostics", systemImage: "waveform.path.ecg") }
-            UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
-                .tabItem { Label("Usage Insights", systemImage: "chart.bar.xaxis") }
-            AboutView(persistenceStore: persistenceStore)
-                .tabItem { Label("About", systemImage: "info.circle") }
+        NavigationSplitView {
+            List(SettingsSection.allCases, selection: $selection) { section in
+                Label(section.label, systemImage: section.systemImage)
+                    .tag(section)
+            }
+            .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 220)
+        } detail: {
+            ScrollView {
+                detailContent
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(20)
-        .frame(minWidth: 560, minHeight: 420)
+        .frame(minWidth: 760, minHeight: 520)
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selection ?? .overlay {
+        case .overlay:
+            OverlaySettingsTab(overlayPanelController: overlayPanelController)
+        case .hotkey:
+            HotkeySettingsTab(onHotkeyChanged: onHotkeyChanged)
+        case .dictionary:
+            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .libraries:
+            DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
+        case .snippets:
+            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .appProfiles:
+            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .aiCleanup:
+            CleanupSettingsTab()
+        case .playground:
+            PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
+        case .diagnostics:
+            DiagnosticsSettingsTab(persistenceStore: persistenceStore)
+        case .usageInsights:
+            UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .about:
+            AboutView(persistenceStore: persistenceStore)
+        }
     }
 }
 
@@ -78,6 +155,117 @@ private struct OverlaySettingsTab: View {
         .onAppear {
             selectedAnchor = overlayPanelController.anchor
         }
+    }
+}
+
+// MARK: - Hotkey tab
+
+private struct HotkeySettingsTab: View {
+    let onHotkeyChanged: (CGKeyCode) -> Void
+
+    @State private var currentKeyCode: CGKeyCode = HotkeySettingsStore.keyCode
+    @State private var isRecording = false
+    @State private var localMonitor: Any?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Push-to-Talk Key")
+                .font(.headline)
+            Text("Hold this key anywhere on your Mac to start dictating, and release it to stop.")
+                .foregroundStyle(.secondary)
+            // Input Monitoring is what a global push-to-talk key requires, and is easy to miss
+            // since (unlike Microphone/Accessibility) macOS never shows a system prompt for it;
+            // the user has to add Scribe manually. Surfaced here because "the key does nothing"
+            // is otherwise indistinguishable from a wrong binding.
+            Text("If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Text(isRecording ? "Press any key..." : HotkeyKeyCodeCatalog.displayName(for: currentKeyCode))
+                    .font(.title3.bold())
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .frame(minWidth: 160)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isRecording ? Color.accentColor.opacity(0.2) : Color.gray.opacity(0.12)))
+
+                Button(isRecording ? "Cancel" : "Record New Key") {
+                    if isRecording {
+                        stopRecording()
+                    } else {
+                        startRecording()
+                    }
+                }
+
+                if currentKeyCode != HotkeySettingsStore.defaultKeyCode {
+                    Button("Reset to Right Option") {
+                        apply(keyCode: HotkeySettingsStore.defaultKeyCode)
+                    }
+                }
+            }
+
+            Text("Common choices")
+                .font(.subheadline.bold())
+                .padding(.top, 4)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                ForEach(HotkeyKeyCodeCatalog.entries) { entry in
+                    Button {
+                        apply(keyCode: entry.keyCode)
+                    } label: {
+                        Text(entry.name)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(currentKeyCode == entry.keyCode ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer()
+        }
+        .onDisappear {
+            stopRecording()
+        }
+    }
+
+    /// Captures the next key press (modifier or regular key) within the Settings window only, via
+    /// a local `NSEvent` monitor (no extra permission needed beyond the window having focus,
+    /// unlike `HotkeyManager`'s system-wide `CGEvent` tap). Swallows the captured event so it
+    /// never also types into the window.
+    private func startRecording() {
+        isRecording = true
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            let candidateKeyCode = CGKeyCode(event.keyCode)
+
+            if event.type == .flagsChanged {
+                // A flagsChanged event fires on both press AND release of a modifier key; only
+                // treat this as a recording when the key is actually down right now, the same
+                // check HotkeyManager itself uses to tell the two apart.
+                guard CGEventSource.keyState(.combinedSessionState, key: candidateKeyCode) else {
+                    return event
+                }
+            }
+
+            apply(keyCode: candidateKeyCode)
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        isRecording = false
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+        }
+        localMonitor = nil
+    }
+
+    private func apply(keyCode: CGKeyCode) {
+        currentKeyCode = keyCode
+        HotkeySettingsStore.keyCode = keyCode
+        onHotkeyChanged(keyCode)
     }
 }
 
