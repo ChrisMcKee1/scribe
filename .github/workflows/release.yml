@@ -22,6 +22,14 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
 
+      # Hoisted here because `secrets` is NOT one of the contexts available to an `if:`
+      # expression. Testing secrets.* directly in a step condition does not fail that step, it
+      # invalidates the whole workflow file: GitHub rejects the run before scheduling any job, so
+      # every push since that condition was added produced a red run with zero jobs and the
+      # unhelpful message "This run likely failed because of a workflow file issue". `env` does
+      # allow the secrets context, so the presence check happens here and the steps test the result.
+      STORE_SECRETS_PRESENT: ${{ secrets.STORE_CLIENT_ID != '' && secrets.STORE_PRODUCT_ID != '' }}
+
     steps:
       - name: Check out release source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -152,8 +160,7 @@ jobs:
         if: |
           startsWith(github.ref, 'refs/tags/v') &&
           vars.STORE_AUTO_SUBMIT != 'false' &&
-          secrets.STORE_CLIENT_ID != '' &&
-          secrets.STORE_PRODUCT_ID != ''
+          env.STORE_SECRETS_PRESENT == 'true'
         shell: pwsh
         run: |
           # Fire and forget. A Store certification cycle takes hours, so blocking this job on it
@@ -172,7 +179,7 @@ jobs:
       - name: Note that the Store submission was skipped
         if: |
           startsWith(github.ref, 'refs/tags/v') &&
-          (vars.STORE_AUTO_SUBMIT == 'false' || secrets.STORE_CLIENT_ID == '' || secrets.STORE_PRODUCT_ID == '')
+          (vars.STORE_AUTO_SUBMIT == 'false' || env.STORE_SECRETS_PRESENT != 'true')
         shell: pwsh
         run: |
           $reason = if ('${{ vars.STORE_AUTO_SUBMIT }}' -eq 'false') {
