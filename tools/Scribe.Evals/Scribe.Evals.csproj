@@ -18,6 +18,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- tools/Scribe.StyleEval reuses this project's Azure Responses wiring rather than standing up
+         a second provider path. Scribe.Core grants internals access to Scribe.Evals and not to
+         Scribe.StyleEval, so the bridge has to run through here. Side-testing only; neither project
+         is published by build/pack.ps1. -->
+    <InternalsVisibleTo Include="Scribe.StyleEval" />
+    <InternalsVisibleTo Include="Scribe.StyleEval.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" />
     <!-- Eval framework stays in this tool only (PrivateAssets=all): it must not flow into the
          app or become a shipped dependency. -->

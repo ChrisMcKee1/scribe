@@ -13,6 +13,7 @@ using OpenAI;
 using OpenAI.Chat;
 using OpenAI.Responses;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Models;
 using FoundryConfiguration = Microsoft.AI.Foundry.Local.Configuration;
 using FoundryLogLevel = Microsoft.AI.Foundry.Local.LogLevel;
 
@@ -456,6 +457,135 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         return new CleanupResult(combined, outcome, partial);
+    }
+
+    /// <summary>
+    /// Largest selection accepted for a text action. Beyond this the request would be chunked, and
+    /// chunking a transform is not equivalent to chunking a cleanup: a per-chunk rewrite loses the
+    /// document-level structure that "rewrite as a task list" or "format for Teams" exist to produce,
+    /// and rejoining the pieces produces something no single instruction ever asked for. Refusing is
+    /// honest; silently degrading is not.
+    /// </summary>
+    internal const int MaxTextActionChars = 12_000;
+
+    /// <inheritdoc />
+    public async Task<TextActionResult> ApplyActionAsync(
+        string selection,
+        TextActions.TextAction action,
+        IReadOnlyList<DictionaryEntry>? glossaryEntries = null,
+        string? spokenInstruction = null,
+        string? writingStyleOverride = null,
+        bool requireSingleLine = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        if (string.IsNullOrWhiteSpace(selection))
+        {
+            return TextActionResult.Failed(
+                TextActionFailure.EmptySelection, "Select some text first.");
+        }
+
+        if (selection.Length > MaxTextActionChars)
+        {
+            return TextActionResult.Failed(
+                TextActionFailure.TooLarge,
+                $"That selection is too long for one request. Try {MaxTextActionChars:N0} characters or fewer.");
+        }
+
+        AIAgent agent;
+        CleanupOptions options;
+        lock (_gate)
+        {
+            if (!_options.Enabled)
+            {
+                return TextActionResult.Failed(
+                    TextActionFailure.NotEnabled,
+                    "Turn on AI cleanup in Settings to use this action.");
+            }
+
+            if (_status != CleanupStatus.Ready || _agentFactory is not { } factory)
+            {
+                return TextActionResult.Failed(
+                    TextActionFailure.NotReady,
+                    string.IsNullOrWhiteSpace(_statusDetail)
+                        ? "The AI model is not ready yet."
+                        : "The AI model is not ready yet: " + _statusDetail);
+            }
+
+            options = _options;
+
+            // Small on-device models get the tighter glossary budget for the same reason cleanup does:
+            // a long vocabulary list crowds out the text being transformed.
+            var maxTerms = options.Provider == CleanupProvider.FoundryLocal
+                ? CleanupPrompt.MaxGlossaryTermsLocal
+                : CleanupPrompt.MaxGlossaryTermsCloud;
+
+            // The local tier gets the compressed rulebook. Resolved by prompt style rather than by
+            // provider alone, so a user pointing the bring-your-own endpoint at a small local server
+            // can opt into it explicitly, exactly as cleanup already allows.
+            var local = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider)
+                == CleanupPromptStyle.Local;
+
+            var systemPrompt = TextActions.TextActionPrompt.BuildSystemPrompt(
+                action, glossaryEntries, maxTerms, writingStyleOverride, requireSingleLine, local);
+
+            agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt));
+        }
+
+        var userMessage = TextActions.TextActionPrompt.BuildUserMessage(selection, spokenInstruction);
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
+
+            // Headroom over the selection so a legitimate expansion is not truncated mid-sentence,
+            // which would otherwise reach the sanitizer as a plausible but silently cut answer.
+            var chatOptions = new ChatOptions
+            {
+                MaxOutputTokens = Math.Clamp((selection.Length / 2) + 512, 512, 8192),
+            };
+
+            if (options.Provider == CleanupProvider.FoundryLocal)
+            {
+                chatOptions.Temperature = CleanupTemperature;
+            }
+
+            var runOptions = new ChatClientAgentRunOptions(chatOptions);
+            var response = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
+                .ConfigureAwait(false);
+
+            var verdict = TextActions.TextActionSanitizer.Sanitize(response.Text, selection, action);
+            if (!verdict.Accepted)
+            {
+                _log.LogInformation(
+                    "Text action {ActionId} rejected: {Reason}.", action.Id, verdict.Reason);
+                return new TextActionResult(
+                    null,
+                    TextActionFailure.Rejected,
+                    TextActions.TextActionSanitizer.Describe(verdict.Reason),
+                    verdict.Reason);
+            }
+
+            return TextActionResult.Success(verdict.Text);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return TextActionResult.Failed(TextActionFailure.Cancelled, string.Empty);
+        }
+        catch (OperationCanceledException)
+        {
+            return TextActionResult.Failed(
+                TextActionFailure.CallFailed,
+                $"The model did not answer within {AuxiliaryCompletionTimeoutSeconds} seconds.");
+        }
+        catch (Exception ex)
+        {
+            // Never log the selection or the model's answer: both are the user's document content.
+            _log.LogWarning(ex, "Text action {ActionId} failed at runtime.", action.Id);
+            return TextActionResult.Failed(TextActionFailure.CallFailed, DescribeFailure(ex, options.Provider));
+        }
     }
 
     public async Task<string?> CompleteAsync(

@@ -292,6 +292,55 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingCard}">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                                <TextBlock Text="Rewrite selected text (Experimental)" Style="{StaticResource SettingTitle}"/>
+                                                <TextBlock Style="{StaticResource SettingHint}"
+                                                           Text="Select text in any app, press the hotkey, and pick what to do with it: rewrite for an AI agent, format for Teams, fix grammar, and more. Scribe copies the selection to read it, then puts your clipboard back."/>
+                                            </StackPanel>
+                                            <ui:ToggleSwitch x:Name="TextActionsCheck" Grid.Column="1"
+                                                             VerticalAlignment="Center"
+                                                             Checked="TextActionsCheck_Changed"
+                                                             Unchecked="TextActionsCheck_Changed"/>
+                                        </Grid>
+                                        <Grid x:Name="TextActionsHotkeyRow" Margin="0,12,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ui:TextBox x:Name="TextActionsHotkeyBox" Grid.Column="0" IsReadOnly="True"
+                                                        VerticalContentAlignment="Center"
+                                                        PlaceholderText="Not set, use the tray menu"/>
+                                            <ui:Button Grid.Column="1" Content="Set" Margin="8,0,0,0" MinWidth="72"
+                                                       Click="TextActionsCaptureButton_Click"/>
+                                            <ui:Button Grid.Column="2" Content="Clear" Margin="8,0,0,0" MinWidth="72"
+                                                       Click="TextActionsClearButton_Click"/>
+                                        </Grid>
+                                        <TextBlock Style="{StaticResource SettingHint}"
+                                                   Text="Needs a modifier, for example Ctrl+Alt+Space. Most actions need AI cleanup switched on; applying your dictionary works offline with no model. Not available in a terminal, because Ctrl+C there stops the running command."/>
+                                        <Grid Margin="0,14,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                                <TextBlock Text="Floating dock" Style="{StaticResource SettingTitle}"/>
+                                                <TextBlock Style="{StaticResource SettingHint}"
+                                                           Text="A small always-on-top tile you can drag anywhere. Clicking it keeps your text selected, which the tray menu cannot do because opening it moves the focus off your selection."/>
+                                            </StackPanel>
+                                            <ui:ToggleSwitch x:Name="TextActionDockCheck" Grid.Column="1"
+                                                             VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>

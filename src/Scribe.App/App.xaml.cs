@@ -50,6 +50,13 @@ public partial class App : Application
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
     private QuickAdd.QuickAddWindow? _quickAddWindow;
+    private TextActions.TextActionController? _textActions;
+    private Infrastructure.GlobalHotkey? _textActionsHotkey;
+
+    /// <summary>The file log sink, so its health can be reported in Settings.</summary>
+    internal static FileLoggerProvider? LogSink { get; private set; }
+    private Infrastructure.ForegroundTracker? _foreground;
+    private TextActions.TextActionDockWindow? _textActionDock;
     private UpdateService? _updates;
     private SessionDiagnostics? _diagnostics;
     private ILogger? _appLog;
@@ -99,9 +106,20 @@ public partial class App : Application
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddSingleton<SessionDiagnostics>();
+
+        // The non-destructive selection reader lives in the shell because System.Windows.Automation
+        // ships with the Windows Desktop framework and is only referenced where UseWPF is set.
+        // Scribe.Core owns the ISelectionProbe contract and the fallback ordering.
+        builder.Services.AddSingleton<UiaSelectionProbe>();
+        builder.Services.AddSingleton<Scribe.Core.TextInjection.ISelectionProbe>(
+            sp => sp.GetRequiredService<UiaSelectionProbe>());
         builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
-        builder.Logging.AddProvider(new FileLoggerProvider(paths.LogsDir));
+        // Held in a static so Settings can report whether logging is ACTUALLY working rather
+        // than displaying the folder it was asked to use. A packaged build was found writing
+        // nothing for an entire session while the About page confidently showed a path.
+        LogSink = new FileLoggerProvider(paths.LogsDir);
+        builder.Logging.AddProvider(LogSink);
         builder.Logging.AddDebug();
 
         // Debug, not Information. The log is the only diagnostic channel this app has: it is a tray
@@ -295,6 +313,45 @@ public partial class App : Application
         {
             _overlay.Warmup();
         }
+
+        // Text actions: a separate controller and a separate RegisterHotKey trigger, deliberately
+        // sharing nothing with the push-to-talk hook. If any of this fails, dictation is unaffected.
+        _textActions = new TextActions.TextActionController(
+            services.GetRequiredService<SelectionReader>(),
+            services.GetRequiredService<ITextCleanupService>(),
+            services.GetRequiredService<ITextPostProcessor>(),
+            services.GetRequiredService<IDictionaryRepository>(),
+            services.GetRequiredService<ITextInjector>(),
+            services.GetRequiredService<ILogger<TextActions.TextActionController>>(),
+            services.GetRequiredService<IDictionaryLibraryService>());
+        _textActions.Notice += message =>
+        {
+            try
+            {
+                _tray?.ShowNotification(message);
+            }
+            catch (Exception ex)
+            {
+                log.LogDebug(ex, "Could not show the text action notice.");
+            }
+        };
+
+        // Remembers the last window that was not Scribe's, so the tray route can still find the
+        // selection after its own menu has taken the foreground.
+        _foreground = new Infrastructure.ForegroundTracker(log);
+        _foreground.Start();
+        _textActions.ForegroundTargetProvider = () => _foreground?.LastForeignWindow ?? 0;
+        _textActions.StateChanged += state =>
+            Dispatcher.BeginInvoke(() => _textActionDock?.SetState(state));
+
+        _textActionsHotkey = new Infrastructure.GlobalHotkey(log);
+
+        // The hotkey and the dock do not disturb activation, so they read the live foreground
+        // window. The tray menu does, so it asks for the remembered one.
+        _textActionsHotkey.Pressed += () => _textActions?.Invoke();
+        _tray.TextActionsRequested += () => _textActions?.Invoke(useRememberedTarget: true);
+
+        ApplyTextActionSettings(_controller.CurrentSettings);
 
         _tray.SetAiCleanupChecked(_controller.CurrentSettings.EnableAiCleanup);
 
@@ -595,6 +652,96 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// Applies the text action settings: hands the controller its snapshot, shows or hides the tray
+    /// entry, and registers or clears the global hotkey.
+    /// </summary>
+    /// <remarks>
+    /// Every step is best effort. A hotkey Windows refuses (because another app already owns the
+    /// combination) leaves the feature reachable from the tray rather than failing the save, and no
+    /// failure here is allowed to propagate into the settings write or the dictation loop.
+    /// </remarks>
+    private void ApplyTextActionSettings(AppSettings settings)
+    {
+        try
+        {
+            _textActions?.ApplySettings(settings);
+            _tray?.SetTextActionsVisible(settings.EnableTextActions);
+
+            var binding = settings.EnableTextActions ? settings.TextActionsHotkey : null;
+            if (_textActionsHotkey?.Update(binding) == false && binding is not null)
+            {
+                _tray?.ShowError($"another app already uses {binding.DisplayName}");
+            }
+
+            ApplyTextActionDock(settings);
+        }
+        catch (Exception ex)
+        {
+            _appLog?.LogWarning(ex, "Applying the text action settings failed.");
+        }
+    }
+
+    /// <summary>Shows, hides, or repositions the floating dock to match the saved settings.</summary>
+    private void ApplyTextActionDock(AppSettings settings)
+    {
+        var wanted = settings.EnableTextActions && settings.ShowTextActionDock;
+
+        if (!wanted)
+        {
+            _textActionDock?.Close();
+            _textActionDock = null;
+            return;
+        }
+
+        if (_textActionDock is null)
+        {
+            var dock = new TextActions.TextActionDockWindow();
+
+            // The dock never takes focus, so unlike the tray route it reads the live foreground
+            // window and the user's selection is still sitting there intact.
+            dock.Clicked += () => _textActions?.Invoke();
+            dock.Moved += (left, top) => SaveDockPosition(left, top);
+            dock.Closed += (_, _) => { if (ReferenceEquals(_textActionDock, dock)) _textActionDock = null; };
+
+            _textActionDock = dock;
+            dock.Show();
+        }
+
+        if (settings.TextActionDockLeft is { } savedLeft && settings.TextActionDockTop is { } savedTop)
+        {
+            _textActionDock.PlaceAt(savedLeft, savedTop);
+        }
+        else
+        {
+            _textActionDock.PlaceAtDefault();
+        }
+    }
+
+    private void SaveDockPosition(double left, double top)
+    {
+        try
+        {
+            var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
+            if (repo.LastLoadFailed)
+            {
+                return;
+            }
+
+            var settings = repo.Load();
+            settings.TextActionDockLeft = left;
+            settings.TextActionDockTop = top;
+            repo.Save(settings);
+            _controller?.ApplySettings(settings);
+            _textActions?.ApplySettings(settings);
+        }
+        catch (Exception ex)
+        {
+            // Losing the dock position is a cosmetic failure; it must never surface as an error.
+            _appLog?.LogDebug(ex, "Could not save the dock position.");
+        }
+    }
+
+    /// <summary>
     /// Opens the settings window (or focuses it if already open). Built per-open from the host so
     /// it always reflects the latest persisted state; on save it calls back into the controller to
     /// apply the new binding and dictionary live.
@@ -628,6 +775,7 @@ public partial class App : Application
                 _controller!.ApplySettings(settings);
                 _overlay?.SetPosition(settings.OverlayPosition);
                 _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
+                ApplyTextActionSettings(settings);
             },
             capturing => _controller?.SetHotkeyCaptureMode(capturing),
             _updates,
@@ -1100,6 +1248,10 @@ public partial class App : Application
 
             _overlay?.CloseOverlay();
             _controller?.Dispose();
+            _textActionsHotkey?.Dispose();
+            _textActionDock?.Close();
+            _foreground?.Dispose();
+            _textActions?.Dispose();
             _tray?.Dispose();
             DisposeThemeWatcher();
 
