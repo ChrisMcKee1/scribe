@@ -55,8 +55,15 @@ public sealed partial class OverlayWindow : Window
         ApplyExtendedStyles();
 
         // DWM-composition transparency: a window with no opaque backdrop shows whatever is behind it.
-        SystemBackdrop = new TransparentBackdrop();
-        OverlayLog.Write("OverlayWindow.ctor SystemBackdrop=TransparentBackdrop assigned");
+        if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOBACKDROP") == "1")
+        {
+            OverlayLog.Write("OverlayWindow.ctor DIAG: SystemBackdrop skipped");
+        }
+        else
+        {
+            SystemBackdrop = new TransparentBackdrop();
+            OverlayLog.Write("OverlayWindow.ctor SystemBackdrop=TransparentBackdrop assigned");
+        }
 
         SizeAndPosition();
 
@@ -96,8 +103,24 @@ public sealed partial class OverlayWindow : Window
     private void ApplyExtendedStyles()
     {
         var ex = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE);
+
+        // Diagnostic rung. The bisection narrowed the Win+Shift+S failure to the moment this window
+        // is SHOWN: never created works, created-but-never-shown works, shown fails. The backdrop,
+        // HWND_TOPMOST and the keyboard hook are all already ruled out. WS_EX_LAYERED is the prime
+        // remaining suspect because it is the one style here that changes how the window is
+        // composed: a normal WinUI 3 window renders through the compositor and is NOT layered, and
+        // GetWindowDisplayAffinity is documented to succeed "only when the window is layered", so
+        // forcing it makes this the one WinUI window on the desktop that answers such a query.
+        var layered = Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOLAYERED") == "1"
+            ? 0
+            : NativeMethods.WS_EX_LAYERED;
+        if (layered == 0)
+        {
+            OverlayLog.Write("OverlayWindow.ApplyExtendedStyles DIAG: WS_EX_LAYERED omitted");
+        }
+
         var updated = ex
-            | NativeMethods.WS_EX_LAYERED
+            | layered
             | NativeMethods.WS_EX_TRANSPARENT
             | NativeMethods.WS_EX_TOOLWINDOW
             | NativeMethods.WS_EX_NOACTIVATE;
@@ -371,6 +394,17 @@ public sealed partial class OverlayWindow : Window
 
     private void EnsureShown()
     {
+        // Diagnostic rung. The bisection has shown Win+Shift+S works when the overlay window is
+        // never CREATED and fails once it has been SHOWN, with the backdrop and HWND_TOPMOST both
+        // ruled out. This switch separates the two remaining possibilities: whether the mere
+        // EXISTENCE of the layered/transparent window breaks the screen-snip capture, or whether it
+        // takes the act of showing it (AppWindow.Show / the first Activate()).
+        if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NEVERSHOW") == "1")
+        {
+            OverlayLog.Write("OverlayWindow.EnsureShown DIAG: show suppressed (window exists, stays hidden)");
+            return;
+        }
+
         // Re-assert size/position in case the monitor/DPI changed between shows.
         SizeAndPosition();
 
@@ -391,6 +425,18 @@ public sealed partial class OverlayWindow : Window
 
     private void AssertTopMost()
     {
+        // Diagnostic rung, same shape as SCRIBE_OVERLAY_DIAG_NOBACKDROP and _NOWINDOW. A live
+        // bisection showed Win+Shift+S fails whenever this window EXISTS (screen snip launches two
+        // SnippingTool processes and both exit) and succeeds when it does not (one process, and it
+        // survives). The process, the custom SystemBackdrop and the keyboard hook were each ruled
+        // out. This switch isolates the next candidate: whether holding HWND_TOPMOST is what makes
+        // the capture overlay abort.
+        if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOTOPMOST") == "1")
+        {
+            OverlayLog.Write("OverlayWindow.AssertTopMost DIAG: HWND_TOPMOST skipped");
+            return;
+        }
+
         var ok = NativeMethods.SetWindowPos(
             _hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);

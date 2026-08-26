@@ -58,3 +58,6 @@ desktop.ini
 
 # Logs / local app data
 *.log
+
+# Side-testing style eval results (tools/Scribe.StyleEval). Never part of a build.
+tools/Scribe.StyleEval/results/

@@ -14,5 +14,7 @@
     <Project Path="tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj" />
     <Project Path="tools/Scribe.Evals/Scribe.Evals.csproj" />
     <Project Path="tools/Scribe.InjectionLab/Scribe.InjectionLab.csproj" />
+    <Project Path="tools/Scribe.StyleEval/Scribe.StyleEval.csproj" />
+    <Project Path="tools/Scribe.StyleEval.Tests/Scribe.StyleEval.Tests.csproj" />
   </Folder>
 </Solution>

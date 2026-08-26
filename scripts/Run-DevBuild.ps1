@@ -39,6 +39,17 @@ Push-Location $repo
 
 function Write-Step([string]$text) { Write-Host "`n=== $text" -ForegroundColor Cyan }
 
+# Newest matching executable for the configuration being run. Newest rather than first because both
+# platform layouts can be present at once on a tree that has been built each way.
+function Find-Output([string]$relativeBin, [string]$exeName) {
+    $root = Join-Path $repo $relativeBin
+    if (-not (Test-Path $root)) { return $null }
+    Get-ChildItem -Path $root -Recurse -Filter $exeName -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*$([IO.Path]::DirectorySeparatorChar)$Configuration$([IO.Path]::DirectorySeparatorChar)*" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
 try {
     Write-Step 'Stopping any running Scribe'
     # Query first, then stop by literal id: a name-based kill would also match an unrelated process,
@@ -81,15 +92,19 @@ try {
     }
     Write-Host "  models OK ($models)"
 
-    $overlay = Join-Path $repo "src/Scribe.Overlay/bin/x64/$Configuration/net10.0-windows10.0.19041.0/win-x64/Scribe.Overlay.exe"
-    if (-not (Test-Path $overlay)) {
-        throw "Overlay executable not found at $overlay."
+    # Resolved by search rather than by a literal path. The TFM carries the Windows SDK version and
+    # moves whenever that is bumped, and the overlay lands under bin/x64 or bin depending on whether
+    # the build passed -p:Platform=x64. A hardcoded path went stale against both and failed the run
+    # AFTER the stop and the build, which leaves the machine with no Scribe running at all.
+    $overlay = Find-Output 'src/Scribe.Overlay/bin' 'Scribe.Overlay.exe'
+    if (-not $overlay) {
+        throw "Overlay executable not found under src/Scribe.Overlay/bin for $Configuration. Build first."
     }
     Write-Host "  overlay OK"
 
-    $app = Join-Path $repo "src/Scribe.App/bin/$Configuration/net10.0-windows10.0.19041.0/Scribe.exe"
-    if (-not (Test-Path $app)) {
-        throw "App executable not found at $app."
+    $app = Find-Output 'src/Scribe.App/bin' 'Scribe.exe'
+    if (-not $app) {
+        throw "App executable not found under src/Scribe.App/bin for $Configuration. Build first."
     }
 
     Write-Step 'Launching dev build'

@@ -73,6 +73,22 @@ temporarily read the existing text clipboard so it can restore that content
 after pasting the dictation. Scribe does not retain or transmit the previous
 clipboard content.
 
+Clipboard writes that Scribe performs itself are marked so Windows excludes them
+from clipboard history (Win+V) and from cross-device cloud clipboard sync.
+
+**Rewriting selected text uses the clipboard, and one part of that cannot be
+protected.** When you ask Scribe to act on text you have highlighted in another
+application, Scribe reads that selection by sending a copy command to the
+application you are in. The copy is performed by that application, not by Scribe,
+and Windows only lets the application that places data on the clipboard mark it
+as excluded. This means the text you select is placed in Windows clipboard
+history by the application it came from, and is synchronized to your other
+devices if you have cross-device clipboard turned on. Scribe cannot prevent
+this, and restoring your previous clipboard afterwards does not remove the
+history entry. If this matters for a particular document, turn off clipboard
+history in Windows Settings under System > Clipboard, or do not use the rewrite
+feature on that content. Rewriting selected text is off by default.
+
 ### Diagnostic information
 
 Scribe writes diagnostic logs locally. Logs may include application lifecycle

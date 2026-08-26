@@ -41,8 +41,15 @@ public partial class App : Application
         OverlayLog.Write("App.OnLaunched enter");
         try
         {
-            _window = new OverlayWindow();
-            OverlayLog.Write("App.OnLaunched window constructed");
+            if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOWINDOW") == "1")
+            {
+                OverlayLog.Write("App.OnLaunched DIAG: window creation skipped");
+            }
+            else
+            {
+                _window = new OverlayWindow();
+                OverlayLog.Write("App.OnLaunched window constructed");
+            }
 
             // Arm the parent watchdog before anything else: if the engine that spawned us dies in the
             // window before the pipe ever connects (pipe EOF can't fire pre-connection), this is what
@@ -58,7 +65,7 @@ public partial class App : Application
             {
                 StartIpc(pipeName!);
             }
-            else
+            else if (_window is not null)
             {
                 StartStandalone();
             }

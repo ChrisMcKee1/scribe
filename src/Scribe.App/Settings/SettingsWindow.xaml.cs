@@ -101,6 +101,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private HotkeyBinding _pendingBinding;
     private HotkeyBinding? _pendingDictationOnlyBinding;
+    private HotkeyBinding? _pendingTextActionsBinding;
+    private bool _capturingTextActions;
     private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
@@ -150,6 +152,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
         _pendingDictationOnlyBinding = _settings.DictationOnlyHotkey;
+        _pendingTextActionsBinding = _settings.TextActionsHotkey;
 
         // Match the system light/dark theme + accent colour and enable the Mica backdrop.
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
@@ -187,6 +190,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // the path Scribe itself uses is what sent a Store user hunting for a folder Windows had
         // redirected somewhere else. AppPaths probes for the real location at startup.
         AboutLogsPathBox.Text = _paths.EffectiveLogsDir;
+
+        // The path alone is not the truth. If the sink failed to open, that folder holds nothing,
+        // and a user (or a support thread) reading a stale file from it is exactly how a shipped
+        // build went a week looking like it was logging when it was not.
+        if (App.LogSink?.CurrentStatus() is { } logStatus && !logStatus.Healthy)
+        {
+            AboutLogsPathBox.Text =
+                $"{_paths.EffectiveLogsDir}   [NOT LOGGING: {logStatus.Reason}]";
+        }
+        else if (App.LogSink?.CurrentStatus() is { Path.Length: > 0 } live &&
+                 !live.Path.StartsWith(_paths.LogsDir, StringComparison.OrdinalIgnoreCase))
+        {
+            // Writing somewhere other than the advertised folder, e.g. the temp fallback.
+            AboutLogsPathBox.Text = live.Path;
+        }
         AboutDatabasePathBox.Text = _paths.EffectiveDatabasePath;
         AboutStoreLinkBox.Text = ScribeLinks.StoreWeb;
         if (_paths.IsFallbackRoot)
@@ -759,6 +777,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             DictationOnlyHotkeyBox.Text = _pendingDictationOnlyBinding is null
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
+            TextActionsCheck.IsChecked = _settings.EnableTextActions;
+            TextActionsHotkeyRow.IsEnabled = _settings.EnableTextActions;
+            TextActionDockCheck.IsChecked = _settings.ShowTextActionDock;
+            TextActionsHotkeyBox.Text = _pendingTextActionsBinding is null
+                ? string.Empty
+                : HotkeyCapture.Describe(_pendingTextActionsBinding);
             DictationOnlyModeCombo.SelectedIndex =
                 _pendingDictationOnlyBinding?.Mode == HotkeyMode.Toggle ? 1 : 0;
 
@@ -1548,6 +1572,76 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         HotkeyBox.Focus();
     }
 
+    /// <summary>
+    /// Captures the text action hotkey.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately does NOT reuse <see cref="BeginCapture"/>. That routine exists for the
+    /// push-to-talk bindings, which run on the low-level keyboard hook and therefore support bare
+    /// keys and two-key physical chords, and it has to put the hook into pass-through mode to
+    /// capture them at all. The text action trigger runs on <c>RegisterHotKey</c> instead, which
+    /// requires a modifier plus exactly one key and is matched by Windows, so a plain WPF key
+    /// handler is both sufficient and safer: it never touches the dictation hook's capture state.
+    /// </remarks>
+    private void TextActionsCaptureButton_Click(object sender, RoutedEventArgs e)
+    {
+        TextActionsHotkeyBox.Text = "Press a key combination...";
+        _capturingTextActions = true;
+        _ = TextActionsHotkeyBox.Focus();
+    }
+
+    private void TextActionsClearButton_Click(object sender, RoutedEventArgs e)
+    {
+        _capturingTextActions = false;
+        _pendingTextActionsBinding = null;
+        TextActionsHotkeyBox.Text = string.Empty;
+    }
+
+    private void TextActionsCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (TextActionsHotkeyRow is not null)
+        {
+            TextActionsHotkeyRow.IsEnabled = TextActionsCheck.IsChecked == true;
+        }
+    }
+
+    private void CaptureTextActionKey(KeyEventArgs e)
+    {
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
+        {
+            return; // still waiting for the non-modifier key
+        }
+
+        if (key == Key.Escape)
+        {
+            _capturingTextActions = false;
+            TextActionsHotkeyBox.Text = _pendingTextActionsBinding is null
+                ? string.Empty
+                : HotkeyCapture.Describe(_pendingTextActionsBinding);
+            return;
+        }
+
+        // Reuses the same builder the push-to-talk boxes use, so the two hotkey surfaces agree on
+        // modifier handling and on how a binding is rendered.
+        var candidate = HotkeyCapture.FromKeyEvent(e, HotkeyMode.Toggle);
+
+        // RegisterHotKey will happily take a bare key and then swallow it system-wide, so a plain
+        // letter would stop that letter working in every application. Require a modifier.
+        if (candidate.Modifiers == KeyModifiers.None)
+        {
+            TextActionsHotkeyBox.Text = "Add a modifier, for example Ctrl+Alt+Space";
+            return;
+        }
+
+        _capturingTextActions = false;
+        _pendingTextActionsBinding = candidate;
+        TextActionsHotkeyBox.Text = HotkeyCapture.Describe(candidate);
+    }
+
     private void DictationOnlyCaptureButton_Click(object sender, RoutedEventArgs e)
     {
         BeginCapture(dictationOnly: true);
@@ -1580,6 +1674,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Text action capture is handled here, on the WINDOW, for the same reason the push-to-talk
+        // capture below is: PreviewKeyDown tunnels from the root to the FOCUSED element only, so a
+        // handler attached to the capture box never runs while focus is still on the Set button
+        // next to it. Attaching at the window makes focus irrelevant.
+        if (_capturingTextActions)
+        {
+            CaptureTextActionKey(e);
+            return;
+        }
+
         if (!_capturing)
         {
             return;
@@ -4065,6 +4169,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.Hotkey = standardBinding;
             _settings.DictationOnlyHotkey = dictationOnlyBinding;
+            _settings.EnableTextActions = TextActionsCheck.IsChecked == true;
+            _settings.TextActionsHotkey = _pendingTextActionsBinding;
+            _settings.ShowTextActionDock = TextActionDockCheck.IsChecked == true;
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
             _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
