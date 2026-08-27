@@ -215,8 +215,7 @@ function New-ScribeMsix {
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
-  IgnorableNamespaces="uap rescap virtualization">
+  IgnorableNamespaces="uap rescap">
 
   <Identity
     Name="$IdentityName"
@@ -230,29 +229,27 @@ function New-ScribeMsix {
     <Logo>Assets\StoreLogo.png</Logo>
     <Description>Private, fully offline push-to-talk voice dictation for Windows.</Description>
 
-    <!-- Exempt ScribeData from AppData write virtualization.
+    <!-- No FileSystemWriteVirtualization exclusion, deliberately.
 
-         Without this, a packaged app that CREATES a folder under %LOCALAPPDATA% has that write
-         redirected into %LOCALAPPDATA%\Packages\<family>\LocalCache\Local (Windows 10 1903 and
-         later; see msix-src/desktop/desktop-to-uwp-behind-the-scenes.md). The app still reads its
-         own path back through the merged view, so everything works and Settings > About shows
-         %LOCALAPPDATA%\ScribeData\logs. But File Explorer, running outside the container, sees
-         nothing there. That is exactly what happened to a 0.3.10 Store user asked for a log file:
-         the folder they were sent to did not exist, and the report died there.
+         An earlier release excluded ScribeData so the folder would exist at the real
+         %LOCALAPPDATA% path a support request could point a user at. The Store DENIED the
+         unvirtualizedResources capability that requires (policy 10.6.3, 2026-08-27), and the
+         capability reference is explicit that this is not our scenario: "designed for certain
+         types of desktop PC games that are published by Microsoft and our partners... not
+         intended to be used for other scenarios, because it could compromise the system's
+         ability to uninstall cleanly."
 
-         It does not reproduce on a machine that also has the direct-download build, because
-         ScribeData already exists at the real path and redirection only applies to NEW folders.
-         That is why the behaviour survived to a release.
+         Nothing is lost by complying. Write virtualization only redirects NEWLY created folders
+         (Windows 10 1903 and later): "Modifications to existing AppData files is done on the
+         unvirtualized files... On fallback, writes to the unvirtualized files are allowed." So
+         every install that already has ScribeData keeps using the real path untouched, and only
+         a fresh Store-only install lands in the package container.
 
-         The narrow virtualization: form is the one that matters (Windows 11 is the floor here); the
-         desktop6 form is not used because it would unvirtualize the whole of AppData and HKCU for
-         no benefit. AppPaths migrates data written by earlier packaged builds forward on first run.
+         The support problem it was solving is handled in code instead, and better: AppPaths
+         .ResolveEffectiveRoot writes a probe marker and checks whether it materialises at the
+         virtualized twin, so EffectiveRootDir reports where the data PHYSICALLY is rather than
+         where we assume. Settings, About renders that with copy-path and open-folder buttons.
     -->
-    <virtualization:FileSystemWriteVirtualization>
-      <virtualization:ExcludedDirectories>
-        <virtualization:ExcludedDirectory>`$(KnownFolder:LocalAppData)\ScribeData</virtualization:ExcludedDirectory>
-      </virtualization:ExcludedDirectories>
-    </virtualization:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
@@ -282,11 +279,6 @@ function New-ScribeMsix {
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
-    <!-- Required by the virtualization:FileSystemWriteVirtualization exclusion above. Like
-         runFullTrust it is a restricted capability, so the submission carries a justification:
-         Scribe writes one folder that the user must be able to open in File Explorer to collect
-         diagnostics and to back up their own dictation history. -->
-    <rescap:Capability Name="unvirtualizedResources" />
     <DeviceCapability Name="microphone" />
   </Capabilities>
 </Package>
