@@ -46,7 +46,7 @@ public sealed class SnippetMigrationTests
             Assert.Equal("transcription_model_id", columns.ExecuteScalar());
             using var version = migrated.CreateCommand();
             version.CommandText = "PRAGMA user_version;";
-            Assert.Equal(6L, (long)(version.ExecuteScalar() ?? 0L));
+            Assert.Equal(7L, (long)(version.ExecuteScalar() ?? 0L));
         }
         finally
         {
@@ -94,7 +94,7 @@ public sealed class SnippetMigrationTests
             using var migrated = db.Open();
             using var version = migrated.CreateCommand();
             version.CommandText = "PRAGMA user_version;";
-            Assert.Equal(6L, (long)(version.ExecuteScalar() ?? 0L));
+            Assert.Equal(7L, (long)(version.ExecuteScalar() ?? 0L));
         }
         finally
         {

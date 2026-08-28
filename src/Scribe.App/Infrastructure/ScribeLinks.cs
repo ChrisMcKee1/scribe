@@ -25,4 +25,16 @@ internal static class ScribeLinks
     /// another device or platform, where the ms-windows-store protocol resolves to nothing.
     /// </summary>
     public const string StoreWeb = "https://apps.microsoft.com/detail/" + StoreProductId + "?hl=en-us&gl=US&ocid=pdpshare";
+
+    /// <summary>
+    /// Opens the Store's own rating and review surface for Scribe.
+    /// </summary>
+    /// <remarks>
+    /// Store policy requires that any in-app rating OF THE APP route here regardless of what the
+    /// user thinks, and treats sending happy users to the Store while routing unhappy ones to a
+    /// private inbox as a fraudulent practice. So this is offered unconditionally in About and is
+    /// deliberately not wired to the per-result thumbs on the History page, which rate a rewrite
+    /// rather than the product.
+    /// </remarks>
+    public const string StoreReview = "ms-windows-store://review/?ProductId=" + StoreProductId;
 }

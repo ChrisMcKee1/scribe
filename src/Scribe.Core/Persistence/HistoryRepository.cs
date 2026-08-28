@@ -103,13 +103,15 @@ public sealed class HistoryRepository : IHistoryRepository
         using var connection = _database.Open();
         var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
         var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
+        var hasRatingColumn = EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL");
         var cleanupExpression = hasCleanupColumn ? "cleanup_ms" : "NULL";
         var modelExpression = hasModelColumn ? "transcription_model_id" : "NULL";
+        var ratingExpression = hasRatingColumn ? "ai_rating" : "NULL";
         using var command = connection.CreateCommand();
         command.CommandText =
             $"""
             SELECT id, timestamp_utc, text, audio_ms, decode_ms, {cleanupExpression},
-                   target_app, audio_blob_id, {modelExpression}
+                   target_app, audio_blob_id, {modelExpression}, {ratingExpression}
             FROM history
             ORDER BY timestamp_utc DESC
             LIMIT $limit;
@@ -129,7 +131,8 @@ public sealed class HistoryRepository : IHistoryRepository
                 reader.IsDBNull(5) ? null : reader.GetInt32(5),
                 reader.IsDBNull(6) ? null : reader.GetString(6),
                 reader.IsDBNull(7) ? null : reader.GetInt64(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? AiRating.Unrated : (AiRating)reader.GetInt32(9)));
         }
 
         return results;
@@ -148,6 +151,32 @@ public sealed class HistoryRepository : IHistoryRepository
         var sampleRate = reader.GetInt32(0);
         var bytes = (byte[])reader[1];
         return new CapturedAudio(ToFloats(bytes), sampleRate);
+    }
+
+    /// <summary>
+    /// Records what the user thought of an AI-cleaned result, or clears it when they tap the same
+    /// thumb again.
+    /// </summary>
+    /// <remarks>
+    /// Writes the column defensively rather than assuming the migration ran: this repository is
+    /// used against databases that were rebuilt from a damaged file, where a table can come back
+    /// without the newest column, and a rating that throws would take the History page down over an
+    /// opinion nobody needed to record.
+    /// </remarks>
+    public void SetAiRating(long id, AiRating rating)
+    {
+        using var connection = _database.Open();
+        if (!EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL"))
+        {
+            return;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE history SET ai_rating = $rating WHERE id = $id;";
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue(
+            "$rating", rating == AiRating.Unrated ? DBNull.Value : (int)rating);
+        command.ExecuteNonQuery();
     }
 
     public void Delete(long id)

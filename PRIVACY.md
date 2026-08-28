@@ -31,6 +31,22 @@ corresponding history entry until you delete that entry or clear your history.
 
 Scribe never transmits microphone audio off your device.
 
+### Reporting an AI result
+
+If AI cleanup or a rewrite produces something inappropriate, you can report it
+from the History page or from Settings, About. Scribe composes the report and
+opens your email app with it, or copies it to your clipboard. Scribe does not
+send anything itself, and nothing leaves your device unless you send it.
+
+The report contains the AI result, the model and provider that produced it, your
+Scribe version, and the time. It does not include your audio, any other
+dictation, or what you originally said, unless you choose to add that yourself
+before sending. You can read the whole report before deciding.
+
+Rating a result useful or not useful is stored only on this PC. Those ratings are
+never transmitted, and they are separate from Microsoft Store ratings and
+reviews, which are handled entirely by the Store.
+
 ### Dictation history and usage information
 
 Scribe stores completed transcripts locally so that you can review and recover

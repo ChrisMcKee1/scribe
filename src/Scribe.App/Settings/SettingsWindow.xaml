@@ -12,6 +12,39 @@
         PreviewKeyUp="HotkeyBox_PreviewKeyUp"
         Deactivated="SettingsWindow_Deactivated_StopHotkeyCapture">
     <ui:FluentWindow.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+
+        <!-- Small, quiet, icon-only. The thumbs sit inside a data grid row and must not compete
+             with the row's text: they are an optional aside, not a call to action. Segoe MDL2
+             Assets supplies the glyphs, matching the icons used elsewhere in this window. -->
+        <Style x:Key="HistoryThumbButton" TargetType="Button">
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Margin" Value="0,0,2,0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background"
+                                        Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Page header shown at the top of every section, Windows Settings style. -->
         <Style TargetType="TextBlock" x:Key="PageTitle">
             <Setter Property="FontSize" Value="26"/>
@@ -1494,6 +1527,37 @@
                                         <DataGridTextColumn Header="App" Binding="{Binding App}" Width="Auto"/>
                                         <DataGridTextColumn Header="Audio" Binding="{Binding Audio}" Width="Auto"/>
                                         <DataGridTextColumn Header="Decode" Binding="{Binding Decode}" Width="Auto"/>
+                                        <!-- Scoped to the RESULT, never to Scribe. Store policy requires any
+                                             rating OF THE APP to route to the Store's own mechanism regardless
+                                             of sentiment, and treats a private thumbs-down path paired with a
+                                             public thumbs-up path as a fraudulent practice. The header says
+                                             "Result" for that reason; do not retitle it to anything that reads
+                                             as rating the product. -->
+                                        <DataGridTemplateColumn Header="Result" Width="Auto">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Orientation="Horizontal"
+                                                                Visibility="{Binding ProducedByAi, Converter={StaticResource BoolToVisibility}}">
+                                                        <Button Style="{StaticResource HistoryThumbButton}"
+                                                                Content="{Binding ThumbUpGlyph}"
+                                                                Tag="{Binding Id}"
+                                                                ToolTip="This rewrite was useful"
+                                                                Click="HistoryThumbUp_Click"/>
+                                                        <Button Style="{StaticResource HistoryThumbButton}"
+                                                                Content="{Binding ThumbDownGlyph}"
+                                                                Tag="{Binding Id}"
+                                                                ToolTip="This rewrite was not useful"
+                                                                Click="HistoryThumbDown_Click"/>
+                                                        <Button Style="{StaticResource HistoryThumbButton}"
+                                                                Content="&#xE724;"
+                                                                Tag="{Binding Id}"
+                                                                ToolTip="Report this AI result to the developer"
+                                                                Visibility="{Binding CanReport, Converter={StaticResource BoolToVisibility}}"
+                                                                Click="HistoryReport_Click"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="AI cleanup" Binding="{Binding Cleanup}" Width="Auto">
                                             <DataGridTextColumn.ElementStyle>
                                                 <Style TargetType="TextBlock">
@@ -1970,6 +2034,49 @@
                                                    Margin="0,12,0,0" MinWidth="150"
                                                    Click="PrivacyPolicyButton_Click"/>
                                     </StackPanel>
+                                </ui:Card>
+
+                                <!-- Store policy 11.16 requires a reporting route for AI content that is
+                                     reachable regardless of what is in History, so this card is the
+                                     unconditional one; the per-result buttons in History are the
+                                     contextual path. -->
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                            <TextBlock Text="Report an AI result" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
+                                                       Text="If AI cleanup or a rewrite produced something inappropriate, tell us. Scribe opens your mail app with the report so you can read it before sending; nothing is transmitted on its own. You can also report a specific result from the History page."/>
+                                        </StackPanel>
+                                        <ui:Button Grid.Column="1" Content="Report AI content"
+                                                   VerticalAlignment="Center" MinWidth="150"
+                                                   Click="AboutReportAiContent_Click"/>
+                                    </Grid>
+                                </ui:Card>
+
+                                <!-- Deliberately unconditional and unconnected to the History thumbs.
+                                     Store policy requires an in-app rating of the APP to route to the
+                                     Store's own mechanism regardless of sentiment; offering this only
+                                     to people who liked a result is the pattern filed under fraudulent
+                                     activity. Anyone can reach this at any time. -->
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                            <TextBlock Text="Rate Scribe in the Store" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
+                                                       Text="Ratings and reviews are handled by the Microsoft Store, whatever you want to say."/>
+                                        </StackPanel>
+                                        <ui:Button Grid.Column="1" Content="Open Store rating"
+                                                   VerticalAlignment="Center" MinWidth="150"
+                                                   Click="AboutRateInStore_Click"/>
+                                    </Grid>
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingCard}">

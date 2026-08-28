@@ -20,7 +20,7 @@ public sealed class ScribeDatabase : IDisposable
     public const string ExpectedSqliteVersion = "3.53.4";
 
     private const int BusyTimeoutMs = 10_000;
-    private const int SchemaVersion = 6;
+    private const int SchemaVersion = 7;
 
     // Tables copied out of a damaged database during salvage, ordered so foreign-key targets
     // (audio_blobs) are restored before the rows that reference them (history).
@@ -423,6 +423,11 @@ public sealed class ScribeDatabase : IDisposable
             Execute(connection, SchemaV6, transaction);
         }
 
+        if (current < 7 && HistoryNeedsColumn(connection, transaction, "ai_rating"))
+        {
+            Execute(connection, SchemaV7, transaction);
+        }
+
         // PRAGMA user_version does not accept parameters; SchemaVersion is a trusted constant.
         Execute(connection, $"PRAGMA user_version={SchemaVersion};", transaction);
         transaction.Commit();
@@ -585,5 +590,15 @@ public sealed class ScribeDatabase : IDisposable
     // statistics never mix Parakeet with Moonshine or unknown historical rows.
     private const string SchemaV6 = """
         ALTER TABLE history ADD COLUMN transcription_model_id TEXT NULL;
+        """;
+
+    /// <summary>
+    /// Whether the user marked an AI-cleaned result useful. NULL means unrated, which is the
+    /// overwhelming majority of rows and the reason this is nullable rather than defaulted: an
+    /// unrated result and a result nobody minded are different facts, and collapsing them would
+    /// make the counts meaningless the moment anyone tried to read them.
+    /// </summary>
+    private const string SchemaV7 = """
+        ALTER TABLE history ADD COLUMN ai_rating INTEGER NULL;
         """;
 }
