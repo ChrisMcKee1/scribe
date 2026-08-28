@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -8,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using Scribe.Core.Feedback;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -2794,6 +2796,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void AboutCopyStoreLink_Click(object sender, RoutedEventArgs e) =>
         CopyPathToClipboard(ScribeLinks.StoreWeb, "Store link");
 
+    /// <summary>
+    /// The unconditional reporting route required by Store policy 11.16, reachable whether or not
+    /// History has anything in it.
+    /// </summary>
+    private void AboutReportAiContent_Click(object sender, RoutedEventArgs e) =>
+        ShowAiReportDialog(string.Empty);
+
+    /// <summary>
+    /// Sends the user to the Store's own rating surface.
+    /// </summary>
+    /// <remarks>
+    /// Offered to everyone, always, and never gated on the History thumbs. Routing only satisfied
+    /// users here while steering unhappy ones to a private inbox is the pattern Store policy files
+    /// under fraudulent activity, so the two must stay unconnected.
+    /// </remarks>
+    private void AboutRateInStore_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink(ScribeLinks.StoreReview, "Could not open the Microsoft Store rating page.");
+
     // --- About: where your data lives --------------------------------------------------------
     // The paths come from AppPaths, the same object every writer uses, so what is shown here can
     // never drift from where the files actually are. A portable profile (SCRIBE_DATA_DIR) or a
@@ -3850,6 +3870,103 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Owner = this,
         };
         return await dialog.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary;
+    }
+
+    /// <summary>
+    /// Puts the report on the clipboard, swallowing the failure.
+    /// </summary>
+    /// <remarks>
+    /// Clipboard.SetText throws when another process holds the clipboard open, which is common and
+    /// transient. Losing the report is bad; taking the Settings window down over it is worse.
+    /// </remarks>
+    private void CopyReportToClipboard(string report)
+    {
+        try
+        {
+            Clipboard.SetText(report);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not copy the AI report to the clipboard.");
+        }
+    }
+
+    /// <summary>
+    /// Offers to report one AI result to the developer, showing the exact contents first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Required by Store policy 11.16, which obliges a product generating live AI content to
+    /// "provide a means for users to report inappropriate content to the developer". Scribe's 0.3.12
+    /// submission was rejected for its absence.
+    /// </para>
+    /// <para>
+    /// Scribe transmits nothing here. The report is composed locally and handed to the user's mail
+    /// client or clipboard, and a person decides whether to send it. That is not squeamishness: the
+    /// report necessarily contains the user's own words, PRIVACY.md states that nothing leaves the
+    /// device, and "fully offline" is the product's central claim. Posting it to an endpoint would
+    /// make the privacy statement false in order to satisfy a policy about protecting users.
+    /// </para>
+    /// <para>
+    /// The source text is offered as a secondary action rather than included by default, because it
+    /// is the most sensitive part and the output alone is usually enough to judge.
+    /// </para>
+    /// </remarks>
+    private async void ShowAiReportDialog(string output)
+    {
+        var version = UpdateService.RunningVersion;
+        var provider = _settings.AiCleanupProvider.ToString();
+        var model = string.IsNullOrWhiteSpace(_settings.AiCleanupModel)
+            ? "(default)"
+            : _settings.AiCleanupModel.Trim();
+
+        var report = AiContentReport.Build(output, provider, model, version, DateTimeOffset.UtcNow);
+
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Report this AI result",
+            Content =
+                $"This sends a report to {AiContentReport.SupportAddress}.\n\n" +
+                "Scribe does not send anything by itself. Your mail app opens with the report " +
+                "below and you decide whether to send it. This is not a Microsoft Store review.\n\n" +
+                "The report contains the AI result, the model that produced it, and your Scribe " +
+                "version. It does not include what you originally said, your audio, or any other " +
+                "dictation.\n\n" +
+                "----------------------------------------\n" +
+                report,
+            PrimaryButtonText = "Open email",
+            SecondaryButtonText = "Copy report",
+            CloseButtonText = "Cancel",
+            Owner = this,
+        };
+
+        var choice = await dialog.ShowDialogAsync();
+        if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
+        {
+            var uri = AiContentReport.BuildMailtoUri(AiContentReport.BuildSubject(version), report);
+            try
+            {
+                Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                // No mail client, or the shell refused the handler. Falling back to the clipboard
+                // keeps the report recoverable instead of losing the user's effort to a dead end.
+                _log.LogWarning(ex, "Could not open a mail client for the AI report.");
+                CopyReportToClipboard(report);
+                ShowThemedMessage(
+                    "Report copied",
+                    "Scribe could not open your mail app, so the report was copied to your " +
+                    $"clipboard instead. Please paste it into an email to {AiContentReport.SupportAddress}.");
+            }
+        }
+        else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary)
+        {
+            CopyReportToClipboard(report);
+            ShowThemedMessage(
+                "Report copied",
+                $"The report is on your clipboard. Please paste it into an email to {AiContentReport.SupportAddress}.");
+        }
     }
 
     /// <summary>
@@ -5223,6 +5340,85 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void HistoryGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e) => CopyHistoryText();
 
+    private void HistoryThumbUp_Click(object sender, RoutedEventArgs e) =>
+        RateHistoryRow(sender, AiRating.Useful);
+
+    private void HistoryThumbDown_Click(object sender, RoutedEventArgs e) =>
+        RateHistoryRow(sender, AiRating.NotUseful);
+
+    /// <summary>
+    /// Records an opinion about one AI result, or clears it when the same thumb is pressed twice.
+    /// </summary>
+    /// <remarks>
+    /// Stays local. This is a quality signal about a rewrite, never a rating of Scribe: Store policy
+    /// requires an in-app rating OF THE APP to route to the Store's own mechanism regardless of
+    /// sentiment, and treats sending positive sentiment to the Store while keeping negative
+    /// sentiment private as a fraudulent practice. The Store rating action lives in About, is
+    /// unconditional, and is deliberately not wired to these buttons.
+    /// </remarks>
+    private void RateHistoryRow(object sender, AiRating rating)
+    {
+        if (sender is not FrameworkElement { Tag: long id })
+        {
+            return;
+        }
+
+        var index = IndexOfHistoryRow(id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        // Pressing the same thumb again clears it, so a misclick is undoable without a second
+        // control explaining itself.
+        var next = _historyRows[index].Rating == rating ? AiRating.Unrated : rating;
+
+        try
+        {
+            _history.SetAiRating(id, next);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not save the rating for history entry {Id}.", id);
+            return;
+        }
+
+        _historyRows[index] = _historyRows[index] with { Rating = next };
+    }
+
+    /// <summary>
+    /// Opens a report for one AI result. Composes it, shows the user exactly what it contains, and
+    /// leaves the sending to them.
+    /// </summary>
+    private void HistoryReport_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: long id })
+        {
+            return;
+        }
+
+        var index = IndexOfHistoryRow(id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        ShowAiReportDialog(_historyRows[index].Text);
+    }
+
+    private int IndexOfHistoryRow(long id)
+    {
+        for (var i = 0; i < _historyRows.Count; i++)
+        {
+            if (_historyRows[i].Id == id)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private void HistoryCopyButton_Click(object sender, RoutedEventArgs e) => CopyHistoryText();
 
     private void CopyHistoryText()
@@ -5638,6 +5834,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private sealed record HistoryRow(
         long Id, string When, string Text, string App, string Audio, string Decode, string Cleanup)
     {
+        /// <summary>
+        /// Whether AI cleanup actually ran for this dictation. The thumbs and the report only apply
+        /// to generative output: a dictation that was merely transcribed, or that had the user's own
+        /// dictionary applied, is not AI-generated content and reporting it as such would be noise.
+        /// </summary>
+        public bool ProducedByAi { get; init; }
+
+        /// <summary>What the user said about the result, if anything.</summary>
+        public AiRating Rating { get; init; } = AiRating.Unrated;
+
+        /// <summary>Filled glyph when chosen, outline when not. Segoe MDL2 Assets.</summary>
+        public string ThumbUpGlyph => Rating == AiRating.Useful ? "" : "";
+
+        public string ThumbDownGlyph => Rating == AiRating.NotUseful ? "" : "";
+
+        /// <summary>The report path opens only on a thumbs-down, which is where it is wanted.</summary>
+        public bool CanReport => ProducedByAi && Rating == AiRating.NotUseful;
+
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
             entry.TimestampUtc.ToLocalTime().ToString("MMM d, h:mm tt"),
@@ -5645,7 +5859,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             string.IsNullOrWhiteSpace(entry.TargetApp) ? HistoryRowFormat.NotApplicable : entry.TargetApp!,
             HistoryRowFormat.Audio(entry.AudioMilliseconds),
             HistoryRowFormat.Latency(entry.DecodeMilliseconds),
-            HistoryRowFormat.Latency(entry.CleanupMilliseconds));
+            HistoryRowFormat.Latency(entry.CleanupMilliseconds))
+        {
+            ProducedByAi = entry.CleanupMilliseconds is > 0,
+            Rating = entry.AiRating,
+        };
     }
 
     /// <summary>Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable.</summary>
