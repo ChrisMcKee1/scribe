@@ -5,7 +5,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Full Settings window replacing the earlier static scaffold text. Sections mirror the feature
-/// areas already implemented: overlay position, hotkey, dictionary, snippets, and per-app
+/// areas already implemented: overlay position, input (hotkey and microphone), dictionary, snippets, and per-app
 /// profiles. Backed directly by `PersistenceStore` (no separate view-model layer yet; the store's
 /// CRUD surface is already small and synchronous, matching the CLI verbs used to verify each
 /// feature).
@@ -33,7 +33,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .overlay: return "Overlay"
-        case .hotkey: return "Hotkey"
+        case .hotkey: return "Input"
         case .dictionary: return "Dictionary"
         case .libraries: return "Libraries"
         case .snippets: return "Snippets"
@@ -49,7 +49,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .overlay: return "rectangle.on.rectangle"
-        case .hotkey: return "keyboard"
+        case .hotkey: return "slider.horizontal.3"
         case .dictionary: return "character.book.closed"
         case .libraries: return "books.vertical"
         case .snippets: return "text.append"
