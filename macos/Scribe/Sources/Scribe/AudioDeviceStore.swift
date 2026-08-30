@@ -64,6 +64,36 @@ enum AudioDeviceStore {
         return deviceIDs.first { deviceUID($0) == uid }
     }
 
+    /// Looks up the UID/name for an arbitrary `AudioDeviceID`, e.g. one read back from a live
+    /// `AudioUnit` via `kAudioOutputUnitProperty_CurrentDevice`, for diagnostics such as
+    /// `--verify-selected-microphone`.
+    static func describe(_ deviceID: AudioDeviceID) -> AudioInputDevice? {
+        guard let uid = deviceUID(deviceID), let name = deviceName(deviceID) else { return nil }
+        return AudioInputDevice(uid: uid, name: name, isDefault: deviceID == defaultInputDeviceID())
+    }
+
+    /// Ground-truth check for whether a given device is actively being used for I/O right now,
+    /// independent of whatever `AVAudioEngine`/AUHAL reports for its own current-device property
+    /// (which can point at an internal aggregate wrapper on modern macOS). Used to verify a
+    /// specific microphone selection actually took effect.
+    static func isDeviceRunning(uid: String) -> Bool {
+        guard let deviceIDs = allDeviceIDs(), let deviceID = deviceIDs.first(where: { deviceUID($0) == uid }) else {
+            return false
+        }
+
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+
+        var isRunning: UInt32 = 0
+        var dataSize = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &isRunning) == noErr else {
+            return false
+        }
+        return isRunning != 0
+    }
+
     private static func allDeviceIDs() -> [AudioDeviceID]? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,

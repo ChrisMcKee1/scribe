@@ -933,6 +933,10 @@ private enum CommandLineTranscriptionTool {
             return runListDictionaryLibraries()
         case "--set-launch-at-login":
             return runSetLaunchAtLogin(arguments: arguments)
+        case "--list-input-devices":
+            return runListInputDevices()
+        case "--verify-selected-microphone":
+            return runVerifySelectedMicrophone()
         default:
             return false
         }
@@ -1072,6 +1076,67 @@ private enum CommandLineTranscriptionTool {
         fputs("\(libraries.count) built-in dictionary librar(y/ies):\n", stdout)
         for library in libraries {
             fputs("  \(library.id): \(library.name) [\(library.category)] (\(library.entries.count) terms)\n", stdout)
+        }
+        return true
+    }
+
+    /// Lists every microphone CoreAudio currently exposes (built-in, USB, Bluetooth), the same
+    /// devices the "Microphone" picker in Settings > Hotkey offers. Diagnostic helper for
+    /// confirming a newly paired device (e.g. a Bluetooth dongle) is actually visible before
+    /// selecting it in the UI.
+    private static func runListInputDevices() -> Bool {
+        let devices = AudioDeviceStore.availableInputDevices()
+        fputs("\(devices.count) input device(s):\n", stdout)
+        for device in devices {
+            let marker = device.isDefault ? " (default)" : ""
+            fputs("  \(device.uid): \(device.name)\(marker)\n", stdout)
+        }
+        if let selectedUID = AudioDeviceStore.selectedDeviceUID {
+            fputs("Currently selected: \(selectedUID) (\(AudioDeviceStore.selectedDeviceName ?? "unknown name"))\n", stdout)
+        } else {
+            fputs("Currently selected: system default\n", stdout)
+        }
+        return true
+    }
+
+    /// Starts the real `AudioCaptureEngine`, reads back which `AudioDeviceID` the AUHAL unit is
+    /// actually pulling audio from, and prints its name, confirming the saved microphone selection
+    /// took effect rather than trusting log output alone.
+    private static func runVerifySelectedMicrophone() -> Bool {
+        let engine = AudioCaptureEngine()
+        do {
+            try engine.start()
+        } catch {
+            fputs("Failed to start capture: \(error.localizedDescription)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        defer { _ = engine.stop() }
+
+        guard let deviceID = engine.currentInputDeviceID() else {
+            fputs("Could not read back the active input device.\n", stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        if let device = AudioDeviceStore.describe(deviceID) {
+            fputs("Active microphone (AUHAL property): \(device.name) (\(device.uid))\n", stdout)
+        } else {
+            fputs("Active microphone (AUHAL property): AudioDeviceID \(deviceID) (name unavailable)\n", stdout)
+        }
+
+        // AVAudioEngine can report an internal aggregate wrapper here on modern macOS even when a
+        // specific hardware device was requested, so also ask CoreAudio directly which physical
+        // input device is actually running right now: this is the ground truth.
+        fputs("\nDevices CoreAudio reports as actively running:\n", stdout)
+        var sawRunningDevice = false
+        for device in AudioDeviceStore.availableInputDevices() {
+            if AudioDeviceStore.isDeviceRunning(uid: device.uid) {
+                fputs("  RUNNING: \(device.name) (\(device.uid))\n", stdout)
+                sawRunningDevice = true
+            }
+        }
+        if !sawRunningDevice {
+            fputs("  (none reported running)\n", stdout)
         }
         return true
     }

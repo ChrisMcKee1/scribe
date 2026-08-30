@@ -159,11 +159,22 @@ final class AudioCaptureEngine {
     /// which is also how a Bluetooth microphone works with zero code here, as long as it is the
     /// current system default input.
     private func applySelectedInputDeviceIfNeeded(to inputNode: AVAudioInputNode) {
-        guard var deviceID = AudioDeviceStore.resolveSelectedDeviceID() else { return }
+        let debug = ProcessInfo.processInfo.environment["SCRIBE_AUDIO_DEBUG"] != nil
+        guard var deviceID = AudioDeviceStore.resolveSelectedDeviceID() else {
+            if debug { fputs("DEBUG applySelectedInputDeviceIfNeeded: resolveSelectedDeviceID() returned nil\n", stderr) }
+            return
+        }
         guard let audioUnit = inputNode.audioUnit else {
+            if debug { fputs("DEBUG applySelectedInputDeviceIfNeeded: inputNode.audioUnit is nil\n", stderr) }
             logger.warning("Could not select the saved microphone: the input node has no underlying audio unit yet.")
             return
         }
+
+        // By the time `inputNode` is first touched, AVAudioEngine has already initialized the
+        // AUHAL unit against the system default device, and `kAudioOutputUnitProperty_CurrentDevice`
+        // is documented to only take effect on an uninitialized unit. Bracket the property set with
+        // an uninitialize/reinitialize or the unit silently keeps using its original device.
+        let uninitStatus = AudioUnitUninitialize(audioUnit)
 
         let status = AudioUnitSetProperty(
             audioUnit,
@@ -173,9 +184,40 @@ final class AudioCaptureEngine {
             &deviceID,
             UInt32(MemoryLayout<AudioDeviceID>.size))
 
+        let initStatus = AudioUnitInitialize(audioUnit)
+        if debug {
+            fputs("DEBUG applySelectedInputDeviceIfNeeded: deviceID=\(deviceID) uninit=\(uninitStatus) set=\(status) init=\(initStatus)\n", stderr)
+        }
+
         if status != noErr {
             logger.warning("Failed to select the saved microphone (OSStatus \(status, privacy: .public)); falling back to the system default input.")
         }
+        if uninitStatus != noErr {
+            logger.warning("Failed to uninitialize the capture audio unit before selecting the saved microphone (OSStatus \(uninitStatus, privacy: .public)).")
+        }
+        if initStatus != noErr {
+            logger.warning("Failed to reinitialize the capture audio unit after selecting the saved microphone (OSStatus \(initStatus, privacy: .public)).")
+        }
+        if status == noErr, uninitStatus == noErr, initStatus == noErr {
+            logger.info("Selected microphone: \(AudioDeviceStore.selectedDeviceName ?? "unknown", privacy: .public)")
+        }
+    }
+
+    /// Reads back the `AudioDeviceID` the AUHAL unit is actually pulling audio from right now, so
+    /// tooling (e.g. `--verify-selected-microphone`) can confirm device selection took effect
+    /// without depending on `OSLog` output being available in the caller's context.
+    func currentInputDeviceID() -> AudioDeviceID? {
+        guard let audioUnit = audioEngine.inputNode.audioUnit else { return nil }
+        var deviceID = AudioDeviceID(0)
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            &dataSize)
+        return status == noErr ? deviceID : nil
     }
 
     private func cleanupCaptureGraph() {
