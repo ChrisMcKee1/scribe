@@ -68,3 +68,6 @@ desktop.ini
 .squad/.cache/
 # Squad: SubSquad activation file (local to this machine)
 .squad-workstream
+
+# Side-testing style eval results (tools/Scribe.StyleEval). Never part of a build.
+tools/Scribe.StyleEval/results/

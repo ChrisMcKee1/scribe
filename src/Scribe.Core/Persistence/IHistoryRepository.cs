@@ -21,6 +21,9 @@ public interface IHistoryRepository
     CapturedAudio? GetAudio(long blobId);
 
     /// <summary>Deletes a history row and its uniquely owned audio blob.</summary>
+    /// <summary>Records what the user thought of an AI-cleaned result.</summary>
+    void SetAiRating(long id, AiRating rating);
+
     void Delete(long id);
 
     /// <summary>Removes all history and stored audio.</summary>

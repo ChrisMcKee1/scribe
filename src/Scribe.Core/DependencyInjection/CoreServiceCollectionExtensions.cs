@@ -44,6 +44,10 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
         services.AddSingleton<IHotkeyService, HotkeyService>();
         services.AddSingleton<ITextInjector, TextInjector>();
+        // Resolved with the optional probe when the host registered one (the WPF shell does).
+        services.AddSingleton(sp => new SelectionReader(
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SelectionReader>>(),
+            sp.GetService<ISelectionProbe>()));
         services.AddSingleton<IVadService, VadService>();
 
         services.AddSingleton<ScribeDatabase>();

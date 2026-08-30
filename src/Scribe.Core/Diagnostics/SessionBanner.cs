@@ -23,9 +23,11 @@ public sealed record SessionIdentity(string Id, int ProcessId, DateTimeOffset St
 }
 
 /// <summary>
-/// How this copy of Scribe was installed. It decides which update path runs, and (until the
-/// package manifest excluded ScribeData from AppData virtualization) it decided whether the user
-/// could find their own log folder at all, so it belongs at the top of every log.
+/// How this copy of Scribe was installed. It decides which update path runs, and it determines
+/// whether Windows redirects the app's writes, which decides where the user's own log folder
+/// physically is. A packaged build's data may sit in the package container rather than at the
+/// %LOCALAPPDATA% path the app addresses, so this belongs at the top of every log: without it,
+/// "look in ScribeData\logs" is advice that sends a Store user to an empty folder.
 /// </summary>
 public enum InstallChannel
 {

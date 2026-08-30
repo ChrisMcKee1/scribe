@@ -31,6 +31,22 @@ corresponding history entry until you delete that entry or clear your history.
 
 Scribe never transmits microphone audio off your device.
 
+### Reporting an AI result
+
+If AI cleanup or a rewrite produces something inappropriate, you can report it
+from the History page or from Settings, About. Scribe composes the report and
+opens your email app with it, or copies it to your clipboard. Scribe does not
+send anything itself, and nothing leaves your device unless you send it.
+
+The report contains the AI result, the model and provider that produced it, your
+Scribe version, and the time. It does not include your audio, any other
+dictation, or what you originally said, unless you choose to add that yourself
+before sending. You can read the whole report before deciding.
+
+Rating a result useful or not useful is stored only on this PC. Those ratings are
+never transmitted, and they are separate from Microsoft Store ratings and
+reviews, which are handled entirely by the Store.
+
 ### Dictation history and usage information
 
 Scribe stores completed transcripts locally so that you can review and recover
@@ -72,6 +88,22 @@ If clipboard-paste injection is selected or used as a fallback, Scribe may
 temporarily read the existing text clipboard so it can restore that content
 after pasting the dictation. Scribe does not retain or transmit the previous
 clipboard content.
+
+Clipboard writes that Scribe performs itself are marked so Windows excludes them
+from clipboard history (Win+V) and from cross-device cloud clipboard sync.
+
+**Rewriting selected text uses the clipboard, and one part of that cannot be
+protected.** When you ask Scribe to act on text you have highlighted in another
+application, Scribe reads that selection by sending a copy command to the
+application you are in. The copy is performed by that application, not by Scribe,
+and Windows only lets the application that places data on the clipboard mark it
+as excluded. This means the text you select is placed in Windows clipboard
+history by the application it came from, and is synchronized to your other
+devices if you have cross-device clipboard turned on. Scribe cannot prevent
+this, and restoring your previous clipboard afterwards does not remove the
+history entry. If this matters for a particular document, turn off clipboard
+history in Windows Settings under System > Clipboard, or do not use the rewrite
+feature on that content. Rewriting selected text is off by default.
 
 ### Diagnostic information
 

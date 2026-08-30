@@ -20,6 +20,7 @@ internal sealed class TrayIconHost : IDisposable
     private readonly TaskbarIcon _icon;
     private readonly MenuItem _pauseItem;
     private readonly MenuItem _aiItem;
+    private readonly MenuItem _textActionsItem;
 
     // The icon currently assigned to the tray. Held so its handle can be released once it has been
     // replaced; H.NotifyIcon owns nothing beyond the instance it is showing.
@@ -37,6 +38,12 @@ internal sealed class TrayIconHost : IDisposable
 
     /// <summary>Raised when the user picks "Add to dictionary" from the tray menu.</summary>
     public event Action? AddToDictionaryRequested;
+
+    /// <summary>
+    /// Raised when the user picks "Rewrite selected text". Hidden unless the feature is switched on,
+    /// so a user who has never enabled it sees no menu entry for it.
+    /// </summary>
+    public event Action? TextActionsRequested;
 
     /// <summary>Raised when the user explicitly asks to copy the last finalized dictation.</summary>
     public event Action? CopyLastDictationRequested;
@@ -90,6 +97,14 @@ internal sealed class TrayIconHost : IDisposable
         var settings = new MenuItem { Header = "Settings" };
         settings.Click += (_, _) => SettingsRequested?.Invoke();
         menu.Items.Add(settings);
+
+        _textActionsItem = new MenuItem
+        {
+            Header = "Rewrite selected text",
+            Visibility = Visibility.Collapsed,
+        };
+        _textActionsItem.Click += (_, _) => TextActionsRequested?.Invoke();
+        menu.Items.Add(_textActionsItem);
 
         var addToDictionary = new MenuItem { Header = "Add to dictionary" };
         addToDictionary.Click += (_, _) => AddToDictionaryRequested?.Invoke();
@@ -194,6 +209,10 @@ internal sealed class TrayIconHost : IDisposable
 
     /// <summary>Reflects the persisted AI-cleanup setting in the quick-toggle check mark.</summary>
     public void SetAiCleanupChecked(bool enabled) => Dispatch(() => _aiItem.IsChecked = enabled);
+
+    /// <summary>Shows or hides the "Rewrite selected text" entry as the feature is toggled.</summary>
+    public void SetTextActionsVisible(bool visible) => Dispatch(() =>
+        _textActionsItem.Visibility = visible ? Visibility.Visible : Visibility.Collapsed);
 
     /// <summary>Surfaces a transient error to the user via the tray tooltip.</summary>
     public void ShowError(string message) => Dispatch(() =>

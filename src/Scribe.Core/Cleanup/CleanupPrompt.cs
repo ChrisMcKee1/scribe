@@ -48,7 +48,8 @@ public static class CleanupPrompt
         "translate the dictation unless I explicitly ask you to. Use correct punctuation, meaning " +
         "commas, periods, semicolons, colons, question marks, and parentheses, according to " +
         "sentence structure. Do not use dash punctuation to join clauses; use a comma, colon, " +
-        "semicolon, or period instead. " +
+        "semicolon, or period instead. That governs the punctuation you are choosing: never delete " +
+        "an em or en dash that was already in the text you were given. " +
         "Break long run-on speech into properly formed sentences, and start a new " +
         "paragraph when the topic shifts. Separate paragraphs with one blank line. Remove filler " +
         "words and false starts (such as \"um\", " +

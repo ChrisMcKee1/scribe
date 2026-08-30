@@ -1,0 +1,133 @@
+<Window x:Class="Scribe.App.TextActions.TextActionDockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Scribe dock"
+        Width="60" Height="60"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowsTransparency="False"
+        Background="#1C1C1E"
+        WindowStartupLocation="Manual"
+        SourceInitialized="OnSourceInitialized"
+        MouseLeftButtonDown="OnMouseLeftButtonDown"
+        MouseLeftButtonUp="OnMouseLeftButtonUp"
+        MouseMove="OnMouseMove"
+        MouseEnter="OnMouseEnter"
+        MouseLeave="OnMouseLeave">
+    <!--
+        AllowsTransparency is deliberately FALSE. AGENTS.md records a long-running "black box" bug
+        where WPF's AllowsTransparency plus layered-window rendering intermittently painted an opaque
+        rectangle, which is why the recording pill was moved to a separate WinUI process. Rounded
+        corners come from DWM instead (DWMWA_WINDOW_CORNER_PREFERENCE, applied in the code-behind),
+        so this window never touches the layered path.
+
+        Every animated property here is a RenderTransform or an Opacity. Both compose on the render
+        thread without invalidating layout, which is what keeps a surface that animates all day from
+        costing a layout pass per frame.
+    -->
+    <Grid x:Name="Root" RenderTransformOrigin="0.5,0.5">
+        <Grid.RenderTransform>
+            <ScaleTransform x:Name="PressScale" ScaleX="1" ScaleY="1"/>
+        </Grid.RenderTransform>
+
+        <!-- Celebration pulses. Two rings on a stagger read as a single expanding wave rather than
+             two events. Parked at zero opacity; only the Done state runs them. -->
+        <Ellipse x:Name="Ring1" Width="46" Height="46" Opacity="0"
+                 StrokeThickness="2" Stroke="#30D158" RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform>
+                <ScaleTransform x:Name="Ring1Scale" ScaleX="1" ScaleY="1"/>
+            </Ellipse.RenderTransform>
+        </Ellipse>
+        <Ellipse x:Name="Ring2" Width="46" Height="46" Opacity="0"
+                 StrokeThickness="2" Stroke="#30D158" RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform>
+                <ScaleTransform x:Name="Ring2Scale" ScaleX="1" ScaleY="1"/>
+            </Ellipse.RenderTransform>
+        </Ellipse>
+
+        <!-- Soft outer halo, tinted by state. Gives the tile depth against arbitrary content behind
+             it without needing per-pixel window transparency. -->
+        <Ellipse x:Name="Halo" Width="54" Height="54" Opacity="0.16" Fill="#3A3A3C"/>
+
+        <!-- The state ring. Colour carries the meaning so it is readable at a glance and without
+             relying on reading a small glyph. -->
+        <Ellipse x:Name="StateRing"
+                 Width="46" Height="46"
+                 StrokeThickness="2"
+                 Stroke="#3A3A3C"
+                 RenderTransformOrigin="0.5,0.5">
+            <Ellipse.RenderTransform>
+                <ScaleTransform x:Name="RingScale" ScaleX="1" ScaleY="1"/>
+            </Ellipse.RenderTransform>
+            <Ellipse.Fill>
+                <RadialGradientBrush x:Name="FaceFill" GradientOrigin="0.4,0.32" Center="0.5,0.5"
+                                     RadiusX="0.65" RadiusY="0.65">
+                    <GradientStop x:Name="FillTop" Color="#3A3A3E" Offset="0"/>
+                    <GradientStop x:Name="FillBottom" Color="#242428" Offset="1"/>
+                </RadialGradientBrush>
+            </Ellipse.Fill>
+        </Ellipse>
+
+        <!-- The face. Two eyes and a mouth, drawn rather than an emoji glyph, because a font glyph
+             cannot animate between expressions. Breathing scales it and bobbing translates it, on
+             one transform group so the two compose rather than fight. -->
+        <Canvas x:Name="Face" Width="46" Height="46" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Canvas.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform x:Name="BreathScale" CenterX="23" CenterY="23" ScaleX="1" ScaleY="1"/>
+                    <TranslateTransform x:Name="FaceBob"/>
+                </TransformGroup>
+            </Canvas.RenderTransform>
+
+            <!-- Eyes: closed (a curve) when asleep, open (a dot) when reading. -->
+            <Path x:Name="LeftEyeClosed" Stroke="#E5E5EA" StrokeThickness="2" StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round" Data="M 13,22 Q 16,25 19,22"/>
+            <Path x:Name="RightEyeClosed" Stroke="#E5E5EA" StrokeThickness="2" StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round" Data="M 27,22 Q 30,25 33,22"/>
+            <Ellipse x:Name="LeftEyeOpen" Canvas.Left="14" Canvas.Top="19" Width="5" Height="6"
+                     Fill="#E5E5EA" Visibility="Collapsed"/>
+            <Ellipse x:Name="RightEyeOpen" Canvas.Left="28" Canvas.Top="19" Width="5" Height="6"
+                     Fill="#E5E5EA" Visibility="Collapsed"/>
+
+            <Path x:Name="Mouth" Stroke="#E5E5EA" StrokeThickness="2" StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round" Data="M 20,31 L 26,31"/>
+        </Canvas>
+
+        <!-- Sleep marks. Three of them on a stagger, each rising, drifting, growing and fading on its
+             own clock, which is what makes it read as a stream rather than a blinking glyph. -->
+        <Canvas x:Name="SleepMarks" Width="60" Height="60" IsHitTestVisible="False">
+            <TextBlock x:Name="Zed1" Text="z" Canvas.Left="36" Canvas.Top="16"
+                       FontSize="9" FontWeight="SemiBold" Foreground="#8E8E93" Opacity="0"
+                       RenderTransformOrigin="0.5,0.5">
+                <TextBlock.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="Zed1Scale" ScaleX="0.7" ScaleY="0.7"/>
+                        <TranslateTransform x:Name="Zed1Move"/>
+                    </TransformGroup>
+                </TextBlock.RenderTransform>
+            </TextBlock>
+            <TextBlock x:Name="Zed2" Text="z" Canvas.Left="36" Canvas.Top="16"
+                       FontSize="9" FontWeight="SemiBold" Foreground="#8E8E93" Opacity="0"
+                       RenderTransformOrigin="0.5,0.5">
+                <TextBlock.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="Zed2Scale" ScaleX="0.7" ScaleY="0.7"/>
+                        <TranslateTransform x:Name="Zed2Move"/>
+                    </TransformGroup>
+                </TextBlock.RenderTransform>
+            </TextBlock>
+            <TextBlock x:Name="Zed3" Text="z" Canvas.Left="36" Canvas.Top="16"
+                       FontSize="9" FontWeight="SemiBold" Foreground="#8E8E93" Opacity="0"
+                       RenderTransformOrigin="0.5,0.5">
+                <TextBlock.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="Zed3Scale" ScaleX="0.7" ScaleY="0.7"/>
+                        <TranslateTransform x:Name="Zed3Move"/>
+                    </TransformGroup>
+                </TextBlock.RenderTransform>
+            </TextBlock>
+        </Canvas>
+    </Grid>
+</Window>

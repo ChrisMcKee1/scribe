@@ -96,6 +96,13 @@ internal static class InjectionNativeMethods
     [DllImport("user32.dll")]
     internal static extern uint GetClipboardSequenceNumber();
 
+    /// <summary>
+    /// Registers (or looks up) a named clipboard format. Used for the clipboard history and cloud
+    /// sync exclusion markers, whose names are known to Windows.
+    /// </summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "RegisterClipboardFormatW")]
+    internal static extern uint RegisterClipboardFormat(string formatName);
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct GUITHREADINFO
     {

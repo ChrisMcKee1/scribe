@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Scribe.StyleEval: SIDE-TESTING ONLY. THIS PROJECT IS NEVER PUBLISHED AND NEVER SHIPS.
+
+    build/pack.ps1 publishes exactly two projects, src/Scribe.App and src/Scribe.Overlay, and
+    packs the result with Velopack. Nothing under tools/ is in that path, so this harness can
+    reference test-only packages and call the shipping instruction sets directly without any
+    risk of the eval framework, the corpus, or the checkers reaching a user's machine.
+
+    It grades the TEXT ACTION instruction sets that DO ship:
+      src/Scribe.Core/TextActions/TextActionCatalog.cs
+      src/Scribe.Core/TextActions/EnrichmentRules.cs
+      src/Scribe.Core/TextActions/TextActionPrompt.cs
+      src/Scribe.Core/TextActions/TextActionSanitizer.cs
+    It references Scribe.Core directly on purpose, so the suite always measures the shipping
+    prompts rather than a copy that can silently drift away from them.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Scribe.StyleEval</RootNamespace>
+    <AssemblyName>Scribe.StyleEval</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Internal dev tool: never packed, never published with the app. -->
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shipping instruction sets under test. -->
+    <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
+    <!-- Provider wiring reuse: Scribe.Evals owns the Azure Responses client the benchmark already
+         uses, and it is the assembly Scribe.Core grants internals access to. -->
+    <ProjectReference Include="..\Scribe.Evals\Scribe.Evals.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Azure.Identity" />
+    <PackageReference Include="Azure.ResourceManager.CognitiveServices" />
+    <!-- Pinned only to keep the assembly-version unification quiet: Scribe.Evals references 10.9.0
+         with PrivateAssets=all, so nothing flows here and MSBuild otherwise resolves an older copy
+         from the graph and warns. Eval-only, never published. -->
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation" PrivateAssets="all" />
+    <!-- CommonMark parsing for the Markdown-destination checkers. PrivateAssets=all: eval-only. -->
+    <PackageReference Include="Markdig" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The corpus travels with the binary so a run works from any working directory. -->
+    <None Include="corpus\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The checker tests live in a sibling project and call the checkers directly. -->
+    <InternalsVisibleTo Include="Scribe.StyleEval.Tests" />
+  </ItemGroup>
+
+</Project>

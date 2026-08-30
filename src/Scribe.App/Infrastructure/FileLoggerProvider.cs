@@ -37,6 +37,9 @@ internal sealed class FileLoggerProvider : ILoggerProvider
     private int _writesSinceSizeCheck;
     private bool _dayBudgetAnnounced;
 
+    /// <summary>Why logging is dead, when it is. Empty while logging is working.</summary>
+    private string _failureReason = string.Empty;
+
     public FileLoggerProvider(
         string logsDirectory,
         LogLevel minimumLevel = LogLevel.Debug,
@@ -46,19 +49,87 @@ internal sealed class FileLoggerProvider : ILoggerProvider
         _minimumLevel = minimumLevel;
         _dailyBudgetBytes = dailyBudgetBytes;
         _fileDay = DateOnly.FromDateTime(DateTime.Now);
+        // A shipped Store build was found writing NOTHING for a whole session while happily writing
+        // its database to the same ScribeData root, and the reason was unknowable: this constructor
+        // used to swallow every exception into an empty path, which the rest of the class treats as
+        // "logging is dead", with no message, no fallback and no way for anyone to find out. That
+        // silence is why a reproducible bug survived multiple debugging sessions with no evidence to
+        // read. The failure is now recorded, a second location is tried, and CurrentStatus reports
+        // the outcome so Settings can show the truth instead of a path the app is not writing to.
+        if (!TryOpenIn(_logsDirectory))
+        {
+            var fallback = FallbackDirectory();
+            if (!string.IsNullOrEmpty(fallback) && TryOpenIn(fallback))
+            {
+                _failureReason = $"primary log folder unusable ({_failureReason}); using {fallback}";
+            }
+            else
+            {
+                _filePath = string.Empty;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prepares <paramref name="directory"/> for writing, capturing the reason on failure.
+    /// </summary>
+    private bool TryOpenIn(string directory)
+    {
         try
         {
-            Directory.CreateDirectory(_logsDirectory);
-            _filePath = ScribeLogFiles.PathFor(_logsDirectory, _fileDay);
+            Directory.CreateDirectory(directory);
+            var path = ScribeLogFiles.PathFor(directory, _fileDay);
+
+            // Prove the directory is actually writable rather than assuming it: CreateDirectory
+            // succeeding says nothing about whether this process may add a file to it, which is
+            // exactly the distinction a packaged app with redirected storage can fall foul of.
+            using (var probe = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                // Opened and closed; the append leaves the file untouched when nothing is written.
+            }
+
+            _filePath = path;
             _dayBytes = CurrentFileLength();
 
             // Sweep before the first line rather than on a timer: the app may run for weeks without
             // ever reaching a scheduled sweep, and startup is the one moment guaranteed to happen.
-            ScribeLogFiles.Prune(_logsDirectory, _fileDay);
+            ScribeLogFiles.Prune(directory, _fileDay);
+            _failureReason = string.Empty;
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            _filePath = string.Empty;
+            _failureReason = $"{ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Second place to try when the preferred folder cannot be written. Deliberately the per-user
+    /// temp folder, which a packaged app can always write to even when its AppData writes are
+    /// redirected or denied.
+    /// </summary>
+    private static string FallbackDirectory()
+    {
+        try
+        {
+            return Path.Combine(Path.GetTempPath(), "ScribeData", "logs");
+        }
+        catch (Exception)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Where logging is actually going, and why it is not going anywhere when that is the case.
+    /// Surfaced in Settings so "the log folder" never again names a folder nothing is written to.
+    /// </summary>
+    public (bool Healthy, string Path, string Reason) CurrentStatus()
+    {
+        lock (_gate)
+        {
+            return (_filePath.Length > 0, _filePath, _failureReason);
         }
     }
 
