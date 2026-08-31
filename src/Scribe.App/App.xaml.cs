@@ -263,15 +263,17 @@ public partial class App : Application
         _controller.ModelsReleased += () =>
         {
             // The overlay helper is the other idle-only resident (~100 MB of WinUI runtime).
-            // ShowRecording relaunches it lazily, exactly like the overlay-disabled path, so
-            // closing it here costs one warm-up on the first post-idle dictation and nothing else.
+            // Suspend, NOT CloseOverlay: close completes the command queue and joins the consumer
+            // thread, which is a one-way door - after the first idle release the overlay could
+            // never appear again for the life of the process (a live session proved it). Suspend
+            // ends only the helper process; the next ShowRecording relaunches it.
             try
             {
-                _overlay?.CloseOverlay();
+                _overlay?.SuspendOverlay();
             }
             catch (Exception ex)
             {
-                _appLog?.LogDebug(ex, "Could not close the overlay during idle release.");
+                _appLog?.LogDebug(ex, "Could not suspend the overlay during idle release.");
             }
         };
 

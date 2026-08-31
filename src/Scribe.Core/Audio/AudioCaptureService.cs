@@ -6,6 +6,11 @@ using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Scribe.Core.Models;
 
+// WasapiCapture is obsoleted by NAudio 3 in favor of WasapiRecorder, and this file stays on it by
+// informed choice: the recorder produced two live capture regressions on real hardware (an
+// un-unwrapped extensible mix format and ~20 dB quieter capture). See the comment in Start().
+#pragma warning disable CS0618
+
 namespace Scribe.Core.Audio;
 
 /// <summary>
@@ -26,7 +31,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly object _sync = new();
 
-    private WasapiRecorder? _capture;
+    private WasapiCapture? _capture;
     private MMDevice? _device;
     private MemoryStream? _raw;
     private WaveFormat? _captureFormat;
@@ -93,16 +98,16 @@ public sealed class AudioCaptureService : IAudioCaptureService
             {
                 _device = ResolveDevice(deviceId);
 
-                // WasapiRecorder (NAudio 3) replaces the obsoleted WasapiCapture. Defaults match
-                // the old behavior on purpose: shared mode, event sync, and the device's native
-                // mix format. The DataAvailable callback hands the WASAPI packet as a
-                // ReadOnlySpan over the native buffer, so the audio is copied exactly once,
-                // straight into the capture MemoryStream, instead of through an intermediate
-                // managed array per packet.
-                _capture = new WasapiRecorderBuilder()
-                    .WithDevice(_device)
-                    .WithEventSync()
-                    .Build();
+                // Deliberately the obsoleted WasapiCapture, not NAudio 3's WasapiRecorder. The
+                // recorder was tried (0.3.16) and produced two live capture regressions in one
+                // day on the same microphone: the mix format arrived with its extensible header
+                // intact (blinding every Encoding-switch consumer), and captured speech came in
+                // roughly 20 dB quieter than WasapiCapture on the same endpoint (peaks that were
+                // -14 dBFS became -35 dBFS, so VAD rejected real dictations as silence - the
+                // recorder evidently taps the stream at a different point in the effects/AGC
+                // chain). Correct levels beat one saved buffer copy; do not swap this back
+                // without A/B-ing recorded peaks on real hardware.
+                _capture = new WasapiCapture(_device, useEventSync: true);
                 _captureFormat = NormalizeFormat(_capture.WaveFormat);
 
                 // Pre-size for ~30 s at the device's native rate (typically ~11 MB at 48 kHz
@@ -153,7 +158,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public void RequestStop()
     {
-        WasapiRecorder? capture;
+        WasapiCapture? capture;
         lock (_sync)
         {
             if (!IsCapturing || _stopRequested)
@@ -179,7 +184,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public CapturedAudio Stop()
     {
-        WasapiRecorder? capture;
+        WasapiCapture? capture;
         MemoryStream? raw;
         WaveFormat? format;
         ManualResetEventSlim? stopped;
@@ -248,22 +253,20 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    // The buffer span aliases the native WASAPI packet and is only valid for the duration of this
-    // callback; both consumers below (the stream write and the peak scan) finish before returning.
-    private void OnDataAvailable(ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long devicePosition, long qpcPosition)
+    private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
         MemoryStream? raw = _raw;
         WaveFormat? format = _captureFormat;
-        if (raw is null || format is null || buffer.IsEmpty)
+        if (raw is null || format is null || e.BytesRecorded == 0)
         {
             return;
         }
 
-        raw.Write(buffer);
+        raw.Write(e.Buffer, 0, e.BytesRecorded);
 
         // Peak is computed unconditionally (not just for the level meter): the running maximum is
         // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".
-        float peak = ComputePeak(buffer, format);
+        float peak = ComputePeak(e.Buffer.AsSpan(0, e.BytesRecorded), format);
         if (peak > _capturePeak)
         {
             _capturePeak = peak;
@@ -593,7 +596,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return null;
     }
 
-    private void Cleanup(WasapiRecorder? capture, MemoryStream? raw, ManualResetEventSlim? stopped)
+    private void Cleanup(WasapiCapture? capture, MemoryStream? raw, ManualResetEventSlim? stopped)
     {
         if (capture is not null)
         {
