@@ -4,13 +4,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- WinUI 3 / Windows App SDK 2.2.0 (latest stable) powers the standalone Scribe.Overlay
+    <!-- WinUI 3 / Windows App SDK 2.4.0 (latest stable) powers the standalone Scribe.Overlay
          recording pill. 2.0 introduced SystemBackdropElement (clipped Acrylic/Mica anywhere in the
          tree with a CornerRadius), the supported floating-glass-pill recipe. The pill runs as its
          own kept-warm, unpackaged self-contained process driven by the WPF app over a named pipe,
          which sidesteps the .NET 10 WPF AllowsTransparency/UpdateLayeredWindow "black box" failure
          (dotnet/wpf #11321) by rendering through DWM composition instead of the legacy layered path. -->
-    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
 
     <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime. The native runtime is
          architecture-specific; Scribe.Core references both and selects by RuntimeIdentifier so
