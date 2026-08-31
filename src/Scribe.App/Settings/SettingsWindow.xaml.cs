@@ -796,6 +796,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
+            MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
+            IdleReleaseBox.Value = Math.Clamp(_settings.ReleaseModelsAfterIdleMinutes, 0, 120);
+            HistoryRetentionBox.Value = Math.Clamp(_settings.HistoryRetentionDays, 0, 3650);
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
             InjectionCombo.SelectedItem =
@@ -4301,6 +4304,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
+            // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
+            // rather than silently becoming 0, which here means "off/forever".
+            _settings.MaxDictationMinutes =
+                ClampNumberBox(MaxDictationBox.Value, _settings.MaxDictationMinutes, 1440);
+            _settings.ReleaseModelsAfterIdleMinutes =
+                ClampNumberBox(IdleReleaseBox.Value, _settings.ReleaseModelsAfterIdleMinutes, 120);
+            _settings.HistoryRetentionDays =
+                ClampNumberBox(HistoryRetentionBox.Value, _settings.HistoryRetentionDays, 3650);
             _settings.InjectionMethod =
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
@@ -5663,6 +5674,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Reads a NumberBox into an int setting: a cleared box keeps the previously saved value
+    /// (0 is a deliberate "off/forever" choice, so it must never be the accident of an empty
+    /// field), and anything typed past the range is clamped rather than rejected.
+    /// </summary>
+    private static int ClampNumberBox(double? value, int fallback, int max) =>
+        value is null ? Math.Clamp(fallback, 0, max) : Math.Clamp((int)Math.Round(value.Value), 0, max);
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
 

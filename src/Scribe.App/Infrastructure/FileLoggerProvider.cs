@@ -27,7 +27,9 @@ internal sealed class FileLoggerProvider : ILoggerProvider
     private readonly long _dailyBudgetBytes;
     private readonly LogLevel _minimumLevel;
     private readonly object _gate = new();
-    private string _filePath;
+    // Empty means "logging is dead"; initialized here so the constructor's failure paths cannot
+    // leave it null (CS8618) when both TryOpenIn attempts fail.
+    private string _filePath = string.Empty;
     private DateOnly _fileDay;
 
     // Best-effort running size of today's file. Seeded from disk and refreshed periodically rather
