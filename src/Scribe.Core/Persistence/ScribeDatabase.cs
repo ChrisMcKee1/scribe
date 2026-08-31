@@ -45,6 +45,14 @@ public sealed class ScribeDatabase : IDisposable
     /// </summary>
     public bool RepairedAtStartup { get; private set; }
 
+    /// <summary>
+    /// True when a startup repair could not carry the settings row into the rebuilt database, so
+    /// the app is running on compiled defaults. This is the one salvage failure a user cannot
+    /// shrug off (hotkeys, AI cleanup and libraries all silently reset), so the shell must say it
+    /// plainly instead of the generic "some history may be missing".
+    /// </summary>
+    public bool SettingsLostInRepair { get; private set; }
+
     private ScribeDatabase(string connectionString, bool isMemory, ILogger<ScribeDatabase> logger)
     {
         _connectionString = connectionString;
@@ -159,13 +167,31 @@ public sealed class ScribeDatabase : IDisposable
         }
     }
 
+    // synchronous=FULL is explicit rather than inherited: with WAL it costs one fsync per commit
+    // (Scribe writes are rare and small) and guarantees the database survives power loss, not just
+    // process death. Relying on the compiled default left durability to whatever the native bundle
+    // was built with.
     private static void Configure(SqliteConnection connection) =>
-        Execute(connection, $"PRAGMA busy_timeout={BusyTimeoutMs};");
+        Execute(connection, $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL;");
+
+    // Probe retries: a transient error (lock held by an exiting instance, an antivirus scan) must
+    // never be mistaken for corruption, so non-corruption errors are retried before startup fails.
+    private const int ProbeAttempts = 3;
+    private static readonly TimeSpan ProbeRetryDelay = TimeSpan.FromMilliseconds(750);
 
     // Startup corruption check for the file database. quick_check walks the tree structure of every
     // table; a healthy database answers "ok". A damaged one either answers with the first problem or
-    // throws outright; both trigger a rebuild that salvages every readable row into a fresh file.
-    // The check runs on a throwaway connection so a rebuild never races the keep-alive.
+    // throws SQLITE_CORRUPT/SQLITE_NOTADB; both trigger a rebuild that salvages every readable row
+    // into a fresh file. The check runs on a throwaway connection so a rebuild never races the
+    // keep-alive.
+    //
+    // Any OTHER SqliteException is deliberately NOT corruption. This used to treat every probe
+    // error as a corrupt database, and a "database is locked" from an instance still shutting down
+    // (the single-instance mutex releases the moment a process dies, before its SQLite handles
+    // close) made a healthy database get moved aside and rebuilt as empty - which is how a user's
+    // settings vanished on 2026-08-31. A transient error is retried; if it persists, startup fails
+    // loudly with the data intact, which is always recoverable in a way a destructive rebuild of a
+    // healthy file is not.
     private void EnsureFileDatabaseHealthy()
     {
         if (!File.Exists(DataSourcePath()))
@@ -174,16 +200,31 @@ public sealed class ScribeDatabase : IDisposable
         }
 
         string verdict;
-        try
+        var attempt = 0;
+        while (true)
         {
-            using var probe = new SqliteConnection(_connectionString);
-            probe.Open();
-            Configure(probe);
-            verdict = QueryScalar(probe, "PRAGMA quick_check(1);").ToString() ?? string.Empty;
-        }
-        catch (SqliteException ex)
-        {
-            verdict = ex.Message;
+            attempt++;
+            try
+            {
+                using var probe = new SqliteConnection(_connectionString);
+                probe.Open();
+                Configure(probe);
+                verdict = QueryScalar(probe, "PRAGMA quick_check(1);").ToString() ?? string.Empty;
+                break;
+            }
+            catch (SqliteException ex) when (IsCorruptionError(ex))
+            {
+                verdict = ex.Message;
+                break;
+            }
+            catch (SqliteException ex) when (attempt < ProbeAttempts)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Database probe hit a transient error (attempt {Attempt}/{Max}); retrying.",
+                    attempt, ProbeAttempts);
+                Thread.Sleep(ProbeRetryDelay);
+            }
         }
 
         if (string.Equals(verdict, "ok", StringComparison.OrdinalIgnoreCase))
@@ -204,11 +245,24 @@ public sealed class ScribeDatabase : IDisposable
         {
             // Salvage is best-effort: if even the rebuild fails, get the damaged file out of the way
             // so a completely fresh database can be created; the aside copy remains for manual
-            // recovery. Losing data is bad; failing to start at all is worse.
+            // recovery. Losing data is bad; failing to start at all is worse. This still counts as
+            // a repair with lost settings, so the user hears about it instead of quietly finding
+            // every preference reset.
             _logger.LogError(ex, "Database salvage failed; starting fresh. The damaged file is kept alongside.");
             TryMoveDamagedAside();
+            RepairedAtStartup = true;
+            SettingsLostInRepair = true;
         }
     }
+
+    /// <summary>
+    /// The two result codes SQLite reserves for a genuinely damaged file: SQLITE_CORRUPT (11,
+    /// malformed image) and SQLITE_NOTADB (26, not a database file at all). Everything else -
+    /// BUSY, LOCKED, IOERR, CANTOPEN - describes the environment, not the file, and must never
+    /// justify a destructive rebuild.
+    /// </summary>
+    private static bool IsCorruptionError(SqliteException ex) =>
+        ex.SqliteErrorCode is 11 or 26 || (ex.SqliteExtendedErrorCode & 0xFF) is 11 or 26;
 
     private string DataSourcePath() => new SqliteConnectionStringBuilder(_connectionString).DataSource;
 
@@ -262,15 +316,40 @@ public sealed class ScribeDatabase : IDisposable
             Pooling = false,
         }.ToString();
 
+        var settingsCopied = 0;
         try
         {
             using var damaged = new SqliteConnection(asideConnectionString);
             damaged.Open();
             Configure(damaged);
 
+            // Fold the damaged file's WAL into its main image before reading anything. Without
+            // this, salvage reads through the merged WAL view, and a torn WAL frame can make a
+            // table unreadable during salvage that is perfectly intact once the WAL is discarded -
+            // the 2026-08-31 repair read 0 settings rows from a file whose settings survived.
+            try { Execute(damaged, "PRAGMA wal_checkpoint(TRUNCATE);"); }
+            catch (SqliteException) { /* best effort; salvage proceeds on the merged view */ }
+
             foreach (var table in SalvageTables)
             {
                 var copied = TryCopyTable(damaged, fresh, table);
+
+                // The settings row is one small record and the single most painful loss, so it
+                // alone earns a second attempt on a fresh connection: reopening after the
+                // checkpoint above reads the recovered main image directly.
+                if (table == "settings" && copied == 0)
+                {
+                    using var reopened = new SqliteConnection(asideConnectionString);
+                    reopened.Open();
+                    Configure(reopened);
+                    copied = TryCopyTable(reopened, fresh, table);
+                }
+
+                if (table == "settings")
+                {
+                    settingsCopied = copied;
+                }
+
                 salvaged.Add($"{table}: {copied}");
             }
 
@@ -284,6 +363,7 @@ public sealed class ScribeDatabase : IDisposable
             _logger.LogWarning(ex, "The damaged database could not be reopened for salvage; starting fresh.");
         }
 
+        SettingsLostInRepair = settingsCopied == 0;
         _logger.LogWarning(
             "Database rebuilt after corruption. Rows recovered: {Salvaged}. The damaged original was kept at {Aside}.",
             string.Join(", ", salvaged), asidePath);
