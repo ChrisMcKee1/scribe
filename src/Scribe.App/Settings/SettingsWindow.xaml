@@ -404,6 +404,29 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Keep dictation history for" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Days dictation history and any stored audio are kept. Older entries are removed the next time Scribe starts. Set to 0 to keep everything forever."/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:NumberBox x:Name="HistoryRetentionBox" Width="130"
+                                                          Minimum="0" Maximum="3650" SmallChange="1"
+                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                          SpinButtonPlacementMode="Inline"
+                                                          AutomationProperties.Name="Keep dictation history for days"/>
+                                            <TextBlock Text="days" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </ui:Card>
+
+                                <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
                                         <TextBlock Text="Speech recognition model" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
@@ -541,6 +564,50 @@
                                                        Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early, so leave it off if that happens."/>
                                         </StackPanel>
                                         <ui:ToggleSwitch x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Maximum dictation length" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="Longest single recording, in minutes. Reaching the limit stops the recording cleanly and transcribes everything captured, so a forgotten toggle or a stuck key cannot record forever. Set to 0 for no limit."/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:NumberBox x:Name="MaxDictationBox" Width="130"
+                                                          Minimum="0" Maximum="1440" SmallChange="1"
+                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                          SpinButtonPlacementMode="Inline"
+                                                          AutomationProperties.Name="Maximum dictation length in minutes"/>
+                                            <TextBlock Text="min" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock Text="Release speech models when idle" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Style="{StaticResource SettingHint}"
+                                                       Text="After this many minutes without a dictation, Scribe unloads the speech models to free about 700 MB of memory. The next dictation reloads them with a short warm-up of a second or two. Set to 0 to keep the models loaded forever."/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <ui:NumberBox x:Name="IdleReleaseBox" Width="130"
+                                                          Minimum="0" Maximum="120" SmallChange="1"
+                                                          MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                          SpinButtonPlacementMode="Inline"
+                                                          AutomationProperties.Name="Release speech models after idle minutes"/>
+                                            <TextBlock Text="min" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
                                     </Grid>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingCard}">
