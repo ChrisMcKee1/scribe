@@ -374,6 +374,25 @@ public partial class App : Application
         // off the UI thread, so the Settings failure list never accumulates indefinitely.
         _ = Task.Run(() => _controller!.PruneFailureLog());
 
+        // Apply the history retention window the same way. Stored audio is the cost that makes
+        // this matter (~1.9 MB per dictated minute); before this, both tables grew for the life
+        // of the install with no pruning path but a manual Clear.
+        var retentionDays = _controller.CurrentSettings.HistoryRetentionDays;
+        if (retentionDays > 0)
+        {
+            var history = services.GetRequiredService<IHistoryRepository>();
+            _ = Task.Run(() =>
+            {
+                var removed = history.PruneOlderThan(DateTimeOffset.UtcNow.AddDays(-retentionDays));
+                if (removed > 0)
+                {
+                    log.LogInformation(
+                        "Pruned {Count} dictation history entries older than {Days} days.",
+                        removed, retentionDays);
+                }
+            });
+        }
+
         // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
         // if the app was moved, and clears if the user disabled it elsewhere.
         if (!settingsRepository.LastLoadFailed)

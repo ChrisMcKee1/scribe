@@ -28,4 +28,11 @@ public interface IHistoryRepository
 
     /// <summary>Removes all history and stored audio.</summary>
     void Clear();
+
+    /// <summary>
+    /// Deletes history entries older than <paramref name="cutoffUtc"/>, plus any audio blob that is
+    /// both older than the cutoff and no longer referenced by a surviving entry. Returns the number
+    /// of history rows removed. Never throws.
+    /// </summary>
+    int PruneOlderThan(DateTimeOffset cutoffUtc);
 }

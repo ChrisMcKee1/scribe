@@ -84,6 +84,11 @@ internal sealed class DictationController : IDisposable
     // moment a recording starts.
     private System.Threading.Timer? _idleReleaseTimer;
 
+    // Duration ceiling (MaxDictationMinutes): one-shot, armed per recording. A forgotten toggle
+    // or stuck key otherwise grows the raw capture ~23 MB/min without bound; hitting the ceiling
+    // ends the dictation through the normal stop path so everything captured still transcribes.
+    private System.Threading.Timer? _durationLimitTimer;
+
     public DictationController(
         IHotkeyService hotkeys,
         IAudioCaptureService audio,
@@ -619,6 +624,14 @@ internal sealed class DictationController : IDisposable
                     _silenceSubscribed = true;
                 }
             }
+
+            if (settings.MaxDictationMinutes > 0)
+            {
+                _durationLimitTimer ??= new System.Threading.Timer(
+                    _ => OnDurationLimitReached(), null, Timeout.Infinite, Timeout.Infinite);
+                _durationLimitTimer.Change(
+                    TimeSpan.FromMinutes(settings.MaxDictationMinutes), Timeout.InfiniteTimeSpan);
+            }
         }
         catch (Exception ex)
         {
@@ -686,6 +699,33 @@ internal sealed class DictationController : IDisposable
 
         /// <summary>Dictation was paused from the tray while a recording was live.</summary>
         Paused,
+
+        /// <summary>The recording reached the MaxDictationMinutes ceiling and was ended cleanly.</summary>
+        DurationLimit,
+    }
+
+    // Fired on a timer thread when a recording has run for the full MaxDictationMinutes. Ends the
+    // dictation through the same path as the silence auto-stop, so the capture is transcribed and
+    // injected normally; only the trigger differs.
+    private void OnDurationLimitReached()
+    {
+        var minutes = CurrentSettings.MaxDictationMinutes;
+        _log.LogWarning(
+            "#{Id} recording reached the {Minutes}-minute ceiling; stopping and transcribing. " +
+            "A forgotten toggle looks exactly like this.",
+            _dictationId, minutes);
+
+        try
+        {
+            Warning?.Invoke($"dictation hit the {minutes} minute limit and was transcribed");
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "A duration-limit warning handler failed.");
+        }
+
+        _hotkeys.CancelToggle();
+        StopAndProcess(DictationStopReason.DurationLimit);
     }
 
     /// <summary>
@@ -697,6 +737,7 @@ internal sealed class DictationController : IDisposable
     private void StopAndProcess(DictationStopReason reason)
     {
         UnsubscribeSilence();
+        _durationLimitTimer?.Change(Timeout.Infinite, Timeout.Infinite);
 
         DictationSession session;
         TaskCompletionSource completion;
@@ -1300,6 +1341,7 @@ internal sealed class DictationController : IDisposable
         _disposed = true;
         _lifetimeCts.Cancel();
         _idleReleaseTimer?.Dispose();
+        _durationLimitTimer?.Dispose();
         UnsubscribeSilence();
         _audio.CaptureFaulted -= OnCaptureFaulted;
         if (_audio.IsCapturing)

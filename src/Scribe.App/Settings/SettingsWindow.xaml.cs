@@ -3850,6 +3850,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _updates.UpdateReady -= OnUpdateReady;
         }
 
+        // A running DispatcherTimer roots this window (and its loaded history rows) in the
+        // dispatcher's timer list until the tick fires; stop it so close releases everything now.
+        _infoDismissTimer?.Stop();
+
         Closed -= OnClosed;
     }
 

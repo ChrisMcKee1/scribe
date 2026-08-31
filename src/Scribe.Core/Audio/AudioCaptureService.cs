@@ -94,7 +94,15 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 _device = ResolveDevice(deviceId);
                 _capture = new WasapiCapture(_device, useEventSync: true);
                 _captureFormat = _capture.WaveFormat;
-                _raw = new MemoryStream();
+
+                // Pre-size for ~30 s at the device's native rate (typically ~11 MB at 48 kHz
+                // stereo float). MemoryStream grows by doubling, and every doubling of a large
+                // buffer momentarily holds old + new on the LOH; starting at a realistic capture
+                // length removes the churn for the common case without meaningfully overpaying
+                // for short presses.
+                var presizeBytes = Math.Clamp(
+                    _captureFormat.AverageBytesPerSecond * 30L, 64 * 1024, 32 * 1024 * 1024);
+                _raw = new MemoryStream((int)presizeBytes);
                 _stopped = new ManualResetEventSlim(false);
                 _captureError = null;
                 _stopRequested = false;
