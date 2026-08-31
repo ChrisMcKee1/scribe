@@ -419,9 +419,24 @@ public partial class App : Application
 
         // The dictionary seed above forced database initialization, so a corruption repair (if any)
         // already ran; tell the user now rather than let them discover missing history on their own.
-        if (services.GetRequiredService<ScribeDatabase>().RepairedAtStartup)
+        // The two outcomes get different messages on purpose: "recovered" when settings survived,
+        // and a loud reset warning when they did not - the old single message claimed settings were
+        // recovered even when the salvage got zero rows, which is exactly the silent reset a user
+        // cannot diagnose.
+        var database = services.GetRequiredService<ScribeDatabase>();
+        if (database.RepairedAtStartup)
         {
-            _tray.ShowInfo("Scribe repaired its database. Settings and dictionary were recovered; some history may be missing.");
+            if (database.SettingsLostInRepair)
+            {
+                _tray.ShowNotification(
+                    "Scribe repaired its database, but your settings could not be recovered and were " +
+                    "reset. The damaged file was kept next to the database for manual recovery.",
+                    isError: true);
+            }
+            else
+            {
+                _tray.ShowInfo("Scribe repaired its database. Settings and dictionary were recovered; some history may be missing.");
+            }
         }
 
         // --- Onboarding (first-run welcome) -------------------------------------------------
