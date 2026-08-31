@@ -103,7 +103,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     .WithDevice(_device)
                     .WithEventSync()
                     .Build();
-                _captureFormat = _capture.WaveFormat;
+                _captureFormat = NormalizeFormat(_capture.WaveFormat);
 
                 // Pre-size for ~30 s at the device's native rate (typically ~11 MB at 48 kHz
                 // stereo float). MemoryStream grows by doubling, and every doubling of a large
@@ -404,6 +404,36 @@ public sealed class AudioCaptureService : IAudioCaptureService
             // Some drivers expose no endpoint-volume interface; treat as not muted.
             _logger.LogDebug(ex, "Could not read the endpoint mute state.");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Unwraps a WAVEFORMATEXTENSIBLE header to its underlying standard format. WASAPI reports the
+    /// shared mix format as extensible, and the old WasapiCapture normalized it before anyone saw
+    /// it; WasapiRecorder (NAudio 3) hands it over raw. Left extensible, every consumer that
+    /// switches on <see cref="WaveFormat.Encoding"/> goes blind at once: the peak meter reads
+    /// zero, silence auto-stop never fires, the signal analyzer reports an empty -99 dBFS capture,
+    /// and the "muted?" heuristic is disabled - which is exactly what a support log showed the day
+    /// NAudio 3 landed (IeeeFloat captures at -14 dBFS became Extensible captures at -99).
+    /// The raw audio bytes are identical either way; only the header interpretation changes.
+    /// </summary>
+    internal static WaveFormat NormalizeFormat(WaveFormat format)
+    {
+        if (format is not WaveFormatExtensible extensible)
+        {
+            return format;
+        }
+
+        try
+        {
+            return extensible.ToStandardWaveFormat();
+        }
+        catch (InvalidOperationException)
+        {
+            // An exotic subformat has no standard equivalent. Keep the extensible header: the
+            // meter stays blind for that device (seeded non-silent, as before), but capture and
+            // resampling still work.
+            return format;
         }
     }
 
