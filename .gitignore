@@ -58,6 +58,16 @@ desktop.ini
 
 # Logs / local app data
 *.log
+# Squad: ignore runtime state (logs, inbox, sessions)
+# Note: .squad/casting/* is identity and MUST be committed to main, not ignored
+.squad/orchestration-log/
+.squad/log/
+.squad/decisions/inbox/
+.squad/sessions/
+.squad/.scratch/
+.squad/.cache/
+# Squad: SubSquad activation file (local to this machine)
+.squad-workstream
 
 # Side-testing style eval results (tools/Scribe.StyleEval). Never part of a build.
 tools/Scribe.StyleEval/results/

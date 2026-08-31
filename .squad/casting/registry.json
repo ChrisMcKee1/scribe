@@ -1,0 +1,39 @@
+{
+  "agents": {
+    "Lead": {
+      "persistent_name": "Lead",
+      "universe": "descriptive",
+      "created_at": "2026-08-24T14:15:44Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "Frontend": {
+      "persistent_name": "Frontend",
+      "universe": "descriptive",
+      "created_at": "2026-08-24T14:15:44Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "Backend": {
+      "persistent_name": "Backend",
+      "universe": "descriptive",
+      "created_at": "2026-08-24T14:15:44Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "Platform": {
+      "persistent_name": "Platform",
+      "universe": "descriptive",
+      "created_at": "2026-08-24T14:15:44Z",
+      "legacy_named": false,
+      "status": "active"
+    },
+    "Tester": {
+      "persistent_name": "Tester",
+      "universe": "descriptive",
+      "created_at": "2026-08-24T14:15:44Z",
+      "legacy_named": false,
+      "status": "active"
+    }
+  }
+}

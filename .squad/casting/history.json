@@ -1,0 +1,9 @@
+{
+  "universe_usage_history": ["descriptive"],
+  "assignment_cast_snapshots": {
+    "2026-08-24-macos-port": {
+      "universe": "descriptive",
+      "members": ["Lead", "Frontend", "Backend", "Platform", "Tester"]
+    }
+  }
+}
