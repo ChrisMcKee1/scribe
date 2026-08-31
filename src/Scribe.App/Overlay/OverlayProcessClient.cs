@@ -163,6 +163,32 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         });
     }
 
+    /// <summary>
+    /// Ends the helper process to reclaim its memory but leaves this client fully operational:
+    /// the next Show*/Warmup call relaunches the helper exactly like the overlay-disabled path.
+    /// Used by the idle release; <see cref="CloseOverlay"/> remains the terminal shutdown.
+    /// </summary>
+    public void SuspendOverlay()
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        CancelPreview();
+        Unsubscribe();
+        _desiredState = "HIDE";
+
+        try
+        {
+            _queue.Add(Command.Suspend);
+        }
+        catch (InvalidOperationException)
+        {
+            // queue already completed; the client is shutting down anyway
+        }
+    }
+
     public void CloseOverlay()
     {
         if (_closed)
@@ -226,6 +252,22 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
                     KillProcess();
                     break;
+                }
+
+                if (item.IsSuspend)
+                {
+                    // Idle teardown: end the helper (~100 MB of WinUI runtime) but keep this
+                    // consumer loop running, so the next ensureAlive command relaunches it. This
+                    // exists because the idle release originally called CloseOverlay, which
+                    // completes the queue and joins this thread - after the first idle period the
+                    // overlay could never appear again for the life of the process.
+                    if (IsAlive)
+                    {
+                        TryWrite("EXIT");
+                    }
+
+                    KillProcess();
+                    continue;
                 }
 
                 if (item.EnsureAlive)
@@ -570,10 +612,14 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         return null;
     }
 
-    private readonly record struct Command(string Text, bool EnsureAlive, bool IsExit, bool IsMeter = false)
+    private readonly record struct Command(
+        string Text, bool EnsureAlive, bool IsExit, bool IsMeter = false, bool IsSuspend = false)
     {
         public static Command Exit { get; } = new(string.Empty, false, true);
         public static Command Meter { get; } = new(string.Empty, false, false, true);
+
+        /// <summary>Ends the helper process but keeps the consumer loop alive for a relaunch.</summary>
+        public static Command Suspend { get; } = new(string.Empty, false, false, false, true);
     }
 
     /// <summary>

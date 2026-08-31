@@ -29,6 +29,12 @@ public interface IOverlayController
     /// <summary>Hides the pill (suppressed while a failure flash is still holding).</summary>
     void HideOverlay();
 
+    /// <summary>
+    /// Ends the helper process to reclaim its memory while staying ready to relaunch on the next
+    /// Show call. Used by the idle release; distinct from the terminal shutdown.
+    /// </summary>
+    void SuspendOverlay();
+
     /// <summary>Anchors the pill at the given screen position, now and across overlay relaunches.</summary>
     void SetPosition(OverlayPosition position);
 
