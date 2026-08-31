@@ -39,6 +39,51 @@ European languages out of the box. It is a **transducer** with the vocabulary ba
 there is **no runtime language parameter**, so do NOT build a "language picker" setting; the
 model auto‑handles whatever is spoken. (Whisper takes a language hint; this does not.)
 
+## Mono-repo note: native macOS port (`macos/Scribe`, PR #61)
+
+`macos/Scribe` is a real, hand-maintained macOS reimplementation, not a shared-code port of
+`Scribe.Core`. It is a separate Swift Package Manager app: `macos/Scribe/Package.swift` declares
+package `ScribeMac`, executable target `Scribe`, and test target `ScribeTests`. No macOS build
+path references any C# project in this repo. If you change Windows-side behavior in `Scribe.Core`,
+such as dictionary matching, snippets, cleanup prompt composition, diagnostics percentile math,
+usage-insight aggregation, or CSV import/export, assume a parallel Swift copy under
+`macos/Scribe/Sources/Scribe/` and `macos/Scribe/Tests/ScribeTests/` may need the same edit, then
+check `macos/PORTING-PLAN.md` before you claim parity still holds.
+
+Where the macOS port lives: `macos/Scribe/Sources/Scribe/` currently contains 59 tracked source
+files on `origin/main`; `macos/Scribe/Tests/ScribeTests/` contains 27 tracked XCTest files, many
+ported 1:1 from the C# xUnit suites where applicable. Packaging scripts live in
+`macos/Scribe/scripts/` (`build-app.sh`, `make-dmg.sh`, `notarize.sh`, `setup-dev-signing.sh`).
+The top-level docs are `macos/README.md`, the user-facing build/run guide and current feature list;
+`macos/PORTING-PLAN.md`, the authoritative row-by-row Windows-feature-parity checklist and
+implementation notebook, currently starting from `Status: Feature parity complete`; and
+`macos/CLEANUP-MODEL-BENCHMARK.md` plus `macos/benchmark_cleanup.py`, the separate macOS local-model
+cleanup benchmark whose heuristic scores are explicitly not directly comparable to Windows'
+`docs/model-leaderboard.md`.
+
+Key macOS architecture facts before you edit it: on-device ASR uses Foundry Local
+`parakeet-tdt-0.6b-v2`, with the dynamic port resolved from `foundry status -o json`; managed
+Ollama is the alternative local provider. Unlike Windows, the macOS app does not bundle an ASR
+runtime or model, users install Foundry Local or Ollama themselves. Silence auto-stop is currently
+`SilenceAutoStopDetector`, an energy-threshold RMS detector marked as a stopgap rather than a
+trained Silero VAD. AI cleanup mirrors the Windows provider categories, Foundry Local, managed
+Ollama, any OpenAI-compatible endpoint, and Microsoft Foundry cloud via `AzureCredential.swift`
+plus `KeychainStore.swift`; verify the current configuration surface in `macos/PORTING-PLAN.md`
+and `macos/README.md` before editing setup guidance, because that area is moving quickly. The
+overlay pill is in-process: `OverlayPanelController` hosts a borderless, non-activating `NSPanel`
+with SwiftUI content, no separate overlay process or IPC. Persistence is a separate SQLite store in
+`PersistenceStore`, not Windows' `scribe.db`, with its own non-destructive probe-then-`ALTER TABLE`
+migrations. Packaging today is still dev-focused: `build-app.sh` produces an ad-hoc `.app`, and
+`macos/README.md` remains the source of truth for the current gaps around notarization and
+auto-update.
+
+If your Windows PR changes behavior that the Swift port mirrors, call out in your PR description or
+commit message that the matching row in `macos/PORTING-PLAN.md` may now be stale. There is no
+automation keeping the C# and Swift implementations in sync.
+
+`origin/feat/macos-apple-silicon` exists as an earlier, separate prototype that was not merged, and
+it is not the current macOS effort described here.
+
 ## Tech stack (be specific, versions matter)
 
 - **Language / runtime:** C# / **.NET 10**, targeting **Windows 11** (`net10.0-windows10.0.22000.0`),
@@ -695,6 +740,21 @@ inference and the provider-unavailable failure at load, and remembers it.
 ## Git workflow
 
 - Branch off `main`; keep PRs small and focused. Open an issue first for large changes.
+- This checkout is a fork workflow. `origin` is John's fork, `https://github.com/x3nc0n/scribe.git`,
+  and is the only remote this working tree should push to. `upstream` is Chris McKee's original
+  repo, `https://github.com/ChrisMcKee1/scribe.git`, and is the review and merge target. Never push
+  directly to `upstream`.
+- John's ongoing split on this repo is: primary maintainer for the native macOS port under
+  `macos/Scribe/`, secondary contributor for Windows bug fixes under `src/Scribe.*`,
+  `tests/Scribe.Core.Tests/`, and related docs.
+- Normal contribution flow: create or update a branch on `origin`, push there, then open a pull
+  request from that fork branch to `upstream:main`. To update an existing upstream pull request,
+  push more commits to the exact same `origin` branch that the pull request already uses as its
+  head branch.
+- Current example: upstream PR #61 is `x3nc0n/scribe:main` into `ChrisMcKee1/scribe:main` and
+  carries the native macOS port. Because Chris can merge unrelated Windows work into
+  `upstream/main` at any time, `origin/main` must periodically catch up from `upstream/main`, then
+  be pushed back to `origin/main` so PR #61 stays mergeable.
 - Commit message: what changed **and why**. Always append this trailer (per house rule):
 
 ```

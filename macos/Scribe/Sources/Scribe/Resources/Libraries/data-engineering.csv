@@ -1,0 +1,116 @@
+# name: Data Engineering
+# category: Data and AI
+# description: Data integration, orchestration, streaming, lakehouse, warehouse, and analytics-engine terminology.
+pattern,replacement
+#
+# --- Integration and orchestration ---
+dbt,dbt
+dbt core,dbt Core
+dbt cloud,dbt Cloud
+dbt labs,dbt Labs
+sql mesh,SQLMesh
+sqlmesh,SQLMesh
+dataform,Dataform
+airbyte,Airbyte
+py airbyte,PyAirbyte
+fivetran,Fivetran
+matillion,Matillion
+meltano,Meltano
+dagster,Dagster
+prefect workflow,Prefect
+apache airflow,Apache Airflow
+airflow dag,Airflow DAG
+airflow dags,Airflow DAGs
+#
+# --- Streaming and distributed processing ---
+apache kafka,Apache Kafka
+kafka,Kafka
+kafka connect,Kafka Connect
+kafka streams,Kafka Streams
+confluent kafka,Confluent Kafka
+confluent cloud,Confluent Cloud
+schema registry,Schema Registry
+apache spark,Apache Spark
+py spark,PySpark
+pyspark,PySpark
+spark sql,Spark SQL
+spark structured streaming,Spark Structured Streaming
+apache flink,Apache Flink
+apache beam,Apache Beam
+debezium,Debezium
+#
+# --- Lakehouse tables and file formats ---
+delta lake,Delta Lake
+delta sharing,Delta Sharing
+apache iceberg,Apache Iceberg
+apache hudi,Apache Hudi
+apache parquet,Apache Parquet
+parquet,Parquet
+apache arrow,Apache Arrow
+py arrow,PyArrow
+pyarrow,PyArrow
+apache avro,Apache Avro
+avro,Avro
+orc,ORC
+#
+# --- Warehouses, lakehouses, and query engines ---
+snowflake,Snowflake
+databricks,Databricks
+big query,BigQuery
+bigquery,BigQuery
+amazon redshift,Amazon Redshift
+redshift warehouse,Amazon Redshift
+click house,ClickHouse
+clickhouse,ClickHouse
+duck db,DuckDB
+duckdb,DuckDB
+apache trino,Trino
+trino,Trino
+presto sql,Presto
+dremio,Dremio
+starburst data,Starburst
+amazon athena,Amazon Athena
+azure synapse,Azure Synapse
+synapse analytics,Azure Synapse Analytics
+azure data explorer,Azure Data Explorer
+kusto,Kusto
+k q l,KQL
+kql,KQL
+t sql,T-SQL
+#
+# --- Microsoft Fabric ---
+microsoft fabric,Microsoft Fabric
+one lake,OneLake
+onelake,OneLake
+fabric data factory,Fabric Data Factory
+fabric data engineering,Fabric Data Engineering
+fabric data science,Fabric Data Science
+fabric data warehouse,Fabric Data Warehouse
+real time intelligence,Real-Time Intelligence
+real time hub,Real-Time hub
+eventstream,Eventstream
+eventstreams,Eventstreams
+eventhouse,Eventhouse
+eventhouses,Eventhouses
+dataflow gen 2,Dataflow Gen2
+power query,Power Query
+#
+# --- Data architecture and operations ---
+etl,ETL
+e t l,ETL
+elt,ELT
+e l t,ELT
+cdc,CDC
+c d c,CDC
+scd,SCD
+s c d,SCD
+olap,OLAP
+oltp,OLTP
+ddl,DDL
+dml,DML
+dag,DAG
+dags,DAGs
+data ops,DataOps
+dataops,DataOps
+data vault,Data Vault
+kimball methodology,Kimball methodology

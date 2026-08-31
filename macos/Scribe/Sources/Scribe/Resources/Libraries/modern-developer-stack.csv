@@ -1,0 +1,173 @@
+# name: Modern Developer Stack
+# category: Software Development
+# description: Current cloud platforms, web frameworks, data tools, observability, testing, and developer applications.
+pattern,replacement
+#
+# --- Cloud platforms and hosting ---
+supabase,Supabase
+supa base,Supabase
+cloudflare,Cloudflare
+cloud flare,Cloudflare
+vercel,Vercel
+netlify,Netlify
+firebase,Firebase
+appwrite,Appwrite
+pocketbase,PocketBase
+pocket base,PocketBase
+cloudinary,Cloudinary
+fly io,Fly.io
+render platform,Render
+railway platform,Railway
+cloudflare workers,Cloudflare Workers
+cloudflare pages,Cloudflare Pages
+cloudflare r 2,Cloudflare R2
+cloudflare d 1,Cloudflare D1
+vercel functions,Vercel Functions
+vercel edge functions,Vercel Edge Functions
+netlify functions,Netlify Functions
+supabase auth,Supabase Auth
+supabase storage,Supabase Storage
+supabase edge functions,Supabase Edge Functions
+firebase auth,Firebase Authentication
+cloud run,Cloud Run
+#
+# --- Web frameworks and runtimes ---
+next js,Next.js
+nextjs,Next.js
+sveltekit,SvelteKit
+svelte kit,SvelteKit
+tailwind css,Tailwind CSS
+react js,React
+reactjs,React
+vue js,Vue.js
+vuejs,Vue.js
+nuxt js,Nuxt.js
+nuxtjs,Nuxt.js
+remix framework,Remix
+astro framework,Astro
+solid js,SolidJS
+solidjs,SolidJS
+qwik framework,Qwik
+angular framework,Angular
+nest js,NestJS
+nestjs,NestJS
+express js,Express.js
+fastify,Fastify
+hono framework,Hono
+django,Django
+fast api,FastAPI
+fastapi,FastAPI
+flask framework,Flask
+spring boot,Spring Boot
+blazor,Blazor
+react native,React Native
+expo framework,Expo
+htmx,htmx
+alpine js,Alpine.js
+lit framework,Lit
+storybook js,Storybook
+shad c n,shadcn/ui
+shad c n ui,shadcn/ui
+docusaurus,Docusaurus
+vite press,VitePress
+dot net aspire,.NET Aspire
+.net aspire,.NET Aspire
+dot net maui,.NET MAUI
+.net maui,.NET MAUI
+deno runtime,Deno runtime
+bun runtime,Bun runtime
+rust language,Rust language
+swift language,Swift language
+elixir language,Elixir language
+#
+# --- Data and API tooling ---
+prisma,Prisma
+drizzle orm,Drizzle ORM
+open api,OpenAPI
+openapi,OpenAPI
+web assembly,WebAssembly
+webassembly,WebAssembly
+wasm,Wasm
+cockroach db,CockroachDB
+cockroachdb,CockroachDB
+planet scale,PlanetScale
+planetscale,PlanetScale
+elastic search,Elasticsearch
+elasticsearch,Elasticsearch
+open search,OpenSearch
+opensearch,OpenSearch
+neon database,Neon
+neon postgres,Neon Postgres
+turso database,Turso
+convex database,Convex
+protocol buffers,Protocol Buffers
+protobuf,Protocol Buffers
+t rpc,tRPC
+trpc,tRPC
+entity framework,Entity Framework
+sql alchemy,SQLAlchemy
+sqlalchemy,SQLAlchemy
+pinecone,Pinecone
+weaviate,Weaviate
+milvus,Milvus
+qdrant,Qdrant
+chroma db,ChromaDB
+mongodb atlas,MongoDB Atlas
+firebase firestore,Cloud Firestore
+#
+# --- Delivery and observability ---
+pulumi,Pulumi
+open telemetry,OpenTelemetry
+opentelemetry,OpenTelemetry
+otel,OTel
+grafana,Grafana
+prometheus,Prometheus
+datadog,Datadog
+sentry sdk,Sentry SDK
+new relic,New Relic
+honeycomb observability,Honeycomb
+grafana loki,Grafana Loki
+grafana tempo,Grafana Tempo
+jaeger tracing,Jaeger
+open feature,OpenFeature
+launch darkly,LaunchDarkly
+#
+# --- AI application tooling ---
+langchain,LangChain
+lang chain,LangChain
+langgraph,LangGraph
+lang graph,LangGraph
+llama index,LlamaIndex
+semantic kernel,Semantic Kernel
+vercel ai sdk,Vercel AI SDK
+ollama,Ollama
+lm studio,LM Studio
+open router,OpenRouter
+model context protocol,Model Context Protocol
+mcp server,MCP server
+#
+# --- Editors and developer applications ---
+visual studio code,Visual Studio Code
+vs code,Visual Studio Code
+v s code,Visual Studio Code
+cursor ide,Cursor IDE
+windsurf ide,Windsurf IDE
+warp terminal,Warp terminal
+jetbrains,JetBrains
+jetbrains rider,JetBrains Rider
+zed editor,Zed editor
+postman api client,Postman
+insomnia api client,Insomnia API client
+bruno api client,Bruno API client
+#
+# --- Testing and code quality ---
+playwright test,Playwright
+vitest,Vitest
+cypress,Cypress
+jest test framework,Jest
+testing library,Testing Library
+storybook test,Storybook
+biome js,Biome
+prettier formatter,Prettier
+eslint,ESLint
+es lint,ESLint
