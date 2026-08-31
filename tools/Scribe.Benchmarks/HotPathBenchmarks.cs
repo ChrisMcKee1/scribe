@@ -74,10 +74,10 @@ public class HotPathBenchmarks
 
         public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 1);
 
-        public int Read(float[] buffer, int offset, int count)
+        public int Read(Span<float> buffer)
         {
-            var available = Math.Min(count, samples.Length - _position);
-            samples.AsSpan(_position, available).CopyTo(buffer.AsSpan(offset, available));
+            var available = Math.Min(buffer.Length, samples.Length - _position);
+            samples.AsSpan(_position, available).CopyTo(buffer);
             _position += available;
             return available;
         }

@@ -26,7 +26,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly MMDeviceEnumerator _enumerator = new();
     private readonly object _sync = new();
 
-    private WasapiCapture? _capture;
+    private WasapiRecorder? _capture;
     private MMDevice? _device;
     private MemoryStream? _raw;
     private WaveFormat? _captureFormat;
@@ -92,7 +92,17 @@ public sealed class AudioCaptureService : IAudioCaptureService
             try
             {
                 _device = ResolveDevice(deviceId);
-                _capture = new WasapiCapture(_device, useEventSync: true);
+
+                // WasapiRecorder (NAudio 3) replaces the obsoleted WasapiCapture. Defaults match
+                // the old behavior on purpose: shared mode, event sync, and the device's native
+                // mix format. The DataAvailable callback hands the WASAPI packet as a
+                // ReadOnlySpan over the native buffer, so the audio is copied exactly once,
+                // straight into the capture MemoryStream, instead of through an intermediate
+                // managed array per packet.
+                _capture = new WasapiRecorderBuilder()
+                    .WithDevice(_device)
+                    .WithEventSync()
+                    .Build();
                 _captureFormat = _capture.WaveFormat;
 
                 // Pre-size for ~30 s at the device's native rate (typically ~11 MB at 48 kHz
@@ -143,7 +153,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public void RequestStop()
     {
-        WasapiCapture? capture;
+        WasapiRecorder? capture;
         lock (_sync)
         {
             if (!IsCapturing || _stopRequested)
@@ -169,7 +179,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public CapturedAudio Stop()
     {
-        WasapiCapture? capture;
+        WasapiRecorder? capture;
         MemoryStream? raw;
         WaveFormat? format;
         ManualResetEventSlim? stopped;
@@ -238,20 +248,22 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    private void OnDataAvailable(object? sender, WaveInEventArgs e)
+    // The buffer span aliases the native WASAPI packet and is only valid for the duration of this
+    // callback; both consumers below (the stream write and the peak scan) finish before returning.
+    private void OnDataAvailable(ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long devicePosition, long qpcPosition)
     {
         MemoryStream? raw = _raw;
         WaveFormat? format = _captureFormat;
-        if (raw is null || format is null || e.BytesRecorded == 0)
+        if (raw is null || format is null || buffer.IsEmpty)
         {
             return;
         }
 
-        raw.Write(e.Buffer, 0, e.BytesRecorded);
+        raw.Write(buffer);
 
         // Peak is computed unconditionally (not just for the level meter): the running maximum is
         // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".
-        float peak = ComputePeak(e.Buffer, e.BytesRecorded, format);
+        float peak = ComputePeak(buffer, format);
         if (peak > _capturePeak)
         {
             _capturePeak = peak;
@@ -395,13 +407,13 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    internal static float ComputePeak(byte[] buffer, int bytes, WaveFormat format)
+    internal static float ComputePeak(ReadOnlySpan<byte> buffer, WaveFormat format)
     {
         float peak = 0f;
 
         if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         {
-            ReadOnlySpan<float> samples = MemoryMarshal.Cast<byte, float>(buffer.AsSpan(0, bytes));
+            ReadOnlySpan<float> samples = MemoryMarshal.Cast<byte, float>(buffer);
             foreach (float sample in samples)
             {
                 float abs = Math.Abs(sample);
@@ -413,7 +425,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
         else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16)
         {
-            ReadOnlySpan<short> samples = MemoryMarshal.Cast<byte, short>(buffer.AsSpan(0, bytes));
+            ReadOnlySpan<short> samples = MemoryMarshal.Cast<byte, short>(buffer);
             foreach (short sample in samples)
             {
                 float abs = Math.Abs(sample / 32768f);
@@ -425,7 +437,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
         else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 32)
         {
-            ReadOnlySpan<int> samples = MemoryMarshal.Cast<byte, int>(buffer.AsSpan(0, bytes));
+            ReadOnlySpan<int> samples = MemoryMarshal.Cast<byte, int>(buffer);
             foreach (int sample in samples)
             {
                 float abs = Math.Abs(sample / 2147483648f);
@@ -437,7 +449,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
         else if (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 24)
         {
-            ReadOnlySpan<byte> raw = buffer.AsSpan(0, bytes - (bytes % 3));
+            ReadOnlySpan<byte> raw = buffer[..(buffer.Length - (buffer.Length % 3))];
             for (var i = 0; i + 2 < raw.Length; i += 3)
             {
                 // Little-endian 24-bit sample, sign-extended via a shifted 32-bit build-up.
@@ -491,7 +503,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     samples = expanded;
                 }
 
-                var read = provider.Read(samples, count, samples.Length - count);
+                var read = provider.Read(samples.AsSpan(count));
                 if (read <= 0)
                 {
                     return samples.AsSpan(0, count).ToArray();
@@ -551,7 +563,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return null;
     }
 
-    private void Cleanup(WasapiCapture? capture, MemoryStream? raw, ManualResetEventSlim? stopped)
+    private void Cleanup(WasapiRecorder? capture, MemoryStream? raw, ManualResetEventSlim? stopped)
     {
         if (capture is not null)
         {
