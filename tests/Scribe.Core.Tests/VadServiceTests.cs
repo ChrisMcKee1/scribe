@@ -157,6 +157,43 @@ public sealed class VadServiceTests
         Assert.Null(vad.LastSpeechSeconds);
     }
 
+    [Fact]
+    public void Unload_ThenTrim_ReloadsOnDemand()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        var models = locator.Resolve();
+        if (!models.VadAvailable) return;
+
+        var wav = Path.Combine(models.Directory, "test_wavs", "en.wav");
+        if (!File.Exists(wav)) return;
+
+        var speech = LoadResampled16kMono(wav);
+        if (speech.Length == 0) return;
+
+        using var vad = new VadService(locator, NullLogger<VadService>.Instance);
+        vad.Initialize();
+        Assert.True(vad.IsAvailable);
+
+        vad.Unload();
+        Assert.False(vad.IsAvailable);
+
+        // Idle release depends on Trim re-initializing by itself after an unload.
+        var result = vad.Trim(new CapturedAudio(speech, 16000));
+        Assert.True(vad.IsAvailable);
+        Assert.False(result.IsEmpty);
+    }
+
+    [Fact]
+    public void Unload_BeforeInitialize_IsANoOp()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        using var vad = new VadService(locator, NullLogger<VadService>.Instance);
+
+        vad.Unload(); // must not throw and must not load anything
+
+        Assert.False(vad.IsAvailable);
+    }
+
     private static int RequiredSampleRate(int seconds) => 16000 * seconds;
 
     private static float[] LoadResampled16kMono(string wavPath)
