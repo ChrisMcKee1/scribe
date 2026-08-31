@@ -32,4 +32,10 @@ public interface IVadService : IDisposable
     /// the model is unavailable or the audio is not 16 kHz.
     /// </summary>
     CapturedAudio Trim(CapturedAudio audio);
+
+    /// <summary>
+    /// Releases the loaded VAD model. The service stays usable: the next <see cref="Trim"/> or
+    /// <see cref="Initialize"/> reloads it on demand. No-op when nothing is loaded.
+    /// </summary>
+    void Unload();
 }

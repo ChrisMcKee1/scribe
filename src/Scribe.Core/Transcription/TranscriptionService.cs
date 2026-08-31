@@ -232,6 +232,18 @@ public sealed class TranscriptionService : ITranscriptionService
         return Math.Clamp(Environment.ProcessorCount / 2, 1, MaxAutoThreads);
     }
 
+    public void Unload()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _recognizer is null) return;
+            _recognizer.Dispose();
+            _recognizer = null;
+            _activeModelId = null;
+            _logger.LogInformation("Recognizer unloaded; it will reload on the next dictation.");
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)

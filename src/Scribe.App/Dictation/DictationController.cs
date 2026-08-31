@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
@@ -77,6 +78,12 @@ internal sealed class DictationController : IDisposable
     private SilenceAutoStopTracker? _silenceTracker;
     private bool _silenceSubscribed;
 
+    // Idle model release: after ReleaseModelsAfterIdleMinutes without a dictation the recognizer
+    // and VAD are unloaded, returning their memory (model weights plus whatever high-water the
+    // ONNX Runtime arena accumulated) to the OS. Re-armed on every return to idle; disarmed the
+    // moment a recording starts.
+    private System.Threading.Timer? _idleReleaseTimer;
+
     public DictationController(
         IHotkeyService hotkeys,
         IAudioCaptureService audio,
@@ -111,6 +118,13 @@ internal sealed class DictationController : IDisposable
 
     /// <summary>Raised whenever the dictation state changes (on a background thread).</summary>
     public event Action<DictationState>? StateChanged;
+
+    /// <summary>
+    /// Raised (on a background thread) after the idle timeout unloaded the speech models, so the
+    /// shell can also drop other idle-only residents (the out-of-process overlay). Purely
+    /// informational; the models reload on demand at the next dictation.
+    /// </summary>
+    public event Action? ModelsReleased;
 
     /// <summary>Raised when a capture or transcription step fails.</summary>
     public event Action<string>? Error;
@@ -192,7 +206,74 @@ internal sealed class DictationController : IDisposable
         _hotkeys.Deactivated += OnDeactivated;
         _hotkeys.Start();
         _started = true;
+        _idleReleaseTimer = new System.Threading.Timer(
+            _ => ReleaseIdleModels(), null, Timeout.Infinite, Timeout.Infinite);
+        ScheduleIdleRelease();
         _log.LogInformation("Dictation controller started; binding = {Binding}.", _settings.Hotkey.DisplayName);
+    }
+
+    /// <summary>
+    /// (Re)arms the idle-release countdown from the live settings. A zero or negative setting
+    /// disarms it entirely, keeping the models resident forever.
+    /// </summary>
+    private void ScheduleIdleRelease()
+    {
+        var timer = _idleReleaseTimer;
+        if (timer is null) return;
+
+        var minutes = CurrentSettings.ReleaseModelsAfterIdleMinutes;
+        timer.Change(
+            minutes > 0 ? TimeSpan.FromMinutes(minutes) : Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>
+    /// Unloads the recognizer and VAD if the controller is genuinely idle, then compacts the LOH
+    /// with the one blocking gen-2 collection that actually returns large buffers to the OS (a
+    /// background gen-2 never honors CompactOnce). Skips silently when a dictation is recording
+    /// or still processing; the timer re-arms when that work returns to idle.
+    /// </summary>
+    private void ReleaseIdleModels()
+    {
+        try
+        {
+            lock (_gate)
+            {
+                if (_disposed || _state != DictationState.Idle || _processingTask is not null)
+                {
+                    return;
+                }
+            }
+
+            if (!_transcription.IsReady && !_vad.IsAvailable)
+            {
+                return; // nothing resident
+            }
+
+            _transcription.Unload();
+            _vad.Unload();
+
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+            _log.LogInformation(
+                "Speech models released after {Minutes} idle minutes; they reload on the next dictation.",
+                CurrentSettings.ReleaseModelsAfterIdleMinutes);
+
+            try
+            {
+                ModelsReleased?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "A ModelsReleased handler failed.");
+            }
+        }
+        catch (Exception ex)
+        {
+            // Releasing memory is an optimization; it must never destabilize dictation.
+            _log.LogWarning(ex, "Idle model release failed.");
+        }
     }
 
     /// <summary>
@@ -220,6 +301,7 @@ internal sealed class DictationController : IDisposable
         var next = BuildCleanupOptions(settings);
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
+        ScheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
 
@@ -410,6 +492,19 @@ internal sealed class DictationController : IDisposable
         }
 
         _log.LogInformation("Dictation {State}.", paused ? "paused" : "resumed");
+
+        // Pausing is the user saying "Scribe should stand down": release the models right away
+        // rather than waiting out the idle window. Resume just re-arms the countdown; the next
+        // dictation reloads on demand.
+        if (paused && !stopRecording)
+        {
+            _ = Task.Run(ReleaseIdleModels);
+        }
+        else if (!paused)
+        {
+            ScheduleIdleRelease();
+        }
+
         if (stopRecording)
         {
             _hotkeys.CancelToggle();
@@ -445,6 +540,29 @@ internal sealed class DictationController : IDisposable
             _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
             _captureStartedTimestamp = Stopwatch.GetTimestamp();
             _dictationId = Interlocked.Increment(ref _dictationSeq);
+        }
+
+        _idleReleaseTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+        // If the idle release ran, start reloading the models NOW so the warm-up overlaps with the
+        // recording instead of stacking onto decode latency after the key is released. Transcribe
+        // falls back to a synchronous load if the user finishes speaking first.
+        if (!_transcription.IsReady)
+        {
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    _vad.Initialize();
+                    _transcription.Initialize();
+                }
+                catch (Exception ex)
+                {
+                    // Transcribe reports the real failure with full context; this warm-up is
+                    // best-effort and must never surface its own error path.
+                    _log.LogDebug(ex, "Background model reload failed; Transcribe will retry.");
+                }
+            });
         }
 
         try
@@ -1072,6 +1190,7 @@ internal sealed class DictationController : IDisposable
             paused = _paused; // a pause requested mid-capture takes effect once processing finishes
         }
 
+        ScheduleIdleRelease();
         Raise(paused ? DictationState.Paused : DictationState.Idle);
     }
 
@@ -1180,6 +1299,7 @@ internal sealed class DictationController : IDisposable
 
         _disposed = true;
         _lifetimeCts.Cancel();
+        _idleReleaseTimer?.Dispose();
         UnsubscribeSilence();
         _audio.CaptureFaulted -= OnCaptureFaulted;
         if (_audio.IsCapturing)

@@ -59,6 +59,48 @@ public sealed class TranscriptionServiceTests
     }
 
     [Fact]
+    public void Unload_ThenTranscribe_ReloadsOnDemand()
+    {
+        var locator = new ModelLocator(new AppPaths());
+        var models = locator.Resolve();
+        if (!models.AsrComplete)
+            return;
+
+        var wav = Path.Combine(models.Directory, "test_wavs", "en.wav");
+        if (!File.Exists(wav))
+            return;
+
+        using var service = new TranscriptionService(
+            locator,
+            Options.Create(new TranscriptionOptions { NumThreads = 4 }),
+            NullLogger<TranscriptionService>.Instance);
+
+        service.Initialize();
+        Assert.True(service.IsReady);
+
+        service.Unload();
+        Assert.False(service.IsReady);
+
+        // The service must come back on its own: idle release depends on this exact path.
+        var result = service.Transcribe(TestAudio.LoadWav(wav));
+        Assert.True(service.IsReady);
+        Assert.False(result.IsEmpty);
+    }
+
+    [Fact]
+    public void Unload_BeforeInitialize_IsANoOp()
+    {
+        using var service = new TranscriptionService(
+            new ModelLocator(new AppPaths()),
+            Options.Create(new TranscriptionOptions()),
+            NullLogger<TranscriptionService>.Instance);
+
+        service.Unload(); // must not throw and must not load anything
+
+        Assert.False(service.IsReady);
+    }
+
+    [Fact]
     public void Transcribe_EmptyAudio_ReturnsEmptyWithoutLoadingModel()
     {
         var locator = new ModelLocator(new AppPaths());

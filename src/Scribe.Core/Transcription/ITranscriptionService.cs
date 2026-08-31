@@ -19,4 +19,12 @@ public interface ITranscriptionService : IDisposable
 
     /// <summary>Decodes a capture to text. Empty input yields <see cref="TranscriptionResult.Empty"/>.</summary>
     TranscriptionResult Transcribe(CapturedAudio audio);
+
+    /// <summary>
+    /// Releases the loaded recognizer and every byte ONNX Runtime's arena is holding — the only
+    /// way that memory returns to the OS, since the arena never shrinks on its own. The service
+    /// stays usable: the next <see cref="Initialize"/> or <see cref="Transcribe"/> reloads the
+    /// model on demand. No-op when nothing is loaded.
+    /// </summary>
+    void Unload();
 }

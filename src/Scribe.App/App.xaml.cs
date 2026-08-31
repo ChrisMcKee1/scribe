@@ -260,6 +260,21 @@ public partial class App : Application
             {
                 _appLog?.LogDebug(ex, "Could not show the AI cleanup provider notification.");            }
         }));
+        _controller.ModelsReleased += () =>
+        {
+            // The overlay helper is the other idle-only resident (~100 MB of WinUI runtime).
+            // ShowRecording relaunches it lazily, exactly like the overlay-disabled path, so
+            // closing it here costs one warm-up on the first post-idle dictation and nothing else.
+            try
+            {
+                _overlay?.CloseOverlay();
+            }
+            catch (Exception ex)
+            {
+                _appLog?.LogDebug(ex, "Could not close the overlay during idle release.");
+            }
+        };
+
         _controller.InjectionFailed += () =>
         {
             // The failed dictation survives in LastTranscriptStore; a balloon closes the loop so

@@ -77,6 +77,15 @@ public sealed class AppSettings
     public bool UseVoiceActivityDetection { get; set; } = true;
 
     /// <summary>
+    /// Minutes of idle (no dictation, not recording) after which the speech models are unloaded to
+    /// return their memory to the OS; the next dictation reloads them with a one-to-two-second
+    /// warm-up. 0 keeps the models resident forever (the pre-0.3.16 behavior). Ten minutes keeps
+    /// Scribe out of the "top memory" list while it sits in the tray, which is most of its life,
+    /// without touching back-to-back dictation sessions.
+    /// </summary>
+    public int ReleaseModelsAfterIdleMinutes { get; set; } = 10;
+
+    /// <summary>
     /// In toggle mode, end the dictation automatically after a few seconds of silence instead of
     /// waiting for the second key press. Off by default (noisy rooms can misfire the detector).
     /// </summary>

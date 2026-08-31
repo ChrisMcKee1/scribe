@@ -184,6 +184,20 @@ public sealed class VadService : IVadService
         }
     }
 
+    public void Unload()
+    {
+        lock (_gate)
+        {
+            if (_disposed || !_initialized) return;
+            _vad?.Dispose();
+            _vad = null;
+            _available = false;
+            _initialized = false; // the next Trim/Initialize reloads the model on demand
+            _lastSpeechSeconds = null;
+            _logger.LogInformation("Silero VAD unloaded; it will reload on the next dictation.");
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)
