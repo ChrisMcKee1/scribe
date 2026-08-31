@@ -22,20 +22,20 @@ internal sealed class MonoDownmixSampleProvider : ISampleProvider
 
     public WaveFormat WaveFormat { get; }
 
-    public int Read(float[] buffer, int offset, int count)
+    public int Read(Span<float> buffer)
     {
         if (_channels == 1)
         {
-            return _source.Read(buffer, offset, count);
+            return _source.Read(buffer);
         }
 
-        int needed = count * _channels;
+        int needed = buffer.Length * _channels;
         if (_buffer.Length < needed)
         {
             _buffer = new float[needed];
         }
 
-        int read = _source.Read(_buffer, 0, needed);
+        int read = _source.Read(_buffer.AsSpan(0, needed));
         int frames = read / _channels;
         for (int frame = 0; frame < frames; frame++)
         {
@@ -46,7 +46,7 @@ internal sealed class MonoDownmixSampleProvider : ISampleProvider
                 sum += _buffer[baseIndex + channel];
             }
 
-            buffer[offset + frame] = sum / _channels;
+            buffer[frame] = sum / _channels;
         }
 
         return frames;

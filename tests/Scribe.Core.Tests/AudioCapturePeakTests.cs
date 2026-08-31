@@ -34,7 +34,7 @@ public sealed class AudioCapturePeakTests
         var format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 1);
         var buffer = FloatBuffer(new float[480]);
 
-        var peak = AudioCaptureService.ComputePeak(buffer, buffer.Length, format);
+        var peak = AudioCaptureService.ComputePeak(buffer, format);
 
         Assert.Equal(0f, peak);
         Assert.True(peak < AudioCaptureService.SilentCapturePeak);
@@ -48,7 +48,7 @@ public sealed class AudioCapturePeakTests
         var format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 1);
         var buffer = FloatBuffer(0.0f, 0.002f, -0.0015f, 0.001f);
 
-        var peak = AudioCaptureService.ComputePeak(buffer, buffer.Length, format);
+        var peak = AudioCaptureService.ComputePeak(buffer, format);
 
         Assert.True(peak >= AudioCaptureService.SilentCapturePeak);
     }
@@ -59,7 +59,7 @@ public sealed class AudioCapturePeakTests
         var format = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
         var buffer = FloatBuffer(0.1f, -0.75f, 0.3f);
 
-        Assert.Equal(0.75f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format), 3);
+        Assert.Equal(0.75f, AudioCaptureService.ComputePeak(buffer, format), 3);
     }
 
     [Fact]
@@ -69,7 +69,7 @@ public sealed class AudioCapturePeakTests
         var format = WaveFormat.CreateIeeeFloatWaveFormat(48000, 1);
         var buffer = FloatBuffer(1.5f, -2.0f);
 
-        Assert.Equal(1f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format));
+        Assert.Equal(1f, AudioCaptureService.ComputePeak(buffer, format));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class AudioCapturePeakTests
         var format = new WaveFormat(16000, 16, 1);
         var buffer = Pcm16Buffer(0, -16384, 8192);
 
-        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format), 3);
+        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, format), 3);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class AudioCapturePeakTests
         var format = new WaveFormat(16000, 16, 1);
         var buffer = Pcm16Buffer(new short[160]);
 
-        Assert.Equal(0f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format));
+        Assert.Equal(0f, AudioCaptureService.ComputePeak(buffer, format));
     }
 
     [Fact]
@@ -98,7 +98,7 @@ public sealed class AudioCapturePeakTests
         var buffer = new byte[samples.Length * sizeof(int)];
         Buffer.BlockCopy(samples, 0, buffer, 0, buffer.Length);
 
-        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format), 3);
+        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, format), 3);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class AudioCapturePeakTests
         // Two little-endian 24-bit samples: 0x400000 (= +0.5) and a small negative value.
         var buffer = new byte[] { 0x00, 0x00, 0x40, 0xFF, 0xFF, 0xFF };
 
-        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format), 3);
+        Assert.Equal(0.5f, AudioCaptureService.ComputePeak(buffer, format), 3);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class AudioCapturePeakTests
         var format = new WaveFormat(22050, 8, 1);
         var buffer = new byte[64];
 
-        Assert.Equal(0f, AudioCaptureService.ComputePeak(buffer, buffer.Length, format));
+        Assert.Equal(0f, AudioCaptureService.ComputePeak(buffer, format));
     }
 
     [Theory]

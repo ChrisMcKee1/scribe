@@ -15,7 +15,7 @@ public class MonoDownmixSampleProviderTests
 
         var mono = new MonoDownmixSampleProvider(source);
         float[] output = new float[8];
-        int read = mono.Read(output, 0, output.Length);
+        int read = mono.Read(output);
 
         Assert.Equal(1, mono.WaveFormat.Channels);
         Assert.Equal(16000, mono.WaveFormat.SampleRate);
@@ -34,7 +34,7 @@ public class MonoDownmixSampleProviderTests
 
         var mono = new MonoDownmixSampleProvider(source);
         float[] output = new float[4];
-        int read = mono.Read(output, 0, output.Length);
+        int read = mono.Read(output);
 
         Assert.Equal(4, read);
         Assert.Equal(samples, output);
@@ -57,10 +57,10 @@ public class MonoDownmixSampleProviderTests
 
         public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
 
-        public int Read(float[] buffer, int offset, int count)
+        public int Read(Span<float> buffer)
         {
-            int available = Math.Min(count, data.Length - _position);
-            Array.Copy(data, _position, buffer, offset, available);
+            int available = Math.Min(buffer.Length, data.Length - _position);
+            data.AsSpan(_position, available).CopyTo(buffer);
             _position += available;
             return available;
         }

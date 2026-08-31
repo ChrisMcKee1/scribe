@@ -208,7 +208,7 @@ public sealed class VadServiceTests
         var all = new List<float>(capacity: 16000 * 8);
         var buffer = new float[16000];
         int read;
-        while ((read = resampler.Read(buffer, 0, buffer.Length)) > 0)
+        while ((read = resampler.Read(buffer.AsSpan())) > 0)
         {
             for (var i = 0; i < read; i++)
                 all.Add(buffer[i]);

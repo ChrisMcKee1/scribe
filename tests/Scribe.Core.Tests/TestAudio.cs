@@ -19,7 +19,7 @@ internal static class TestAudio
         var interleaved = new List<float>(capacity: (int)(reader.Length / sizeof(float)));
         var block = new float[sampleRate * channels];
         int read;
-        while ((read = reader.Read(block, 0, block.Length)) > 0)
+        while ((read = reader.Read(block.AsSpan())) > 0)
         {
             for (var i = 0; i < read; i++)
                 interleaved.Add(block[i]);

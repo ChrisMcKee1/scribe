@@ -167,7 +167,7 @@ internal static class BenchmarkInput
         var samples = new List<float>(16000 * 30);
         var buffer = new float[16000];
         int read;
-        while ((read = resampler.Read(buffer, 0, buffer.Length)) > 0)
+        while ((read = resampler.Read(buffer.AsSpan())) > 0)
         {
             for (var i = 0; i < read; i++)
             {
