@@ -134,8 +134,11 @@ internal static class Program
     }
 
     /// <summary>
-    /// Decodes progressively longer audio in a single shot and reports where, if anywhere, the
-    /// recognizer stops producing text.
+    /// Decodes progressively longer audio through the real service and reports where, if anywhere,
+    /// the recognizer stops producing text. Since chunked decoding landed, Transcribe splits
+    /// anything over 30 s (TranscriptionChunker.MaxChunkSeconds) into bounded chunks, so this
+    /// check now verifies that the split path keeps producing text where the single-shot decode
+    /// used to collapse (and keeps the memory arena bounded while doing it).
     /// <para>
     /// This exists because of a real user report. A Store user on 0.3.10 said dictation "cut out
     /// after seven to ten seconds"; their log showed the opposite of what that sounds like. Audio
@@ -145,8 +148,8 @@ internal static class Program
     /// </para>
     /// <para>
     /// sherpa-onnx documents VAD-segmented decoding (<c>sherpa-onnx-vad-with-offline-asr</c>) as the
-    /// way to run Parakeet TDT over long audio, and Scribe feeds it one unsegmented span. This check
-    /// measures how far that holds on the machine it runs on, which is the number nobody had.
+    /// way to run Parakeet TDT over long audio; Scribe's chunked decode is that pattern with
+    /// energy-minimum boundaries. This check measures how it holds up on the machine it runs on.
     /// </para>
     /// </summary>
     private static int RunLongAudioCheck(TranscriptionService service, List<Fixture> fixtures)

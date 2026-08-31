@@ -174,12 +174,34 @@ public sealed class TranscriptionService : ITranscriptionService
             var recognizer = _recognizer
                 ?? throw new InvalidOperationException("Recognizer is not initialized.");
 
-            using var stream = recognizer.CreateStream();
-            stream.AcceptWaveform(audio.SampleRate, audio.Samples);
-            recognizer.Decode(stream);
+            // Long captures decode in bounded chunks (see TranscriptionChunker) because one long
+            // decode permanently pins the arena at its high-water mark. Chunks are decoded one at
+            // a time on purpose: the batch Decode(IEnumerable) overload runs them as a single
+            // padded batch through the encoder, which multiplies the very allocation the chunking
+            // exists to cap.
+            var spans = TranscriptionChunker.Plan(audio.Samples, audio.SampleRate);
+            string text;
+            if (spans.Count == 1)
+            {
+                text = DecodeSpan(recognizer, audio, spans[0]);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Capture of {Seconds:F1}s exceeds {Max}s; decoding as {Chunks} chunks.",
+                    audio.Duration.TotalSeconds, TranscriptionChunker.MaxChunkSeconds, spans.Count);
+
+                var parts = new List<string>(spans.Count);
+                foreach (var span in spans)
+                {
+                    var part = DecodeSpan(recognizer, audio, span);
+                    if (part.Length > 0) parts.Add(part);
+                }
+
+                text = string.Join(' ', parts);
+            }
 
             sw.Stop();
-            var text = stream.Result.Text?.Trim() ?? string.Empty;
             var result = new TranscriptionResult(text, audio.Duration, sw.Elapsed, _activeModelId);
 
             _logger.LogDebug(
@@ -189,6 +211,19 @@ public sealed class TranscriptionService : ITranscriptionService
 
             return result;
         }
+    }
+
+    private static string DecodeSpan(
+        OfflineRecognizer recognizer, CapturedAudio audio, (int Start, int Length) span)
+    {
+        var samples = span.Start == 0 && span.Length == audio.Samples.Length
+            ? audio.Samples
+            : audio.Samples.AsSpan(span.Start, span.Length).ToArray();
+
+        using var stream = recognizer.CreateStream();
+        stream.AcceptWaveform(audio.SampleRate, samples);
+        recognizer.Decode(stream);
+        return stream.Result.Text?.Trim() ?? string.Empty;
     }
 
     private static int ResolveThreadCount(int configured)
