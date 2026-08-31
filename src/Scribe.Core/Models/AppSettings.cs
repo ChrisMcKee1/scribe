@@ -86,6 +86,21 @@ public sealed class AppSettings
     public int ReleaseModelsAfterIdleMinutes { get; set; } = 10;
 
     /// <summary>
+    /// Hard ceiling on a single recording, in minutes; hitting it stops the dictation cleanly and
+    /// transcribes what was captured. 0 removes the ceiling. This exists because a forgotten
+    /// toggle (or a stuck key) otherwise grows the raw capture buffer without bound — the only
+    /// truly unbounded memory path in the app — at roughly 23 MB per minute.
+    /// </summary>
+    public int MaxDictationMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Days dictation history (and any stored audio) is kept before startup pruning removes it;
+    /// 0 keeps everything forever. Stored audio is the disk cost that makes this matter: about
+    /// 1.9 MB per dictated minute, previously kept for the life of the install.
+    /// </summary>
+    public int HistoryRetentionDays { get; set; } = 90;
+
+    /// <summary>
     /// In toggle mode, end the dictation automatically after a few seconds of silence instead of
     /// waiting for the second key press. Off by default (noisy rooms can misfire the detector).
     /// </summary>

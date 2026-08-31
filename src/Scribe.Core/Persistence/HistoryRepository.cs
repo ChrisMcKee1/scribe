@@ -209,6 +209,46 @@ public sealed class HistoryRepository : IHistoryRepository
         command.ExecuteNonQuery();
     }
 
+    public int PruneOlderThan(DateTimeOffset cutoffUtc)
+    {
+        // Same shape as CleanupFailureLog.PruneOlderThan: the timestamp format ("O") sorts as
+        // text, so an indexed string comparison is a correct age filter. Audio blobs go second,
+        // and only those both old AND orphaned: a blob still referenced by a surviving entry
+        // (however old) must stay playable, mirroring the ownership rule in Delete().
+        try
+        {
+            var cutoff = cutoffUtc.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
+
+            using var rows = connection.CreateCommand();
+            rows.Transaction = transaction;
+            rows.CommandText = "DELETE FROM history WHERE timestamp_utc < $cutoff;";
+            rows.Parameters.AddWithValue("$cutoff", cutoff);
+            var removed = rows.ExecuteNonQuery();
+
+            using var blobs = connection.CreateCommand();
+            blobs.Transaction = transaction;
+            blobs.CommandText =
+                """
+                DELETE FROM audio_blobs
+                WHERE created_utc < $cutoff
+                    AND id NOT IN (
+                        SELECT audio_blob_id FROM history WHERE audio_blob_id IS NOT NULL);
+                """;
+            blobs.Parameters.AddWithValue("$cutoff", cutoff);
+            blobs.ExecuteNonQuery();
+
+            transaction.Commit();
+            return removed;
+        }
+        catch
+        {
+            // Retention is housekeeping; a locked or damaged database must never take down startup.
+            return 0;
+        }
+    }
+
     internal static byte[] ToBytes(float[] samples) =>
         MemoryMarshal.AsBytes(samples.AsSpan()).ToArray();
 

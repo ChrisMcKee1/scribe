@@ -428,6 +428,62 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void History_prune_removes_old_rows_and_orphaned_blobs_only()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new HistoryRepository(db);
+        var audio = new CapturedAudio([0.1f, 0.2f, 0.3f], 16000);
+
+        // Old entry with its own blob (both should go), a fresh entry with a blob (both stay),
+        // and an old blob still referenced by a FRESH entry (must stay playable).
+        var oldBlob = repo.AddAudioBlob(audio);
+        repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow.AddDays(-120), "old", 500, 40, AudioBlobId: oldBlob));
+
+        var sharedOldBlob = repo.AddAudioBlob(audio);
+        var freshWithOldBlob = repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "fresh-shares-old-audio", 500, 40, AudioBlobId: sharedOldBlob));
+
+        // AddAudioBlob stamps created_utc as now; back-date the two "old" blobs so their age
+        // matches their entries, the way blobs written at dictation time age in production.
+        using (var connection = db.Open())
+        using (var age = connection.CreateCommand())
+        {
+            age.CommandText = "UPDATE audio_blobs SET created_utc = $ts WHERE id IN ($a, $b);";
+            age.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.AddDays(-120).ToString("O"));
+            age.Parameters.AddWithValue("$a", oldBlob);
+            age.Parameters.AddWithValue("$b", sharedOldBlob);
+            age.ExecuteNonQuery();
+        }
+
+        var freshBlob = repo.AddAudioBlob(audio);
+        repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "fresh", 500, 40, AudioBlobId: freshBlob));
+
+        var removed = repo.PruneOlderThan(DateTimeOffset.UtcNow.AddDays(-90));
+
+        Assert.True(removed >= 1);
+        var recent = repo.GetRecent(10);
+        Assert.Equal(2, recent.Count);
+        Assert.DoesNotContain(recent, e => e.Text == "old");
+
+        Assert.Null(repo.GetAudio(oldBlob));           // orphaned by the prune: gone
+        Assert.NotNull(repo.GetAudio(sharedOldBlob));  // old but still referenced: kept
+        Assert.NotNull(repo.GetAudio(freshBlob));      // fresh: kept
+        Assert.Equal(sharedOldBlob, recent.Single(e => e.Id == freshWithOldBlob.Id).AudioBlobId);
+    }
+
+    [Fact]
+    public void History_prune_with_future_cutoff_equals_clear_but_returns_count()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new HistoryRepository(db);
+        repo.Add(new HistoryEntry(0, DateTimeOffset.UtcNow, "x", 500, 40));
+
+        var removed = repo.PruneOlderThan(DateTimeOffset.UtcNow.AddDays(1));
+
+        Assert.Equal(1, removed);
+        Assert.Empty(repo.GetRecent(10));
+    }
+
+    [Fact]
     public void History_clear_removes_rows_and_blobs()
     {
         using var db = ScribeDatabase.CreateInMemory();
