@@ -16,7 +16,7 @@ endpoint (sends the *transcribed text only*, never audio, and is strictly opt‑
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
 suggestions); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
-(writing style + newline mode by focused process); **AI cleanup** across three providers
+(writing style + newline mode by focused process); **AI cleanup** across four providers
 (Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
 any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
 **playground** for testing normal push-to-talk with raw recognition, dictionary/library/snippet

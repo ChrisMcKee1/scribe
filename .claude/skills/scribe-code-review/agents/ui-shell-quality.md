@@ -7,16 +7,15 @@ one, stay reachable by keyboard, keep meaning readable without colour, honour th
 reduced-motion setting, and stay inside the brand PRODUCT.md describes?
 
 Scribe is a Windows tray app, not a web app. The shell is a WPF window vocabulary from a single
-package, plus two always-on-top floating surfaces that deliberately do not follow the theme at all.
+package, plus one always-on-top floating surface that deliberately does not follow the theme at all.
 Half the rules below exist because a UI shortcut here is invisible to the compiler and to the test
 suite: `tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj` references only `Scribe.Core`, so nothing
 in this lens's blast radius has a test that can fail.
 
 **Dispatch trigger.** The diff touches `*.xaml`, `*.xaml.cs`, `src/Scribe.App/Tray/**`,
 `src/Scribe.App/Onboarding/**`, `src/Scribe.App/QuickAdd/**`, or `src/Scribe.App/Settings/**`. In
-practice that covers all seven WPF windows under `src/Scribe.App/`, `src/Scribe.App/TextActions/**`
-where the motion work lives, the tray menu host, and `src/Scribe.Overlay/OverlayWindow.xaml(.cs)` and
-`App.xaml(.cs)`.
+practice that covers all four WPF windows under `src/Scribe.App/`, the tray menu host, and
+`src/Scribe.Overlay/OverlayWindow.xaml(.cs)` and `App.xaml(.cs)`.
 
 **Severity cap:** 🟡 Important. **Findings cap:** 5.
 
@@ -43,9 +42,9 @@ Before you flag or clear a UI change, be able to name all six of these. If one i
 instead of concluding.
 
 1. **Which surface it is.** A `ui:FluentWindow` chrome surface (Settings, Quick add, Welcome,
-   Dictionary cleanup, the text action palette), one of the two fixed-dark floating surfaces (the
-   WinUI pill, the WPF dock), the tray context menu, or the overlay process. The theme and colour
-   rules differ per surface and §6 is the scoping section.
+   Dictionary cleanup), the fixed-dark floating surface (the WinUI pill), the tray context menu, or
+   the overlay process. The theme and colour rules differ per surface and §6 is the scoping
+   section.
 2. **Which framework.** `src/Scribe.App/**` is WPF plus WPF-UI 4.3.0 (`Directory.Packages.props:41`,
    package id `WPF-UI`, namespace `Wpf.Ui`). `src/Scribe.Overlay/**` is WinUI 3 with **no** WPF-UI and
    no `Scribe.Core` reference. A WPF API name in an overlay finding is an instant false positive.
@@ -69,7 +68,7 @@ to prevent. Raise it as a Question or stay silent.
 application level. That has two consequences and confusing them produces bad findings.
 
 **The `ui:` types are the vocabulary for anything WPF-UI ships its own control for.** Verified in-repo
-usage across the six App XAML files: `ui:FluentWindow` (every window except the dock),
+usage across the four App XAML files: `ui:FluentWindow` (every window),
 `ui:TitleBar`, `ui:Card`, `ui:CardExpander`, `ui:Button`, `ui:TextBox`, `ui:PasswordBox`,
 `ui:ToggleSwitch`, `ui:SymbolIcon`, `ui:InfoBar`, `ui:Badge`, `ui:ProgressRing`. In code:
 `Wpf.Ui.Controls.MessageBox` and `Wpf.Ui.Controls.InfoBarSeverity`.
@@ -104,13 +103,12 @@ new `UserControl`) that duplicates a WPF-UI control already used in this reposit
 finding that tells the author to use a control the package does not ship is worse than no finding.
 
 **Not a hand-roll: retemplating a standard control.** That is the established shape here, and it is
-what you should recommend when a stock control is nearly right. Three live examples:
+what you should recommend when a stock control is nearly right. Two live examples:
 
 | Style key | File | What it retemplates |
 | --- | --- | --- |
 | `WordChip` | `QuickAddWindow.xaml:23-67` | `ToggleButton`, with a header comment saying why a plain button was rejected |
-| `OverlayZone` | `SettingsWindow.xaml:68-101` | `RadioButton`, one cell of the 9-anchor position picker |
-| `ActionRow` | `TextActionPaletteWindow.xaml:56-139` | `Button`, the two-line palette row |
+| `OverlayZone` | `SettingsWindow.xaml:102-135` | `RadioButton`, one cell of the 9-anchor position picker |
 
 **Also not a finding: the settings nav rail is a `ListBox`, not `ui:NavigationView`.**
 `SettingsWindow.xaml:123-131` uses a `ListBox` named `NavList` whose `ItemContainerStyle` is
@@ -167,16 +165,16 @@ Per-window, the convention is one line, **before** `InitializeComponent()`:
 - A new `ui:FluentWindow` with no `SystemThemeWatcher.Watch(this)`, or one that calls it after
   `InitializeComponent()` when every sibling calls it before.
 - A hardcoded colour on a themed chrome surface where a `DynamicResource` brush exists.
-  `SettingsWindow.xaml` carries **47** `DynamicResource` references and exactly **one** hardcoded
-  colour (`Fill="#E5484D"` at `:81`, the recording dot inside the position-picker preview, which is
-  quoting the pill's own red on purpose). `QuickAddWindow.xaml` has 14, `TextActionPaletteWindow.xaml`
-  18, `WelcomeWindow.xaml` 8, `DictionaryCleanupWindow.xaml` 6. The brush names in use are the Fluent
+  `SettingsWindow.xaml` carries **52** `DynamicResource` references and exactly **one** hardcoded
+  colour (`Fill="#E5484D"` at `:114`, the recording dot inside the position-picker preview, which is
+  quoting the pill's own red on purpose). `QuickAddWindow.xaml` has 14, `WelcomeWindow.xaml` 8,
+  `DictionaryCleanupWindow.xaml` 6. The brush names in use are the Fluent
   tokens: `TextFillColorPrimaryBrush`, `TextFillColorSecondaryBrush`, `AccentTextFillColorPrimaryBrush`,
   `ControlFillColorDefaultBrush`, `ControlFillColorSecondaryBrush`, `ControlFillColorTertiaryBrush`,
   `ControlStrokeColorDefaultBrush`, `AccentFillColorDefaultBrush`, `AccentFillColorSecondaryBrush`,
   `TextOnAccentFillColorPrimaryBrush`, `ApplicationBackgroundBrush`.
 
-**Do not apply the last bullet to the dock or the pill.** See §6.
+**Do not apply the last bullet to the pill.** See §6.
 
 **Contrast.** PRODUCT.md's Accessibility section sets the bar: *"Target WCAG AA contrast while
 following Windows system theme and accessibility settings."* You cannot compute a contrast ratio
@@ -194,19 +192,17 @@ PRODUCT.md is the requirement, verbatim: *"Preserve keyboard navigation, visible
 scaling, color-independent meaning, and reduced-motion behavior."* That is the rubric. Here is what
 the repository actually does against it, so you flag divergence rather than absence.
 
-**Keyboard navigation.** The text action palette is the worked example and the one to cite.
-`TextActionPaletteWindow.xaml.cs:371-398` handles `Escape` (close), `Up` and `Down`
-(`MoveSelection`, which walks the rows and calls `Focus()`), and `Enter` (runs the first match, with
-the comment "what makes typing a complete path to an action without ever touching the arrow keys").
-The constructor focuses the filter box on `Loaded` rather than the first row, with a comment saying
-why, and the window shows the affordance in text: `"Type to filter, Enter to run, Esc to close"`.
-Dialog buttons use the WPF idioms: `IsCancel="True"` and `IsDefault="True"` on the Quick add Cancel
-and Save buttons (`QuickAddWindow.xaml:190-193`).
+**Keyboard navigation.** Quick add is the worked example and the one to cite. Dialog buttons use the
+WPF idioms, `IsCancel="True"` and `IsDefault="True"` on the Cancel and Save buttons
+(`QuickAddWindow.xaml:190-193`), and `SaveButton.IsDefault` is re-evaluated as the plan changes so
+Enter stays on the common path and a deletion has to be a deliberate click
+(`QuickAddWindow.xaml.cs:359`, `:373`). The window focuses its first input on `Loaded` rather than a
+button (`QuickAddWindow.xaml.cs:127`).
 
-**Visible focus.** `ActionRow` gives keyboard focus the same visual treatment as hover, with the
-comment stating the intent: *"Keyboard focus gets the same treatment as hover, so arrowing through the
-list is as legible as pointing at it."* The `IsKeyboardFocused` trigger sets the row background and
-the accent bar height and opacity (`TextActionPaletteWindow.xaml:120-127`).
+**Visible focus.** No surviving window retemplates a control with a focus visual of its own, so there
+is no in-repo precedent to cite here. Review against the rule rather than against an example: a
+retemplated control must leave keyboard focus visible, either by keeping the inherited
+`FocusVisualStyle` or by giving `IsKeyboardFocused` a trigger of its own.
 
 **🟡 Important, hard flag:**
 
@@ -251,26 +247,17 @@ Two separate rules. Both are written into the codebase already.
 ### 4a. Every WPF animation checks `SystemParameters.ClientAreaAnimation`
 
 This is the Windows "Show animations in Windows" setting, and it is PRODUCT.md's reduced-motion
-requirement in practice. `src/Scribe.App/TextActions/TextActionDockWindow.xaml.cs` gates **six**
-separate entry points on it, and `StartIdleLoop` carries the reasoning in a comment
-(`:228-229`): *"Honour the Windows 'show animations' setting. PRODUCT.md requires reduced-motion
-behavior, and a thing that moves forever in peripheral vision is the first thing to violate it."*
+requirement in practice.
 
-| Method | Line | Behaviour when animations are off |
-| --- | --- | --- |
-| `AnimateBrush` | `:193-197` | sets the target brush directly, no fade |
-| `StartIdleLoop` | `:230-233` | returns, no breathing loop at all |
-| `Celebrate` | `:383-386` | returns |
-| `Shake` | `:433-436` | returns |
-| `StartWorkingPulse` | `:452-455` | returns |
-| `Scale` | `:547-551` | writes `PressScale.ScaleX/ScaleY` directly |
+**There is no WPF animation left in `src/Scribe.App/**` today.** The reference implementation was the
+text action dock, which gated six entry points on `SystemParameters.ClientAreaAnimation`, and it was
+deleted along with that feature. The rule is unchanged; the precedent is in git history
+(`git show 14d39d8 -- src/Scribe.App/TextActions/TextActionDockWindow.xaml.cs`) if you want to read
+the shape before recommending it.
 
-`TextActionPaletteWindow.FadeIn` (`:192-208`) does the same and simply returns, leaving the row at
-full opacity.
-
-Note the two distinct correct endings: an animation that **carries information** (a colour change, a
-press scale) sets the final value directly, and an animation that is **decoration only** returns. Both
-are right; which one applies depends on whether skipping the animation would leave the UI in a stale
+Two distinct endings are correct. An animation that **carries information** (a colour change, a press
+scale) sets the final value directly when animations are off. An animation that is **decoration only**
+returns. Which one applies depends on whether skipping the animation would leave the UI in a stale
 state.
 
 **🟡 Important, hard flag:** a new WPF animation, `Storyboard`, `BeginAnimation`, or `DoubleAnimation`
@@ -280,9 +267,7 @@ endings applies.
 
 **💡 Suggestion, and prefer silence:** an ungated short one-shot hover or press transition declared
 inside a XAML `ControlTemplate.Triggers` block, where the trigger's own exit action restores the
-resting value. The `ActionRow` hover animations (`TextActionPaletteWindow.xaml:90-118`, 120 ms) and
-the palette's `Loaded` entrance (`:142-157`, 200 ms) are ungated today and are not defects. Do not
-spend the findings cap here.
+resting value. Do not spend the findings cap here.
 
 **Overlay animations are out of scope for this rule.** `SystemParameters` is WPF and does not exist in
 WinUI. `src/Scribe.Overlay/OverlayWindow.xaml:9-30` declares `PulseStoryboard` and
@@ -295,15 +280,10 @@ while the user is actively dictating. Do not assert the API works unpackaged; as
 
 ### 4b. Anything that animates for a long time animates a `RenderTransform` or `Opacity`
 
-`src/Scribe.App/TextActions/TextActionDockWindow.xaml:19-29` states the rule in the file itself:
+A `RenderTransform` and an `Opacity` both compose on the render thread without invalidating layout,
+which is what keeps a surface that animates all day from costing a layout pass per frame.
 
-> Every animated property here is a RenderTransform or an Opacity. Both compose on the render thread
-> without invalidating layout, which is what keeps a surface that animates all day from costing a
-> layout pass per frame.
-
-The dock lives up to it: `PressScale`, `BreathScale`, `FaceBob`, `Ring1Scale`, `Ring2Scale`,
-`RingScale`, and the per-glyph `ScaleTransform` / `TranslateTransform` pairs, plus `Opacity` on the
-rings and sleep marks. The overlay pill does the same: `PulseStoryboard` animates `RecDot.Opacity`,
+The overlay pill follows it: `PulseStoryboard` animates `RecDot.Opacity`,
 and `ProcessingStoryboard` animates `Dot1Transform.Y`, `Dot2Transform.Y`, `Dot3Transform.Y`, which are
 `TranslateTransform` instances hung off each `Ellipse.RenderTransform`
 (`OverlayWindow.xaml:9-30`, `:115-123`). Even the settings usage chart follows it: the bars are a
@@ -315,11 +295,10 @@ property is `Width`, `Height`, `Margin`, `Padding`, `Left`, `Top`, `MaxWidth`, `
 `GridLength`. Name the transform that should carry it instead: `ScaleTransform` for a size,
 `TranslateTransform` for a move, `Opacity` for a fade.
 
-**Do not flag a short one-shot animation on a layout property.** The accent bar in `ActionRow`
-animates `Height` from 16 to 30 over 120 ms on hover, and the comment explains the deliberate choice:
-*"Accent bar. Height animates rather than width so the text never moves; a row that shifts on hover
-feels unstable."* (`TextActionPaletteWindow.xaml:77-84`, `:90-118`.) That is a considered trade and it
-is not what this rule is about.
+**Do not flag a short one-shot animation on a layout property**, where the trigger's exit action
+restores the resting value. A 120 ms hover transition on a `Height` can be the considered choice, for
+instance when animating height rather than width keeps neighbouring text from shifting. That is a
+trade, and it is not what this rule is about.
 
 ---
 
@@ -331,18 +310,15 @@ telemetry that requires specialist knowledge. Do not sacrifice Windows familiari
 And Design Principles: *"Reward real progress with personal records and honest local data, never
 invented scores."*
 
-This is not a style preference in this repository. `TextActionDockWindow.Celebrate`
-(`:372-403`) has the ruling written into its remarks:
-
-> Deliberately not confetti or particles. PRODUCT.md's anti-references name confetti explicitly,
-> alongside gamification and arbitrary scores. A bounce and a pulse are the same beat of delight
-> without the consumer-game register the brand rejects, and they cost two transforms rather than a
-> particle system that would run on the same surface that sits on screen all day.
+This is not a style preference in this repository. The register the brand does accept is a brief
+transform, a bounce or a pulse, rather than a particle system: it is the same beat of delight without
+the consumer-game vocabulary PRODUCT.md rules out, and it costs two transforms instead of a particle
+system running on a surface that sits on screen all day.
 
 **🟡 Important, hard flag:** the diff adds a particle or confetti effect, a streak counter, a daily or
 weekly goal with a nag, a level, an XP bar, a composite "score" the user cannot trace back to a
 measurement, or a badge awarded for engagement rather than for a fact about their data. Quote the
-anti-reference line and name `Celebrate` as the register the brand does accept.
+anti-reference line.
 
 **🟡 Important, hard flag:** a decorative dashboard tile. The bar for a metric surface here is that
 every number is traceable to local data and is also legible as text. The two live surfaces both clear
@@ -351,11 +327,10 @@ the usage trend chart is paired one-to-one with `UsageTrendGrid`, a DataGrid of 
 `Dictations`, `Words` (`SettingsWindow.xaml:1636-1646`). A new chart with no numeric readout beside
 it, or a tile whose value is a derived index rather than a measurement, is the finding.
 
-**Do not flag personality itself.** The dock has a face that breathes, blinks, celebrates, and shakes,
-and PRODUCT.md's Brand Personality asks for exactly that: *"quietly delightful"*, with *"moments of
-earned personality that make repeated use feel satisfying without turning work into a game."* The
-line is invented reward versus honest reaction. A bounce when an action **actually succeeded** is on
-the right side of it.
+**Do not flag personality itself.** PRODUCT.md's Brand Personality asks for it: *"quietly
+delightful"*, with *"moments of earned personality that make repeated use feel satisfying without
+turning work into a game."* The line is invented reward versus honest reaction. A bounce when an
+action **actually succeeded** is on the right side of it.
 
 **Do not re-open settled UI decisions.** AGENTS.md closes these; a lens reopening one is drifting, not
 reviewing: a language picker for the transducer model, an in-process WPF transparent pill, lowering
@@ -363,7 +338,7 @@ reviewing: a language picker for the transducer model, an in-process WPF transpa
 
 ---
 
-## §6. Scoping: the two floating surfaces are not settings windows
+## §6. Scoping: the floating surface is not a settings window
 
 Getting this wrong is the most likely way this lens produces a confidently wrong finding, so check it
 before writing anything about colour or theme.
@@ -376,29 +351,19 @@ carries zero `DynamicResource` references and every colour is a literal ARGB hex
 flag its hardcoded colours as a missing theme token, and never propose moving anything in it to
 `Scribe.Core`**: `Scribe.Overlay.csproj` deliberately has no `ProjectReference`.
 
-**The text action dock (`src/Scribe.App/TextActions/TextActionDockWindow.xaml`) is the same.** It is a
-plain WPF `Window`, not a `ui:FluentWindow`, with `Background="#1C1C1E"`, zero `DynamicResource`
-references, and every colour a literal. It is a 60 by 60 always-on-top tile over other people's
-windows. Same rule.
-
-**`AllowsTransparency` stays false everywhere.** `TextActionDockWindow.xaml:10` sets it explicitly,
-and the comment at `:19-29` records why: the .NET 10 WPF `AllowsTransparency` plus layered-window path
-intermittently painted an opaque black box, which is the bug that moved the pill out of process. The
-dock gets its rounded corners from DWM instead, via `DWMWA_WINDOW_CORNER_PREFERENCE` applied in
-`OnSourceInitialized` (`TextActionDockWindow.xaml.cs:99-101`). AGENTS.md lists reintroducing a WPF
-transparent or layered pill under **Never**.
+**`AllowsTransparency` stays false everywhere.** The .NET 10 WPF `AllowsTransparency` plus
+layered-window path intermittently painted an opaque black box, which is the bug that moved the pill
+out of process; `src/Scribe.Overlay/TransparentBackdrop.cs:16` records it. A WPF window that wants
+rounded corners takes them from DWM instead, via `DWMWA_WINDOW_CORNER_PREFERENCE`. AGENTS.md lists
+reintroducing a WPF transparent or layered pill under **Never**.
 
 **🟡 Important, hard flag:** any `AllowsTransparency="True"` added to a WPF window in
-`src/Scribe.App/**`, or `AllowsTransparency="False"` being deleted from `TextActionDockWindow.xaml`.
-Cross-reference `overlay-process-contract`, which owns this at 🔴 and will carry the severity; your
-job is to notice it on a window that lens's trigger might not match.
+`src/Scribe.App/**`. Cross-reference `overlay-process-contract`, which owns this at 🔴 and will carry
+the severity; your job is to notice it on a window that lens's trigger might not match.
 
 **Other exceptions in this family, all pre-existing:**
 
-- `TextActionPaletteWindow` is a `ui:FluentWindow` that does **not** call
-  `SystemThemeWatcher.Watch(this)`. That is a real gap rather than a counter-convention, but it
-  predates the diff, so it is only a finding if the change touches that constructor.
-- The two `System.Windows.MessageBox.Show` calls at `src/Scribe.App/App.xaml.cs:427` and `:445` are
+- The two `System.Windows.MessageBox.Show` calls at `src/Scribe.App/App.xaml.cs:436` and `:454` are
   the fatal and fallback data-folder notices, on the path where the data folder itself failed. They
   predate the diff.
 
@@ -474,19 +439,14 @@ off in Windows gets a card that pulses on the settings page for as long as it is
 target is a layout property every frame invalidates layout for the whole panel rather than composing on
 the render thread.
 
-`TextActionDockWindow` solves exactly this and states the rule in its own XAML header (`:19-29`):
-"Every animated property here is a RenderTransform or an Opacity." Six of its animation entry points
-open with `if (!SystemParameters.ClientAreaAnimation)`, returning for decoration and writing the final
-value directly for anything that carries information (`:193`, `:230`, `:383`, `:433`, `:452`, `:547`).
-
-Fix: gate the method the way `StartIdleLoop` does and animate a `ScaleTransform` on the card's
-`RenderTransform` with `RenderTransformOrigin` set, the way the usage trend bars already do
-(`SettingsWindow.xaml:1621-1631`).
+Fix: open the method with `if (!SystemParameters.ClientAreaAnimation) return;`, and animate a
+`ScaleTransform` on the card's `RenderTransform` with `RenderTransformOrigin` set, the way the usage
+trend bars already do (`SettingsWindow.xaml:1621-1631`).
 ```
 
 **If clean:** "UI shell quality clean: the change stayed in the WPF-UI Fluent vocabulary, followed the
 system theme through the existing failure-tolerant path, kept every new control reachable by keyboard
-with a visible focus state and meaning that survives without colour, gated its motion on
+with a visible focus state and meaning that survives without colour, gated any motion on
 `SystemParameters.ClientAreaAnimation` and animated transforms rather than layout, and added nothing
 PRODUCT.md's anti-references rule out."
 
@@ -499,27 +459,24 @@ Do not raise any of these. Each is a shape this repository has on purpose.
 - **Plain WPF controls.** `ui:ControlsDictionary` in `App.xaml` already gives `ComboBox`, `CheckBox`,
   `RadioButton`, `DataGrid`, `ProgressBar`, `ListBox`, `WrapPanel`, `ScrollViewer`, and `TextBlock`
   their Fluent look. Using one is not a hand-roll.
-- **Retemplating a stock control.** `WordChip`, `OverlayZone`, and `ActionRow` are the established
-  shape for a control WPF-UI does not ship, and each carries a comment saying why.
+- **Retemplating a stock control.** `WordChip` and `OverlayZone` are the established shape for a
+  control WPF-UI does not ship, and each carries a comment saying why.
 - **The settings nav rail as a `ListBox`.** Deliberate. Do not propose `ui:NavigationView`.
-- **The pill's and the dock's hardcoded colours and missing theme handling.** Both are fixed-dark
-  floating surfaces over arbitrary content, by design. See §6.
+- **The pill's hardcoded colours and missing theme handling.** It is a fixed-dark floating surface
+  over arbitrary content, by design. See §6.
 - **`ThemesDictionary Theme="Dark"` in `App.xaml`.** A design-time seed that `ApplyCurrentWindowsTheme`
   overwrites at startup, not a decision to ship a dark-only app.
 - **`AutomationProperties.Name` missing from a control that already has a visible text label.** Nine
   controls in the whole App carry it, applied where the label is detached. Absence is the norm.
 - **A short one-shot hover, press, or entrance animation that is ungated**, including one on a layout
-  property, where the trigger's exit action restores the resting value. The 120 ms `ActionRow` accent
-  bar and the 200 ms palette entrance are both deliberate.
+  property, where the trigger's exit action restores the resting value.
 - **`WordChip` being `Focusable="False"` and `IsTabStop="False"`** (`QuickAddWindow.xaml:131-132`).
   The chips are a pointer shortcut into two `ui:TextBox` controls that are themselves in the tab
   order, they carry `AutomationProperties.Name="{Binding Text}"`, and `IsChecked` is bound `TwoWay`
   specifically so a toggle arriving from assistive technology writes back to the model. The comment at
   `:121-125` records the bug the `TwoWay` binding fixed.
-- **The two `System.Windows.MessageBox.Show` calls in `App.xaml.cs`** (`:427`, `:445`). Pre-existing
+- **The two `System.Windows.MessageBox.Show` calls in `App.xaml.cs`** (`:427`, `:454`). Pre-existing
   data-folder failure notices.
-- **`TextActionPaletteWindow` not calling `SystemThemeWatcher.Watch`.** A real gap, pre-existing;
-  only a finding if the diff edits that constructor.
 - **Overlay animations not honouring a reduced-motion setting.** `SystemParameters` is WPF. Existing
   overlay storyboards are ungated; a new one is a Question, not a finding.
 - **Anything about the pill's process boundary, the pipe commands, the `OverlayPosition` and

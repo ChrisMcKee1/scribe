@@ -51,7 +51,7 @@ verdict, not a shrug.
 
 | Boundary | What crosses it | Gate |
 | --- | --- | --- |
-| AI cleanup and text actions | Transcript or selected text, the writing style, prompts, relevant dictionary terms, per-app profile instructions. Never audio. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:120`), plus a remote `CleanupProvider`. `EnableTextActions` (`AppSettings.cs:32`) for the selection path. |
+| AI cleanup | The transcript, the writing style, prompts, relevant dictionary terms, per-app profile instructions. Never audio. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:109`), plus a remote `CleanupProvider`. |
 | AI dictionary suggestions | A bounded sample of recent transcript history, capped at `AiDictionarySuggester.DefaultMaxSampleChars` (6000). | An explicit button press in Settings. |
 | AI usage insight | Aggregate totals and dictionary-covered term labels only. | An explicit button press. |
 | Model and update downloads | Outbound GET only. `TranscriptionModelInstaller` fetches model files and verifies a SHA256; Velopack and the Store fetch updates. Nothing user-authored is uploaded. | First-run install, update check. |
@@ -200,10 +200,9 @@ Hard-flag 🔴 when the diff:
 
 ## §7. Every online feature is opt-in, and the read must fail closed
 
-`EnableAiCleanup` (`AppSettings.cs:120`) and `EnableTextActions` (`AppSettings.cs:32`) are both plain
-`bool` with no initializer, so they are `false` by default. `EnableTextActions` carries the reason in
-its own doc comment: it reads the selection out of whatever app is in front, so it has to be something
-the user switched on deliberately.
+`EnableAiCleanup` (`AppSettings.cs:109`) is a plain `bool` with no initializer, so it is `false` by
+default. That is the shape every online gate takes here: the feature sends the user's words somewhere,
+so it has to be something they switched on deliberately.
 
 Two failure modes, both 🔴:
 
@@ -211,7 +210,7 @@ Two failure modes, both 🔴:
   feature to everyone. Worse, per P-7, a default expressed only as a property initializer is applied
   on **deserialization** of an existing settings file, so an install that predates the feature
   silently acquires it on upgrade. A first-run opt-in belongs in `CreateDefault`
-  (`AppSettings.cs:296`), and an online feature should not be defaulted on at all.
+  (`AppSettings.cs:285`), and an online feature should not be defaulted on at all.
 - **A permissive absent state at the read.** `flag != false`, `flag ?? true`, `!settings.DisableX`, or
   a `TryGet` whose miss branch proceeds. A fail-closed read is `flag == true` and a miss that does
   nothing. State the exact rewrite in the finding.

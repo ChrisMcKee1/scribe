@@ -113,6 +113,16 @@ internal sealed class CliOptions
             AzureDeployment: model,
             AzureTenantId: AzureTenantId,
             WritingStyle: writingStyle),
+        // The Copilot backend takes no endpoint and no key. The model slot is passed through, and a
+        // blank one means "whatever this GitHub account defaults to", so `--model` stays optional.
+        CleanupProvider.GitHubCopilot => new CleanupOptions(
+            Enabled: true,
+            Provider: CleanupProvider.GitHubCopilot,
+            FoundryModelAlias: CleanupModelCatalog.DefaultAlias,
+            AzureEndpoint: null,
+            AzureDeployment: null,
+            WritingStyle: writingStyle,
+            CopilotModel: string.Equals(model, "default", StringComparison.OrdinalIgnoreCase) ? null : model),
         _ => new CleanupOptions(
             Enabled: true,
             Provider: CleanupProvider.FoundryLocal,
@@ -144,9 +154,12 @@ internal sealed class CliOptions
                     o.Verbose = true;
                     break;
                 case "--provider":
-                    o.Provider = Next().ToLowerInvariant() is "azure" or "azurefoundry" or "cloud"
-                        ? CleanupProvider.AzureFoundry
-                        : CleanupProvider.FoundryLocal;
+                    o.Provider = Next().ToLowerInvariant() switch
+                    {
+                        "azure" or "azurefoundry" or "cloud" => CleanupProvider.AzureFoundry,
+                        "copilot" or "githubcopilot" or "github" => CleanupProvider.GitHubCopilot,
+                        _ => CleanupProvider.FoundryLocal,
+                    };
                     break;
                 case "--suite":
                     o.Suite = Next().ToLowerInvariant() switch

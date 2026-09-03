@@ -1,6 +1,7 @@
 ---
-status: candidate
+status: retired
 added: 2026-08-23
+retired: 2026-08-31
 surface: text-injection
 severity: important
 paths:
@@ -14,6 +15,12 @@ evidence:
 ---
 
 # An asynchronous Windows activation must be waited on before any input is synthesized into it
+
+> **Retired 2026-08-31.** The text action (highlight and rewrite) feature was removed, and with it
+> every shape this rule guards: `TextActionController`, `SelectionReader`, and
+> `ForegroundReadiness` itself. Nothing left in the repository synthesizes input into a window it
+> has just activated. Kept on disk for provenance, per the retirement policy in
+> [`README.md`](README.md).
 
 ## Guideline
 

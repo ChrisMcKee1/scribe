@@ -12,6 +12,16 @@ public enum CleanupProvider
     FoundryLocal = 0,
     AzureFoundry = 1,
     OpenAiCompatible = 2,
+
+    /*
+     * The user's own GitHub Copilot licence, through Agent Framework's Copilot backend.
+     *
+     * Unlike every other provider this one has no endpoint and no key: it drives an authenticated
+     * Copilot CLI on this machine, so the models on offer are whichever ones the signed-in GitHub
+     * account is entitled to. That also makes it the one provider with a dependency Scribe cannot
+     * satisfy on its own, which is why Settings detects the CLI before offering it.
+     */
+    GitHubCopilot = 3,
 }
 
 /// <summary>
@@ -53,7 +63,8 @@ public sealed record CleanupOptions(
     string? AzureSubscriptionId = null,
     Settings.AzureAuthMode AzureAuthMode = Settings.AzureAuthMode.AzureCli,
     string? AzureClientId = null,
-    string? AzureClientSecret = null)
+    string? AzureClientSecret = null,
+    string? CopilotModel = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =
@@ -67,6 +78,9 @@ public sealed record CleanupOptions(
         // The API key stays optional: local servers (Ollama, LM Studio) don't need one.
         CleanupProvider.OpenAiCompatible =>
             !string.IsNullOrWhiteSpace(CustomEndpoint) && !string.IsNullOrWhiteSpace(CustomModel),
+        // No endpoint, no key, and the model is optional: blank means "whatever the Copilot CLI
+        // defaults to for this account", which is a working configuration rather than a missing one.
+        CleanupProvider.GitHubCopilot => true,
         _ => !string.IsNullOrWhiteSpace(FoundryModelAlias),
     };
 }

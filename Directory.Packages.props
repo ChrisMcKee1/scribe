@@ -63,9 +63,15 @@
          GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
          into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
          Azure.AI.Projects' AIProjectClient, the framework's native Foundry path, no server-side agent. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.19.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.19.0" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.20.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.20.0" />
     <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
+    <!-- The GitHub Copilot backend, so a user with a Copilot licence can bring their own model
+         instead of standing up Azure. It drives the Copilot CLI rather than an HTTP endpoint, so
+         Scribe detects that CLI before offering the provider (Cleanup/GitHubCopilotCli.cs), and
+         every reference to its types stays inside one method so the .NET loader never loads the
+         assembly for a user who does not select it. -->
+    <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.20.0" />
     <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
@@ -90,10 +96,6 @@
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
-
-    <!-- CommonMark parser for the side-testing style suite (tools/Scribe.StyleEval). Referenced
-         with PrivateAssets=all from that tool only, which build/pack.ps1 never publishes. -->
-    <PackageVersion Include="Markdig" Version="1.3.2" />
 
     <!-- Test -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />

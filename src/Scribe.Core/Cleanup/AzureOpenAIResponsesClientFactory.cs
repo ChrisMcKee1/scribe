@@ -28,6 +28,43 @@ internal static class AzureOpenAIResponsesClientFactory
         return client.GetResponsesClient();
     }
 
+    /*
+     * The same configured client, handed back whole so a caller can ask it for a Chat Completions
+     * client instead of a Responses one.
+     *
+     * Not every Foundry deployment serves Responses: MAI-Thinking-1 answers it with HTTP 400
+     * "operation unsupported" and serves Chat Completions on the same /openai/v1 base. Both surfaces
+     * therefore have to be reachable, and they must be reachable through ONE configured client so
+     * the endpoint shaping, the auth policy, the timeout and the retry policy cannot drift apart
+     * between them.
+     */
+    public static OpenAIClient CreateClientWithApiKey(
+        Uri resourceEndpoint,
+        string apiKey,
+        TimeSpan? networkTimeout = null,
+        bool disableRetries = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+
+        return new OpenAIClient(
+            new ApiKeyCredential(apiKey),
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+    }
+
+    /// <inheritdoc cref="CreateClientWithApiKey"/>
+    public static OpenAIClient CreateClientWithTokenCredential(
+        Uri resourceEndpoint,
+        TokenCredential credential,
+        TimeSpan? networkTimeout = null,
+        bool disableRetries = false)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+
+        return new OpenAIClient(
+            new BearerTokenPolicy(credential, AzureAIScope),
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+    }
+
     public static ResponsesClient CreateWithTokenCredential(
         Uri resourceEndpoint,
         TokenCredential credential,

@@ -35,7 +35,7 @@ Every path was confirmed to exist.
 | Rubric | Paths |
 | --- | --- |
 | **F-1 Hotkey hook** | `src/Scribe.Core/Hotkeys/HotkeyService.cs`, `ChordStateMachine.cs`, `SuppressedKeyReconciler.cs`, `HookLivenessProbe.cs`, `NativeMethods.cs` |
-| **F-2 Text injection** | `src/Scribe.Core/TextInjection/**` (`TextInjector.cs`, `Win32Clipboard.cs`, `ForegroundReadiness.cs`, `SelectionReader.cs`, `InjectionNativeMethods.cs`) |
+| **F-2 Text injection** | `src/Scribe.Core/TextInjection/**` (`TextInjector.cs`, `Win32Clipboard.cs`, `InjectionNativeMethods.cs`) |
 | **F-3 Overlay** | `src/Scribe.Overlay/OverlayWindow.xaml.cs`, `TransparentBackdrop.cs`, `App.xaml.cs`, `Ipc/OverlayIpcServer.cs`, `src/Scribe.App/Overlay/OverlayProcessClient.cs` |
 | **F-4 Cleanup service** | `src/Scribe.Core/Cleanup/TextCleanupService.cs` |
 | **F-5 Speech engine** | `src/Scribe.Core/Transcription/TranscriptionService.cs`, `TranscriptionDecoding.cs`, `src/Scribe.Core/Audio/CaptureSignalAnalyzer.cs` |
@@ -118,8 +118,8 @@ Fire here only when the diff would reproduce one of the named incidents above.
 
 ## §2. F-2: Text injection, where the user's words are actually delivered
 
-**The surface.** `TextInjector.cs` (609 lines), `Win32Clipboard.cs` (316 lines),
-`ForegroundReadiness.cs`, `SelectionReader.cs`, `InjectionNativeMethods.cs`.
+**The surface.** `TextInjector.cs` (609 lines), `Win32Clipboard.cs` (285 lines),
+`InjectionNativeMethods.cs`.
 
 **The failures this surface has already produced.**
 
@@ -139,10 +139,11 @@ Fire here only when the diff would reproduce one of the named incidents above.
   holds the clipboard lock.
 - **Text typed into the wrong window.** The foreground target can change mid sequence, so `Inject`
   captures an expected window and re-checks it through `IsExpectedForeground` before starting, on the STA
-  worker, before the paste, and once per chunk in the typing loop. Activation on Windows has two stages
-  and only the first is observable through `GetForegroundWindow`, which is why `ForegroundReadiness`
-  exists: input delivered between "window became foreground" and "its thread restored focus to a child
-  control" is silently dropped, one or two characters at typing speed.
+  worker, before the paste, and once per chunk in the typing loop. Note also that activation on Windows
+  has two stages and only the first is observable through `GetForegroundWindow`: input delivered between
+  "window became foreground" and "its thread restored focus to a child control" is silently dropped, one
+  or two characters at typing speed. `TextInjector` never activates a window itself, which is what keeps
+  it clear of that trap; a diff that adds an activation has to solve it.
 
 **Invariants the diff must preserve.**
 
@@ -394,7 +395,7 @@ worth spending the cap on.
 When the diff updates N callsites of a pattern on a fragile surface, grep for the un-updated siblings and
 judge each survivor. Concretely:
 
-- A new synthetic input path added beside `TextInjector` and `SelectionReader` that does not set
+- A new synthetic input path added beside `TextInjector` that does not set
   `dwExtraInfo = SyntheticInputMarker.Value`.
 - A new clipboard write beside the existing ones that skips whatever privacy marking the others apply.
 - A new pipe verb with a `case` in `OverlayIpcServer.Dispatch` and no `Enqueue` on the engine side, or
@@ -518,9 +519,6 @@ Do not raise any of these. Each is a shape this repository has on purpose.
 - **`TextInjector`'s `Thread.Sleep` calls.** They are measured and commented, and the whole sequence is
   synchronous by contract on a joined STA worker. Do not propose `async`/`await` here.
 - **`Win32Clipboard` being text only.** A stated scope decision in its own summary, not an oversight.
-- **`SelectionReader.RestoreClipboard` restoring unconditionally.** Its remarks record why the
-  sequence-number guard was removed: Scribe empties the clipboard and the target then writes to it, two
-  bumps of Scribe's own making, so the guard fired on every capture and the restore never ran.
 - **Everything under `src/Scribe.Overlay/` being view work with no test.** The suite cannot reference that
   project and never should; `Scribe.Overlay` deliberately has no `Scribe.Core` reference. "Move it to
   Core" is never a valid suggestion for overlay code.

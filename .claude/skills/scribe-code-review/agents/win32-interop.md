@@ -30,15 +30,15 @@ the gap instead of concluding.
 
 1. **Which thread the new code runs on.** The hook callback thread (`Scribe.HotkeyHook`, STA, with a
    native message pump), the dispatch thread (`Scribe.HotkeyDispatch`), the STA injection worker
-   (`Scribe.TextInjection` / `Scribe.SelectionReader`), the WPF UI thread, or a pool thread. Almost
-   every rule below is thread-conditional.
+   (`Scribe.TextInjection`), the WPF UI thread, or a pool thread. Almost every rule below is
+   thread-conditional.
 2. **Whether it sits inside the OS deadline.** Anything reachable from `HotkeyService.HookCallback`
    (`src/Scribe.Core/Hotkeys/HotkeyService.cs:310-357`) is on the path every keystroke in the system
    takes. Anything on the watchdog, the reconciler task, or the consumer thread is not.
 3. **The comment that explains the shape.** These files carry incident records, not narration.
-   `HookLivenessProbe`'s summary, `SuppressedKeyReconciler`'s summary, `Win32Clipboard.CanBorrow`'s
-   remarks, `GlobalHotkey`'s remarks, and the `TypeUnicode` / `ChunkLength` comments are the reasoning
-   you are reviewing against. A hunk that deletes one of them deserves a hard look on its own.
+   `HookLivenessProbe`'s summary, `SuppressedKeyReconciler`'s summary, `Win32Clipboard`'s
+   `MarkPrivate` remarks, and the `TypeUnicode` / `ChunkLength` comments are the reasoning you are
+   reviewing against. A hunk that deletes one of them deserves a hard look on its own.
 4. **What the failure looks like to the user.** Every rule here maps to a symptom: a key the user cannot
    release, dictation that stops working until restart, a long dictation that truncates, a destroyed
    clipboard, or text typed into the wrong window.
@@ -139,17 +139,19 @@ movement is a finding in its own right; hand it to `tests-regression-pin` rather
 low-level hooks in one process means two callbacks per keystroke inside one `LowLevelHooksTimeout` budget,
 and two reconcilers competing over the same physical keys.
 
-The text action trigger is the worked example of the correct alternative. It runs on `RegisterHotKey` and
-a message-only window (`src/Scribe.App/Infrastructure/GlobalHotkey.cs`), whose remarks state both
-reasons: the semantics differ (push-to-talk needs press and release as separate events, opening a palette
-is a single tap the OS can match itself) and the risk differs more (a third chord state machine in the
-callback puts new work on the path every keystroke takes, while `RegisterHotKey` shares no state with the
-hook, cannot slow it down, and cannot leave a key stranded). `App.xaml.cs:303-304` says the same thing at
-the wiring site.
+The correct alternative for a **tap-to-fire** trigger is `RegisterHotKey` on a message-only window.
+Two things separate it from the hook. The semantics differ: push-to-talk needs press and release as
+separate events, while a tap is a single match the OS can make itself. And the risk differs more: another
+chord state machine in the callback puts new work on the path every keystroke takes, whereas
+`RegisterHotKey` shares no state with the hook, cannot slow it down, and cannot leave a key stranded.
+
+**There is no `RegisterHotKey` in the repository today.** The worked example was the text action
+trigger, removed with that feature; `git show 14d39d8 -- src/Scribe.App/Infrastructure/GlobalHotkey.cs`
+has the shape and its remarks if you need to describe it.
 
 **🔴 Critical, hard flag:** a second `SetWindowsHookEx` anywhere in the process, or a new global trigger
 implemented by adding another `ChordStateMachine` to `HookCallback` when a tap-to-fire
-`RegisterHotKey` binding would serve. Name `GlobalHotkey` as the shape to reuse.
+`RegisterHotKey` binding would serve.
 
 **Note, do not flag:** `HotkeyService` already carries a *second* chord machine, `_dictationOnlyState`,
 inside the callback (`HotkeyService.cs:339-345`). That one is existing, load-bearing, and shares the
@@ -198,9 +200,8 @@ the original exception keeps unwinding with its stack untouched. If a diff conve
 **Also check `dwExtraInfo`.** Every synthetic event Scribe sends carries
 `SyntheticInputMarker.Value` (`src/Scribe.Core/Hotkeys/ChordStateMachine.cs:227-231`) so the hook can tell
 Scribe's own input from the user's. It is set in `TextInjector.KeyboardInput`
-(`TextInjector.cs:562-576`), `SelectionReader.KeyboardInput`
-(`src/Scribe.Core/TextInjection/SelectionReader.cs:275-291`), and
-`NativeMethods.SendMarkedKeyEvent` (`src/Scribe.Core/Hotkeys/NativeMethods.cs:221-240`). A new synthetic
+(`TextInjector.cs:562-576`) and `NativeMethods.SendMarkedKeyEvent`
+(`src/Scribe.Core/Hotkeys/NativeMethods.cs:221-240`). A new synthetic
 input path that leaves `dwExtraInfo` at zero is 🔴: the hook will treat Scribe's own Ctrl as a user
 keypress and can start or stop a dictation from its own injection.
 
@@ -210,15 +211,15 @@ left-hand sibling and fails to release the right key. A new synthetic release of
 omits the flag is 🟡, or 🔴 when it is on the reconciler path, since a failed release is precisely the
 stuck-key symptom that path exists to cure.
 
-## §5. Clipboard: STA, retries, and two deliberately different predicates
+## §5. Clipboard: STA, retries, and a borrow predicate that is not a round-trip guarantee
 
 `Win32Clipboard` states the requirement in its own summary
 (`src/Scribe.Core/TextInjection/Win32Clipboard.cs:9`): *"All methods must be called on an STA thread that
 owns a message queue."* `TextInjector.RunOnStaThread<T>` (`TextInjector.cs:578-608`) is the canonical
 entry, and it is **P-5** in `references/patterns.md`: a dedicated `Thread` with
 `SetApartmentState(ApartmentState.STA)`, `IsBackground = true`, `Start()`, then `Join()`, capturing any
-worker exception and rethrowing it on the caller after the join. `SelectionReader.RunOnStaThread`
-(`SelectionReader.cs:314-339`) is the sibling.
+worker exception and rethrowing it on the caller after the join. It is the only STA entry point in the
+repository, so a new clipboard caller reuses it rather than standing up a second worker.
 
 **🔴 Critical, hard flag:**
 
@@ -228,32 +229,31 @@ worker exception and rethrowing it on the caller after the join. `SelectionReade
 - `Thread.Start()` without `Join()` on an injection or clipboard sequence. That turns a synchronous
   contract into a race.
 - A new clipboard open that calls `OpenClipboard` once instead of retrying. `TryOpen`
-  (`Win32Clipboard.cs:302-315`) retries `OpenRetries = 6` times with `OpenRetryDelayMs = 15` because
+  (`Win32Clipboard.cs:271-284`) retries `OpenRetries = 6` times with `OpenRetryDelayMs = 15` because
   another process routinely holds the lock.
 - A `CloseClipboard` that is not in a `finally`, or a `GlobalLock` without a matching `GlobalUnlock` in a
   `finally`, or a `GlobalAlloc` that is not freed on the failure path. `SetText`
-  (`Win32Clipboard.cs:143-193`) frees the handle when `SetClipboardData` returns 0, because ownership only
+  (`Win32Clipboard.cs:114-164`) frees the handle when `SetClipboardData` returns 0, because ownership only
   transfers to the system on success.
 
-**Understand before judging the two predicates.** `HasNonTextContent` and `CanBorrow` look like inverses
-and are deliberately not. Read the remarks on `CanBorrow` (`Win32Clipboard.cs:67-92`) before touching
-either.
+**Understand `HasNonTextContent` before judging a borrow.** `HasNonTextContent`
+(`Win32Clipboard.cs:23-42`) asks *"would borrowing lose anything at all"*, and answers yes for rich
+text, because restoring plain text drops the HTML and RTF companions. That is the right question for
+its one caller, `TextInjector`, which has somewhere to go when the answer is yes: it falls back to
+typing (`TextInjector.cs:141-148`).
 
-- `HasNonTextContent` (`Win32Clipboard.cs:23-42`) asks *"would borrowing lose anything at all"*, and
-  answers yes for rich text, because restoring plain text drops the HTML and RTF companions. That is the
-  right question for `TextInjector`, which has somewhere to go when the answer is yes: it falls back to
-  typing (`TextInjector.cs:141-148`).
-- `CanBorrow` (`Win32Clipboard.cs:93-94`) asks the narrower *"is the user's content recoverable"*: empty,
-  or text-bearing. A selection read has no fallback, and reusing `HasNonTextContent` there disabled the
-  whole feature for any ordinary copy from a browser, Word, Teams, or an editor, because those put
-  CF_UNICODETEXT, CF_TEXT, CF_OEMTEXT, CF_LOCALE and HTML Format on the clipboard, five formats, which
-  trips the more-than-four heuristic even though the text round-trips perfectly.
+It is deliberately **not** a "can this be restored" predicate, and it is tuned for a caller that has a
+fallback. A new caller with no fallback would be disabled by it on any ordinary copy from a browser,
+Word, Teams, or an editor, because those put CF_UNICODETEXT, CF_TEXT, CF_OEMTEXT, CF_LOCALE and HTML
+Format on the clipboard, five formats, which trips the more-than-four heuristic even though the text
+round-trips perfectly. Scribe carried a separate narrower predicate for that case once; it was removed
+with the text action feature.
 
-**🔴 Critical, hard flag:** a diff that collapses the two into one predicate, or swaps one call site to
-the other guard. Name which failure it reintroduces.
+**🔴 Critical, hard flag:** a new borrow-and-restore path that reuses `HasNonTextContent` as its gate
+without a fallback to fall back to. Name the failure it reintroduces.
 
 **Do not touch `PrivateMarkerCount` without understanding it.** `MarkPrivate`
-(`Win32Clipboard.cs:228-236`) writes three registered formats,
+(`Win32Clipboard.cs:197-205`) writes three registered formats,
 `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`, and
 `CanUploadToCloudClipboard`, on every write this class performs. `HasNonTextContent` discounts them
 (`Win32Clipboard.cs:36-41`) because not discounting them pushed a plain text item from 1 format to 4 and a
@@ -272,28 +272,29 @@ against it before starting (`TextInjector.cs:47-50`), again on the STA worker
 (`TextInjector.cs:107-108`), and the user-visible failure string is exactly
 `"The focused window changed while processing."`, which `DictationController` maps to the
 "focus changed, so the dictation was not inserted" message
-(`src/Scribe.App/Dictation/DictationController.cs:947-960`). Both call sites pass a real window:
-`session.TargetWindow` from the dictation loop, `capture.TargetWindow` from the text action path
-(`src/Scribe.App/TextActions/TextActionController.cs:308-312`).
+(`src/Scribe.App/Dictation/DictationController.cs:947-960`). The call site passes a real window,
+`session.TargetWindow` from the dictation loop.
 
 **🔴 Critical, hard flag:** a new injection or synthetic-input path with no foreground check, or one that
 checks only on entry and then runs a multi-second loop. Typing a transcript into whatever window happened
 to arrive is the worst non-privacy outcome this product has.
 
 **🟡 Important:** a new activation that calls `SetForegroundWindow` and proceeds immediately.
-Activation on Windows has two stages and only the first is observable through `GetForegroundWindow`:
-`ForegroundReadiness` (`src/Scribe.Core/TextInjection/ForegroundReadiness.cs`) exists because input
-delivered between "window became foreground" and "its thread restored focus to a child control" is
-silently dropped, which is one or two characters at typing speed. It polls `GetGUIThreadInfo` for a
-non-zero `hwndFocus` and then applies a 60 ms settle on **every** success path, including the one where
-the window was already foreground on entry; returning early without the settle was the original defect.
-Reuse `ForegroundReadiness.WaitForInputReady` rather than a bare `Thread.Sleep`.
+Activation on Windows has two stages and only the first is observable through `GetForegroundWindow`.
+Input delivered between "window became foreground" and "its thread restored focus to a child control"
+is silently dropped, which is one or two characters at typing speed. Scribe used to carry a
+`ForegroundReadiness` helper for exactly this; it went with the text action feature, so a diff that
+reintroduces an activate-then-type sequence has to solve it again. Poll `GetGUIThreadInfo` for a
+non-zero `hwndFocus` and settle afterwards on **every** success path, including the one where the
+window was already foreground on entry: returning early without the settle was the original defect.
+A bare `Thread.Sleep` is not the fix.
 
 **`AttachThreadInput` is not used anywhere in Scribe today.** If the diff introduces it, that is a
-**Question at minimum**: Scribe reads focus through `GetGUIThreadInfo` instead, which needs no attach and
-cannot deadlock two input queues together. Ask why the readiness probe is not sufficient, and if the
+**Question at minimum**: Scribe reads focus through `GetGUIThreadInfo` instead
+(`TextInjector.cs:234-235`), which needs no attach and cannot deadlock two input queues together. Ask
+why polling `GetGUIThreadInfo` is not sufficient, and if the
 answer is "to read a caret position", check whether `GUITHREADINFO.rcCaret`
-(`src/Scribe.Core/TextInjection/InjectionNativeMethods.cs:106-118`) already answers it. Flag 🔴 only if
+(`src/Scribe.Core/TextInjection/InjectionNativeMethods.cs:107-118`) already answers it. Flag 🔴 only if
 the attach is left unpaired with a detach.
 
 ## §7. P/Invoke declaration hygiene
@@ -302,33 +303,30 @@ Check each new or edited declaration against what the repository already does. T
 and each has bitten somebody somewhere.
 
 - **`SetLastError = true` where the error is read.** Present on `SetWindowsHookEx`
-  (`Hotkeys/NativeMethods.cs:55`), `SendInput` (`InjectionNativeMethods.cs:76`), `RegisterHotKey`
-  (`GlobalHotkey.cs:42`), and the clipboard and Global* imports. Flag 🟡 when a diff reads
-  `Marshal.GetLastWin32Error()` after a call declared without it: the value is then whatever unrelated
-  call last set it.
-- **Read the error immediately.** `GlobalHotkey.cs:91-99` reads it on the line after the failing
-  `RegisterHotKey`; `HotkeyService.cs:270-276` builds the `Win32Exception` immediately after the failed
-  install. Flag 🟡 when a log call, a string interpolation, or another P/Invoke sits between the failure
-  and the read.
+  (`Hotkeys/NativeMethods.cs:55`), `SendInput` (`InjectionNativeMethods.cs:76`), and the clipboard and
+  Global* imports. Flag 🟡 when a diff reads `Marshal.GetLastWin32Error()` after a call declared without
+  it: the value is then whatever unrelated call last set it.
+- **Read the error immediately.** `HotkeyService.cs:270-276` builds the `Win32Exception` immediately
+  after the failed install. Flag 🟡 when a log call, a string interpolation, or another P/Invoke sits
+  between the failure and the read.
 - **`cbSize` / `dwSize` uses `Marshal.SizeOf<T>()`, never a literal.** Every site in this repository does:
-  `Marshal.SizeOf<INPUT>()` (`TextInjector.cs:283`, `TextInjector.cs:525`, `SelectionReader.cs:272`,
-  `Hotkeys/NativeMethods.cs:239`), `Marshal.SizeOf<GUITHREADINFO>()` (`TextInjector.cs:234`,
-  `ForegroundReadiness.cs:108`), `Marshal.SizeOf<LASTINPUTINFO>()` (`Hotkeys/NativeMethods.cs:143`),
+  `Marshal.SizeOf<INPUT>()` (`TextInjector.cs:283`, `TextInjector.cs:525`,
+  `Hotkeys/NativeMethods.cs:239`), `Marshal.SizeOf<GUITHREADINFO>()` (`TextInjector.cs:234`),
+  `Marshal.SizeOf<LASTINPUTINFO>()` (`Hotkeys/NativeMethods.cs:143`),
   `Marshal.SizeOf<DispatcherQueueOptions>()`
   (`src/Scribe.Overlay/Interop/WindowsSystemDispatcherQueueHelper.cs:38`). A hardcoded byte count is 🔴,
   because the struct is a different size on ARM64 than the number the author measured on x64 and Scribe
   ships both.
-- **A managed delegate handed to a native API is held in a field.** Two live exemplars: `HotkeyService._proc`
-  (`HotkeyService.cs:26`, assigned at `:58`) and `ForegroundTracker._callback`
-  (`src/Scribe.App/Infrastructure/ForegroundTracker.cs:46-48`), whose comment states it plainly, the OS
-  stores the native function pointer and letting the delegate be collected leaves Windows calling into
-  freed memory. A new `SetWindowsHookEx`, `SetWinEventHook`, or any callback registration passing a
-  freshly constructed lambda is 🔴.
+- **A managed delegate handed to a native API is held in a field.** The live exemplar is
+  `HotkeyService._proc` (`HotkeyService.cs:26`, assigned at `:58`, passed at `:270`). The OS stores the
+  native function pointer, so letting the delegate be collected leaves Windows calling into freed
+  memory. A new `SetWindowsHookEx`, `SetWinEventHook`, or any callback registration passing a freshly
+  constructed lambda is 🔴.
 - **Every acquired handle is released on every path.** `OpenInputDesktop` is paired with `CloseDesktop`
   (`Hotkeys/NativeMethods.cs:113-123`), the hook handle is unhooked on the hook thread's own exit with
   `Interlocked.CompareExchange` so a replaced thread never unhooks its successor's hook
-  (`HotkeyService.cs:262-265, 306-307`), `GlobalHotkey.Dispose` unregisters and removes its hook
-  (`GlobalHotkey.cs:158-174`), and the clipboard globals are freed on failure. Flag an unpaired acquire 🔴.
+  (`HotkeyService.cs:262-265, 306-307`), and the clipboard globals are freed on failure. Flag an
+  unpaired acquire 🔴.
 - **`LibraryImport` versus `DllImport`.** `Hotkeys/NativeMethods.cs:52-56` records the rule: the blittable
   calls use source-generated `LibraryImport`, and `SetWindowsHookEx` stays on classic `DllImport` because
   it marshals a managed delegate. Do not flag a `DllImport` that marshals a delegate, a `char[]`, or a
@@ -379,8 +377,8 @@ success and the user's text silently stops mid-sentence."* The severity ladder f
 
 **Raise a Question** instead when the mechanism depends on something you could not read: the cost of a
 call inside the callback whose body you cannot see, whether a new timing constant was measured or guessed,
-or whether an `AttachThreadInput` has a reason `ForegroundReadiness` cannot serve. Phrase it as a genuine
-question with the specific fact you need.
+or whether an `AttachThreadInput` has a reason a `GetGUIThreadInfo` poll cannot serve. Phrase it as a
+genuine question with the specific fact you need.
 
 **Never write** "this will fail the build" or "the tests will catch this". Three defects in one release
 compiled warning clean and only appeared at runtime; the claim carries no weight in either direction here.
@@ -429,20 +427,15 @@ Do not raise any of these.
   `ConsumeTransitions`, `DispatchTransition`, `WatchdogTick`, and the `ScheduleReconcile` continuation all
   log, allocate, and take `_sync`. That is correct; only `HookCallback` and what it calls synchronously
   are on the deadline.
-- **`SelectionReader.SendCtrlC` checking only for zero is not a missing short-count check.**
-  `CaptureCore` (`SelectionReader.cs:183-201`) treats zero as "Windows refused the copy" and then proves
-  the copy landed by polling a clipboard it emptied first (`WaitForClipboardText`). A partial chord is
-  caught by the poll, not by the count. Only flag this file if the diff changes that proof.
-- **`SelectionReader.RestoreClipboard` restoring unconditionally is deliberate.** Its remarks record why
-  the sequence-number guard was removed: Scribe empties the clipboard and the target then writes to it,
-  two bumps of Scribe's own making, so the guard fired on every capture and the restore never ran. Do not
-  ask for the guard back.
 - **`TextInjector`'s `Thread.Sleep` calls are measured, not lazy.** `PasteSettleDelayMs = 130`,
-  `ClipboardSettleDelayMs = 30`, `InterChunkSettleMs = 5`, and `ForegroundReadiness.SettleMs = 60` each
-  carry a comment. Do not propose replacing them with `async`/`await`: the whole sequence is synchronous
-  by contract on an STA worker that is joined.
+  `ClipboardSettleDelayMs = 30`, and `InterChunkSettleMs = 5` each carry a comment. Do not propose
+  replacing them with `async`/`await`: the whole sequence is synchronous by contract on an STA worker
+  that is joined.
 - **`Win32Clipboard` being text-only is a stated scope decision**, not an oversight
   (`Win32Clipboard.cs:6-9`). Do not ask for image or file format preservation.
+- **`Win32Clipboard.FormatCount` and `SequenceNumber` having a single caller each.** Both exist for
+  `TextInjector.PasteViaClipboard`'s borrow-and-restore proof; a one-caller accessor here is the shape,
+  not dead code.
 - **`app.manifest` requesting `asInvoker` with `uiAccess="false"` is settled.** Injecting into elevated
   windows needs uiAccess plus a signed install and was deferred past v1. That is why a UIPI-rejected
   `SendInput` is reported as `Failed` rather than healed

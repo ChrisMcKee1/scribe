@@ -41,6 +41,12 @@ public class PersistenceTests
         settings.AiCleanupPromptStyle = Scribe.Core.Cleanup.CleanupPromptStyle.Local;
         settings.AiCleanupFrontierPrompt = "my custom frontier prompt";
         settings.AiCleanupLocalPrompt = "my custom local prompt";
+        // The Copilot provider and its model, together: the provider is a new enum member and the
+        // model is a new property, and a mistake in either silently reverts the user's choice to the
+        // account default after a restart, which looks like the model ignoring them rather than a
+        // settings bug.
+        settings.AiCleanupProvider = Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot;
+        settings.AiCleanupCopilotModel = "claude-sonnet-4";
 
         repo.Save(settings);
         var loaded = repo.Load();
@@ -57,6 +63,8 @@ public class PersistenceTests
         Assert.Equal(Scribe.Core.Cleanup.CleanupPromptStyle.Local, loaded.AiCleanupPromptStyle);
         Assert.Equal("my custom frontier prompt", loaded.AiCleanupFrontierPrompt);
         Assert.Equal("my custom local prompt", loaded.AiCleanupLocalPrompt);
+        Assert.Equal(Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot, loaded.AiCleanupProvider);
+        Assert.Equal("claude-sonnet-4", loaded.AiCleanupCopilotModel);
     }
 
     [Fact]

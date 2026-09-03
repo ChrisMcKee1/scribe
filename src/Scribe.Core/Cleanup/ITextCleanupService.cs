@@ -50,35 +50,6 @@ public interface ITextCleanupService : IAsyncDisposable
         string systemPrompt, string userMessage, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Runs a text action over a selection the user made in another application and returns the
-    /// transformed text, or a failure describing why nothing should be written back.
-    /// </summary>
-    /// <remarks>
-    /// Distinct from <see cref="CleanAsync"/> in three ways that matter. The input is text a person
-    /// typed rather than speech-to-text output, so the cleanup guardrails and writing style are the
-    /// wrong prompt. The selection is frequently text the user did not write, so it is treated as
-    /// untrusted data and delimited. And the result overwrites something that already exists, so a
-    /// rejected answer must fail closed to "change nothing" rather than degrading to raw input the
-    /// way cleanup does. Never throws.
-    /// </remarks>
-    /// <param name="selection">The text the user selected. Sent to the model as delimited data.</param>
-    /// <param name="action">Which transformation to apply.</param>
-    /// <param name="glossaryEntries">Enabled dictionary entries, the user's own first.</param>
-    /// <param name="spokenInstruction">
-    /// For the voice action only: the transcribed instruction describing the change to make.
-    /// </param>
-    /// <param name="writingStyleOverride">A per-app profile style, applied to tone actions only.</param>
-    /// <param name="requireSingleLine">True when the destination treats a line break as Enter.</param>
-    Task<TextActionResult> ApplyActionAsync(
-        string selection,
-        TextActions.TextAction action,
-        IReadOnlyList<Models.DictionaryEntry>? glossaryEntries = null,
-        string? spokenInstruction = null,
-        string? writingStyleOverride = null,
-        bool requireSingleLine = false,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Lightweight availability probe for the settings UI: initializes the Foundry Local runtime
     /// (without downloading a model) and reports whether it is usable on this machine. Never throws.
     /// Only meaningful for the Foundry Local provider.

@@ -224,6 +224,17 @@ public static class SessionBanner
             Cleanup.CleanupProvider.AzureFoundry =>
                 $"deployment={settings.AiCleanupAzureDeployment ?? "unset"} " +
                 $"endpoint={Presence(settings.AiCleanupAzureEndpoint)} auth={settings.AiCleanupAzureAuthMode}",
+            /*
+             * Copilot needs its own arm rather than falling into the custom-endpoint one.
+             *
+             * That arm reported `model=unset endpoint=unset` for every Copilot session: it reads
+             * AiCleanupCustomModel, which this provider never sets, and prints an endpoint field that
+             * is meaningless for a provider with no endpoint. The banner exists because a log handed
+             * over after the fact often has no other record of how the process started, and this is
+             * the one provider whose model is free text, so it is the worst one to lose.
+             */
+            Cleanup.CleanupProvider.GitHubCopilot =>
+                $"model={settings.AiCleanupCopilotModel ?? "account default"}",
             _ => $"model={settings.AiCleanupCustomModel ?? "unset"} endpoint={Presence(settings.AiCleanupCustomEndpoint)}",
         };
 

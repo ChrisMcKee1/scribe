@@ -64,35 +64,6 @@ internal static class Win32Clipboard
         "CanUploadToCloudClipboard",
     ];
 
-    /// <summary>
-    /// True when the current clipboard contents can be saved and put back afterwards, so a caller
-    /// may safely borrow the clipboard.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately a different question from <see cref="HasNonTextContent"/>, and deliberately not
-    /// its inverse.
-    /// <para>
-    /// <see cref="HasNonTextContent"/> asks "would borrowing the clipboard lose anything at all",
-    /// and answers yes for rich text, because restoring plain text drops the HTML and RTF companions.
-    /// That is the right question for <see cref="TextInjector"/>, which has somewhere to go when the
-    /// answer is yes: it falls back to typing the text instead of pasting it.
-    /// </para>
-    /// <para>
-    /// A selection read has no such fallback, so reusing that guard meant any ordinary copy from a
-    /// browser, Word, Teams or an editor disabled the whole feature. Those put CF_UNICODETEXT,
-    /// CF_TEXT, CF_OEMTEXT, CF_LOCALE and HTML Format on the clipboard, which is five formats and
-    /// trips the "more than four" heuristic even though the text round-trips perfectly.
-    /// </para>
-    /// <para>
-    /// The question that actually matters before borrowing is narrower: is the user's content
-    /// recoverable? It is when the clipboard is empty, and it is when the clipboard holds text. It
-    /// is not when the clipboard holds an image, copied files or a spreadsheet range with no text
-    /// representation, because this class cannot reproduce those.
-    /// </para>
-    /// </remarks>
-    public static bool CanBorrow() =>
-        CountClipboardFormats() == 0 || IsClipboardFormatAvailable(CF_UNICODETEXT);
-
     public static int FormatCount => CountClipboardFormats();
 
     public static uint SequenceNumber => GetClipboardSequenceNumber();
@@ -200,7 +171,7 @@ internal static class Win32Clipboard
     /// <para>
     /// Scribe uses the clipboard as a transport, not as a place to leave things: it borrows it to
     /// paste a result, then puts the user's own content back. Without these markers every dictation
-    /// and every rewrite Scribe pastes is captured by Win+V and, when the user has cross-device
+    /// Scribe pastes is captured by Win+V and, when the user has cross-device
     /// clipboard turned on, uploaded to Microsoft and synced to their other machines. That is a
     /// straightforward violation of what this product promises.
     /// </para>
@@ -214,11 +185,9 @@ internal static class Win32Clipboard
     /// See <see href="https://learn.microsoft.com/windows/win32/dataxchg/clipboard-formats"/>.
     /// </para>
     /// <para>
-    /// <b>This only protects clipboard writes Scribe performs itself.</b> The selection reader works
-    /// by synthesizing Ctrl+C, which makes the TARGET application perform the write, and an
-    /// annotation can only be attached by the process placing the data. So the text a user selects is
-    /// captured by clipboard history and Scribe cannot prevent it. That limitation is real, is not
-    /// fixable from here, and belongs in PRIVACY.md rather than being quietly hoped over.
+    /// <b>This only protects clipboard writes Scribe performs itself.</b> An annotation can only be
+    /// attached by the process placing the data, so anything another application copies is captured
+    /// by clipboard history and Scribe cannot prevent it.
     /// </para>
     /// <para>
     /// Best effort throughout: a failure to annotate must never fail the paste the user is waiting

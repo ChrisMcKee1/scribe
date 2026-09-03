@@ -103,8 +103,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private HotkeyBinding _pendingBinding;
     private HotkeyBinding? _pendingDictationOnlyBinding;
-    private HotkeyBinding? _pendingTextActionsBinding;
-    private bool _capturingTextActions;
     private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
@@ -154,7 +152,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _settings = settingsRepository.Load();
         _pendingBinding = _settings.Hotkey;
         _pendingDictationOnlyBinding = _settings.DictationOnlyHotkey;
-        _pendingTextActionsBinding = _settings.TextActionsHotkey;
 
         // Match the system light/dark theme + accent colour and enable the Mica backdrop.
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
@@ -779,12 +776,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             DictationOnlyHotkeyBox.Text = _pendingDictationOnlyBinding is null
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
-            TextActionsCheck.IsChecked = _settings.EnableTextActions;
-            TextActionsHotkeyRow.IsEnabled = _settings.EnableTextActions;
-            TextActionDockCheck.IsChecked = _settings.ShowTextActionDock;
-            TextActionsHotkeyBox.Text = _pendingTextActionsBinding is null
-                ? string.Empty
-                : HotkeyCapture.Describe(_pendingTextActionsBinding);
             DictationOnlyModeCombo.SelectedIndex =
                 _pendingDictationOnlyBinding?.Mode == HotkeyMode.Toggle ? 1 : 0;
 
@@ -832,6 +823,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             new ProviderChoice(CleanupProvider.FoundryLocal, "On-device (Foundry Local)"),
             new ProviderChoice(CleanupProvider.AzureFoundry, "Microsoft Foundry (your Azure sign-in)"),
             new ProviderChoice(CleanupProvider.OpenAiCompatible, "Custom endpoint (Ollama, LM Studio, OpenRouter)"),
+            new ProviderChoice(CleanupProvider.GitHubCopilot, "GitHub Copilot (your Copilot licence)"),
         };
 
         // Foundry model picker: searchable list of curated aliases. The live Foundry Local catalog
@@ -870,6 +862,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         CustomEndpointBox.Text = _settings.AiCleanupCustomEndpoint ?? string.Empty;
         CustomModelBox.Text = _settings.AiCleanupCustomModel ?? string.Empty;
+        CopilotModelCombo.Text = _settings.AiCleanupCopilotModel ?? string.Empty;
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
 
         // Open optional details automatically only when its remaining field has a saved value.
@@ -1577,76 +1570,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         HotkeyBox.Focus();
     }
 
-    /// <summary>
-    /// Captures the text action hotkey.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately does NOT reuse <see cref="BeginCapture"/>. That routine exists for the
-    /// push-to-talk bindings, which run on the low-level keyboard hook and therefore support bare
-    /// keys and two-key physical chords, and it has to put the hook into pass-through mode to
-    /// capture them at all. The text action trigger runs on <c>RegisterHotKey</c> instead, which
-    /// requires a modifier plus exactly one key and is matched by Windows, so a plain WPF key
-    /// handler is both sufficient and safer: it never touches the dictation hook's capture state.
-    /// </remarks>
-    private void TextActionsCaptureButton_Click(object sender, RoutedEventArgs e)
-    {
-        TextActionsHotkeyBox.Text = "Press a key combination...";
-        _capturingTextActions = true;
-        _ = TextActionsHotkeyBox.Focus();
-    }
-
-    private void TextActionsClearButton_Click(object sender, RoutedEventArgs e)
-    {
-        _capturingTextActions = false;
-        _pendingTextActionsBinding = null;
-        TextActionsHotkeyBox.Text = string.Empty;
-    }
-
-    private void TextActionsCheck_Changed(object sender, RoutedEventArgs e)
-    {
-        if (TextActionsHotkeyRow is not null)
-        {
-            TextActionsHotkeyRow.IsEnabled = TextActionsCheck.IsChecked == true;
-        }
-    }
-
-    private void CaptureTextActionKey(KeyEventArgs e)
-    {
-        e.Handled = true;
-
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
-            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
-        {
-            return; // still waiting for the non-modifier key
-        }
-
-        if (key == Key.Escape)
-        {
-            _capturingTextActions = false;
-            TextActionsHotkeyBox.Text = _pendingTextActionsBinding is null
-                ? string.Empty
-                : HotkeyCapture.Describe(_pendingTextActionsBinding);
-            return;
-        }
-
-        // Reuses the same builder the push-to-talk boxes use, so the two hotkey surfaces agree on
-        // modifier handling and on how a binding is rendered.
-        var candidate = HotkeyCapture.FromKeyEvent(e, HotkeyMode.Toggle);
-
-        // RegisterHotKey will happily take a bare key and then swallow it system-wide, so a plain
-        // letter would stop that letter working in every application. Require a modifier.
-        if (candidate.Modifiers == KeyModifiers.None)
-        {
-            TextActionsHotkeyBox.Text = "Add a modifier, for example Ctrl+Alt+Space";
-            return;
-        }
-
-        _capturingTextActions = false;
-        _pendingTextActionsBinding = candidate;
-        TextActionsHotkeyBox.Text = HotkeyCapture.Describe(candidate);
-    }
-
     private void DictationOnlyCaptureButton_Click(object sender, RoutedEventArgs e)
     {
         BeginCapture(dictationOnly: true);
@@ -1679,16 +1602,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        // Text action capture is handled here, on the WINDOW, for the same reason the push-to-talk
-        // capture below is: PreviewKeyDown tunnels from the root to the FOCUSED element only, so a
-        // handler attached to the capture box never runs while focus is still on the Set button
-        // next to it. Attaching at the window makes focus irrelevant.
-        if (_capturingTextActions)
-        {
-            CaptureTextActionKey(e);
-            return;
-        }
-
         if (!_capturing)
         {
             return;
@@ -3699,6 +3612,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         FoundryPanel.Visibility = provider == CleanupProvider.FoundryLocal ? Visibility.Visible : Visibility.Collapsed;
         AzurePanel.Visibility = provider == CleanupProvider.AzureFoundry ? Visibility.Visible : Visibility.Collapsed;
         CustomPanel.Visibility = provider == CleanupProvider.OpenAiCompatible ? Visibility.Visible : Visibility.Collapsed;
+        CopilotPanel.Visibility = provider == CleanupProvider.GitHubCopilot ? Visibility.Visible : Visibility.Collapsed;
+        if (provider == CleanupProvider.GitHubCopilot)
+        {
+            // Re-checked on every switch to this provider rather than once at open: the CLI can be
+            // installed in the terminal while this window is sitting open, and the whole point of the
+            // banner is to stop being wrong about that.
+            RefreshCopilotCliStatus();
+        }
     }
 
     private void UpdateAiEnabledState()
@@ -3708,6 +3629,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         FoundryPanel.IsEnabled = on;
         AzurePanel.IsEnabled = on;
         CustomPanel.IsEnabled = on;
+        CopilotPanel.IsEnabled = on;
         AiWritingStyleBox.IsEnabled = on;
         ResetWritingStyleButton.IsEnabled = on;
         AiPromptStyleCombo.IsEnabled = on;
@@ -4293,9 +4215,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.Hotkey = standardBinding;
             _settings.DictationOnlyHotkey = dictationOnlyBinding;
-            _settings.EnableTextActions = TextActionsCheck.IsChecked == true;
-            _settings.TextActionsHotkey = _pendingTextActionsBinding;
-            _settings.ShowTextActionDock = TextActionDockCheck.IsChecked == true;
             _settings.ShowOverlay = OverlayCheck.IsChecked == true;
             _settings.OverlayPosition = SelectedOverlayPosition;
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
@@ -4350,6 +4269,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
             _settings.AiCleanupCustomEndpoint = NullIfBlank(CustomEndpointBox.Text);
             _settings.AiCleanupCustomModel = NullIfBlank(CustomModelBox.Text);
+            // Blank is a real answer here: it means "this account's default model", which is why it
+            // is stored as null rather than rejected on save.
+            _settings.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
             _settings.AiCleanupCustomApiKey = NullIfBlank(CustomApiKeyBox.Password);
 
             // Persist the writing style only when it differs from the default; storing blank for the

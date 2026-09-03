@@ -24,5 +24,23 @@
 
     <!-- .NET 8+ appends the commit hash to InformationalVersion; keep it for support diagnostics. -->
     <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+      <!--
+      Do not bundle a Copilot CLI with Scribe.
+
+      GitHub.Copilot.SDK, pulled in by Microsoft.Agents.AI.GitHub.Copilot, downloads a per-platform
+      CLI from registry.npmjs.org during BeforeBuild and copies it into the output. That is wrong
+      here twice over, and the second reason is the one that matters.
+
+      It does not build on a managed device: the npm registry is blocked by policy, so the download
+      fails the build outright with an MSB3923 TLS handshake error.
+
+      And a bundled CLI would be the wrong binary anyway. This provider exists to run cleanup through
+      the user's OWN Copilot licence, which means the CLI that already holds their GitHub sign-in.
+      A private copy shipped inside Scribe would be unauthenticated, would need its own login, and
+      would drift from whatever version they actually use. Cleanup/GitHubCopilotCli.cs finds the
+      installed one and Settings offers to install it when it is missing, which is the same answer
+      on a locked-down device and an open one.
+    -->
+    <CopilotSkipCliDownload>true</CopilotSkipCliDownload>
   </PropertyGroup>
 </Project>

@@ -40,8 +40,7 @@ Write the ones you could not establish rather than concluding around them.
    These are two different numbers in this codebase and §1.1 exists because they were confused once.
 3. **Every reader that takes a snapshot of it.** `AppSettings.Clone` is the snapshot mechanism;
    `DictationCaptureSettingsResolver.Resolve` (`src/Scribe.Core/Hotkeys/DictationCaptureSettingsResolver.cs:12`),
-   `DictationController` (`src/Scribe.App/Dictation/DictationController.cs:209`, `:598`), and
-   `TextActionController.ApplySettings` (`src/Scribe.App/TextActions/TextActionController.cs:77`) all
+   and `DictationController` (`src/Scribe.App/Dictation/DictationController.cs:209`, `:598`) all
    depend on it.
 4. **The migration step that puts it on an already-installed machine.** For a column, the
    `if (current < N)` block. For a settings property, `CreateDefault` or nothing at all.
@@ -78,11 +77,10 @@ a capture behavior switched on, anything that reads out as Scribe changing its o
 The fix is a plain initializer default plus a seed in `CreateDefault`.
 
 **Do not flag** a `= true` initializer whose effect on an upgrading install is the same behavior they
-already had. `PreviewTextActions` (`AppSettings.cs:47`) and `ShiftEnterLineBreaks` (`AppSettings.cs:259`)
-both default to true in the initializer and both are correct: their comments state that the safe value
-is on, and an existing install acquiring them gets the safer behavior, not a surprise. The question is
-never "is there an initializer", it is "what does an install that predates this key get, and is that
-the right answer for them".
+already had. `ShiftEnterLineBreaks` (`AppSettings.cs:248`) defaults to true in the initializer and is
+correct: its comment states that the safe value is on, and an existing install acquiring it gets the
+safer behavior, not a surprise. The question is never "is there an initializer", it is "what does an
+install that predates this key get, and is that the right answer for them".
 
 ### 1.2 `Clone` deep-copies reference types (🔴 for any mutable reference property missing from it)
 
@@ -370,10 +368,10 @@ Do not flag any of these. A lens that only knows how to flag things produces noi
 here is a shape that is already correct in this repository.
 
 - **A `= true` or non-empty initializer whose effect on an upgrading install is the behavior they
-  already had.** `PreviewTextActions` and `ShiftEnterLineBreaks` are correct as written. §1.1 is about
-  a default that changes what the user gets, not about the presence of an initializer.
+  already had.** `ShiftEnterLineBreaks` is correct as written. §1.1 is about a default that changes
+  what the user gets, not about the presence of an initializer.
 - **A new value type, `string`, `record`, or nullable primitive absent from `Clone`.**
-  `MemberwiseClone` copies it correctly, and `AppSettings.cs:273` says so in the source for exactly
+  `MemberwiseClone` copies it correctly, and `AppSettings.cs:292` says so in the source for exactly
   this reason. Only mutable reference types need the rebuild.
 - **A new enum member appended to an existing enum.** Only a rename or a removal breaks a stored
   document. Adding a value to `OverlayPosition` has its own hazard, the by-name overlay enum twin, and

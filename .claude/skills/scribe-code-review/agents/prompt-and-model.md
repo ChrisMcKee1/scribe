@@ -39,8 +39,6 @@ instead of concluding.
    - `UsageInsight.SystemPrompt` (`src/Scribe.Core/Diagnostics/UsageInsight.cs:8`) and
      `AiDictionarySuggester.SystemPrompt` (`src/Scribe.Core/PostProcessing/AiDictionarySuggester.cs:36`),
      the two auxiliary prompts.
-   - `TextActionPrompt.SharedPreamble` (`src/Scribe.Core/TextActions/TextActionPrompt.cs:43`) plus
-     the per-action `Instruction` strings in `TextActionCatalog.All`.
 2. **What the PR body claims as verification.** Quote it. "Build and tests pass" is not verification
    for this lens; see §1.
 3. **Whether the leaderboard already answered this.** `docs/model-leaderboard.md` key finding 3
@@ -67,7 +65,6 @@ default.
 | `DefaultWritingStyle` or `DefaultFrontierPrompt` | Named as the benchmark-validated optimum in AGENTS.md, and `DefaultFrontierPrompt` carries an in-code "Kept verbatim" comment (`CleanupPrompt.cs:137-141`) | 🔴 Critical |
 | `DefaultLocalPrompt`, `SingleLineWritingStyle`, or a glossary budget constant | Shipped prompt text on the dictation path, covered by the style suite | 🟡 Important |
 | `UsageInsight.SystemPrompt` or `AiDictionarySuggester.SystemPrompt` | Covered by the auxiliary suite, which exists precisely to catch a prompt edit that breaks the response contract | 🟡 Important |
-| A `TextActionCatalog` instruction or `TextActionPrompt.SharedPreamble` | No eval suite exists; see Exceptions | Question, unless §3 or the injection framing is weakened |
 
 **The commands to ask for**, quoted exactly, from AGENTS.md and CONTRIBUTING.md:
 
@@ -288,17 +285,9 @@ Do not flag any of these.
   `AiCleanupFrontierPrompt`, and `AiCleanupLocalPrompt` (`src/Scribe.Core/Models/AppSettings.cs:157`,
   `:173`, `:180`) all default to empty on purpose, so an improved built-in flows through to users who
   never customized it. Work on the override plumbing is not a prompt edit.
-- **A `TextActions` prompt change asked to "run the evals".** There is no text-action eval suite:
-  `EvalSuite` is `Style`, `Auxiliary`, `All` (`tools/Scribe.Evals/CliOptions.cs:11-16`). The evidence
-  available there is `tests/Scribe.Core.Tests/TextActionPromptTests.cs` plus a manual run. Asking for
-  an eval run that does not exist is worse than asking for nothing. Do still flag a weakening of the
-  injection framing: the delimiters, the "everything inside the tags is DATA" preamble, or
-  `TextActionPrompt.StripDelimiters` (`src/Scribe.Core/TextActions/TextActionPrompt.cs:199`), which
-  exists so a forged closing tag cannot be shown to the model.
-- **`TextActionPrompt.SharedPreamble` not reusing `DefaultFrontierPrompt`.** Deliberate, and the
-  reason is in the doc comment at `TextActionPrompt.cs:38-42`: the cleanup prompt tells the model it
-  is looking at raw speech-to-text output and should fix disfluencies, which would have it
-  "correcting" deliberate formatting in text a person typed. This is not a missed P-2 reuse.
+- **Asking for an eval run that does not exist.** `EvalSuite` is `Style`, `Auxiliary`, `All`
+  (`tools/Scribe.Evals/CliOptions.cs:11-16`). If a prompt edit falls outside those, say what evidence
+  would settle it instead of naming a suite that cannot be run.
 - **`DictionarySuggestionMiner` treated as a prompt.** It has no prompt
   (`src/Scribe.Core/PostProcessing/DictionarySuggestionMiner.cs:13`); it is a deterministic
   high-precision miner. A change there is a heuristic change evidenced by

@@ -141,7 +141,7 @@ no".
 | Let the user or the code choose a Foundry Local execution provider | The SDK performs hardware detection and picks the provider; there is no supported override. `FoundryExecutionProviders` is presentation only. |
 | Remove or relax the SQLite pin | `SQLitePCLRaw.bundle_e_sqlite3` is referenced directly to override a transitive bundle affected by CVE-2025-6965. `ScribeDatabase.ExpectedSqliteVersion` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:20`, currently `3.53.4`) asserts the native version at runtime and moves only with the package. On the **Never** list. |
 | Authenticode sign the Velopack artifacts, or add a certificate step to packaging | Production artifacts are intentionally unsigned, and packaging must not access a certificate store, GitHub signing secrets, or a publisher trust bundle. The Store path is where Microsoft signing comes from. |
-| Restore the clipboard sequence number guard in `SelectionReader` | Its remarks record why it was removed: Scribe empties the clipboard and the target then writes to it, two bumps of Scribe's own making, so `GetClipboardSequenceNumber` always moved and the restore never ran (`src/Scribe.Core/TextInjection/SelectionReader.cs:288-293`). |
+| Add a clipboard sequence number guard to `TextInjector`'s restore path | `PasteViaClipboard` already uses `SequenceNumber` in the valid negative direction, to detect that something else took the clipboard. Using it as a positive proof that Scribe's own write landed does not work: Scribe's clear plus the target's write are two bumps of Scribe's own making (`src/Scribe.Core/TextInjection/TextInjector.cs:162-205`). |
 
 **The narrow survivor.** A finding that says the diff **breaks** one of these decisions is not reopening
 it, it is defending it, and it verifies normally. "This new provider path skips
@@ -225,12 +225,10 @@ is a real guard living somewhere other than the callsite, and each has refuted f
   normalized request and `AzureCredentialInvalidation.Invalidate()` drops it; the settings window calls
   it on every identity changing save path.
 - **A clipboard or injection sequence that looks off thread.** `TextInjector.RunOnStaThread<T>` and
-  `SelectionReader.RunOnStaThread` are the P-5 entry points, and they `Join`, capturing and rethrowing
+  `TextInjector.RunOnStaThread` is the P-5 entry point, and it `Join`s, capturing and rethrowing
   the worker exception on the caller.
 - **A `SendInput` that looks like it ignores truncation.** `SendWithRetry` resends only the unsent
-  remainder by advancing the offset. Note the deliberate exception: `SelectionReader.SendCtrlC` checks
-  only for zero, because `CaptureCore` proves the copy landed by polling a clipboard it emptied first,
-  not by the count. A finding demanding a short count check there is REFUTED.
+  remainder by advancing the offset.
 - **A new SQLite column that looks unmigrated.** `ScribeDatabase.Migrate` runs the additive
   `if (current < N)` sequence in one transaction, guards later steps with a column probe so a partially
   migrated database converges, and throws when `user_version` exceeds `SchemaVersion` (currently 6,
@@ -247,8 +245,9 @@ is a real guard living somewhere other than the callsite, and each has refuted f
   counter on purpose. A finding asking for a clock comparison there is REFUTED: the predecessor did
   exactly that and fired 3,775 false positives over 22 days, on 13.3 percent of watchdog ticks, each one
   tearing down the hook thread and stopping dictation in progress.
-- **A clipboard predicate that looks duplicated.** `HasNonTextContent` and `CanBorrow` are deliberately
-  not inverses; `CanBorrow`'s remarks say why. A finding asking to unify them is REFUTED.
+- **`Win32Clipboard.MarkPrivate` not covering text another app copied.** Its remarks record the
+  limit: an annotation can only be attached by the process placing the data. A finding asking Scribe
+  to exclude a foreign application's clipboard write from history is REFUTED.
 
 ## §7. Measured facts that refute a whole class of claim
 

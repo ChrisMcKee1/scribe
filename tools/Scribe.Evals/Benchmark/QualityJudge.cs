@@ -109,7 +109,24 @@ internal sealed class QualityJudge
             $"CLEANED (editor output):\n{cleaned}\n\n" +
             "Return ONLY the JSON object.";
 
-        var chatOptions = new ChatOptions { Temperature = 0f, ResponseFormat = ChatResponseFormat.Json };
+        /*
+         * No temperature, deliberately.
+         *
+         * This said Temperature = 0f, and every judge call against a gpt-5.6
+         * deployment came back HTTP 400 "Unsupported parameter: 'temperature'
+         * is not supported with this model." A whole 25 case run graded nothing
+         * and reported quality as "-" for a model that had answered all 25
+         * times, which reads as "the model produced nothing" rather than "the
+         * judge could not grade it".
+         *
+         * TextCleanupService.BuildChatOptions already states the rule for the
+         * cleanup path: an Azure reasoning model runs at a fixed internal
+         * temperature and rejects or ignores an override, so it sets one only
+         * for Foundry Local. The judge is always a cloud model and now follows
+         * the same rule. Determinism here comes from the JSON response format
+         * and the rubric in the instructions, not from a sampling knob.
+         */
+        var chatOptions = new ChatOptions { ResponseFormat = ChatResponseFormat.Json };
         var runOptions = new ChatClientAgentRunOptions(chatOptions);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

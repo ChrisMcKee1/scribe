@@ -23,41 +23,6 @@ public sealed class AppSettings
     /// </summary>
     public HotkeyBinding? DictationOnlyHotkey { get; set; }
 
-    /// <summary>
-    /// Enables the text action palette: select text in any app, press
-    /// <see cref="TextActionsHotkey"/>, and pick a transformation to apply to it. Off by default,
-    /// because it reads the selection out of whatever app is in front and that must be something the
-    /// user switched on deliberately.
-    /// </summary>
-    public bool EnableTextActions { get; set; }
-
-    /// <summary>
-    /// Trigger for the text action palette. Null means unbound, so the palette is reachable only from
-    /// the tray menu. Carried on the existing keyboard hook as a third trigger rather than a second
-    /// hook: two low-level hooks in one process means two callbacks per keystroke inside one
-    /// LowLevelHooksTimeout budget, and two reconcilers competing over the same physical keys.
-    /// </summary>
-    public HotkeyBinding? TextActionsHotkey { get; set; }
-
-    /// <summary>
-    /// Show the result before it replaces the selection. On by default and deliberately so: replacing
-    /// text the user already has is destructive in a way dictation is not, and Ctrl+Z in the target
-    /// app cannot reliably undo a multi-chunk injection.
-    /// </summary>
-    public bool PreviewTextActions { get; set; } = true;
-
-    /// <summary>
-    /// Show the floating dock: a small always-on-top tile that opens the palette for the current
-    /// selection. Unlike the tray menu, clicking it does not take focus, so the selection survives.
-    /// </summary>
-    public bool ShowTextActionDock { get; set; } = true;
-
-    /// <summary>Saved dock position in WPF logical units. Null parks it above the tray.</summary>
-    public double? TextActionDockLeft { get; set; }
-
-    /// <summary>Saved dock position in WPF logical units. Null parks it above the tray.</summary>
-    public double? TextActionDockTop { get; set; }
-
     /// <summary>Show the always-on-top recording overlay while capturing.</summary>
     public bool ShowOverlay { get; set; } = true;
 
@@ -251,6 +216,24 @@ public sealed class AppSettings
 
     /// <summary>Model name to request from the custom endpoint (e.g. <c>qwen3:4b</c>).</summary>
     public string? AiCleanupCustomModel { get; set; }
+
+    /// <summary>
+    /// Which model the GitHub Copilot provider should ask for, e.g. <c>gpt-5</c> or
+    /// <c>claude-sonnet-4</c>. Blank means whichever model that GitHub account defaults to.
+    /// </summary>
+    /// <remarks>
+    /// An editable combo box rather than a fixed list: the ids come from
+    /// <see cref="Cleanup.GitHubCopilotModels.ListAsync"/>, which asks the CLI what the signed-in
+    /// account is licensed for, and the box stays typable so a model GitHub adds between releases is
+    /// still reachable. Blank means that account's default model, which is a working configuration
+    /// rather than a missing one.
+    /// <para>
+    /// The value is passed to the backend through its own environment variable rather than an API
+    /// parameter, and is validated by being used: an unavailable model fails at the validation probe,
+    /// before it can silently affect a dictation.
+    /// </para>
+    /// </remarks>
+    public string? AiCleanupCopilotModel { get; set; }
 
     /// <summary>
     /// Optional API key for the custom endpoint (local servers don't need one). DPAPI-encrypted at

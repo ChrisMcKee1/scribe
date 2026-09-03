@@ -53,7 +53,32 @@ internal sealed class TextCleanupService : ITextCleanupService
     // a couple of seconds regardless, so the cap only ever bites a genuinely slow model.
     private const int CleanupTimeoutSeconds = 12;
     private const int AzureCleanupTimeoutSeconds = 45;
-    private const int InitProbeTimeoutSeconds = 30;
+
+    /*
+     * The GitHub Copilot backend needs its own, larger budget.
+     *
+     * Measured rather than guessed. Asked to punctuate one 22-word sentence, the Copilot CLI took 27
+     * seconds and reported 25.5k input tokens: the coding-agent system context travels with every
+     * request, so even a trivial edit carries it. Against the 12 second local budget this provider
+     * inherited by default, every single call timed out and cleanup fell back to the raw transcript,
+     * which looked identical to the model refusing to edit anything.
+     *
+     * Sized off that measurement with room for a longer dictation. It is a ceiling, not a wait: a
+     * fast answer returns as soon as it arrives.
+     */
+    private const int CopilotCleanupTimeoutSeconds = 120;
+    /*
+     * Raised from 30. A cloud reasoning deployment answering its first request
+     * has a cold start and a thinking pass to get through before a single
+     * visible token, and 30 seconds cancelled Grok 4.6 every time. This matches
+     * AuxiliaryCompletionTimeoutSeconds, which is the same shape of call.
+     *
+     * Waiting longer costs nothing the owner sees. Initialization runs in the
+     * background and dictation keeps working on raw text throughout; the only
+     * thing a longer budget changes is that a slow-but-working deployment now
+     * finishes validating instead of being declared broken.
+     */
+    private const int InitProbeTimeoutSeconds = 90;
     // A local model's first inference includes warm-up, and that grows with parameter count: a 14B
     // model on the CPU cleared 30s, so cleanup was marked Unavailable for a model that then worked
     // fine. The probe runs once per configuration change, so waiting longer here costs nothing on
@@ -62,13 +87,68 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Azure rejects anything below 16 with "integer_below_min_value", so the probe would have failed
     // on every Azure endpoint and marked cleanup Unavailable. The probe only needs the call to
     // succeed, not to produce useful text, so the minimum accepted value is the right choice.
+    /*
+     * The init probe's output ceiling, and why there are two of them.
+     *
+     * On a reasoning model the hidden thinking counts against max_output_tokens,
+     * which EstimateMaxTokens already says in as many words and gives the cloud
+     * path a 512 floor for. The probe hand-rolled its own options and did not,
+     * so it asked a reasoning deployment to think and answer inside 16 tokens.
+     * That is not a small budget, it is an impossible one: the model cannot emit
+     * a visible character, and at a high reasoning effort it spends a long time
+     * finding that out.
+     *
+     * Grok 4.6 is the model that exposed it. Azure documents its reasoning
+     * effort as defaulting to HIGH, so the probe never returned, the 30 second
+     * budget cancelled it, initialization failed, and the service sat at
+     * Initializing forever. Cleanup then skipped every dictation with "enabled
+     * but Initializing" and no error ever reached the user, because degrading
+     * quietly to raw text is exactly what this service promises to do.
+     *
+     * Foundry Local keeps 16. Those models are small, run at a fixed low
+     * reasoning cost, and the local probe has a 180 second budget anyway.
+     */
     private const int InitProbeMaxOutputTokens = 16;
+    private const int CloudInitProbeMaxOutputTokens = AzureReasoningHeadroomTokens;
+
+    /*
+     * Room for a cloud reasoning model to think before it answers, on top of whatever the visible
+     * reply needs. Measured against the slowest thinker we target rather than guessed: Grok 4.6
+     * spends ~532 reasoning tokens on a trivial one-sentence edit, and more as the input grows, so
+     * this is that figure with room to grow rather than a number that merely looks generous.
+     */
+    private const int AzureReasoningHeadroomTokens = 4096;
 
     // How much of the cloud budget one attempt may spend. Measured cleanups on a real deployment
     // run around 2s and peak near 12s, so 25s is far beyond any healthy call and leaves 20s to
     // recover from a stalled connection.
     private const int CloudFirstAttemptTimeoutSeconds = 25;
     private const int TotalCleanupTimeoutSeconds = 90;
+
+    /// <summary>
+    /// The operation-wide budget for one dictation, which must never be smaller than the budget a
+    /// single call is allowed.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="CopilotCleanupTimeoutSeconds"/> is 120 and the flat total was 90, so the per-call
+    /// figure was unreachable: a Copilot call was cancelled by the operation token at 90 seconds no
+    /// matter what its own budget said. The measured 27 second round trip sat inside both, which is
+    /// exactly why nothing looked wrong. Derived from the per-call budget rather than written as a
+    /// second constant, so the two cannot drift apart again.
+    /// </remarks>
+    internal static TimeSpan TotalBudgetFor(CleanupProvider provider)
+    {
+        var single = SingleCallBudgetSeconds(provider);
+        return TimeSpan.FromSeconds(Math.Max(TotalCleanupTimeoutSeconds, single));
+    }
+
+    /// <summary>What one model call may take, by provider. See the constants for the measurements.</summary>
+    internal static int SingleCallBudgetSeconds(CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.GitHubCopilot => CopilotCleanupTimeoutSeconds,
+        CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible => AzureCleanupTimeoutSeconds,
+        _ => CleanupTimeoutSeconds,
+    };
     // Long dictation is split into bounded chunks cleaned sequentially, so a multi-minute capture is
     // still polished instead of skipped or truncated. Each chunk is small enough that the per-chunk
     // token budget never truncates and the per-chunk timeout bounds latency. The chunk ceiling caps
@@ -178,6 +258,16 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Both are reset together with _agent whenever the provider/model/endpoint changes.
     private Func<string, AIAgent>? _agentFactory;
     private Func<string, AIAgent>? _pendingFactory; // handoff from InitXxx (serialized by _initLock)
+
+    /*
+     * The live Copilot session, when that provider is selected.
+     *
+     * Typed as object rather than CopilotClient on purpose. A field's type is part of this class's
+     * metadata and is resolved when the class is first loaded, so naming the type here would load
+     * Microsoft.Agents.AI.GitHub.Copilot on every launch and undo the lazy loading that keeping the
+     * references inside InitGitHubCopilotAsync exists to buy.
+     */
+    private object? _copilotClientHandle;
     private readonly Dictionary<string, AIAgent> _styleAgents = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _configureCts;
@@ -365,7 +455,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         using var totalCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var totalTimeout = CleanupTotalTimeoutOverride ??
-            (CleanupTimeoutOverride is null ? TimeSpan.FromSeconds(TotalCleanupTimeoutSeconds) : Timeout.InfiniteTimeSpan);
+            (CleanupTimeoutOverride is null ? TotalBudgetFor(options.Provider) : Timeout.InfiniteTimeSpan);
         if (totalTimeout != Timeout.InfiniteTimeSpan)
         {
             totalCts.CancelAfter(totalTimeout);
@@ -459,135 +549,6 @@ internal sealed class TextCleanupService : ITextCleanupService
         return new CleanupResult(combined, outcome, partial);
     }
 
-    /// <summary>
-    /// Largest selection accepted for a text action. Beyond this the request would be chunked, and
-    /// chunking a transform is not equivalent to chunking a cleanup: a per-chunk rewrite loses the
-    /// document-level structure that "rewrite as a task list" or "format for Teams" exist to produce,
-    /// and rejoining the pieces produces something no single instruction ever asked for. Refusing is
-    /// honest; silently degrading is not.
-    /// </summary>
-    internal const int MaxTextActionChars = 12_000;
-
-    /// <inheritdoc />
-    public async Task<TextActionResult> ApplyActionAsync(
-        string selection,
-        TextActions.TextAction action,
-        IReadOnlyList<DictionaryEntry>? glossaryEntries = null,
-        string? spokenInstruction = null,
-        string? writingStyleOverride = null,
-        bool requireSingleLine = false,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(action);
-
-        if (string.IsNullOrWhiteSpace(selection))
-        {
-            return TextActionResult.Failed(
-                TextActionFailure.EmptySelection, "Select some text first.");
-        }
-
-        if (selection.Length > MaxTextActionChars)
-        {
-            return TextActionResult.Failed(
-                TextActionFailure.TooLarge,
-                $"That selection is too long for one request. Try {MaxTextActionChars:N0} characters or fewer.");
-        }
-
-        AIAgent agent;
-        CleanupOptions options;
-        lock (_gate)
-        {
-            if (!_options.Enabled)
-            {
-                return TextActionResult.Failed(
-                    TextActionFailure.NotEnabled,
-                    "Turn on AI cleanup in Settings to use this action.");
-            }
-
-            if (_status != CleanupStatus.Ready || _agentFactory is not { } factory)
-            {
-                return TextActionResult.Failed(
-                    TextActionFailure.NotReady,
-                    string.IsNullOrWhiteSpace(_statusDetail)
-                        ? "The AI model is not ready yet."
-                        : "The AI model is not ready yet: " + _statusDetail);
-            }
-
-            options = _options;
-
-            // Small on-device models get the tighter glossary budget for the same reason cleanup does:
-            // a long vocabulary list crowds out the text being transformed.
-            var maxTerms = options.Provider == CleanupProvider.FoundryLocal
-                ? CleanupPrompt.MaxGlossaryTermsLocal
-                : CleanupPrompt.MaxGlossaryTermsCloud;
-
-            // The local tier gets the compressed rulebook. Resolved by prompt style rather than by
-            // provider alone, so a user pointing the bring-your-own endpoint at a small local server
-            // can opt into it explicitly, exactly as cleanup already allows.
-            var local = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider)
-                == CleanupPromptStyle.Local;
-
-            var systemPrompt = TextActions.TextActionPrompt.BuildSystemPrompt(
-                action, glossaryEntries, maxTerms, writingStyleOverride, requireSingleLine, local);
-
-            agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt));
-        }
-
-        var userMessage = TextActions.TextActionPrompt.BuildUserMessage(selection, spokenInstruction);
-
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
-
-            // Headroom over the selection so a legitimate expansion is not truncated mid-sentence,
-            // which would otherwise reach the sanitizer as a plausible but silently cut answer.
-            var chatOptions = new ChatOptions
-            {
-                MaxOutputTokens = Math.Clamp((selection.Length / 2) + 512, 512, 8192),
-            };
-
-            if (options.Provider == CleanupProvider.FoundryLocal)
-            {
-                chatOptions.Temperature = CleanupTemperature;
-            }
-
-            var runOptions = new ChatClientAgentRunOptions(chatOptions);
-            var response = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
-                .ConfigureAwait(false);
-
-            var verdict = TextActions.TextActionSanitizer.Sanitize(response.Text, selection, action);
-            if (!verdict.Accepted)
-            {
-                _log.LogInformation(
-                    "Text action {ActionId} rejected: {Reason}.", action.Id, verdict.Reason);
-                return new TextActionResult(
-                    null,
-                    TextActionFailure.Rejected,
-                    TextActions.TextActionSanitizer.Describe(verdict.Reason),
-                    verdict.Reason);
-            }
-
-            return TextActionResult.Success(verdict.Text);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return TextActionResult.Failed(TextActionFailure.Cancelled, string.Empty);
-        }
-        catch (OperationCanceledException)
-        {
-            return TextActionResult.Failed(
-                TextActionFailure.CallFailed,
-                $"The model did not answer within {AuxiliaryCompletionTimeoutSeconds} seconds.");
-        }
-        catch (Exception ex)
-        {
-            // Never log the selection or the model's answer: both are the user's document content.
-            _log.LogWarning(ex, "Text action {ActionId} failed at runtime.", action.Id);
-            return TextActionResult.Failed(TextActionFailure.CallFailed, DescribeFailure(ex, options.Provider));
-        }
-    }
-
     public async Task<string?> CompleteAsync(
         string systemPrompt, string userMessage, CancellationToken cancellationToken = default)
     {
@@ -651,10 +612,13 @@ internal sealed class TextCleanupService : ITextCleanupService
         AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
-        // reasoning model whose hidden thinking precedes the visible rewrite.
-        var isCloud = options.Provider is CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible;
-        var budget = CleanupTimeoutOverride ?? TimeSpan.FromSeconds(
-            isCloud ? AzureCleanupTimeoutSeconds : CleanupTimeoutSeconds);
+        // reasoning model whose hidden thinking precedes the visible rewrite. GitHub Copilot is
+        // remote too, and slower again, so it is in this group with a budget of its own.
+        var isCloud = options.Provider is CleanupProvider.AzureFoundry
+            or CleanupProvider.OpenAiCompatible
+            or CleanupProvider.GitHubCopilot;
+        var budget = CleanupTimeoutOverride
+            ?? TimeSpan.FromSeconds(SingleCallBudgetSeconds(options.Provider));
 
         // A cloud connection that has sat idle can be silently dead: the request goes out and
         // nothing ever comes back, so the entire budget drains and the dictation falls back to raw
@@ -662,7 +626,21 @@ internal sealed class TextCleanupService : ITextCleanupService
         // budget on one attempt makes that stall unrecoverable, so the first attempt gets a slice
         // large enough for any healthy call and a stall still leaves room to try again.
         // Benchmarks pin the timeout explicitly and want exactly one attempt.
-        var retryOnStall = isCloud && CleanupTimeoutOverride is null;
+        /*
+         * Copilot is excluded from the stall retry, and would break without the exclusion.
+         *
+         * The retry exists for an idle HTTPS connection that has died silently: the request goes out,
+         * nothing comes back, and slicing the budget leaves room for a second attempt that usually
+         * succeeds at once. The Copilot backend is not that shape. It talks over stdin/stdout to a
+         * child process on this machine, so there is no idle socket to go stale.
+         *
+         * And the slice would cut every call short: CloudFirstAttemptTimeoutSeconds is 25 and a
+         * measured Copilot round trip is 27, so a first attempt would be abandoned two seconds before
+         * the answer arrived, every time. It gets its whole budget in one attempt.
+         */
+        var retryOnStall = isCloud
+            && options.Provider != CleanupProvider.GitHubCopilot
+            && CleanupTimeoutOverride is null;
         var firstAttempt = retryOnStall
             ? TimeSpan.FromSeconds(CloudFirstAttemptTimeoutSeconds)
             : budget;
@@ -1735,6 +1713,19 @@ internal sealed class TextCleanupService : ITextCleanupService
             acquired = true;
             ct.ThrowIfCancellationRequested();
 
+            /*
+             * A Copilot session belongs to the Copilot provider and nothing else.
+             *
+             * Without this, a user who tried Copilot and then switched to Foundry Local kept the
+             * `copilot` child process alive for the rest of the session: the only other disposal site
+             * is inside InitGitHubCopilotAsync, which runs when Copilot is selected AGAIN, and
+             * ownsClient is false so the agent never claims it either.
+             */
+            if (options.Provider != CleanupProvider.GitHubCopilot)
+            {
+                await ReleaseCopilotSessionAsync().ConfigureAwait(false);
+            }
+
             AIAgent? agent;
             try
             {
@@ -1742,6 +1733,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                 {
                     CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
                     CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
+                    CleanupProvider.GitHubCopilot => await InitGitHubCopilotAsync(options, ct).ConfigureAwait(false),
                     _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
                 };
             }
@@ -1776,6 +1768,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                 {
                     agent = demotion.Agent;
                     options = demotion.Options;
+                }
+                else if (await TryAzureChatCompletionsAsync(options, probeFailure, ct).ConfigureAwait(false)
+                    is { } viaChat)
+                {
+                    agent = viaChat;
                 }
                 else
                 {
@@ -1842,6 +1839,127 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     private sealed record AgentProbeFailure(string Message, Exception? Exception);
 
+    /*
+     * Second surface: Chat Completions, for a deployment the Responses API will not serve.
+     *
+     * Not every Foundry model speaks Responses. MAI-Thinking-1 is documented as "API type: Chat
+     * completions" and answers a Responses call with HTTP 400 "The requested operation is
+     * unsupported", which arrives as a validation failure and leaves cleanup switched off with no
+     * route to the model the owner deliberately deployed.
+     *
+     * Measured against all three deployments before this was written, because the fix had to be a
+     * surface the whole set shares rather than a special case for one model:
+     *
+     *   POST /openai/v1/chat/completions   MAI-Thinking-1  OK    gpt-5.6-sol  OK   grok-4.6  OK
+     *   POST /openai/v1/responses          MAI-Thinking-1  400   gpt-5.6-sol  OK   grok-4.6  OK
+     *
+     * So Chat Completions on the unified v1 path is the common denominator. It is the fallback and
+     * not the default because Responses is the forward-looking surface and is the only one that
+     * serves the newest reasoning models: the comment on the Responses client records that Chat
+     * Completions answers gpt-5.x "pro" and the o-series with the same "operation unsupported" 400
+     * in the other direction. Trying Responses first and stepping down keeps both halves working.
+     *
+     * Detected rather than configured. The deployment capability map does carry the answer
+     * (MAI-Thinking-1 reports chatCompletion=true and no responses key), but reading it here would
+     * mean persisting a second copy of it into settings and trusting it to still be true; the model
+     * itself is never out of date about what it serves.
+     */
+    private async Task<AIAgent?> TryAzureChatCompletionsAsync(
+        CleanupOptions options, AgentProbeFailure failure, CancellationToken ct)
+    {
+        if (options.Provider != CleanupProvider.AzureFoundry ||
+            string.IsNullOrWhiteSpace(options.AzureEndpoint) ||
+            string.IsNullOrWhiteSpace(options.AzureDeployment))
+        {
+            return null;
+        }
+
+        // Only for the refusal that means "wrong surface". A timeout, a 500 or an auth failure says
+        // nothing about which API the deployment speaks, and retrying those here would turn one slow
+        // failure into two.
+        if (!IsSurfaceRejection(failure.Exception))
+        {
+            return null;
+        }
+
+        try
+        {
+            var endpointUri = new Uri(options.AzureEndpoint!);
+            var accountHost = new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/");
+            var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
+
+            var openAiClient = useKey
+                ? AzureOpenAIResponsesClientFactory.CreateClientWithApiKey(accountHost, options.AzureApiKey!)
+                : AzureOpenAIResponsesClientFactory.CreateClientWithTokenCredential(
+                    accountHost,
+                    AzureCredentialFactory.Create(new AzureCredentialRequest(
+                        options.AzureAuthMode,
+                        options.AzureTenantId,
+                        options.AzureSubscriptionId,
+                        options.AzureClientId,
+                        options.AzureClientSecret)));
+
+            var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
+            // Same stored-output assertion the two Responses paths make. This is outbound cloud
+            // egress, so it carries the same control; WithStoredOutputDisabled has a
+            // ChatCompletionOptions arm precisely so this path is covered rather than fail-closed
+            // into the wrong option type.
+            _pendingFactory = i => deployment.AsAIAgent(
+                instructions: i, name: AgentName, clientFactory: DisableStoredOutput);
+            var agent = _pendingFactory(BuildSystemPrompt(options));
+
+            if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } stillFailing)
+            {
+                _log.LogDebug(
+                    "Chat Completions fallback also failed for {Deployment}: {Message}",
+                    options.AzureDeployment, stillFailing.Message);
+                return null;
+            }
+
+            _log.LogInformation(
+                "Azure deployment {Deployment} does not serve the Responses API; using Chat Completions.",
+                options.AzureDeployment);
+            return agent;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogDebug(ex, "Could not build a Chat Completions agent for {Deployment}.",
+                options.AzureDeployment);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True for a 400 from the Responses surface, which is the signal to try Chat Completions.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately any 400 rather than only the ones whose text says "unsupported". Azure phrases
+    /// this refusal at least two ways for the same deployment: MAI-Thinking-1 answered "The
+    /// requested operation is unsupported" through one path and "There was an issue with your
+    /// request. Please check your inputs and try again" through another, and a matcher keyed to the
+    /// first wording silently stopped firing when the second one arrived. Matching on the status
+    /// alone cannot be broken by rewording.
+    /// <para>
+    /// Widening it costs nothing, because this is not the decision. A 400 only buys ONE attempt on
+    /// the other surface, that attempt is validated by the same probe, and a failure there returns
+    /// null and leaves the original diagnostic standing. Statuses that say nothing about the surface
+    /// (a timeout, a 401, a 429, a 500) are still excluded, because retrying those here would turn
+    /// one slow failure into two.
+    /// </para>
+    /// </remarks>
+    private static bool IsSurfaceRejection(Exception? exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is ClientResultException { Status: 400 })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private sealed record FoundryDemotionResult(CleanupOptions Options, AIAgent Agent);
 
     private sealed record FoundryExecutionProviderFailure(
@@ -1863,6 +1981,22 @@ internal sealed class TextCleanupService : ITextCleanupService
             {
                 responseOptions.StoredOutputEnabled = false;
                 return responseOptions;
+            }
+
+            /*
+             * The same control on the Chat Completions surface.
+             *
+             * TryAzureChatCompletionsAsync can make Chat Completions the live path for a deployment
+             * that will not serve Responses, and that path's raw representation is a
+             * ChatCompletionOptions, not a CreateResponseOptions. Without this arm it fell through to
+             * the fail-closed branch below and got handed a CreateResponseOptions, which is simply
+             * the wrong type for that client: the assertion would not have been applied and the
+             * control would have lapsed on exactly the path it was needed for.
+             */
+            if (raw is OpenAI.Chat.ChatCompletionOptions chatOptions)
+            {
+                chatOptions.StoredOutputEnabled = false;
+                return chatOptions;
             }
 
             // Fail CLOSED. Passing an unrecognised object through would let Azure fall back to its
@@ -1913,11 +2047,45 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             var chatOptions = new ChatOptions
             {
-                MaxOutputTokens = InitProbeMaxOutputTokens,
+                /*
+                 * Keyed on the provider that needs it, not on "anything but local".
+                 *
+                 * The predicate was `!= FoundryLocal`, which swept in OpenAiCompatible as well. That
+                 * provider's users are running Ollama and LM Studio against small local models, and
+                 * reserving 4096 output tokens on a short context can get the probe rejected outright,
+                 * marking cleanup Unavailable on a model that would have worked. The headroom is for
+                 * Azure reasoning deployments and for the Copilot backend, which are the ones measured
+                 * to need it.
+                 */
+                MaxOutputTokens = options.Provider is CleanupProvider.AzureFoundry
+                    or CleanupProvider.GitHubCopilot
+                    ? CloudInitProbeMaxOutputTokens
+                    : InitProbeMaxOutputTokens,
             };
             if (options.Provider == CleanupProvider.FoundryLocal)
             {
                 chatOptions.Temperature = CleanupTemperature;
+            }
+
+            /*
+             * The probe reasons the way a real cleanup call will.
+             *
+             * Deliberately NOT pinned to a low effort to make the probe cheap.
+             * The probe exists to answer "will this deployment serve cleanup",
+             * and a probe that succeeds at an effort the cleanup path never uses
+             * answers a different question: a model that passes validation and
+             * then times out on the owner's first dictation is worse than one
+             * that refuses at setup, because the failure has moved to where he
+             * is not looking. Whatever the model's own default is, it is what
+             * both calls get.
+             */
+            if (ReasoningEffortOverride is { } probeEffort)
+            {
+                chatOptions.Reasoning = new ReasoningOptions
+                {
+                    Effort = probeEffort,
+                    Output = ReasoningOutput.None,
+                };
             }
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
@@ -2352,6 +2520,119 @@ internal sealed class TextCleanupService : ITextCleanupService
         var provider = executionProvider?.Trim();
         return !string.IsNullOrEmpty(provider) &&
             _availableExecutionProviders.Contains(provider, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /*
+     * Cleanup through the user's own GitHub Copilot licence.
+     *
+     * ## Why the types only appear inside this method
+     *
+     * Every reference to CopilotClient is local to this body, and that is load-bearing rather than
+     * tidiness. The CLR resolves an assembly the first time a method that references it is JIT
+     * compiled, so a user who never selects this provider never loads
+     * Microsoft.Agents.AI.GitHub.Copilot at all: no startup cost, no memory cost, and no Copilot
+     * runtime touched. Hoisting the client into a field, or naming the type in a signature on a
+     * class built during startup, would pull the assembly in on every launch and quietly undo that.
+     *
+     * ## Why the CLI is checked here as well as in Settings
+     *
+     * Settings checks it to decide what to offer. This checks it because the answer can change
+     * between the two: the CLI can be uninstalled, or a settings file can arrive from a machine that
+     * had it. Failing here with the real reason is what turns "cleanup silently did nothing" into a
+     * status line naming the missing dependency.
+     *
+     * ## What this deliberately does not enable
+     *
+     * The Copilot backend is a coding agent: shell execution, file access and URL fetching are all
+     * in its runtime. They are off unless a SessionConfig supplies an OnPermissionRequest handler,
+     * and none is supplied here and none should be. Scribe is asking it to punctuate a sentence.
+     */
+    private Task<AIAgent?> InitGitHubCopilotAsync(CleanupOptions options, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var cli = GitHubCopilotCli.Detect();
+        if (!cli.Found)
+        {
+            SetStatus(
+                CleanupStatus.Unavailable,
+                "The GitHub Copilot CLI is not installed. Install it from Settings, then turn AI cleanup back on.");
+            return Task.FromResult<AIAgent?>(null);
+        }
+
+        /*
+         * The SDK takes the model through its own environment variable rather than an API, so a
+         * chosen model is published for the client to read. Blank means the account default, which is
+         * why this clears rather than writes an empty string: an empty value is not the same question
+         * as an unset one.
+         *
+         * Set immediately before the client is constructed and cleared straight after, rather than
+         * left standing. It is process scope, so this is stale state rather than the machine-wide
+         * hazard AGENTS.md describes for persistent AZURE_CLIENT_* variables, but it is still shared:
+         * GitHubCopilotModels.ListAsync builds its own client from the settings window and can run
+         * while a reconfiguration is in flight, and a value left over from a provider the user has
+         * since switched away from would silently steer it.
+         */
+        var previousModelVariable = Environment.GetEnvironmentVariable(GitHubCopilotCli.ModelVariable);
+        Environment.SetEnvironmentVariable(
+            GitHubCopilotCli.ModelVariable,
+            string.IsNullOrWhiteSpace(options.CopilotModel) ? null : options.CopilotModel!.Trim());
+
+        SetStatus(CleanupStatus.Downloading, "Starting the GitHub Copilot session…");
+
+        /*
+         * Point the SDK at the CLI we found, rather than the one it expects to have bundled.
+         *
+         * With no Connection set, CopilotClient spawns
+         * `<output>/runtimes/win-x64/native/copilot.exe`, the copy the build-time npm download would
+         * have placed there. Directory.Build.props switches that download off, so the default throws
+         * "Copilot runtime not found".
+         *
+         * ForStdio with the detected path is the better arrangement in any case: it runs the CLI the
+         * owner actually installed and is signed in to, which is what makes this "bring your own
+         * model" rather than a second, unauthenticated Copilot inside Scribe. UseLoggedInUser is left
+         * at its default of true so the runtime picks up the stored OAuth token or `gh` auth.
+         */
+        // Restored once the client has read it, so the variable does not outlive the construction
+        // it exists for. In a finally so an exception on StartAsync cannot leave it set either.
+        var client = new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions
+        {
+            Connection = GitHub.Copilot.RuntimeConnection.ForStdio(cli.Path!),
+        });
+        try
+        {
+            client.StartAsync(ct).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            client.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Environment.SetEnvironmentVariable(GitHubCopilotCli.ModelVariable, previousModelVariable);
+            SetStatus(
+                CleanupStatus.Unavailable,
+                "Could not start GitHub Copilot. Check that you are signed in: run `copilot` once in a terminal.");
+            _log.LogWarning(ex, "GitHub Copilot session could not be started.");
+            return Task.FromResult<AIAgent?>(null);
+        }
+
+        Environment.SetEnvironmentVariable(GitHubCopilotCli.ModelVariable, previousModelVariable);
+
+        // Held so the session is torn down with the service (DisposeAsync) rather than leaked per
+        // reconfiguration, and replaced here so switching model does not strand the old child process.
+        var previous = Interlocked.Exchange(ref _copilotClientHandle, client);
+        if (previous is IAsyncDisposable staleSession)
+        {
+            try { staleSession.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch (Exception ex) { _log.LogDebug(ex, "Could not dispose the previous Copilot session."); }
+        }
+
+        // Fully qualified rather than a file-scoped `using GitHub.Copilot`, so every name from this
+        // package stays inside this one method body and the lazy-load argument above holds by
+        // construction rather than by convention. ownsClient stays false: the session is disposed
+        // through _copilotClientHandle, and letting the agent own it too would double-dispose it
+        // every time the user changes a setting.
+        _pendingFactory = instructions => GitHub.Copilot.CopilotClientExtensions.AsAIAgent(
+            client, name: AgentName, instructions: instructions);
+        return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
     }
 
     /// <summary>
@@ -2883,12 +3164,28 @@ internal sealed class TextCleanupService : ITextCleanupService
         // English averages a little over one token per word; cleanup output tracks input length.
         var words = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
-        // Azure cleanup often runs on reasoning models whose hidden thinking tokens count against this
-        // same budget, so a tight cap would truncate the visible answer. Give a generous ceiling.
+        /*
+         * Azure cleanup often runs on reasoning models whose hidden thinking counts against this
+         * same budget, so a tight cap truncates the visible answer. The floor was 512 and that was
+         * measured to be far too low.
+         *
+         * Grok 4.6, asked to punctuate a 51-token sentence, spent 532 reasoning tokens before it
+         * wrote a single visible one. Scribe's real prompt carries the rulebook and the glossary, so
+         * its inputs run about a thousand tokens and its thinking runs longer still. Against a 512
+         * floor the model regularly used the whole budget on reasoning, returned an empty message,
+         * failed TrySanitize, and cleanup fell back to the raw transcript. That reads to the user as
+         * "the AI did nothing" on a model that was working correctly and simply had nowhere to put
+         * the answer.
+         *
+         * The ceiling is not an allocation. Azure bills the tokens a model actually generates, so a
+         * generous cap costs nothing on gpt-5.6-sol, which answers the same prompt with zero
+         * reasoning tokens, and is the difference between working and silently doing nothing on a
+         * model that thinks before it speaks.
+         */
         if (provider == CleanupProvider.AzureFoundry)
         {
-            var azureEstimate = (words * 4) + 512;
-            return Math.Clamp(azureEstimate, 512, 16384);
+            var azureEstimate = (words * 4) + AzureReasoningHeadroomTokens;
+            return Math.Clamp(azureEstimate, AzureReasoningHeadroomTokens, 16384);
         }
 
         // Foundry Local output also has to cover translation/format expansion and any hidden reasoning
@@ -3277,11 +3574,36 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    public ValueTask DisposeAsync()
+    /// <summary>
+    /// Releases the Copilot CLI session, if one is held. Returns the handle to null so a second call
+    /// is a no-op.
+    /// </summary>
+    /// <remarks>
+    /// Typed against <see cref="IAsyncDisposable"/> rather than the SDK's client so this method does
+    /// not name a Copilot type: a signature here is class metadata and would load the assembly on
+    /// every launch, which is the whole thing <c>InitGitHubCopilotAsync</c>'s lazy-loading discipline
+    /// exists to avoid.
+    /// </remarks>
+    private async Task ReleaseCopilotSessionAsync()
+    {
+        if (Interlocked.Exchange(ref _copilotClientHandle, null) is IAsyncDisposable session)
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Could not dispose the GitHub Copilot session.");
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
     {
         if (_disposed)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         _disposed = true;
@@ -3296,9 +3618,18 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try { cts?.Cancel(); } catch { /* best effort */ }
         cts?.Dispose();
+
+        /*
+         * The Copilot session is a child process, so it has to be asked to close.
+         *
+         * DropAgents only clears the agent references; nothing in it reaches the CLI. Without this
+         * the `copilot` process outlived the app on every exit, and this method returned a completed
+         * ValueTask while claiming asynchrony it never used. Ordered after the cancel so an
+         * initialization already in flight is told to stop before its session is taken away.
+         */
+        await ReleaseCopilotSessionAsync().ConfigureAwait(false);
+
         try { _manager?.Dispose(); } catch { /* best effort */ }
         _initLock.Dispose();
-
-        return ValueTask.CompletedTask;
     }
 }

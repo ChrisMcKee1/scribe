@@ -325,55 +325,6 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingCard}">
-                                    <StackPanel>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                                <TextBlock Text="Rewrite selected text (Experimental)" Style="{StaticResource SettingTitle}"/>
-                                                <TextBlock Style="{StaticResource SettingHint}"
-                                                           Text="Select text in any app, press the hotkey, and pick what to do with it: rewrite for an AI agent, format for Teams, fix grammar, and more. Scribe copies the selection to read it, then puts your clipboard back."/>
-                                            </StackPanel>
-                                            <ui:ToggleSwitch x:Name="TextActionsCheck" Grid.Column="1"
-                                                             VerticalAlignment="Center"
-                                                             Checked="TextActionsCheck_Changed"
-                                                             Unchecked="TextActionsCheck_Changed"/>
-                                        </Grid>
-                                        <Grid x:Name="TextActionsHotkeyRow" Margin="0,12,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ui:TextBox x:Name="TextActionsHotkeyBox" Grid.Column="0" IsReadOnly="True"
-                                                        VerticalContentAlignment="Center"
-                                                        PlaceholderText="Not set, use the tray menu"/>
-                                            <ui:Button Grid.Column="1" Content="Set" Margin="8,0,0,0" MinWidth="72"
-                                                       Click="TextActionsCaptureButton_Click"/>
-                                            <ui:Button Grid.Column="2" Content="Clear" Margin="8,0,0,0" MinWidth="72"
-                                                       Click="TextActionsClearButton_Click"/>
-                                        </Grid>
-                                        <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Needs a modifier, for example Ctrl+Alt+Space. Most actions need AI cleanup switched on; applying your dictionary works offline with no model. Not available in a terminal, because Ctrl+C there stops the running command."/>
-                                        <Grid Margin="0,14,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                                <TextBlock Text="Floating dock" Style="{StaticResource SettingTitle}"/>
-                                                <TextBlock Style="{StaticResource SettingHint}"
-                                                           Text="A small always-on-top tile you can drag anywhere. Clicking it keeps your text selected, which the tray menu cannot do because opening it moves the focus off your selection."/>
-                                            </StackPanel>
-                                            <ui:ToggleSwitch x:Name="TextActionDockCheck" Grid.Column="1"
-                                                             VerticalAlignment="Center"/>
-                                        </Grid>
-                                    </StackPanel>
-                                </ui:Card>
-
-                                <ui:Card Style="{StaticResource SettingCard}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -785,7 +736,7 @@
                                         <TextBlock Text="What leaves this PC" Style="{StaticResource SettingTitle}"
                                                    Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
-                                                   Text="Foundry Local keeps cleanup on this device. Microsoft Foundry and remote OpenAI-compatible providers receive transcript text, writing instructions, and relevant dictionary terms when you enable or invoke their features. Audio never leaves this device."/>
+                                                   Text="Foundry Local keeps cleanup on this device. Microsoft Foundry, remote OpenAI-compatible providers, and GitHub Copilot receive transcript text, writing instructions, and relevant dictionary terms when you enable or invoke their features. GitHub Copilot sends them to GitHub under your own Copilot sign-in and GitHub&apos;s terms, and listing its models contacts GitHub too. Audio never leaves this device."/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0">
                                             <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md"
                                                        RequestNavigate="Hyperlink_RequestNavigate">
@@ -799,7 +750,7 @@
                                     <StackPanel>
                                         <TextBlock Text="Provider" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Run a model on this PC with Foundry Local (fully offline), use a Microsoft Foundry deployment via your Azure sign-in, or point at any OpenAI-compatible server you already run."/>
+                                                   Text="Run a model on this PC with Foundry Local (fully offline), use a Microsoft Foundry deployment via your Azure sign-in, point at any OpenAI-compatible server you already run, or use your own GitHub Copilot licence through the Copilot CLI."/>
                                         <ComboBox x:Name="AiProviderCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                                                   SelectionChanged="AiProviderCombo_SelectionChanged"/>
 
@@ -1035,6 +986,43 @@
                                                             PlaceholderText="Leave blank for local servers like Ollama or LM Studio"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Text only: your audio never leaves this device."/>
+                                        </StackPanel>
+
+                                        <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
+                                            <!-- The CLI this provider runs on. Shown first because
+                                                 nothing below it works without it, and because it is
+                                                 the one dependency Scribe cannot install silently. -->
+                                            <ui:InfoBar x:Name="CopilotCliBar" Margin="0,12,0,0"
+                                                        IsOpen="True" IsClosable="False"
+                                                        Title="Checking for the GitHub Copilot CLI…"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                                <ui:Button x:Name="CopilotInstallButton" Content="Install the CLI"
+                                                           MinWidth="150" Click="CopilotInstallButton_Click"/>
+                                                <ui:Button x:Name="CopilotRecheckButton" Content="Check again"
+                                                           Margin="8,0,0,0" MinWidth="120"
+                                                           Click="CopilotRecheckButton_Click"/>
+                                                <ui:Button x:Name="CopilotSignInButton" Content="Sign in"
+                                                           Margin="8,0,0,0" MinWidth="110"
+                                                           Click="CopilotSignInButton_Click"/>
+                                            </StackPanel>
+                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0"
+                                                       Text="Cleanup runs through your own GitHub Copilot licence, so the models on offer are the ones your GitHub account is entitled to. Scribe uses the CLI you are already signed in to and never asks for a token."/>
+
+                                            <TextBlock Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                            <Grid Margin="0,8,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <ComboBox x:Name="CopilotModelCombo" Grid.Column="0"
+                                                          IsEditable="True" HorizontalAlignment="Stretch"
+                                                          VerticalContentAlignment="Center"/>
+                                                <ui:Button x:Name="CopilotLoadModelsButton" Grid.Column="1"
+                                                           Content="List models" Margin="8,0,0,0" MinWidth="130"
+                                                           Click="CopilotLoadModelsButton_Click"/>
+                                            </Grid>
+                                            <TextBlock x:Name="CopilotModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                       Text="Leave blank to use whichever model your Copilot account defaults to. Press List models to read the ones your licence allows, with their reasoning levels."/>
                                         </StackPanel>
                                     </StackPanel>
                                 </ui:Card>

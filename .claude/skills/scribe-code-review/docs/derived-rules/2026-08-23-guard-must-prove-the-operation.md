@@ -1,6 +1,7 @@
 ---
-status: candidate
+status: retired
 added: 2026-08-23
+retired: 2026-08-31
 surface: text-injection
 severity: important
 paths:
@@ -14,6 +15,12 @@ evidence:
 ---
 
 # A guard that proves an operation happened must observe the operation, not a shared counter and not a payload difference
+
+> **Retired 2026-08-31.** The text action (highlight and rewrite) feature was removed, taking
+> `SelectionReader` with it. Three of the four occurrences behind this rule lived there, leaving
+> only `HookLivenessProbe`, which `agents/win32-interop.md` §2 already covers. One occurrence
+> cannot clear the three-occurrence activation bar, so the rule can no longer graduate on this
+> evidence. Kept on disk for provenance, per the retirement policy in [`README.md`](README.md).
 
 ## Guideline
 

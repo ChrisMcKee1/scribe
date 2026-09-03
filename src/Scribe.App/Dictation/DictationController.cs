@@ -444,7 +444,8 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureSubscriptionId,
         settings.AiCleanupAzureAuthMode,
         settings.AiCleanupAzureClientId,
-        settings.AiCleanupAzureClientSecret);
+        settings.AiCleanupAzureClientSecret,
+        settings.AiCleanupCopilotModel);
 
     // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
     // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied,

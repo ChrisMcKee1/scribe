@@ -134,7 +134,7 @@ clipboard paragraph, say so in the finding: no 🔴-capped lens covered this sur
 | Logs are kept for seven days, and the folder is size-limited so it cannot grow without bound. | `LogRetentionPolicy.DefaultRetentionDays = 7`, `DefaultDailyBudgetBytes` 16 MB, `DefaultTotalBudgetBytes` 64 MB. |
 | "Save diagnostics" never includes `scribe.db`. | `DiagnosticsBundle.Create` enumerating through `ScribeLogFiles.Enumerate`. |
 | Clipboard writes Scribe performs itself are marked so Windows excludes them from clipboard history and cloud sync. | `Win32Clipboard.MarkPrivate`, writing `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`, and `CanUploadToCloudClipboard`. |
-| Scribe reads the previous clipboard only to restore it, and does not retain or transmit it. | `SelectionReader` restore path; `TextInjector` borrow and restore. |
+| Scribe reads the previous clipboard only to restore it, and does not retain or transmit it. | `TextInjector` borrow and restore. |
 | Cleanup failure samples are shortened and pruned after approximately seven days. | `CleanupFailureLog.SampleMaxChars` (200) and its rolling one-week window. |
 | AI usage insight sends aggregate totals and dictionary-covered term labels, never transcripts, audio, focused application names, or timestamps. | `UsageInsight.BuildSummary` and its `Covered` check. |
 | AI dictionary suggestions send a bounded sample of recent transcript history. | `AiDictionarySuggester.BuildHistorySample`, bounded by `DefaultMaxSampleChars` (6000). |

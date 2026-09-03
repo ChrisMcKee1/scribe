@@ -63,7 +63,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   GitHub, modern developer tools, .NET and C#, data engineering, data science, machine learning,
   and more. Say a trigger phrase and a whole saved template types itself.
 - **🧹 AI polish on your terms.** Grammar and structure cleaned by an on-device model (fully
-  offline), your Azure deployment, or **any OpenAI-compatible server you already run** (Ollama,
+  offline), your Azure deployment, **your own GitHub Copilot licence**, or **any
+  OpenAI-compatible server you already run** (Ollama,
   LM Studio, OpenRouter…). Your models, your keys, your costs. Flip it on or off right from the
   tray.
 - **📊 Performance you can verify.** A built-in diagnostics panel computes latency percentiles
@@ -219,7 +220,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Dictionary libraries | Nine curated opt-in libraries, including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own custom CSV libraries |
 | Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
 | Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
-| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
+| AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), your own GitHub Copilot licence via the Copilot CLI, or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |
 | Playground | Captures normal push-to-talk dictation, then shows raw recognition, final highlighted dictionary, library, and snippet replacements, and per-step timing |
 
 **Insight and recovery**
@@ -316,6 +317,8 @@ It stands on the shoulders of excellent open work:
 - **Moonshine**: © Useful Sensors, MIT
 - **sherpa-onnx**: Apache-2.0 (Next-gen Kaldi / k2-fsa)
 - **Silero VAD**: MIT
+- **Microsoft Agent Framework** (`Microsoft.Agents.AI`, `Microsoft.Agents.AI.GitHub.Copilot`): © Microsoft, MIT
+- **GitHub Copilot SDK** (`GitHub.Copilot.SDK`): © GitHub, MIT
 
 ---
 

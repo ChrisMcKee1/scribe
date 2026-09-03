@@ -79,8 +79,8 @@ is a thin shell that wires services together. New behavior should generally land
 with a test, and the App project just binds it to the UI.
 
 The optional AI cleanup is built on the **Microsoft Agent Framework** (`AIAgent`), so the
-on-device (Foundry Local), cloud (Microsoft Foundry) and bring-your-own (OpenAI-compatible)
-providers share one code path and are easy to extend.
+on-device (Foundry Local), cloud (Microsoft Foundry), bring-your-own (OpenAI-compatible) and
+GitHub Copilot providers share one code path and are easy to extend.
 
 ---
 

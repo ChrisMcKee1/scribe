@@ -201,69 +201,6 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         return text.Trim();
     }
 
-    /// <inheritdoc />
-    public SelectionVocabularyResult ProcessSelection(string text)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return new SelectionVocabularyResult(text ?? string.Empty, []);
-        }
-
-        EnsureLoaded();
-
-        // No NormalizeWhitespace and no snippet phase: see the interface remarks. The user is looking
-        // at this text in their own document, so its indentation and blank lines are content.
-        var rules = Volatile.Read(ref _rules);
-        if (rules.Length == 0)
-        {
-            return new SelectionVocabularyResult(text, []);
-        }
-
-        var protectedSpans = ProtectedSpans(text);
-        var replacements = new List<TextReplacement>();
-        var result = ApplySinglePass(
-            text,
-            rules
-                .SelectMany((rule, order) => rule.Find(text, order))
-                .Where(candidate => !IsProtected(protectedSpans, candidate.Index, candidate.Length)),
-            replacements);
-
-        return new SelectionVocabularyResult(result, replacements);
-    }
-
-    // Regions a vocabulary rule must never touch. Rewriting a term inside a URL breaks the link, and
-    // rewriting one inside a backtick span or a file path corrupts something the user wrote precisely.
-    private static List<(int Start, int End)> ProtectedSpans(string text)
-    {
-        var spans = new List<(int Start, int End)>();
-        foreach (Match match in SelectionProtectedRegion().Matches(text))
-        {
-            spans.Add((match.Index, match.Index + match.Length));
-        }
-
-        return spans;
-    }
-
-    private static bool IsProtected(List<(int Start, int End)> spans, int index, int length)
-    {
-        var end = index + length;
-        foreach (var (start, spanEnd) in spans)
-        {
-            if (index < spanEnd && end > start)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    // Backtick spans (including fenced blocks), URLs, and Windows or POSIX paths.
-    [GeneratedRegex(
-        @"`[^`]*`|```[\s\S]*?```|\b[a-z][a-z0-9+.-]*://\S+|(?:[A-Za-z]:\\|\\\\|\./|/)[^\s""'<>|]+",
-        RegexOptions.IgnoreCase)]
-    private static partial Regex SelectionProtectedRegion();
-
     /// <summary>
     /// Runs one dictionary rule over already-finalized text, using the exact pipeline a live
     /// dictation would take: the same normalization, the same compiled matcher, and the same

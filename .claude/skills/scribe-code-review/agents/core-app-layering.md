@@ -142,11 +142,11 @@ finding that names them all rather than spending the cap on near-duplicates.
 
 `src/Scribe.Core/DependencyInjection/CoreServiceCollectionExtensions.cs` is the single registration point
 for Core services. `AddScribeCore` registers `AppPaths`, `ModelLocator`, `ITranscriptionModelInstaller`,
-`ITranscriptionService`, `IAudioCaptureService`, `IHotkeyService`, `ITextInjector`, `SelectionReader`,
-`IVadService`, `ScribeDatabase`, the four repositories (`ISettingsRepository`, `IDictionaryRepository`,
+`ITranscriptionService`, `IAudioCaptureService`, `IHotkeyService`, `ITextInjector`, `IVadService`,
+`ScribeDatabase`, the four repositories (`ISettingsRepository`, `IDictionaryRepository`,
 `ISnippetRepository`, `IHistoryRepository`), `ICleanupFailureLog`, `LastTranscriptStore`,
 `ITextPostProcessor`, `IDictionaryLibraryService`, `ITextCleanupService`, and `IAzureFoundryDiscovery`,
-all as **singletons**. `App.xaml.cs:102` calls `builder.Services.AddScribeCore()`, and everything
+all as **singletons**. `App.xaml.cs:101` calls `builder.Services.AddScribeCore()`, and everything
 downstream resolves through `GetRequiredService`.
 
 **A new Core service constructed with `new` in `Scribe.App` instead of registered there is a finding.**
@@ -155,11 +155,11 @@ a background loop, because the singleton contract is what stops two callers from
 State the fix concretely: add the `AddSingleton<IX, X>()` line to `AddScribeCore` and resolve it.
 
 **Not a finding: App-owned types built or registered in App.** `AzureCliInstaller` and `SessionDiagnostics`
-live in `src/Scribe.App/Infrastructure/` and are registered at `App.xaml.cs:104` and `:105`.
-`UpdateService`, also in `src/Scribe.App/Infrastructure/`, is constructed with `new` at `App.xaml.cs:402`.
+live in `src/Scribe.App/Infrastructure/` and are registered at `App.xaml.cs:103` and `:104`.
+`UpdateService`, also in `src/Scribe.App/Infrastructure/`, is constructed with `new` at `App.xaml.cs:418`.
 Those are App's own types wired at App's composition root, which is what a composition root is for. The
-same goes for `src/Scribe.App/TextActions/TextActionController.cs`, which owns window ordering and Win32
-focus sequencing that cannot be pure.
+same goes for any App class that owns window ordering or Win32 focus sequencing, which cannot be
+pure.
 
 ---
 
@@ -286,11 +286,10 @@ Do not flag any of the following. Each one is a shape this repository has on pur
   are view work. It becomes a finding only when the string encodes a rule the pipeline or the model
   prompt also applies.
 - **Anything under `src/Scribe.Overlay/`.** No Core reference exists and none should be proposed. See §5.
-- **App types at App's composition root.** `AzureCliInstaller`, `SessionDiagnostics`, `UpdateService`, and
-  `TextActionController` are App's own. Constructing or registering them in `App.xaml.cs` is correct.
-- **App code that must own a window handle, foreground state, or focus ordering.** `TextActionController`
-  captures the selection before showing the palette because the palette takes focus; that ordering cannot
-  be a pure function and the class remarks say so.
+- **App types at App's composition root.** `AzureCliInstaller`, `SessionDiagnostics`, and
+  `UpdateService` are App's own. Constructing or registering them in `App.xaml.cs` is correct.
+- **App code that must own a window handle, foreground state, or focus ordering.** Sequencing that
+  depends on which window has focus cannot be a pure function, so it stays in App.
 - **A Core decider added with no window callsite yet**, when the diff is explicitly the first half of a
   planned move and says so. Ask about the callsite in Questions.
 - **Pre-existing logic in a shell file that the diff merely moved, renamed, or reformatted.** If the change

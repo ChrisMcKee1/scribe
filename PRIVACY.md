@@ -92,19 +92,6 @@ clipboard content.
 Clipboard writes that Scribe performs itself are marked so Windows excludes them
 from clipboard history (Win+V) and from cross-device cloud clipboard sync.
 
-**Rewriting selected text uses the clipboard, and one part of that cannot be
-protected.** When you ask Scribe to act on text you have highlighted in another
-application, Scribe reads that selection by sending a copy command to the
-application you are in. The copy is performed by that application, not by Scribe,
-and Windows only lets the application that places data on the clipboard mark it
-as excluded. This means the text you select is placed in Windows clipboard
-history by the application it came from, and is synchronized to your other
-devices if you have cross-device clipboard turned on. Scribe cannot prevent
-this, and restoring your previous clipboard afterwards does not remove the
-history entry. If this matters for a particular document, turn off clipboard
-history in Windows Settings under System > Clipboard, or do not use the rewrite
-feature on that content. Rewriting selected text is off by default.
-
 ### Diagnostic information
 
 Scribe writes diagnostic logs locally. Logs may include application lifecycle
@@ -138,9 +125,9 @@ endpoint.
 AI features are optional. The default Foundry Local provider runs on the device
 and does not send transcript text to a cloud AI service.
 
-If you enable Microsoft Foundry or an OpenAI-compatible remote provider, Scribe
-sends the information needed to perform the action to the endpoint you
-configure. This may include:
+If you enable Microsoft Foundry, an OpenAI-compatible remote provider, or
+GitHub Copilot, Scribe sends the information needed to perform the action to
+that provider. This may include:
 
 - The current transcript
 - Writing-style instructions and prompts
@@ -157,13 +144,23 @@ dictation timestamps.
 
 The remote provider processes this information under the account, terms, data
 retention settings, and privacy policy associated with that provider. Depending
-on your configuration, the provider may be Microsoft or the operator of an
-OpenAI-compatible endpoint. The publisher of Scribe does not receive this
+on your configuration, the provider may be Microsoft, GitHub, or the operator of
+an OpenAI-compatible endpoint. The publisher of Scribe does not receive this
 information.
+
+The GitHub Copilot provider differs from the others in how it connects. There is
+no endpoint you configure and no key Scribe stores. Scribe runs the GitHub
+Copilot CLI that is already installed and signed in on this device, so requests
+travel under your own GitHub identity and are processed by GitHub under your
+Copilot subscription terms and privacy policy. Scribe never sees or stores a
+GitHub token. Asking Settings to list the models your licence allows also
+contacts GitHub. Which model handles a request is whichever one you select, or
+your account default when you leave that blank.
 
 You can stop this transmission at any time by turning off AI cleanup, selecting
 Foundry Local, not invoking AI suggestions or insights, or removing the remote
-provider configuration.
+provider configuration. For GitHub Copilot, selecting a different provider stops
+Scribe using it; signing out of the Copilot CLI removes its access entirely.
 
 ## Provider credentials and account information
 

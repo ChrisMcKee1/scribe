@@ -123,6 +123,22 @@ internal static class Program
             var transcript = scenario.Transcript ?? EvalScenarios.RawTranscript;
             var cleaned = (await svc.CleanAsync(transcript, ct)).Text;
 
+            /*
+             * Show the answer under --verbose.
+             *
+             * The suite reported only pass/fail and "changed-from-raw", which says a model produced
+             * something unusable without ever saying what. Two separate investigations stalled on
+             * that: grok-4.6 and the GitHub Copilot backend both returned rows of
+             * "changed-from-raw=False" that were indistinguishable from each other, and both root
+             * causes were visible in one glance at the text. A harness whose failure mode is
+             * "something went wrong somewhere" costs more than the four lines it takes to fix.
+             */
+            if (opts.Verbose)
+            {
+                Console.Error.WriteLine($"   [{scenario.Name}] in : {Condense(transcript)}");
+                Console.Error.WriteLine($"   [{scenario.Name}] out: {Condense(cleaned)}");
+            }
+
             var evaluator = new StyleAdherenceEvaluator(
                 scenario.MarkerPatterns, scenario.MinMarkersToPass, scenario.RequireChanged,
                 scenario.CountOccurrences, transcript, scenario.ForbiddenPatterns);
@@ -269,4 +285,16 @@ internal static class Program
     }
 
     private static string Trunc(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+    /// <summary>One line, bounded, so a long transcript cannot bury the next row.</summary>
+    private static string Condense(string? text)
+    {
+        var flat = (text ?? string.Empty).Replace('\n', ' ').Replace('\r', ' ').Trim();
+        while (flat.Contains("  ", StringComparison.Ordinal))
+        {
+            flat = flat.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return flat.Length <= 220 ? flat : flat[..220] + "…";
+    }
+
 }

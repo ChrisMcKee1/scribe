@@ -1,4 +1,3 @@
-using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.AI;
 using OpenAI.Responses;
@@ -16,7 +15,6 @@ internal sealed class DirectResponsesCleanupClient
     private readonly string _instructions;
     private readonly ReasoningEffort? _reasoningEffort;
     private readonly int? _maxOutputTokens;
-    private readonly JsonSchemaFormat? _responseSchema;
 
     public DirectResponsesCleanupClient(
         string endpoint,
@@ -26,29 +24,20 @@ internal sealed class DirectResponsesCleanupClient
         ReasoningEffort? reasoningEffort,
         int? maxOutputTokens,
         TimeSpan networkTimeout,
-        bool disableRetries,
-        TokenCredential? credential = null,
-        JsonSchemaFormat? responseSchema = null)
+        bool disableRetries)
     {
-        // A caller that already knows which cached Azure CLI account owns the deployment can hand one
-        // in. tools/Scribe.StyleEval does: on a machine signed in to several tenants, only
-        // `az account get-access-token --subscription <id>` mints an ai.azure.com token, and
-        // AzureCliCredentialOptions.Subscription is the only way to ask for that form.
-        var resolved = credential ?? BuildDefaultCredential(tenantId);
-
         _client = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
             new Uri(endpoint),
-            resolved,
+            BuildDefaultCredential(tenantId),
             networkTimeout + TimeSpan.FromSeconds(5),
             disableRetries);
         _deployment = deployment;
         _instructions = instructions;
         _reasoningEffort = reasoningEffort;
         _maxOutputTokens = maxOutputTokens;
-        _responseSchema = responseSchema;
     }
 
-    private static TokenCredential BuildDefaultCredential(string? tenantId)
+    private static Azure.Core.TokenCredential BuildDefaultCredential(string? tenantId)
     {
         var credentialOptions = new DefaultAzureCredentialOptions
         {
@@ -72,12 +61,7 @@ internal sealed class DirectResponsesCleanupClient
         CancellationToken cancellationToken) =>
         SendAsync(TextCleanupService.BuildUserMessage(transcript), cancellationToken);
 
-    /// <summary>
-    /// Sends an already-composed user message. Used by tools/Scribe.StyleEval, whose user message is
-    /// built by <c>TextActionPrompt.BuildUserMessage</c> rather than by the cleanup service, so both
-    /// harnesses share one Azure Responses path instead of standing up a second one.
-    /// </summary>
-    public async Task<(string Text, BenchTokenUsage? Usage)> SendAsync(
+    private async Task<(string Text, BenchTokenUsage? Usage)> SendAsync(
         string userMessage,
         CancellationToken cancellationToken)
     {
@@ -87,20 +71,6 @@ internal sealed class DirectResponsesCleanupClient
             Instructions = _instructions,
             MaxOutputTokenCount = _maxOutputTokens,
         };
-
-        // Structured output when the caller asked for it. Nothing else changes: with no schema the
-        // request is byte for byte the one the benchmark has always sent.
-        if (_responseSchema is { } schema)
-        {
-            options.TextOptions = new ResponseTextOptions
-            {
-                TextFormat = ResponseTextFormat.CreateJsonSchemaFormat(
-                    schema.Name,
-                    BinaryData.FromString(schema.SchemaJson),
-                    schema.Description,
-                    schema.Strict),
-            };
-        }
 
         options.InputItems.Add(ResponseItem.CreateUserMessageItem(userMessage));
 

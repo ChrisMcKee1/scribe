@@ -44,9 +44,10 @@ When a mining run does happen, it goes in the same directory under the same rule
 A candidate is not a weak rule. It is a rule whose false-positive behavior has not been tested yet,
 and firing it at an author before that is how a review skill loses their trust.
 
-**There are zero active rules today.** Both seed rules below are `candidate`. That means
-`agents/learned-patterns.md` currently has nothing to apply and its correct output on every run is
-the no-active-rules line. That is the intended state, not a gap to fill by promoting something early.
+**There are zero active rules today.** Both seed rules were retired on 2026-08-31 when the text
+action feature was removed and took their evidence with it. That means `agents/learned-patterns.md`
+currently has nothing to apply and its correct output on every run is the no-active-rules line. That
+is the intended state, not a gap to fill by promoting something early.
 
 ---
 
@@ -78,10 +79,10 @@ surface: text-injection    # short label for the area, used in the tables below
 severity: suggestion       # suggestion | important. Never critical. This is the cap.
 paths:                     # globs. Path overlap with the diff is the dispatch trigger.
   - src/Scribe.Core/TextInjection/**
-  - src/Scribe.App/TextActions/**
+  - src/Scribe.Core/Hotkeys/**
 evidence:                  # what produced the rule. Concrete and checkable, one entry per source.
-  - "src/Scribe.App/TextActions/TextActionController.cs:286 records the defect: ..."
-  - "src/Scribe.Core/TextInjection/SelectionReader.cs:180 records the same defect on the read side."
+  - "src/Scribe.Core/TextInjection/TextInjector.cs:162 records the defect: ..."
+  - "src/Scribe.Core/Hotkeys/HookLivenessProbe.cs:10 records the same defect on the watchdog side."
 ---
 ```
 
@@ -177,10 +178,7 @@ the reason anyone believed the rule in the first place.
 
 ### Candidates
 
-| Rule | Surface | Severity cap | Evidence | Blocking on |
-| --- | --- | --- | --- | --- |
-| `2026-08-23-wait-for-activation-before-input.md` | `text-injection` | `important` | 2 defects, both recorded in code comments: the write-back path in `TextActionController` and the clipboard read path in `SelectionReader` | A third independent occurrence, and a replay against merged changes under `src/Scribe.Core/TextInjection/**`. The two known occurrences are the same mechanism on the read and write sides, which is one pattern seen twice rather than three times. |
-| `2026-08-23-guard-must-prove-the-operation.md` | `text-injection` | `important` | 3 defects: the machine-wide sequence-number proof, the payload-comparison proof that replaced it, and the sequence-number guard in `RestoreClipboard` that fired on every capture. `HookLivenessProbe` is a fourth instance of the same shape outside the clipboard. | A replay. The detection signal has to separate the invalid positive direction from the valid negative direction that `TextInjector.PasteViaClipboard` uses correctly today, and that separation has not been tested against real diffs yet. |
+None.
 
 ### Active rules
 
@@ -189,4 +187,7 @@ None. See the note under [Status model](#status-model): this is the expected sta
 
 ### Retired rules
 
-None.
+| Rule | Surface | Retired | Why |
+| --- | --- | --- | --- |
+| `2026-08-23-wait-for-activation-before-input.md` | `text-injection` | 2026-08-31 | The code shape it guards no longer exists. Removing the text action feature deleted `TextActionController`, `SelectionReader`, and `ForegroundReadiness`, which were both of its occurrences and its entire mechanism. |
+| `2026-08-23-guard-must-prove-the-operation.md` | `text-injection` | 2026-08-31 | Three of its four occurrences lived in `SelectionReader`, deleted with the text action feature. The survivor, `HookLivenessProbe`, is already covered by `agents/win32-interop.md` §2, and one occurrence cannot clear the three-occurrence activation bar. |

@@ -61,7 +61,8 @@ Start by listing `../docs/derived-rules/` and reading the frontmatter of every `
 
 **Today, zero rules are `active`.** Both rule files that exist,
 `2026-08-23-wait-for-activation-before-input.md` and `2026-08-23-guard-must-prove-the-operation.md`,
-carry `status: candidate` and each records in its provenance block exactly what it is blocked on.
+carry `status: retired`: the code shapes they guarded were removed from the repository on 2026-08-31,
+and each file records why at the top.
 
 That is not a gap in your run and it is not something to work around. It means your correct output is
 the no-active-rules line in the Output format section, plus the inventory that proves you looked. Do
@@ -218,65 +219,43 @@ root cause anyway, and your entry would lose to theirs on specificity.
 
 | Rule | Status |
 | --- | --- |
-| `2026-08-23-wait-for-activation-before-input.md` | candidate |
-| `2026-08-23-guard-must-prove-the-operation.md` | candidate |
+| `2026-08-23-wait-for-activation-before-input.md` | retired |
+| `2026-08-23-guard-must-prove-the-operation.md` | retired |
 
-No active rules, so nothing was applied. This is the expected state: both rules are parked as
-candidates with their blockers recorded in their own provenance blocks, and
-`docs/derived-rules/README.md` describes what promoting one requires.
+No active rules, so nothing was applied. This is the expected state: both seed rules were retired on
+2026-08-31 when the code shapes they guarded were removed from the repository, and
+`docs/derived-rules/README.md` records why and what promoting a future rule requires.
 ```
 
-Add a Questions line only if a candidate genuinely would have matched, for example:
-
-```markdown
-**Question (about the rule, not the change):** the new activation at
-`src/Scribe.App/TextActions/TextActionController.cs:342` would have matched
-`2026-08-23-wait-for-activation-before-input.md` had it been active. Worth noting toward its
-graduation; `agents/win32-interop.md` already covers this hunk, so nothing is missing from this
-review.
-```
+A retired rule is never applied and never raised, not even as a Question. Its file stays on disk for
+provenance only.
 
 **When a rule is active and matches,** the finding shape. The example below is an **illustrative
-shape** built on a rule that is currently a candidate, and `SelectionWriteBack.cs` is an invented path
-used only to show the format. Never cite either as a live rule or an existing exemplar.
+shape** only. There is no active rule today, and every path in it is invented to show the format.
+Never cite any of it as a live rule or an existing exemplar.
 
 ```markdown
 ## Learned patterns
 
-**Rule inventory:** read `docs/derived-rules/`, 2 rule files, 1 active.
-Matched: `2026-08-23-wait-for-activation-before-input.md` on
-`src/Scribe.Core/TextInjection/SelectionWriteBack.cs`.
+**Rule inventory:** read `docs/derived-rules/`, 3 rule files, 1 active.
+Matched: `2026-11-04-example-rule.md` on `src/Scribe.Core/Example/ExampleWriter.cs`.
 
-🟡 **New write-back activates the target and injects without waiting** (`src/Scribe.Core/TextInjection/SelectionWriteBack.cs:71-74`)
+🟡 **New writer takes the shortcut the rule names** (`src/Scribe.Core/Example/ExampleWriter.cs:71-74`)
 
-Rule: `docs/derived-rules/2026-08-23-wait-for-activation-before-input.md` (active, severity
-`important`). Matched glob `src/Scribe.Core/TextInjection/**`.
+Rule: `docs/derived-rules/2026-11-04-example-rule.md` (active, severity `important`). Matched glob
+`src/Scribe.Core/Example/**`.
 
-The added lines are:
+Quote the two or three added lines here, then state in one sentence what the user sees when the shape
+fails, drawn from the rule's `## Why` section rather than from your own reasoning.
 
-    _ = SetForegroundWindow(target);
-    _injector.Inject(formatted, method, target, shiftEnter);
+Checked against the rule's exceptions: name the exception you considered and why this hunk is not it.
+That sentence is what separates a learned finding from a pattern match.
 
-`SetForegroundWindow` posts a request; the activation lands when the target thread processes it, and
-input delivered before it does is silently dropped with no error and no log line. The rule's evidence
-is two occurrences of exactly this: the first character of every rewrite went missing on the write
-side, and a Ctrl+C into the same gap copied nothing on the read side.
-
-Checked against the rule's exceptions: this is a foreign window, not one of Scribe's own WPF windows,
-and the code does activate, so the `TextInjector.Inject` exception (which does not activate at all)
-does not apply.
-
-Fix, mirroring `TextActionController.RestoreForeground`
-(`src/Scribe.App/TextActions/TextActionController.cs:337-348`): keep the unconditional
-`SetForegroundWindow`, then gate the injection on
-`ForegroundReadiness.WaitForInputReady(target)` and take the fallback when it returns false, rather
-than injecting regardless.
+Fix: name the safe shape from the rule's `## Safe shapes` section and the file that already uses it.
 
 ### Notes
 
-The new poll loop at `:88` bounds itself on an elapsed deadline rather than an iteration count, which
-is the shape `SelectionReader.WaitForClipboardText` settled on after a fixed-count loop could run past
-three seconds under clipboard contention.
+One line, only when the diff does something the rule's provenance would want recorded.
 ```
 
 **If clean** (rules were active, matched on paths, and nothing fired):
@@ -303,9 +282,8 @@ Do not raise any of the following.
 - **A rule that matched on paths but not on its detection signal.** Path overlap is a gate, never a
   finding.
 - **Code the rule's `## Safe shapes` section names as correct.** The negative direction of a shared
-  counter in `TextInjector.PasteViaClipboard`, the unconditional restore in
-  `SelectionReader.RestoreClipboard`, and Scribe activating its own WPF windows for a human to type
-  into are all live examples of shapes that resemble a violation and are not one.
+  counter in `TextInjector.PasteViaClipboard` and Scribe activating its own WPF windows for a human to
+  type into are both live examples of shapes that resemble a violation and are not one.
 - **A concern a hand curated lens owns.** See §5. One line of hand-off, no finding slot.
 - **The rule files themselves, and this directory.** If a diff edits
   `.claude/skills/scribe-code-review/**`, that is a change to the review tooling, not to Scribe. Say

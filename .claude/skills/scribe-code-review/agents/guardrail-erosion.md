@@ -225,7 +225,7 @@ the guardrail, not just the class:
   answer against the raw transcript, so mutating first could flip a borderline detection. Moving the
   call earlier is erosion even though the class is untouched.
 - **It runs only on model output.** `TrySanitize` (line 2906), `SanitizeAuxiliaryCompletion`
-  (line 2827, the `CompleteAsync` path), and `TextActionSanitizer` (line 173). Never on dictionary
+  (line 2827, the `CompleteAsync` path). Never on dictionary
   entries, snippet templates, or raw ASR text: those are user-authored and a dash in them is the user's.
   Widening it to a shared post-processing step that also touches user text is erosion in the other
   direction.
