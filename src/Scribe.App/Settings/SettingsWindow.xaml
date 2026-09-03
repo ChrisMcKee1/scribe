@@ -1018,11 +1018,11 @@
                                                           IsEditable="True" HorizontalAlignment="Stretch"
                                                           VerticalContentAlignment="Center"/>
                                                 <ui:Button x:Name="CopilotLoadModelsButton" Grid.Column="1"
-                                                           Content="List models" Margin="8,0,0,0" MinWidth="130"
+                                                           Content="Refresh models" Margin="8,0,0,0" MinWidth="140"
                                                            Click="CopilotLoadModelsButton_Click"/>
                                             </Grid>
                                             <TextBlock x:Name="CopilotModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Leave blank to use whichever model your Copilot account defaults to. Press List models to read the ones your licence allows, with their reasoning levels."/>
+                                                       Text="Leave blank to use whichever model your Copilot account defaults to. The list is read from your Copilot licence when you select this provider; Refresh models re-reads it after an install or a sign-in."/>
                                         </StackPanel>
                                     </StackPanel>
                                 </ui:Card>

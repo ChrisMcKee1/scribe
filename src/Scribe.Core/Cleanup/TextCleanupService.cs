@@ -340,7 +340,21 @@ internal sealed class TextCleanupService : ITextCleanupService
                 DropAgents();
                 notActionable = true;
             }
-            else if (!(sameConfig && _status == CleanupStatus.Ready))
+            /*
+             * An identical save while initialization is already running is left alone.
+             *
+             * This tested only for Ready, so a second Save of the SAME settings restarted the work.
+             * Harmless when a provider comes up in a second; expensive for GitHub Copilot, whose CLI
+             * handshake takes about twenty seconds. Pressing Save and then Save and close, two
+             * seconds apart, threw away the first attempt and started the clock again, and every
+             * dictation in that window was skipped with "enabled but still starting".
+             *
+             * Only the in-flight states are covered. A configuration that ended at Unavailable still
+             * re-initializes on an identical save, because there the repeat IS the retry, and a stuck
+             * init reaches Unavailable on its own probe timeout rather than blocking retries forever.
+             */
+            else if (!(sameConfig && _status is CleanupStatus.Ready
+                or CleanupStatus.Initializing or CleanupStatus.Downloading))
             {
                 _configureCts?.Cancel();
                 _configureCts = new CancellationTokenSource();
@@ -2578,7 +2592,16 @@ internal sealed class TextCleanupService : ITextCleanupService
             GitHubCopilotCli.ModelVariable,
             string.IsNullOrWhiteSpace(options.CopilotModel) ? null : options.CopilotModel!.Trim());
 
-        SetStatus(CleanupStatus.Downloading, "Starting the GitHub Copilot session…");
+        /*
+         * Initializing, not Downloading. Nothing is being downloaded: the CLI is already installed
+         * and this is the handshake with it.
+         *
+         * The status text is not internal. It is interpolated into the line a skipped dictation shows
+         * the user, so this read as "AI cleanup is enabled but Downloading (Starting the GitHub
+         * Copilot session…)" on any dictation taken during startup, which is both wrong and alarming.
+         * The startup is around 20 seconds, so the window this is visible in is not small.
+         */
+        SetStatus(CleanupStatus.Initializing, "Connecting to the GitHub Copilot CLI…");
 
         /*
          * Point the SDK at the CLI we found, rather than the one it expects to have bundled.

@@ -21,6 +21,16 @@ public partial class SettingsWindow
     private GitHubCopilotCliStatus _copilotCli = GitHubCopilotCliStatus.Missing;
 
     /// <summary>
+    /// Whether the model list has already been fetched for this window.
+    /// </summary>
+    /// <remarks>
+    /// Listing spawns the Copilot CLI and waits on it, so it is not free. Selecting the provider
+    /// fetches once; flipping to another provider and back reuses what was already read. The refresh
+    /// button ignores this, because the reason to press it is that the answer has changed.
+    /// </remarks>
+    private bool _copilotModelsLoaded;
+
+    /// <summary>
     /// Re-detects the CLI and rewrites the banner.
     /// </summary>
     /// <remarks>
@@ -81,6 +91,26 @@ public partial class SettingsWindow
                     // The model list and the sign-in prompt both need the CLI, so they follow it.
                     CopilotLoadModelsButton.IsEnabled = status.Found;
                     CopilotSignInButton.IsEnabled = status.Found;
+
+                    /*
+                     * Populate the models straight away rather than waiting to be asked.
+                     *
+                     * The list is the whole point of choosing this provider, and everything needed to
+                     * fetch it is known the moment detection succeeds. Making the reader press a
+                     * button first is asking them to do the work the panel already knows how to do,
+                     * and an empty dropdown reads as "no models available" rather than "not fetched
+                     * yet". The button stays for the case the button is actually for: re-reading
+                     * after an install or a sign-in changed the answer.
+                     */
+                    if (status.Found && !_copilotModelsLoaded)
+                    {
+                        LoadCopilotModels();
+                    }
+                    else if (!status.Found)
+                    {
+                        // A CLI that went away invalidates whatever was listed from the old one.
+                        _copilotModelsLoaded = false;
+                    }
                 });
             },
             TaskScheduler.Default);
@@ -137,7 +167,7 @@ public partial class SettingsWindow
         {
             CopilotCliBar.Severity = InfoBarSeverity.Informational;
             CopilotCliBar.Title = "Copilot CLI opened";
-            CopilotCliBar.Message = "Sign in there if prompted, then close it and choose List models.";
+            CopilotCliBar.Message = "Sign in there if prompted, then close it and choose Refresh models.";
         }
     }
 
@@ -153,13 +183,28 @@ public partial class SettingsWindow
     /// </remarks>
     private void CopilotLoadModelsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_copilotCli.Found || _copilotCli.Path is null)
+        // An explicit press always re-reads: the reason to use it is that installing or signing in
+        // has changed what the account can see since the automatic fetch ran.
+        _copilotModelsLoaded = false;
+        LoadCopilotModels();
+    }
+
+    /// <summary>
+    /// Fetches the model list and binds it to the combo box. Safe to call when the CLI is missing;
+    /// it does nothing.
+    /// </summary>
+    private void LoadCopilotModels()
+    {
+        if (!_copilotCli.Found || _copilotCli.Path is null || _copilotModelsLoaded)
         {
             return;
         }
 
+        // Set before the work starts, not after it succeeds: this is a re-entry guard, and detection
+        // can fire again while a fetch is still in flight.
+        _copilotModelsLoaded = true;
         CopilotLoadModelsButton.IsEnabled = false;
-        CopilotModelHint.Text = "Asking the Copilot CLI which models your licence allows…";
+        CopilotModelHint.Text = "Reading the models your Copilot licence allows…";
 
         var cliPath = _copilotCli.Path;
         _ = Task.Run(async () => await GitHubCopilotModels.ListAsync(cliPath, CancellationToken.None)
@@ -182,6 +227,9 @@ public partial class SettingsWindow
 
                         if (models.Count == 0)
                         {
+                            // Released so the next selection tries again rather than inheriting a
+                            // failure the user may have already fixed by signing in.
+                            _copilotModelsLoaded = false;
                             CopilotModelHint.Text =
                                 "Could not read the model list. Leave the box blank to use your account's " +
                                 "default, or type a model id such as gpt-5 or claude-sonnet-4.";
