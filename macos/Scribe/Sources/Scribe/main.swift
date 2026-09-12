@@ -841,6 +841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             if isAiCleanupEnabled {
                 let cleanupStart = DispatchTime.now()
                 do {
+                    let preCleanupText = processedText
                     let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
                     let writingStyle = matchedProfile?.writingStylePrompt ?? CleanupPrompt.defaultWritingStyle
                     let systemPrompt = CleanupPrompt.systemPrompt(
@@ -850,11 +851,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                             transcript: CleanupPrompt.wrapTranscript(processedText),
                             writingStylePrompt: systemPrompt))
                     cleanupMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - cleanupStart.uptimeNanoseconds) / 1_000_000.0
-                    if response.cleanedText != processedText {
-                        Self.writeLogLine("AI cleanup refined the transcription.")
+                    switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: preCleanupText) {
+                    case .accepted(let sanitizedText):
+                        if sanitizedText != preCleanupText {
+                            Self.writeLogLine("AI cleanup refined the transcription.")
+                        }
+
+                        processedText = sanitizedText
+                        cleanupApplied = true
+                    case .rejected(let reason):
+                        Self.writeLogLine(reason.logMessage)
                     }
-                    processedText = response.cleanedText
-                    cleanupApplied = true
                 } catch {
                     cleanupMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - cleanupStart.uptimeNanoseconds) / 1_000_000.0
                     Self.writeLogLine("AI cleanup failed (\(error.localizedDescription)); using post-processed transcription.")
@@ -1012,7 +1019,16 @@ private enum CommandLineTranscriptionTool {
                     CleanupRequest(
                         transcript: CleanupPrompt.wrapTranscript(rawTranscript),
                         writingStylePrompt: systemPrompt))
-                fputs("\(response.cleanedText)\n", stdout)
+                let outputText: String
+                switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: rawTranscript) {
+                case .accepted(let sanitizedText):
+                    outputText = sanitizedText
+                case .rejected(let reason):
+                    outputText = rawTranscript
+                    fputs("\(reason.logMessage)\n", stderr)
+                }
+
+                fputs("\(outputText)\n", stdout)
                 fputs(
                     "(\(response.providerID)/\(response.modelID), \(String(format: "%.2f", response.latency))s)\n",
                     stderr)
