@@ -46,6 +46,28 @@ The `VeteranApps` segment is an opaque part of the existing product's technical 
 not control the customer-facing publisher name. The Store listing displays **McKee AI Solutions**.
 Do not delete and recreate the product merely to change this internal identifier.
 
+## Start with Windows
+
+The MSIX manifest declares `windows.startupTask`, with task ID `ScribeStartup` and executable
+`Scribe.exe`. It defaults to disabled so fresh installs remain opt-in. Packaged builds use
+`Windows.ApplicationModel.StartupTask`, not `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`:
+registry writes from a packaged app can be virtualized and are not a startup registration.
+The direct-download build retains the per-user Run entry.
+
+On the first launch after upgrading, an existing enabled Scribe preference enables the newly
+declared task. The General settings toggle then reads Windows' actual state. A task disabled in
+Windows Settings or Task Manager can only be re-enabled there; organization policy overrides are
+also respected. The in-app button opens **Windows Settings > Apps > Startup**.
+
+Before submitting, confirm the task is present in both architecture manifests. On a packaged
+install, enable startup, save, and sign out and back in. Also test disabling it from Windows
+Settings, reopening Scribe, and saving an unrelated setting: startup must stay disabled.
+Building the code alone does not update the manifest of an already installed Store package;
+the fix needs a new Store package.
+
+References: [StartupTask API](https://learn.microsoft.com/uwp/api/windows.applicationmodel.startuptask)
+and [packaged desktop startup extensions](https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions#start-an-executable-file-when-users-log-into-windows).
+
 ## Pricing and availability
 
 Recommended initial settings:

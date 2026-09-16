@@ -58,7 +58,7 @@ public partial class App : Application
     private ILogger? _appLog;
     private int _learningFromHistory;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
@@ -101,6 +101,7 @@ public partial class App : Application
         builder.Services.AddScribeCore();
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton<AzureCliInstaller>();
+        builder.Services.AddSingleton<StartupRegistration>();
         builder.Services.AddSingleton<SessionDiagnostics>();
 
         builder.Services.AddScribeTelemetry();
@@ -346,13 +347,6 @@ public partial class App : Application
             });
         }
 
-        // Reconcile the "launch at logon" registry entry with the saved preference so it self-heals
-        // if the app was moved, and clears if the user disabled it elsewhere.
-        if (!settingsRepository.LastLoadFailed)
-        {
-            StartupRegistration.Sync(_controller.CurrentSettings.LaunchOnLogin);
-        }
-
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
         // The accelerator inventory itself is on the session banner above ("compute: ..."); only
@@ -419,8 +413,20 @@ public partial class App : Application
         _updates.UpdateReady += message => _tray?.ShowInfo(message);
         _updates.ProbePendingLocal();
 
+        // Finish synchronous initialization before yielding to WinRT. Store installs need a
+        // manifest startup task, not a virtualized Run key; existing opt-ins migrate here.
+        if (!settingsRepository.LastLoadFailed)
+        {
+            var startup = await services.GetRequiredService<StartupRegistration>()
+                .SyncAsync(_controller.CurrentSettings.LaunchOnLogin);
+            if (!startup.IsKnown)
+            {
+                log.LogWarning("Startup registration could not be reconciled. {Reason}", startup.Message);
+            }
+        }
+
         // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
-        if (HasSettingsSwitch(e.Args))
+        if (!Dispatcher.HasShutdownStarted && HasSettingsSwitch(e.Args))
         {
             OpenSettings();
         }
@@ -681,6 +687,7 @@ public partial class App : Application
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<ITranscriptionModelInstaller>(),
             services.GetRequiredService<AppPaths>(),
+            services.GetRequiredService<StartupRegistration>(),
             position => _overlay?.Preview(position),
             settings =>
             {

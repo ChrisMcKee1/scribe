@@ -332,10 +332,15 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Start with Windows" Style="{StaticResource SettingTitle}"/>
-                                            <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="Launch Scribe automatically when you sign in."/>
+                                            <TextBlock x:Name="LaunchStatusText" Style="{StaticResource SettingHint}"
+                                                       Text="Checking the Windows startup setting..."/>
+                                            <ui:Button Content="Open Windows startup settings"
+                                                       HorizontalAlignment="Left" Margin="0,8,0,0"
+                                                       Click="StartupSettings_Click"/>
                                         </StackPanel>
-                                        <ui:ToggleSwitch x:Name="LaunchCheck" Grid.Column="1" VerticalAlignment="Center"/>
+                                        <ui:ToggleSwitch x:Name="LaunchCheck" Grid.Column="1" VerticalAlignment="Center"
+                                                         IsEnabled="False" AutomationProperties.Name="Start with Windows"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=LaunchStatusText}"/>
                                     </Grid>
                                 </ui:Card>
 

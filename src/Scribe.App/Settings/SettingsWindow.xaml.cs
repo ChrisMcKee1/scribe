@@ -57,6 +57,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ICleanupFailureLog _failureLog;
     private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
     private readonly AppPaths _paths;
+    private readonly StartupRegistration _startup;
+    private StartupRegistrationStatus? _startupStatus;
+    private bool _refreshingStartup;
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
@@ -124,6 +127,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ICleanupFailureLog failureLog,
         ITranscriptionModelInstaller transcriptionModelInstaller,
         AppPaths paths,
+        StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action<bool>? setHotkeyCaptureMode = null,
@@ -142,6 +146,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _failureLog = failureLog;
         _transcriptionModelInstaller = transcriptionModelInstaller;
         _paths = paths;
+        _startup = startup;
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
@@ -181,6 +186,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Reflect live cleanup-engine state (download progress, ready, errors) in the UI.
         _cleanup.StatusChanged += OnCleanupStatusChanged;
         Closed += OnClosed;
+        Loaded += RefreshStartupStatus;
+        Activated += RefreshStartupStatus;
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
@@ -784,7 +791,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             VadCheck.IsChecked = _settings.UseVoiceActivityDetection;
             AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
-            LaunchCheck.IsChecked = _settings.LaunchOnLogin;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
@@ -812,6 +818,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _loadingUi = false;
         }
     }
+
+    private async void RefreshStartupStatus(object? sender, EventArgs e)
+    {
+        if (_saveInProgress || _refreshingStartup ||
+            (_startupStatus is { IsKnown: true } previous && LaunchCheck.IsChecked != previous.IsEnabled))
+        {
+            return;
+        }
+
+        _refreshingStartup = true;
+        LaunchCheck.IsEnabled = false;
+        try
+        {
+            ShowStartupStatus(await _startup.GetStatusAsync());
+        }
+        finally
+        {
+            _refreshingStartup = false;
+        }
+    }
+
+    private void ShowStartupStatus(StartupRegistrationStatus status)
+    {
+        if (_closed)
+        {
+            return;
+        }
+
+        _startupStatus = status;
+        LaunchCheck.IsChecked = status.IsEnabled;
+        LaunchCheck.IsEnabled = status.CanChange;
+        LaunchStatusText.Text = status.Message;
+    }
+
+    private void StartupSettings_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink("ms-settings:startupapps",
+            "Could not open Windows startup settings. Open Windows Settings > Apps > Startup.");
 
     private void LoadAiSettings()
     {
@@ -3780,6 +3823,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _infoDismissTimer?.Stop();
 
         Closed -= OnClosed;
+        Loaded -= RefreshStartupStatus;
+        Activated -= RefreshStartupStatus;
     }
 
     // --- Themed dialogs / inline notifications -------------------------------------------
@@ -3950,8 +3995,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // "Save" persists and keeps the window open so the user can move page by page; "Save and close"
     // does the same and then closes. Both first give the user a chance to drop dictionary entries a
-    // library already covers, which has to happen here rather than inside TrySave: the prompt is
-    // async and TrySave is called on a synchronous path.
+    // library already covers, before validating and saving the resulting rows.
     //
     // _saveInProgress guards the await. These are async void handlers, so without it a second click
     // while the confirm dialog is open would start a parallel save and the two could interleave
@@ -3968,7 +4012,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _saveInProgress = true;
         try
         {
-            if (await ConfirmDictionaryOverlapAsync() && TrySave())
+            if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
                 ShowInfo("Settings saved.");
             }
@@ -3989,7 +4033,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _saveInProgress = true;
         try
         {
-            if (await ConfirmDictionaryOverlapAsync() && TrySave())
+            if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())
             {
                 Close();
             }
@@ -4029,7 +4073,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var entries = BuildDictionaryEntries(out var duplicate);
             if (duplicate is not null)
             {
-                return true; // TrySave reports the duplicate; don't stack two dialogs
+                return true; // TrySaveAsync reports the duplicate; don't stack two dialogs
             }
 
             var libraries = _loadedLibraries
@@ -4103,7 +4147,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Validates, persists and applies the settings. Returns true on success; on a validation problem
     // or a save error it surfaces its own message, leaves the window open, and returns false.
-    private bool TrySave()
+    private async Task<bool> TrySaveAsync()
     {
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
@@ -4220,7 +4264,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.UseVoiceActivityDetection = VadCheck.IsChecked == true;
             _settings.AutoStopOnSilence = AutoStopCheck.IsChecked == true;
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
-            _settings.LaunchOnLogin = LaunchCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
             // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
@@ -4296,22 +4339,69 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : localPrompt;
 
-            var previousLaunchState = StartupRegistration.IsEnabled();
-            if (!StartupRegistration.Set(_settings.LaunchOnLogin))
+            var requestedLaunch = LaunchCheck.IsChecked == true;
+            var startupChanged = _startupStatus is { IsKnown: true } shown &&
+                requestedLaunch != shown.IsEnabled;
+            var previousLaunchState = await _startup.GetStatusAsync();
+            if (_closed)
             {
-                throw new InvalidOperationException("Windows did not accept the Start with Windows change.");
+                return false;
+            }
+
+            var launchState = previousLaunchState;
+            if (startupChanged)
+            {
+                if (!previousLaunchState.IsKnown)
+                {
+                    ShowStartupStatus(previousLaunchState);
+                    throw new InvalidOperationException(previousLaunchState.Message);
+                }
+
+                launchState = await _startup.SetEnabledAsync(requestedLaunch);
+                ShowStartupStatus(launchState);
+                if (!launchState.Matches(requestedLaunch))
+                {
+                    throw new InvalidOperationException(launchState.Message);
+                }
+            }
+
+            // An unchanged toggle must not undo an external Windows change, or block saving
+            // unrelated settings when startup registration is temporarily unavailable.
+            if (launchState.IsKnown)
+            {
+                _settings.LaunchOnLogin = launchState.IsEnabled;
             }
 
             try
             {
+                if (_closed)
+                {
+                    throw new OperationCanceledException("Settings closed before the startup change could be saved.");
+                }
+
                 _settingsRepository.SaveBundle(_settings, entries, snippets);
             }
             catch
             {
-                StartupRegistration.Set(previousLaunchState);
+                if (startupChanged && launchState.IsEnabled != previousLaunchState.IsEnabled)
+                {
+                    var restored = await _startup.SetEnabledAsync(previousLaunchState.IsEnabled);
+                    ShowStartupStatus(restored);
+                    if (!restored.Matches(previousLaunchState.IsEnabled))
+                    {
+                        _log.LogWarning("Could not restore the startup setting after a failed settings save.");
+                    }
+                }
+
+                if (previousLaunchState.IsKnown)
+                {
+                    _settings.LaunchOnLogin = previousLaunchState.IsEnabled;
+                }
+
                 throw;
             }
 
+            ShowStartupStatus(launchState);
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
@@ -4319,6 +4409,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _dictionarySnapshot = DictionarySignature();
             _snippetSnapshot = SnippetSignature();
             return true;
+        }
+        catch (Exception ex) when (_closed)
+        {
+            _log.LogWarning(ex, "Settings save did not complete before the window closed.");
+            return false;
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
