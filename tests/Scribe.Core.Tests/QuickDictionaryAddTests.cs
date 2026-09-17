@@ -337,6 +337,56 @@ public sealed class QuickDictionaryAddTests
         => new(0, pattern, replacement, wholeWord);
 
     [Fact]
+    public void Consecutive_saves_select_from_the_corrected_transcript_and_repair_the_same_retained_copy()
+    {
+        const string original = "Open cloud pilot, then git hub.\r\nAsk cloud pilot again.";
+        var store = new LastTranscriptStore();
+        store.Seed([original, "Another dictation.", original]);
+        using var db = ScribeDatabase.CreateInMemory();
+        var repository = new DictionaryRepository(db);
+
+        var transcript = original;
+        foreach (var (first, last, pattern, replacement, expected) in new[]
+        {
+            (1, 2, "cloud pilot", "Copilot", "Open Copilot, then git hub.\r\nAsk Copilot again."),
+            (3, 4, "git hub", "GitHub", "Open Copilot, then GitHub.\r\nAsk Copilot again."),
+        })
+        {
+            var tokens = QuickDictionaryAdd.Tokenize(transcript);
+            var selected = QuickDictionaryAdd.Select(transcript, tokens, first, last);
+            Assert.Equal(pattern, selected);
+            var plan = QuickDictionaryAdd.Build(selected, replacement, wholeWord: true, repository.GetAll());
+            Assert.True(plan.CanSave);
+            var saved = repository.Add(Assert.IsType<DictionaryEntry>(plan.Entry));
+            var corrected = QuickDictionaryAdd.Apply(transcript, saved);
+
+            Assert.Equal(expected, corrected);
+            Assert.True(store.Update(transcript, corrected));
+            Assert.Equal([corrected, "Another dictation.", corrected], store.GetRecent());
+            transcript = corrected;
+        }
+
+        Assert.Equal(2, repository.GetAll().Count);
+        Assert.False(QuickDictionaryAdd.Build("git hub", "GitHub", wholeWord: true, repository.GetAll()).CanSave);
+    }
+
+    [Theory]
+    [InlineData("cloud pilot next", "cloud pilot", "Copilot", "Copilot next", 1)]
+    [InlineData("team next", "team", "Microsoft Teams", "Microsoft Teams next", 2)]
+    [InlineData("um next", "um", "", " next", 0)]
+    public void Retokenizing_after_a_save_updates_word_indices(
+        string transcript, string pattern, string replacement, string expected, int nextIndex)
+    {
+        var corrected = QuickDictionaryAdd.Apply(transcript, Rule(pattern, replacement));
+        var tokens = QuickDictionaryAdd.Tokenize(corrected);
+
+        Assert.Equal(expected, corrected);
+        Assert.Equal("next", QuickDictionaryAdd.Select(corrected, tokens, nextIndex, nextIndex));
+        Assert.All(tokens, token =>
+            Assert.Equal(token.Text, corrected.Substring(token.Start, token.Length)));
+    }
+
+    [Fact]
     public void Apply_replaces_every_occurrence_not_just_the_first()
     {
         var result = QuickDictionaryAdd.Apply(

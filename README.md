@@ -137,6 +137,10 @@ AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **impor
 shares, grab the self-documenting **template**, or let **Learn from history** spot the acronyms
 and product names you keep saying and add them for you.
 
+For a quick correction, choose **Add to dictionary** from the tray menu and pick words from a recent
+dictation. **Save** adds the rule, refreshes the corrected words, and keeps the window open so you can
+keep working through the text. Choose **Save and close** when you're finished.
+
 ![Scribe dictionary editor: spoken-to-replacement rules](docs/screenshots/dictionary.png)
 
 ### Know exactly how fast it is

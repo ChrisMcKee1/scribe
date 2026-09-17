@@ -109,7 +109,8 @@
                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                     BorderThickness="1">
                 <Grid>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="10,10,10,6">
+                    <ScrollViewer x:Name="TranscriptScroll" VerticalScrollBarVisibility="Auto"
+                                  Padding="10,10,10,6">
                         <ItemsControl x:Name="Chips">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
@@ -181,16 +182,21 @@
                            MinHeight="32"
                            FontSize="12"
                            TextWrapping="Wrap"
+                           AutomationProperties.LiveSetting="Polite"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
             </StackPanel>
         </Grid>
 
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
                     Margin="24,4,24,18">
-            <ui:Button Content="Cancel" MinWidth="100" Margin="0,0,8,0" IsCancel="True"
+            <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary" MinWidth="96"
+                       Margin="0,0,8,0" IsDefault="True" Click="SaveButton_Click"
+                       ToolTip="Save this rule and refresh the dictation to keep correcting it."/>
+            <ui:Button x:Name="SaveCloseButton" Content="Save and close" MinWidth="120"
+                       Margin="0,0,8,0" Click="SaveCloseButton_Click"
+                       ToolTip="Save this rule and close the window."/>
+            <ui:Button Content="Close" MinWidth="96" IsCancel="True"
                        Click="CancelButton_Click"/>
-            <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary" MinWidth="120"
-                       IsDefault="True" Click="SaveButton_Click"/>
         </StackPanel>
     </Grid>
 </ui:FluentWindow>

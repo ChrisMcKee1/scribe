@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -28,6 +29,7 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Func<DictionaryEntry, DictionaryEntry> _persist;
     private readonly ILogger? _logger;
     private readonly ObservableCollection<WordChip> _chips = new();
+    private readonly List<TranscriptSource> _sources;
 
     private IReadOnlyList<DictionaryEntry> _existing;
     private string _transcript = string.Empty;
@@ -114,12 +116,12 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             }
         };
 
-        var sources = recentTranscripts
+        _sources = recentTranscripts
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => new TranscriptSource(t))
             .ToList();
 
-        if (sources.Count == 0)
+        if (_sources.Count == 0)
         {
             SourcePanel.Visibility = Visibility.Collapsed;
             Chips.Visibility = Visibility.Collapsed;
@@ -128,7 +130,7 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
         else
         {
-            RecentPicker.ItemsSource = sources;
+            RecentPicker.ItemsSource = _sources;
             RecentPicker.DisplayMemberPath = nameof(TranscriptSource.Preview);
             RecentPicker.SelectedIndex = 0; // fires SelectionChanged, which loads the chips
         }
@@ -347,7 +349,7 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
     {
         // StatusText is resolved by InitializeComponent, but TextChanged can fire while the XAML
         // tree is still being built, before the later fields exist.
-        if (StatusText is null || SaveButton is null)
+        if (StatusText is null || SaveButton is null || SaveCloseButton is null)
         {
             return;
         }
@@ -371,10 +373,10 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
 
         SaveButton.IsEnabled = plan.CanSave;
         SaveButton.IsDefault = plan.CanSave && !deletes;
+        SaveCloseButton.IsEnabled = plan.CanSave;
 
-        // "this" rather than "it" or "the word": the selection is often a phrase, and an unanchored
-        // pronoun on a button that behaves differently from the primary action reads as a threat.
-        SaveButton.Content = deletes ? "Leave this out of dictations" : "Save to dictionary";
+        SaveButton.Content = deletes ? "Leave out" : "Save";
+        SaveCloseButton.Content = deletes ? "Leave out and close" : "Save and close";
 
         // The hint has to follow the selection. A static line describing a gesture is exactly what
         // hid multi-select before: it was there, and it still read as "one word is all you get".
@@ -398,7 +400,11 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             WholeWordBox?.IsChecked == true,
             existing);
 
-    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    private void SaveButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: false);
+
+    private void SaveCloseButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: true);
+
+    private void Save(bool closeAfterSaving)
     {
         // Re-read rather than trusting the snapshot taken when the window opened: the settings
         // window may have saved a conflicting rule while this popup sat on screen, and creating a
@@ -434,7 +440,33 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
             saved,
             _transcript,
             string.Equals(corrected, _transcript, StringComparison.Ordinal) ? null : corrected));
-        Close();
+
+        if (closeAfterSaving)
+        {
+            Close();
+            return;
+        }
+
+        // The retained store repairs every identical source. Keep the picker's copies in sync too,
+        // so switching away and back cannot resurrect stale text or break the next content-keyed repair.
+        foreach (var source in _sources)
+        {
+            if (string.Equals(source.Text, _transcript, StringComparison.Ordinal))
+            {
+                source.Update(corrected);
+            }
+        }
+
+        _existing = ReadExisting();
+        var scrollOffset = TranscriptScroll.VerticalOffset;
+        LoadTranscript(corrected);
+        ShouldBeBox.Clear();
+        TranscriptScroll.ScrollToVerticalOffset(scrollOffset);
+        HeardBox.Focus();
+        StatusText.Text = _tokens.Count > 0
+            ? "Saved. Pick another word to correct, or type it below."
+            : "Saved. Type the next words to add.";
+        UIElementAutomationPeer.FromElement(StatusText)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) => Close();
@@ -454,11 +486,20 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     /// <summary>One entry in the recent-dictation picker.</summary>
-    private sealed class TranscriptSource(string text)
+    private sealed class TranscriptSource(string text) : INotifyPropertyChanged
     {
-        public string Text { get; } = text;
+        public string Text { get; private set; } = text;
 
-        public string Preview { get; } = LastTranscriptStore.FormatPreview(text, maxLength: 64);
+        public string Preview => LastTranscriptStore.FormatPreview(Text, maxLength: 64);
+
+        public void Update(string text)
+        {
+            Text = text;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Text)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Preview)));
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
 
         // The picker uses an ItemTemplate, so without this a screen reader reads the type name
         // instead of the dictation, leaving the user no way to tell the five entries apart.

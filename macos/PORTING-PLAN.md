@@ -8,6 +8,11 @@
 - Existing macOS code: `macos/Scribe` SwiftPM menu bar app: full dictation pipeline (hotkey, capture, ASR via Foundry Local, text injection), dictionary/snippets/app-profiles, Settings window (Overlay/Dictionary/Snippets/App Profiles/Diagnostics/About/Playground), AI cleanup across Foundry Local, managed Ollama, any OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth, secrets in Keychain)
 - Current gap: every row in the checklist below is Done; remaining follow-ups are called out inline per row (e.g. a trained Silero VAD to replace the energy-threshold detector, a Settings UI to replace the env-var-driven cleanup provider selection). AI cleanup is now wired into the live dictation pipeline (see the "AI cleanup" rows and "Per-app writing style override" below); it was previously only reachable via `--cleanup-text`.
 
+Windows quick-add follow-up: the "Tray quick add to dictionary" row below covers the original flow.
+Windows now offers **Save** to refresh the corrected dictation and keep editing, plus **Save and
+close**. macOS `QuickAddView.swift` has not yet adopted those separate actions or the refreshed
+word-chip and recent-picker state between saves.
+
 ## Feature parity checklist
 
 | Feature | Status | Owner | macOS implementation approach |
