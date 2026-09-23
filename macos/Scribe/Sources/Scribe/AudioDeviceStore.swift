@@ -36,8 +36,8 @@ struct AudioDeviceStore {
     /// still name a saved microphone that is unplugged ("Unavailable: My Headset"), the same fallback Windows
     /// shows for a saved but missing device.
     var selectedDeviceUID: String? {
-        get { defaults.string(forKey: Self.uidKey) }
-        nonmutating set { defaults.set(newValue, forKey: Self.uidKey) }
+        get { UserDefaults.standard.string(forKey: Self.uidKey) } // MUTATION M9: ignores the injected suite
+        nonmutating set { UserDefaults.standard.set(newValue, forKey: Self.uidKey) }
     }
 
     var selectedDeviceName: String? {

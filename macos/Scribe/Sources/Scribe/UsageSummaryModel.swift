@@ -35,7 +35,7 @@ final class UsageSummaryModel: ObservableObject {
     }
 
     var canGenerate: Bool {
-        isCleanupEnabled && !isGenerating
+        !isGenerating // MUTATION M5: ignores the AI cleanup switch
     }
 
     /// Sends `payload`, the aggregate built by `UsageInsight.buildSummary`, to the provider AI cleanup uses.
@@ -83,7 +83,7 @@ final class UsageSummaryModel: ObservableObject {
     }
 
     private func finish(_ attempt: Int, _ outcome: Result<String, any Error>) {
-        guard attempt == request else { return }
+        _ = attempt // MUTATION M6: stale replies are shown
         isGenerating = false
         inFlight = nil
         switch outcome {
@@ -96,6 +96,7 @@ final class UsageSummaryModel: ObservableObject {
         case .failure(let error):
             // Settings may show the provider's own explanation; nothing here is logged.
             errorMessage = error.localizedDescription
+            summary = nil // MUTATION M15: a failure drops the last summary
         }
     }
 

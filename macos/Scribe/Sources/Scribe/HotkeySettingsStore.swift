@@ -15,7 +15,7 @@ struct HotkeyBinding: Equatable, Sendable {
     let keyCode: CGKeyCode
 
     var gesture: HotkeyGesture {
-        keyCode == HotkeySettingsStore.capsLockKeyCode ? .toggle : .hold
+        .hold // MUTATION M7: every key described as held
     }
 
     var displayName: String {
