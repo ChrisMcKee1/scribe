@@ -683,11 +683,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             showFailedThenHideOverlay()
             presentErrorAlert(title: "No Focused Text Field", message: message)
             postInjectionFailureNotification()
-        case .targetChanged, .targetUnresponsive, .typedPartially, .failed:
+        case .targetChanged, .targetUnknown, .targetUnresponsive, .failed:
             // No modal alert: it would activate Scribe over whatever the user switched to. The transcript
             // is already in the recovery store, and the notification points to it.
             showFailedThenHideOverlay()
             postInjectionFailureNotification()
+        case .typedPartially:
+            showFailedThenHideOverlay()
+            postInjectionFailureNotification(
+                title: "Dictation was only partly inserted",
+                body: "Scribe stopped part way through typing it. Use \u{201C}Copy Transcript\u{201D} below "
+                    + "or the Recent Dictations menu to recover the full text.")
+        case .accessibilityUnconfirmed:
+            // The app may still apply the text when it recovers, so the notice must not claim it failed.
+            showFailedThenHideOverlay()
+            postInjectionFailureNotification(
+                title: "Dictation may not have been inserted",
+                body: "The app stopped responding while Scribe was inserting it, so the text may still appear. "
+                    + "If it does not, use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu.")
+        case .cancelled:
+            overlayPanelController.hide()
         }
     }
 
@@ -728,10 +743,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// closes the loop by telling the user it can still be recovered, with a one-tap "Copy
     /// Transcript" action wired to the same store. Best-effort: any failure here must never
     /// propagate back into the dictation pipeline.
-    private func postInjectionFailureNotification() {
+    private func postInjectionFailureNotification(
+        title: String = "Dictation could not be inserted",
+        body: String = "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it."
+    ) {
         let content = UNMutableNotificationContent()
-        content.title = "Dictation could not be inserted"
-        content.body = "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it."
+        content.title = title
+        content.body = body
         content.categoryIdentifier = Self.injectionFailureCategoryIdentifier
         content.sound = .default
 

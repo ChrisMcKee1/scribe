@@ -10,24 +10,44 @@ enum ClipboardRestoreOutcome: String, Equatable, Sendable {
     case restored
     /// Another application wrote to the pasteboard after Scribe did, so its newer content was left alone.
     case superseded
-    /// Putting the previous text back failed.
+    /// Putting the previous text back failed, so the user's previous content is gone. After a refused
+    /// write (`PasteboardBorrowRefusal.writeFailed`) this is the rollback that failed.
     case failed
 }
 
-/// Why `PasteboardBorrower` declined to lend the pasteboard. Every refusal leaves the pasteboard as the
-/// user had it, or as another application has since made it, and the caller types the text instead.
+/// Why `PasteboardBorrower` declined to lend the pasteboard; the caller types the text instead. Every
+/// refusal but `writeFailed` leaves the pasteboard untouched. `writeFailed` happens after Scribe's clear,
+/// and the rollback outcome that comes with it says whether the user's content went back.
 enum PasteboardBorrowRefusal: String, Equatable, Sendable {
     /// The pasteboard held something a plain-text restore cannot reproduce: rich text, an image, files,
     /// several items, a Handoff item, or another application's transient or concealed marker.
     case nonTextContent
-    /// The pasteboard held plain text that could not be read, or not without macOS asking the user.
+    /// The pasteboard could not report its items, or held plain text that could not be read, or not
+    /// without macOS asking the user.
     case unreadable
     /// Another application wrote to the pasteboard while Scribe was reading it, so nothing was replaced.
     case contended
-    /// Scribe could not write its text. The user's content was put back where possible.
+    /// Scribe could not write its text after clearing the pasteboard. The rollback outcome reports
+    /// whether the user's content was put back (`restored`) or lost (`failed`).
     case writeFailed
     /// Another application took the pasteboard between Scribe's clear and its write.
     case superseded
+}
+
+/// The two pasteboard calls whose failure changes what a borrow may do. Injectable so tests can make them
+/// fail on a real, private pasteboard.
+struct PasteboardOperations {
+    /// The types of every item, or nil when the pasteboard could not report its items. Apple documents a
+    /// nil `pasteboardItems` as an error retrieving them, not as an empty pasteboard.
+    var itemTypes: @MainActor (NSPasteboard) -> [[NSPasteboard.PasteboardType]]?
+    /// Writes items after a clear, reporting whether the pasteboard accepted them.
+    var write: @MainActor (NSPasteboard, [NSPasteboardItem]) -> Bool
+
+    static var live: PasteboardOperations {
+        PasteboardOperations(
+            itemTypes: { pasteboard in pasteboard.pasteboardItems.map { items in items.map(\.types) } },
+            write: { pasteboard, items in pasteboard.writeObjects(items) })
+    }
 }
 
 /// Whether a pasteboard can be borrowed, judged from its item types alone.
@@ -109,14 +129,16 @@ final class PasteboardBorrower {
     private static let ownMarkerTypes: Set<NSPasteboard.PasteboardType> = [transientType, concealedType]
 
     let pasteboard: NSPasteboard
+    private let operations: PasteboardOperations
 
     /// The change count right after Scribe's last restore. While the pasteboard still reports it, the
     /// markers on the pasteboard are Scribe's own and the user's text under them can be borrowed again;
     /// any other value means the markers belong to whoever wrote last.
     private var ownRestoreChangeCount: Int?
 
-    init(pasteboard: NSPasteboard) {
+    init(pasteboard: NSPasteboard, operations: PasteboardOperations = .live) {
         self.pasteboard = pasteboard
+        self.operations = operations
     }
 
     /// Snapshots the pasteboard and replaces it with `text`, reading it only when macOS lets Scribe do so
@@ -138,7 +160,13 @@ final class PasteboardBorrower {
     /// `replace` can tell whether anything was written after the snapshot began.
     func snapshot(contentReadable: Bool) -> PasteboardSnapshotResult {
         let changeCount = pasteboard.changeCount
-        let itemTypes = (pasteboard.pasteboardItems ?? []).map(\.types)
+        // Only an item list that was actually retrieved may say the pasteboard is empty. Taking a failed
+        // read for an empty one would let the borrow clear content it never looked at, then "restore" it
+        // to nothing.
+        guard let itemTypes = operations.itemTypes(pasteboard) else {
+            return .refused(.unreadable)
+        }
+
         let kind = Self.classify(itemTypes, discountingOwnMarkers: changeCount == ownRestoreChangeCount)
         switch kind {
         case .other:
@@ -162,7 +190,7 @@ final class PasteboardBorrower {
             return .refused(.contended, rollback: .notApplicable)
         }
 
-        let write = Self.writePrivately(text, to: pasteboard)
+        let write = writePrivately(text)
         let observed = pasteboard.changeCount
         guard observed == write.changeCount else {
             // Another application took the pasteboard after Scribe's clear. What is there now is not
@@ -173,7 +201,8 @@ final class PasteboardBorrower {
         let lease = PasteboardLease(previous: snapshot.contents, ownedChangeCount: observed)
         guard write.succeeded else {
             // Scribe's clear has already removed the user's content and nothing has written since, so it
-            // goes straight back.
+            // goes straight back. That write can fail too, and the rollback outcome then says so: the
+            // user's previous content is gone.
             return .refused(.writeFailed, rollback: restore(lease))
         }
 
@@ -204,7 +233,7 @@ final class PasteboardBorrower {
                 previousText = text
             }
 
-            let write = Self.writePrivately(previousText, to: pasteboard)
+            let write = writePrivately(previousText)
             if write.succeeded {
                 outcome = .restored
                 if pasteboard.changeCount == write.changeCount {
@@ -275,10 +304,7 @@ final class PasteboardBorrower {
     /// item marked with the nspasteboard.org transient and concealed types. Clipboard history tools read
     /// those as "do not record" and "do not display". Only Scribe's own writes can carry them; whatever
     /// another application copies is outside Scribe's control.
-    private static func writePrivately(
-        _ text: String?,
-        to pasteboard: NSPasteboard
-    ) -> (changeCount: Int, succeeded: Bool) {
+    private func writePrivately(_ text: String?) -> (changeCount: Int, succeeded: Bool) {
         let changeCount = pasteboard.prepareForNewContents(with: .currentHostOnly)
         guard let text else {
             return (changeCount, true)
@@ -290,8 +316,8 @@ final class PasteboardBorrower {
         }
 
         // Best effort: a marker that cannot be attached must never fail the paste the user is waiting for.
-        item.setData(Data(), forType: transientType)
-        item.setData(Data(), forType: concealedType)
-        return (changeCount, pasteboard.writeObjects([item]))
+        item.setData(Data(), forType: Self.transientType)
+        item.setData(Data(), forType: Self.concealedType)
+        return (changeCount, operations.write(pasteboard, [item]))
     }
 }

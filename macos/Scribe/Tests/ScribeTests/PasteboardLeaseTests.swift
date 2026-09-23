@@ -199,6 +199,56 @@ final class PasteboardLeaseTests: XCTestCase {
     }
 
     @MainActor
+    func testAFailedItemReadIsRefusedWithoutWritingAnything() {
+        let pasteboard = makePrivatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        writeItem(to: pasteboard) { item in
+            item.setString("Bold words", forType: .string)
+            item.setData(Data("<b>Bold words</b>".utf8), forType: .html)
+        }
+        let changeCount = pasteboard.changeCount
+        var operations = PasteboardOperations.live
+        operations.itemTypes = { _ in nil }
+        let borrower = PasteboardBorrower(pasteboard: pasteboard, operations: operations)
+
+        let result = borrower.borrow(for: dictation, contentReadable: true)
+
+        XCTAssertEqual(refusal(result), .unreadable)
+        XCTAssertEqual(pasteboard.changeCount, changeCount)
+        XCTAssertNotNil(pasteboard.data(forType: .html))
+    }
+
+    @MainActor
+    func testAFailedWriteIsRolledBackAndSaysSo() {
+        let pasteboard = makePrivatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        copyAsAnotherApplication(usersText, to: pasteboard)
+        let failures = InjectionWriteFailures(1)
+        let borrower = PasteboardBorrower(pasteboard: pasteboard, operations: failures.operations())
+
+        let result = borrower.borrow(for: dictation, contentReadable: true)
+
+        XCTAssertEqual(refusal(result), .writeFailed)
+        XCTAssertEqual(rollback(result), .restored)
+        XCTAssertEqual(pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testAFailedRollbackIsReportedAsFailedNotAsUntouched() {
+        let pasteboard = makePrivatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        copyAsAnotherApplication(usersText, to: pasteboard)
+        let failures = InjectionWriteFailures(2)
+        let borrower = PasteboardBorrower(pasteboard: pasteboard, operations: failures.operations())
+
+        let result = borrower.borrow(for: dictation, contentReadable: true)
+
+        XCTAssertEqual(refusal(result), .writeFailed)
+        XCTAssertEqual(rollback(result), .failed)
+        XCTAssertTrue((pasteboard.pasteboardItems ?? []).isEmpty, "The clear before the failed write took it.")
+    }
+
+    @MainActor
     func testACopyBetweenTheSnapshotAndTheWriteIsNotOverwritten() {
         let pasteboard = makePrivatePasteboard()
         defer { pasteboard.releaseGlobally() }
@@ -303,5 +353,12 @@ final class PasteboardLeaseTests: XCTestCase {
             return nil
         }
         return refusal
+    }
+
+    private func rollback(_ result: PasteboardBorrowResult) -> ClipboardRestoreOutcome? {
+        guard case .refused(_, let rollback) = result else {
+            return nil
+        }
+        return rollback
     }
 }
