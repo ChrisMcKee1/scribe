@@ -1,6 +1,7 @@
 using System.Globalization;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -81,7 +82,9 @@ public static class SessionBanner
     /// <summary>
     /// Builds the banner. Every argument is optional so a caller can log what it has: a probe that
     /// failed (no audio devices, no model) must still leave a banner behind, because "the thing we
-    /// could not detect" is usually the answer.
+    /// could not detect" is usually the answer. <paramref name="communicationsAudioDevice"/> is the
+    /// communications default, given only when it is a different device from the default, and
+    /// <paramref name="selectedAudioDeviceAvailable"/> says whether a chosen microphone is available.
     /// </summary>
     public static IReadOnlyList<string> Compose(
         SessionIdentity session,
@@ -93,7 +96,9 @@ public static class SessionBanner
         string? modelDescription = null,
         string? defaultAudioDevice = null,
         int? audioDeviceCount = null,
-        string? computeCapability = null)
+        string? computeCapability = null,
+        string? communicationsAudioDevice = null,
+        bool? selectedAudioDeviceAvailable = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(paths);
@@ -126,7 +131,8 @@ public static class SessionBanner
             lines.Add($"paths: an older packaged build stored data at {virtualized}");
         }
 
-        lines.Add("audio: " + DescribeAudio(settings, defaultAudioDevice, audioDeviceCount));
+        lines.Add("audio: " + DescribeAudio(
+            settings, defaultAudioDevice, audioDeviceCount, communicationsAudioDevice, selectedAudioDeviceAvailable));
         lines.Add("model: " + (modelDescription ?? settings?.TranscriptionModelId ?? "unknown"));
 
         if (settings is not null)
@@ -198,12 +204,38 @@ public static class SessionBanner
         }
     }
 
-    private static string DescribeAudio(AppSettings? settings, string? defaultDevice, int? deviceCount)
+    private static string DescribeAudio(
+        AppSettings? settings,
+        string? defaultDevice,
+        int? deviceCount,
+        string? communicationsDevice,
+        bool? selectedAvailable)
     {
-        var selected = settings?.InputDeviceId is null
-            ? "system default"
-            : settings.InputDeviceName ?? "a saved device";
-        return $"selected='{selected}' default='{defaultDevice ?? "unknown"}' inputs={deviceCount?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}";
+        var chosen = settings is null ? (MicrophoneSelection?)null : MicrophoneSelection.From(settings);
+        var selected = chosen switch
+        {
+            null => "unknown",
+            { DeviceId: null } => "Windows default",
+            { DeviceName: { } name } => name,
+            _ => "a saved device",
+        };
+
+        var line = $"selected='{selected}'";
+        if (chosen?.DeviceId is not null && selectedAvailable is { } available)
+        {
+            line += $" available={available}";
+        }
+
+        line += $" default='{defaultDevice ?? "unknown"}'";
+
+        // Earlier builds recorded from the communications default while Windows Settings showed another device, so when
+        // the two differ both are named: it answers "why did Scribe use my headset" without a round trip.
+        if (communicationsDevice is not null)
+        {
+            line += $" communicationsDefault='{communicationsDevice}'";
+        }
+
+        return line + $" inputs={deviceCount?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}";
     }
 
     private static string DescribeHotkeys(AppSettings settings)

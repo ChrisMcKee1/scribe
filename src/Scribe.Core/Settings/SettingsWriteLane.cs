@@ -4,8 +4,8 @@ using Scribe.Core.Persistence;
 namespace Scribe.Core.Settings;
 
 /// <summary>
-/// Saves small settings changes, such as the tray's AI cleanup switch, on a worker thread, one at a time and in the
-/// order they were asked for, and hands each stored result back on the owner's thread.
+/// Saves small settings changes, such as the tray's AI cleanup switch and microphone choice, on a worker thread, one at
+/// a time and in the order they were asked for, and hands each stored result back on the owner's thread.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -64,7 +64,7 @@ public sealed class SettingsWriteLane
     public bool Submit(Action<AppSettings> mutate, Action<AppSettings> onSaved, Action<Exception> onFailed)
     {
         ArgumentNullException.ThrowIfNull(onSaved);
-        return Queue(mutate, revision: null, (stored, _) => onSaved(stored), onFailed);
+        return Queue(mutate, setting: null, revision: null, (stored, _) => onSaved(stored), onFailed);
     }
 
     /// <summary>
@@ -76,10 +76,27 @@ public sealed class SettingsWriteLane
     /// </summary>
     public bool Submit(
         Action<AppSettings> mutate, long revision, Action<AppSettings, bool> onStored, Action<Exception> onFailed) =>
-        Queue(mutate, revision, onStored, onFailed);
+        Queue(mutate, setting: null, revision, onStored, onFailed);
+
+    /// <summary>
+    /// <see cref="Submit(Action{AppSettings}, long, Action{AppSettings, bool}, Action{Exception})"/> for any setting the
+    /// tray can change: superseded only by a whole-document save whose intent for that same setting accounts for it
+    /// (<see cref="ISettingsRepository.Update(Action{AppSettings}, ExternalSetting, long, out bool)"/>).
+    /// </summary>
+    public bool Submit(
+        Action<AppSettings> mutate,
+        ExternalSetting setting,
+        long revision,
+        Action<AppSettings, bool> onStored,
+        Action<Exception> onFailed) =>
+        Queue(mutate, setting, revision, onStored, onFailed);
 
     private bool Queue(
-        Action<AppSettings> mutate, long? revision, Action<AppSettings, bool> onStored, Action<Exception> onFailed)
+        Action<AppSettings> mutate,
+        ExternalSetting? setting,
+        long? revision,
+        Action<AppSettings, bool> onStored,
+        Action<Exception> onFailed)
     {
         ArgumentNullException.ThrowIfNull(mutate);
         ArgumentNullException.ThrowIfNull(onStored);
@@ -92,9 +109,11 @@ public sealed class SettingsWriteLane
             var superseded = false;
             try
             {
-                stored = revision is { } asked
-                    ? _repository.Update(mutate, asked, out superseded)
-                    : _repository.Update(mutate);
+                stored = revision is not { } asked
+                    ? _repository.Update(mutate)
+                    : setting is { } which
+                        ? _repository.Update(mutate, which, asked, out superseded)
+                        : _repository.Update(mutate, asked, out superseded);
             }
             catch (Exception ex)
             {
