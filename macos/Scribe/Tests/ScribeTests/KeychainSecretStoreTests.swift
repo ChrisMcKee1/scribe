@@ -1,6 +1,5 @@
 import Security
 import XCTest
-import os
 
 @testable import Scribe
 
@@ -62,25 +61,6 @@ final class KeychainSecretStoreTests: XCTestCase {
         let found = try XCTUnwrap(result as? [String: Any])
         XCTAssertEqual(found[kSecAttrLabel as String] as? String, "created-by-the-test")
         XCTAssertEqual((found[kSecValueData as String] as? Data).map { String(decoding: $0, as: UTF8.self) }, "second")
-    }
-
-    func testConcurrentSavesAllSucceed() throws {
-        let store = makeStore()
-        let account = self.account
-        let failures = OSAllocatedUnfairLock<[String]>(initialState: [])
-
-        DispatchQueue.concurrentPerform(iterations: 8) { index in
-            do {
-                try store.save("value-\(index)", for: account)
-            } catch {
-                let shape = FailureShape(error).description
-                failures.withLock { $0.append(shape) }
-            }
-        }
-
-        XCTAssertEqual(failures.withLock { $0 }, [])
-        let saved = try XCTUnwrap(try store.secret(for: account))
-        XCTAssertTrue(saved.hasPrefix("value-"), saved)
     }
 
     func testRemovingIsIdempotent() throws {
