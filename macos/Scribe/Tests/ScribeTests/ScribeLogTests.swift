@@ -134,6 +134,28 @@ final class ScribeLogTests: XCTestCase {
         PrivacyCanary.assertAbsent(from: recorder.publicText)
     }
 
+    /// An Entra code Scribe does not list, in the three shapes a number behind the prefix can take: a phone
+    /// number, a nine-digit identifier and a run of zeros. Neither output may carry any of the digits.
+    func testAnUnlistedEntraCodeReachesNeitherOutputWithItsDigits() {
+        let recorder = recordScribeLog()
+
+        for code in ["AADSTS5550123", "AADSTS123456789", "AADSTS000000000"] {
+            ScribeLog.error(.cleanup, "Token request failed", .failure(ServiceFailure(failureServiceCode: code)))
+        }
+        recorder.stop()
+
+        let failures = recorder.renderings.filter { $0.line.contains("Token request failed") }
+        XCTAssertEqual(
+            failures.map(\.line),
+            Array(repeating: "[Cleanup] error: Token request failed failure=[ServiceFailure service=AADSTS]", count: 3))
+        XCTAssertEqual(
+            failures.map(\.publicText),
+            Array(repeating: "Token request failed failure=[ServiceFailure service=AADSTS]", count: 3))
+        for digits in ["5550123", "123456789", "000000000", "AADSTS0", "AADSTS5", "AADSTS1"] {
+            XCTAssertFalse(recorder.publicText.contains(digits), digits)
+        }
+    }
+
     /// Standard error whose reader has gone away (Scribe 2>&1 | head) must cost the line and nothing
     /// else. This drives the sink every line goes through at a pipe with no reader, then checks that
     /// logging marks the real standard error the same way: a descriptor without the mark would raise

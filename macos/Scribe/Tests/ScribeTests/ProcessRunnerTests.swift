@@ -1,11 +1,16 @@
 import Darwin
 import XCTest
+import os
 
 @testable import Scribe
 
 /// Runs small real children (`/bin/sh`, `/bin/cat`, `/bin/sleep`) because what matters here is how
 /// the runner behaves against the kernel: pipes that fill up, signals, process groups, descriptors.
-/// Nothing waits by sleeping; a child that has to reach a point first opens a `FileGate`.
+/// Nothing waits by sleeping; a child that has to reach a point first opens a `FileGate`. Every child
+/// ends by itself within about a minute whatever the runner does (a `sleep 30`, a CPU limit of 30
+/// seconds, or a loop of 600 short sleeps), and a wait on a run that a regression could keep from
+/// returning goes through `awaitOutcome(within:_:)`, so a regression fails a test instead of hanging
+/// the suite or leaving processes behind.
 final class ProcessRunnerTests: XCTestCase {
     private let shell = URL(fileURLWithPath: "/bin/sh")
 
@@ -41,6 +46,30 @@ final class ProcessRunnerTests: XCTestCase {
         let reachedReady = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
         XCTAssertTrue(reachedReady, "The child never reached its ready point")
         return task
+    }
+
+    /// Waits for `operation` for at most `limit`. A regression that keeps a run from returning then fails
+    /// the test that met it instead of hanging the suite; the operation is left running, and every child
+    /// these tests start ends by itself. The sleep here orders nothing: it only bounds a failure.
+    private func awaitOutcome(
+        within limit: Duration,
+        _ operation: @escaping @Sendable () async throws -> ProcessRunner.Outcome
+    ) async throws -> ProcessRunner.Outcome {
+        try await withCheckedThrowingContinuation { continuation in
+            let first = FirstResult(continuation)
+            let watchdog = Task {
+                try? await Task.sleep(for: limit)
+                first.resume(with: .failure(RunDidNotReturn(limit: limit)))
+            }
+            Task {
+                do {
+                    first.resume(with: .success(try await operation()))
+                } catch {
+                    first.resume(with: .failure(error))
+                }
+                watchdog.cancel()
+            }
+        }
     }
 
     // MARK: - Exit status and output
@@ -220,17 +249,36 @@ final class ProcessRunnerTests: XCTestCase {
     /// Each run's descendant stays behind a gate holding standard input (with a megabyte still unwritten),
     /// standard output and standard error. Once an outcome is back, the run must hold nothing: no thread
     /// is still working for it and every pipe and kqueue it opened is closed, however many of those
-    /// descendants are still waiting.
+    /// descendants are still waiting. They poll 600 times at most and only while the test's directory
+    /// exists, and the test opens the gate and waits for each of them to end before it returns, so none
+    /// outlives it.
     func testADescendantHoldingEveryPipeLeavesNothingOfTheRunBehind() async throws {
-        let gate = try makeTemporaryDirectory(label: "process").appendingPathComponent("gate")
-        let gatePath = gate.path(percentEncoded: false)
-        defer { _ = FileManager.default.createFile(atPath: gatePath, contents: nil) }
-        let script = #"(while [ ! -e "$1" ]; do sleep 0.05; done) <&0 & printf done"#
+        let directory = try makeTemporaryDirectory(label: "process")
+        let directoryPath = directory.path(percentEncoded: false)
+        let gatePath = directory.appendingPathComponent("gate").path(percentEncoded: false)
+        let script = #"""
+            (i=0; while [ $i -lt 600 ] && [ -d "$2" ] && [ ! -e "$1" ]; do sleep 0.05; i=$((i+1)); done) <&0 &
+            echo $! > "$3"; printf done
+            """#
+        var descendants: [pid_t] = []
+        defer {
+            _ = FileManager.default.createFile(atPath: gatePath, contents: nil)
+            for descendant in descendants {
+                XCTAssertTrue(
+                    ProcessResources.waitForExit(of: descendant, timeout: .seconds(10)),
+                    "Descendant \(descendant) outlived the test")
+            }
+        }
         let input = Data(repeating: 0x2A, count: 1 << 20)
         let shell = shell
         func runHeldBehindTheGate() async throws -> ProcessRunner.Outcome {
-            try await ProcessRunner.run(
-                shell, arguments: ["-c", script, "sh", gatePath], standardInput: input, timeout: .seconds(60))
+            let pidPath = directory.appendingPathComponent(UUID().uuidString).path(percentEncoded: false)
+            let outcome = try await ProcessRunner.run(
+                shell, arguments: ["-c", script, "sh", gatePath, directoryPath, pidPath], standardInput: input,
+                timeout: .seconds(60))
+            let recorded = try String(contentsOfFile: pidPath, encoding: .utf8)
+            descendants.append(try XCTUnwrap(pid_t(recorded.trimmingCharacters(in: .whitespacesAndNewlines))))
+            return outcome
         }
 
         // The first run also settles anything the runtime creates lazily, so the baseline is fair.
@@ -257,7 +305,10 @@ final class ProcessRunnerTests: XCTestCase {
     /// is gone, and once it has finished the run need not wait out the rest of the period.
     func testADescendantCleaningUpAfterItsParentExitsGetsTheGracePeriod() async throws {
         let task = try await startShellAndWaitUntilReady(
-            #"(trap 'sleep 0.3; printf cleaned; exit 0' TERM; touch "$1"; while :; do sleep 0.05; done) & wait"#,
+            #"""
+            (trap 'sleep 0.3; printf cleaned; exit 0' TERM; touch "$1"
+            i=0; while [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done) & wait
+            """#,
             killGracePeriod: .seconds(10))
 
         task.cancel()
@@ -274,7 +325,7 @@ final class ProcessRunnerTests: XCTestCase {
     /// period must still reach it, which the pipes reaching end of file prove.
     func testADescendantIgnoringTerminateAfterItsParentExitsIsKilledAtTheDeadline() async throws {
         let task = try await startShellAndWaitUntilReady(
-            #"(trap "" TERM; touch "$1"; while :; do sleep 0.05; done) & wait"#,
+            #"(trap "" TERM; touch "$1"; i=0; while [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done) & wait"#,
             killGracePeriod: .milliseconds(300))
 
         task.cancel()
@@ -301,6 +352,128 @@ final class ProcessRunnerTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "Got \(error)")
         }
+    }
+
+    /// libproc reports a failed lookup of a process group as an empty list with errno set. Here every
+    /// lookup fails that way while the shell is gone and its worker, which ignores SIGTERM, holds no pipe:
+    /// the run must not take the failure for an empty group, and must end the worker at the deadline.
+    func testAFailedGroupLookupStillEndsTheWorkerAtTheDeadline() async throws {
+        let failingLookup = ProcessRunnerSystemCalls(
+            listProcessGroup: { _, _, _ in
+                errno = EPERM
+                return 0
+            },
+            readPipe: ProcessRunnerSystemCalls.live.readPipe)
+        let ready = try makeTemporaryDirectory(label: "process").appendingPathComponent("ready")
+        let readyPath = ready.path(percentEncoded: false)
+        // The worker ignores SIGTERM, lets go of the output pipes, writes its pid as the ready file and polls
+        // 600 times at most.
+        let script = #"""
+            sh -c 'trap "" TERM; exec >/dev/null 2>&1; echo $$ > "$1.pid"; mv "$1.pid" "$1"
+            i=0; while [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done' worker "$1" &
+            wait
+            """#
+        let shell = shell
+        let task = ProcessRunner.systemCalls.withValue(failingLookup) {
+            Task {
+                try await ProcessRunner.run(
+                    shell, arguments: ["-c", script, "sh", readyPath], timeout: .seconds(60),
+                    killGracePeriod: .milliseconds(300))
+            }
+        }
+        let reachedReady = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
+        XCTAssertTrue(reachedReady, "The worker never reached its ready point")
+        let recorded = try String(contentsOfFile: readyPath, encoding: .utf8)
+        let worker = try XCTUnwrap(pid_t(recorded.trimmingCharacters(in: .whitespacesAndNewlines)))
+
+        let clock = ContinuousClock()
+        let cancelledAt = clock.now
+        task.cancel()
+        let outcome = try await awaitOutcome(within: .seconds(90)) { try await task.value }
+        let waitedAfterCancelling = cancelledAt.duration(to: clock.now)
+        let workerEnded = ProcessResources.waitForExit(of: worker, timeout: .seconds(10))
+        if !workerEnded {
+            kill(worker, SIGKILL)
+        }
+
+        XCTAssertEqual(outcome.terminationReason, .cancelled)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertGreaterThanOrEqual(waitedAfterCancelling, .milliseconds(300))
+        XCTAssertTrue(workerEnded, "The worker outlived the grace period")
+    }
+
+    // MARK: - Endless output
+
+    /// `yes` writes for as long as it runs, and reading it must still leave room for the deadline.
+    /// `ulimit -t` ends `yes` by itself after 30 seconds of CPU time, so a regression fails the duration
+    /// check instead of leaving it running.
+    func testEndlessOutputDoesNotDelayTheDeadline() async throws {
+        let shell = shell
+        let outcome = try await awaitOutcome(within: .seconds(90)) {
+            try await ProcessRunner.run(
+                shell, arguments: ["-c", "ulimit -t 30; exec yes"], timeout: .milliseconds(300),
+                outputLimit: 1 << 16)
+        }
+
+        XCTAssertEqual(outcome.terminationReason, .timedOut)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertEqual(outcome.standardOutput.data.count, 1 << 16)
+        XCTAssertTrue(outcome.standardOutput.isTruncated)
+        XCTAssertLessThan(outcome.duration, .seconds(10))
+    }
+
+    func testEndlessOutputDoesNotDelayCancellation() async throws {
+        let task = try await startShellAndWaitUntilReady(#"touch "$1"; ulimit -t 30; exec yes"#)
+
+        task.cancel()
+        let outcome = try await awaitOutcome(within: .seconds(90)) { try await task.value }
+
+        XCTAssertEqual(outcome.terminationReason, .cancelled)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertLessThan(outcome.duration, .seconds(10))
+    }
+
+    /// The shell exits at once and leaves `yes` writing into standard output. The outcome must still
+    /// arrive at the drain limit, whose last read is bounded however fast `yes` refills the pipe.
+    func testEndlessOutputFromADescendantEndsAtTheDrainLimit() async throws {
+        let shell = shell
+        let outcome = try await awaitOutcome(within: .seconds(90)) {
+            try await ProcessRunner.run(
+                shell, arguments: ["-c", "(ulimit -t 30; exec yes) & printf done"], timeout: .seconds(60),
+                outputLimit: 1 << 16)
+        }
+
+        XCTAssertEqual(outcome.terminationReason, .finished)
+        XCTAssertEqual(outcome.exitStatus, 0)
+        XCTAssertFalse(outcome.standardOutput.reachedEndOfFile)
+        XCTAssertLessThan(outcome.duration, .seconds(10))
+    }
+
+    /// A stand-in for `read` that never runs dry is a writer that is always faster than its reader, which
+    /// no real child can promise. The run must still stop the child at its deadline and, since neither
+    /// stream ever ends, finish with the bounded last read at the drain limit.
+    func testAStreamThatNeverRunsDryCannotHoldTheRunPastItsLimits() async throws {
+        let neverDry = ProcessRunnerSystemCalls(
+            listProcessGroup: ProcessRunnerSystemCalls.live.listProcessGroup,
+            readPipe: { _, buffer, count in
+                buffer.initializeMemory(as: UInt8.self, repeating: 0x79, count: count)
+                return count
+            })
+        let shell = shell
+        let outcome = try await awaitOutcome(within: .seconds(90)) {
+            try await ProcessRunner.systemCalls.withValue(neverDry) {
+                try await ProcessRunner.run(
+                    shell, arguments: ["-c", "exec >&- 2>&-; exec sleep 30"], timeout: .milliseconds(300),
+                    outputLimit: 1 << 16, killGracePeriod: .milliseconds(100))
+            }
+        }
+
+        XCTAssertEqual(outcome.terminationReason, .timedOut)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertFalse(outcome.standardOutput.reachedEndOfFile)
+        XCTAssertFalse(outcome.standardError.reachedEndOfFile)
+        XCTAssertGreaterThan(outcome.standardOutput.totalByteCount, 1 << 16)
+        XCTAssertLessThan(outcome.duration, .seconds(10))
     }
 
     // MARK: - Launch
@@ -376,7 +549,10 @@ final class ProcessRunnerTests: XCTestCase {
             }
             return try await ProcessRunner.run(
                 shell,
-                arguments: ["-c", #"while [ ! -e "$1" ]; do sleep 0.01; done"#, "sh", releasePath],
+                arguments: [
+                    "-c", #"i=0; while [ $i -lt 2000 ] && [ ! -e "$1" ]; do sleep 0.01; i=$((i+1)); done"#, "sh",
+                    releasePath,
+                ],
                 timeout: .seconds(20))
         }.value
 
@@ -429,4 +605,27 @@ final class ProcessRunnerTests: XCTestCase {
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
     }
+}
+
+/// Resumes a continuation with whichever result arrives first, and drops the rest.
+private final class FirstResult: Sendable {
+    private let continuation: OSAllocatedUnfairLock<CheckedContinuation<ProcessRunner.Outcome, any Error>?>
+
+    init(_ continuation: CheckedContinuation<ProcessRunner.Outcome, any Error>) {
+        self.continuation = OSAllocatedUnfairLock(initialState: continuation)
+    }
+
+    func resume(with result: Result<ProcessRunner.Outcome, any Error>) {
+        let pending = continuation.withLock { current -> CheckedContinuation<ProcessRunner.Outcome, any Error>? in
+            defer { current = nil }
+            return current
+        }
+        pending?.resume(with: result)
+    }
+}
+
+private struct RunDidNotReturn: Error, CustomStringConvertible {
+    let limit: Duration
+
+    var description: String { "The run did not return within \(limit)" }
 }
