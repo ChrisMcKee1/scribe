@@ -110,13 +110,13 @@
             <Setter Property="BorderBrush" Value="{DynamicResource ControlStrongStrokeColorDefaultBrush}"/>
         </Style>
 
-        <!-- Check boxes in the editable grids. The stock DataGridCheckBoxColumn draws a check box that
-             ignores the mouse until its cell is in edit mode, and a click only starts that edit when
-             the cell already has focus and is selected, so toggling took two clicks. These check boxes
-             take the click themselves and write through their two-way binding, while the cell still
-             takes focus and selects the row. They stay unfocusable, so keyboard focus remains on the
-             cell and Space still toggles through the column's edit mode, which shows the matching
-             Editing style. Based on the WPF-UI check box so they match the rest of the app. -->
+        <!-- Check boxes in the editable grids. Outside edit mode a check box cell shows a box that takes
+             neither the mouse nor focus, as WPF's and WPF-UI's own column styles do, and toggling it is
+             left to the column's edit: DataGridCheckBoxClick turns a plain press on the cell into that
+             edit, so one click toggles it inside the row's edit transaction, and Space on the focused
+             cell still toggles through the same edit. The Editing styles are the same box while the
+             cell edits, focusable and clickable. Based on the WPF-UI check box so they match the rest
+             of the app. -->
         <Style x:Key="GridCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
             <Setter Property="HorizontalAlignment" Value="Center"/>
         </Style>
@@ -124,6 +124,7 @@
             <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Use the {0} library'}"/>
         </Style>
         <Style x:Key="LibraryOnCheckBox" TargetType="CheckBox" BasedOn="{StaticResource LibraryOnCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
             <Setter Property="Focusable" Value="False"/>
         </Style>
         <Style x:Key="WholeWordCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
@@ -135,6 +136,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="WholeWordCheckBox" TargetType="CheckBox" BasedOn="{StaticResource WholeWordCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
             <Setter Property="Focusable" Value="False"/>
         </Style>
         <Style x:Key="EntryEnabledCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
@@ -146,6 +148,7 @@
             </Style.Triggers>
         </Style>
         <Style x:Key="EntryEnabledCheckBox" TargetType="CheckBox" BasedOn="{StaticResource EntryEnabledCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
             <Setter Property="Focusable" Value="False"/>
         </Style>
 
