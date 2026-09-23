@@ -97,6 +97,19 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
 
+        <!-- The detail side of a master-detail page (Libraries, Snippets, Profiles). FillCard replaces
+             ui:Card's own style rather than extending it, so it draws no border or fill, and a list
+             and the detail beside it read as one panel. This keeps WPF-UI's card and gives it the
+             strong control stroke, the Fluent border meant to stay visible, which every WPF-UI theme
+             defines, high contrast included. -->
+        <Style TargetType="ui:Card" x:Key="DetailCard" BasedOn="{StaticResource {x:Type ui:Card}}">
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrongStrokeColorDefaultBrush}"/>
+        </Style>
+
         <!-- Check boxes in the editable grids. The stock DataGridCheckBoxColumn draws a check box that
              ignores the mouse until its cell is in edit mode, and a click only starts that edit when
              the cell already has focus and is selected, so toggling took two clicks. These check boxes
@@ -1297,7 +1310,7 @@
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </ui:Card>
-                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1364,7 +1377,7 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <StackPanel x:Name="SnippetEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                         <TextBlock Text="Trigger phrase" Style="{StaticResource SettingTitle}"/>
@@ -1439,7 +1452,7 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
