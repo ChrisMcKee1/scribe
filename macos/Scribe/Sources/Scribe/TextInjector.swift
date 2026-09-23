@@ -192,6 +192,8 @@ enum AccessibilityInsertionOutcome: Equatable, Sendable {
     case unresponsive
     /// A write was sent and timed out. The application may still apply it once it recovers.
     case unconfirmed
+    /// The calling task was cancelled between questions, before anything was written.
+    case cancelled
 }
 
 /// The platform calls `TextInjector` makes, so its decisions can be tested without Accessibility
@@ -356,10 +358,11 @@ final class TextInjector {
     ///
     /// Deliveries run one at a time in call order: two interleaved borrows would each snapshot the other's
     /// text as the user's clipboard. Cancelling the calling task is honored only where nothing can be
-    /// duplicated or stranded: before the delivery starts, before the pasteboard is borrowed, between the
-    /// borrow and Command-V (the borrow is undone), and between typed keystrokes. It never cuts short the
-    /// settle after Command-V or the restore that follows, which would either strand Scribe's text on the
-    /// pasteboard or restore the old content before the target has read the new.
+    /// duplicated or stranded: before the delivery starts, between the Accessibility questions asked before
+    /// any write, before the borrow, between the borrow and Command-V (the borrow is undone), and between
+    /// typed keystrokes. It never cuts short an insertion that has sent a write, the settle after Command-V
+    /// or the restore that follows, which would either strand Scribe's text on the pasteboard or restore the
+    /// old content before the target has read the new.
     func inject(
         text: String,
         into target: InjectionTarget? = nil,
@@ -373,16 +376,19 @@ final class TextInjector {
         return result
     }
 
-    /// The shutdown barrier: returns once every delivery requested before this call has finished, so await
-    /// it before the process exits (for example with `applicationShouldTerminate` answering
-    /// `.terminateLater`) and a paste in progress puts the user's pasteboard back instead of exiting with
-    /// their previous content only in memory.
+    /// The shutdown barrier. It is a cooperative completion barrier: it returns once every delivery
+    /// requested before this call has finished, however long that takes. Await it before the process exits
+    /// (for example with `applicationShouldTerminate` answering `.terminateLater`) so a paste in progress
+    /// puts the user's pasteboard back instead of exiting with their previous content only in memory.
     ///
-    /// The pasteboard is never held longer than `beforePaste`, one Accessibility question (bounded by the
-    /// messaging timeout) and `afterPaste`, plus the pasteboard calls of the restore itself; typing never
-    /// holds it. The whole wait is bounded when the callers' tasks are cancelled first: a delivery still
-    /// waiting its turn returns at once, typing stops at its next keystroke, and a borrow not yet pasted is
-    /// undone.
+    /// There is no limit on the elapsed time. Cancelling the callers' tasks first makes every delivery stop
+    /// at its next checkpoint (see `inject`), which shortens the wait but cannot bound it, because what runs
+    /// between checkpoints cannot be interrupted: the Accessibility question or write already in flight,
+    /// each up to `LiveInjectionSystem.accessibilityMessagingTimeout`; an insertion that has sent a write,
+    /// which finishes its path; the settle after Command-V and the restore; the pasteboard calls, whose
+    /// duration is the pasteboard server's; and every awaited pause, which also needs the main actor to be
+    /// free before it resumes. Await it to completion, and never terminate because an estimated interval
+    /// has passed.
     func waitUntilIdle() async {
         await beginDelivery()
         endDelivery()
@@ -468,6 +474,11 @@ final class TextInjector {
             return InjectionResult(delivery: .targetUnresponsive)
         }
 
+        // The focus question can take up to the messaging timeout; nothing has been sent yet.
+        guard !Task.isCancelled else {
+            return InjectionResult(delivery: .cancelled)
+        }
+
         switch system.insertViaAccessibility(text, into: element) {
         case .inserted:
             return InjectionResult(delivery: .accessibility)
@@ -479,6 +490,8 @@ final class TextInjector {
             // Nothing was written, but an application that cannot answer would take a paste or keystrokes
             // whenever it recovers, possibly after the pasteboard has been restored.
             return InjectionResult(delivery: .targetUnresponsive)
+        case .cancelled:
+            return InjectionResult(delivery: .cancelled)
         case .notInserted:
             break
         }
@@ -522,15 +535,15 @@ final class TextInjector {
 
         await pacer.pause(.beforePaste)
 
-        // Focus can move, or the delivery be cancelled, while the write settles. Nothing has been sent
-        // yet, so the borrow is just undone.
+        // Focus can move, or the delivery be cancelled, while the write settles or while the focus question
+        // is answered. Nothing has been sent yet, so the borrow is just undone.
         let withheld: InjectionDelivery?
         if Task.isCancelled {
             withheld = .cancelled
         } else {
             switch confirmTarget(pinned) {
             case .confirmed:
-                withheld = nil
+                withheld = Task.isCancelled ? .cancelled : nil
             case .unresponsive:
                 withheld = .targetUnresponsive
             case .changed, .nothingFocused:
@@ -561,14 +574,19 @@ final class TextInjector {
     }
 
     /// Types `text` as Unicode keystrokes, confirming before each one that the pinned target still has
-    /// focus and that the delivery was not cancelled: typing is paced, and whatever is typed after focus
-    /// moves lands somewhere else.
+    /// focus and that the delivery was not cancelled, both before and after the focus question: typing is
+    /// paced, and whatever is typed after focus moves lands somewhere else.
     private func typeText(
         _ text: String,
         to pinned: TargetExpectation,
         processIdentifier: pid_t,
         shiftReturnLineBreaks: Bool
     ) async -> InjectionDelivery {
+        // Checked before the plan is built, since building it walks the whole text.
+        if Task.isCancelled {
+            return .cancelled
+        }
+
         var posted = 0
         for keystroke in KeystrokePlan.keystrokes(for: text, shiftReturnLineBreaks: shiftReturnLineBreaks) {
             if posted > 0 {
@@ -586,6 +604,10 @@ final class TextInjector {
                 return posted == 0 ? .targetUnresponsive : .typedPartially
             case .changed, .nothingFocused:
                 return posted == 0 ? .targetChanged : .typedPartially
+            }
+
+            if Task.isCancelled {
+                return posted == 0 ? .cancelled : .typedPartially
             }
 
             guard system.post(keystroke, to: processIdentifier) else {

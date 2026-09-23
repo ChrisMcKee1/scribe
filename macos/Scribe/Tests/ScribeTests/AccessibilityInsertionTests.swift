@@ -17,10 +17,16 @@ final class ScriptedAccessibilityAttributes: AccessibilityAttributeAccess {
     var timeouts: Set<String> = []
     /// Writes that are refused outright, named like `timeouts`.
     var refusals: Set<String> = []
+    /// The request that cancels the task running the insertion while it is answered, named like
+    /// `timeouts`: a caller giving up while the application is slow to reply.
+    var cancelsTaskOn: String?
+    /// Every request in order, named like `timeouts`.
+    private(set) var requests: [String] = []
     private(set) var writes: [Write] = []
 
     func isSettable(_ attribute: CFString, on element: AXUIElement) -> (result: AXError, settable: Bool) {
         let name = attribute as String
+        arrive("isSettable \(name)")
         if timeouts.contains("isSettable \(name)") {
             return (.cannotComplete, false)
         }
@@ -29,6 +35,7 @@ final class ScriptedAccessibilityAttributes: AccessibilityAttributeAccess {
 
     func value(of attribute: CFString, on element: AXUIElement) -> (result: AXError, value: CFTypeRef?) {
         let name = attribute as String
+        arrive("value \(name)")
         if timeouts.contains("value \(name)") {
             return (.cannotComplete, nil)
         }
@@ -40,6 +47,7 @@ final class ScriptedAccessibilityAttributes: AccessibilityAttributeAccess {
 
     func setValue(_ value: CFTypeRef, of attribute: CFString, on element: AXUIElement) -> AXError {
         let name = attribute as String
+        arrive("setValue \(name)")
         // Recorded even when it times out: the request was sent, which is what makes it uncertain.
         writes.append(Write(attribute: name, value: value))
         if timeouts.contains("setValue \(name)") {
@@ -50,6 +58,13 @@ final class ScriptedAccessibilityAttributes: AccessibilityAttributeAccess {
         }
         values[name] = value
         return .success
+    }
+
+    private func arrive(_ request: String) {
+        requests.append(request)
+        if request == cancelsTaskOn {
+            cancelTheCurrentInjectionTask()
+        }
     }
 }
 
@@ -181,6 +196,102 @@ final class AccessibilityInsertionTests: XCTestCase {
 
         XCTAssertEqual(AccessibilityInsertion.insert("there", into: element, using: attributes), .notInserted)
         XCTAssertTrue(attributes.writes.isEmpty)
+    }
+
+    @MainActor
+    func testACancelledTaskGetsNoQuestionAtAll() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [selectedText]
+        let target = AXUIElementCreateApplication(4_004)
+
+        let insertion = Task { @MainActor in
+            AccessibilityInsertion.insert("dictated", into: target, using: attributes)
+        }
+        insertion.cancel()
+        let outcome = await insertion.value
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertTrue(attributes.requests.isEmpty)
+    }
+
+    @MainActor
+    func testCancellingWhileAQuestionIsAnsweredStopsBeforeTheNextOneAndWritesNothing() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [value]
+        attributes.values = [value: "Hello world" as CFString, selectedRange: range(6, 5)]
+        attributes.cancelsTaskOn = "value \(value)"
+
+        let outcome = await insertInATask("there", using: attributes)
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertTrue(attributes.writes.isEmpty)
+        XCTAssertEqual(attributes.requests, ["isSettable \(selectedText)", "isSettable \(value)", "value \(value)"])
+    }
+
+    @MainActor
+    func testCancellingBeforeTheSelectedTextWriteSendsNothing() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [selectedText]
+        attributes.cancelsTaskOn = "isSettable \(selectedText)"
+
+        let outcome = await insertInATask("dictated", using: attributes)
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertTrue(attributes.writes.isEmpty)
+        XCTAssertEqual(attributes.requests, ["isSettable \(selectedText)"])
+    }
+
+    @MainActor
+    func testCancellingBeforeTheValueWriteSendsNothing() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [value]
+        attributes.values = [value: "Hello world" as CFString, selectedRange: range(6, 5)]
+        attributes.cancelsTaskOn = "value \(selectedRange)"
+
+        let outcome = await insertInATask("there", using: attributes)
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertTrue(attributes.writes.isEmpty)
+        XCTAssertEqual(attributes.values[value] as? String, "Hello world")
+    }
+
+    @MainActor
+    func testCancellingAfterTheWriteWasSentStillReportsItUnconfirmed() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [selectedText]
+        attributes.timeouts = ["setValue \(selectedText)"]
+        attributes.cancelsTaskOn = "setValue \(selectedText)"
+
+        let outcome = await insertInATask("dictated", using: attributes)
+
+        XCTAssertEqual(outcome, .unconfirmed, "A write that may still land is never reported as not delivered.")
+        XCTAssertEqual(attributes.writes.map(\.attribute), [selectedText])
+    }
+
+    @MainActor
+    func testCancellingAfterARefusedWriteLetsThePathItStartedFinish() async {
+        let attributes = ScriptedAccessibilityAttributes()
+        attributes.settable = [selectedText, value]
+        attributes.values = [value: "Hello world" as CFString, selectedRange: range(6, 5)]
+        attributes.refusals = ["setValue \(selectedText)"]
+        attributes.cancelsTaskOn = "setValue \(selectedText)"
+
+        let outcome = await insertInATask("there", using: attributes)
+
+        XCTAssertEqual(outcome, .inserted)
+        XCTAssertEqual(attributes.values[value] as? String, "Hello there")
+    }
+
+    /// Runs the insertion in a task of its own, so a fake can cancel it without cancelling the test.
+    @MainActor
+    private func insertInATask(
+        _ text: String,
+        using attributes: ScriptedAccessibilityAttributes
+    ) async -> AccessibilityInsertionOutcome {
+        let target = AXUIElementCreateApplication(4_005)
+        return await Task { @MainActor in
+            AccessibilityInsertion.insert(text, into: target, using: attributes)
+        }.value
     }
 
     private func range(_ location: Int, _ length: Int) -> CFTypeRef {

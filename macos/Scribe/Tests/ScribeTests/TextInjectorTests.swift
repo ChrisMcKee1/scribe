@@ -18,6 +18,9 @@ final class ScriptedInjectionSystem: InjectionSystem {
     var frontmost: InjectionApplication?
     var bundleIdentifiers: [pid_t: String] = [:]
     var accessibilityOutcome: AccessibilityInsertionOutcome = .notInserted
+    /// Cancels the task running the delivery while this focus question (counted from 1) is answered, as a
+    /// pipeline would while the application is slow to reply.
+    var cancelsTaskOnFocusQuery: Int?
     /// Keystrokes that fail to post, as if their events could not be created.
     var rejects: (InjectionKeystroke) -> Bool = { _ in false }
     /// Runs as each keystroke is posted, before it is recorded.
@@ -40,6 +43,9 @@ final class ScriptedInjectionSystem: InjectionSystem {
 
     func focusedElement() -> InjectionFocusLookup {
         focusQueries += 1
+        if focusQueries == cancelsTaskOnFocusQuery {
+            cancelTheCurrentInjectionTask()
+        }
         return focus
     }
 
@@ -100,6 +106,16 @@ final class ScriptedInjectionPacer: InjectionPacing {
 
 final class InjectionLogCapture {
     var lines: [String] = []
+}
+
+/// Cancels whichever task is running the caller: a fake answering an Accessibility request uses it to
+/// cancel the delivery while that request is in flight.
+func cancelTheCurrentInjectionTask() {
+    withUnsafeCurrentTask { task in
+        if let task {
+            task.cancel()
+        }
+    }
 }
 
 /// State the tests' callbacks and tasks write into, kept on the main actor with everything else.
@@ -941,6 +957,80 @@ final class TextInjectorTests: XCTestCase {
         XCTAssertEqual(observed.second, InjectionResult(delivery: .cancelled))
         XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
         XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testCancellingWhileTheFocusQuestionIsAnsweredStopsBeforeAccessibilityIsTried() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .inserted
+        harness.system.cancelsTaskOnFocusQuery = 1
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .cancelled))
+        XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testAnInsertionCancelledBetweenItsQuestionsIsNotDelivered() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .cancelled
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .cancelled))
+        XCTAssertFalse(result.mayHaveReachedTarget)
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testCancellingWhileTheQuestionBeforeCommandVIsAnsweredUndoesTheBorrow() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        // The first focus question confirms the target; the second is the one asked before Command-V.
+        harness.system.cancelsTaskOnFocusQuery = 2
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .cancelled, clipboard: .withheld, restore: .restored))
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testCancellingWhileAKeystrokeQuestionIsAnsweredStopsBeforeThatKeystroke() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        // Question one confirms the target, two comes before the first keystroke, three before the second.
+        harness.system.cancelsTaskOnFocusQuery = 3
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .typedPartially, clipboard: .nonTextContent))
+        XCTAssertEqual(harness.system.posted.count, 1)
     }
 
     @MainActor
