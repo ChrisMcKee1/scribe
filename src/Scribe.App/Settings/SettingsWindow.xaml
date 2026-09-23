@@ -1015,6 +1015,8 @@
                                                                Text="Project endpoints use the account host with API keys. This is expected because project data planes require Entra sign-in."/>
                                                 </StackPanel>
 
+                                                <!-- Shown only for an Azure CLI sign-in (AzureSettingsAccess.ShowCliTenant):
+                                                     the tenant box is all it holds. -->
                                                 <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
                                                     <ui:CardExpander.Header>
                                                         <StackPanel>
@@ -1024,7 +1026,7 @@
                                                         </StackPanel>
                                                     </ui:CardExpander.Header>
                                                     <StackPanel Margin="0,4,0,0">
-                                                        <StackPanel x:Name="AzureCliTenantPanel">
+                                                        <StackPanel>
                                                             <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}"/>
                                                             <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                                         VerticalContentAlignment="Center"

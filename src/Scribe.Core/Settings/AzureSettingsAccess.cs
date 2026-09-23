@@ -74,6 +74,20 @@ public static class AzureSettingsAccess
             ShowServicePrincipalFields: false);
     }
 
+    /// <summary>
+    /// Whether the optional Azure CLI tenant field shows, and with it the "Optional Azure details"
+    /// expander, which holds nothing else. The tenant only pins which directory an az login
+    /// authenticates against. A service principal names its own tenant, and an API key never asks
+    /// Entra for a token, so in either mode the expander would open onto nothing.
+    /// </summary>
+    /// <param name="authMode">The Entra identity the settings resolve to.</param>
+    /// <param name="apiKeySelected">
+    /// The API key sign-in method is chosen. It is stored as <see cref="AzureAuthMode.AzureCli"/>
+    /// plus a key, so the mode alone cannot tell it apart.
+    /// </param>
+    public static bool ShowCliTenant(AzureAuthMode authMode, bool apiKeySelected) =>
+        authMode == AzureAuthMode.AzureCli && !apiKeySelected;
+
     public static ValidationIssue ValidateCleanup(
         bool enabled,
         bool usesAzureProvider,
