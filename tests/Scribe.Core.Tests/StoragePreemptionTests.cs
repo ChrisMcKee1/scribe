@@ -359,12 +359,22 @@ public sealed class StoragePreemptionTests : IDisposable
         db.Initialize();
         db.PreemptPollInterval = TimeSpan.FromMilliseconds(1);
         using var vacuumStarting = new ManualResetEventSlim();
+        var stopReachedTheVacuum = false;
         using var maintenance = Create(db, new ManualTimeProvider(_now), StorageMaintenanceOptions.Default with
         {
             ReclaimThresholdBytes = 64 * 1024,
             FreeSpaceProbe = _ => long.MaxValue / 4,
             ConversionQuietPeriod = TimeSpan.Zero,
-            BeforePreemptibleStatement = vacuumStarting.Set,
+            BeforePreemptibleStatement = () =>
+            {
+                var before = db.ActivityCount;
+                vacuumStarting.Set();
+
+                // Holds the VACUUM back until Stop has made its request. The test database is small
+                // enough that a fast runner otherwise finished the conversion before the stop landed,
+                // and the pass then reported a completed conversion instead of the interruption.
+                stopReachedTheVacuum = SpinWait.SpinUntil(() => db.ActivityCount != before, Generous);
+            },
         });
 
         var pass = Task.Run(() => maintenance.RunOnce(SettingsWith(90)));
@@ -373,6 +383,7 @@ public sealed class StoragePreemptionTests : IDisposable
         Assert.True(await Task.Run(() => maintenance.Stop(Generous)).WaitAsync(Generous));
         var report = await pass.WaitAsync(Generous);
 
+        Assert.True(stopReachedTheVacuum, "Stop never registered as activity while the VACUUM was pending.");
         Assert.Equal(ReclaimMethod.Yielded, report!.Reclaim.Method);
         Assert.True(report.Stopped);
         Assert.Null(maintenance.RunOnce(SettingsWith(90)));
@@ -432,12 +443,21 @@ public sealed class StoragePreemptionTests : IDisposable
         db.Initialize();
         db.PreemptPollInterval = TimeSpan.FromMilliseconds(1);
         using var vacuumStarting = new ManualResetEventSlim();
+        var stopReachedTheVacuum = false;
         var maintenance = Create(db, new ManualTimeProvider(_now), StorageMaintenanceOptions.Default with
         {
             ReclaimThresholdBytes = 64 * 1024,
             FreeSpaceProbe = _ => long.MaxValue / 4,
             ConversionQuietPeriod = TimeSpan.Zero,
-            BeforePreemptibleStatement = vacuumStarting.Set,
+            BeforePreemptibleStatement = () =>
+            {
+                var before = db.ActivityCount;
+                vacuumStarting.Set();
+
+                // Holds the VACUUM back until the stop inside Dispose has made its request, for the same
+                // reason as the Stop test above: otherwise a fast runner can finish the conversion first.
+                stopReachedTheVacuum = SpinWait.SpinUntil(() => db.ActivityCount != before, Generous);
+            },
         });
 
         var pass = Task.Run(() => maintenance.RunOnce(SettingsWith(90)));
@@ -446,6 +466,7 @@ public sealed class StoragePreemptionTests : IDisposable
         await Task.Run(maintenance.Dispose).WaitAsync(Generous);
         var report = await pass.WaitAsync(Generous);
 
+        Assert.True(stopReachedTheVacuum, "Dispose never registered as activity while the VACUUM was pending.");
         Assert.Equal(ReclaimMethod.Yielded, report!.Reclaim.Method);
         Assert.Equal(0, DatabaseProbe.QueryInt64(db, "PRAGMA auto_vacuum;"));
         Assert.Equal("ok", DatabaseProbe.QueryString(db, "PRAGMA integrity_check;"));

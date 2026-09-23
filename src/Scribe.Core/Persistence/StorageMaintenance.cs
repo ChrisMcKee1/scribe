@@ -281,6 +281,12 @@ public sealed class StorageMaintenance : IDisposable
             _stopRequested = true;
         }
 
+        // Counted as foreground activity so the stop is sticky: a preemptible statement registered
+        // before this call aborts at its next progress check even if it had not started yet, when a
+        // bare interrupt sent before it starts is lost. No pass starts after this, so the activity it
+        // records cannot delay any later work.
+        _database.RequestYield();
+
         // The interrupt is repeated on every poll because one sent before the statement starts is a
         // no-op in SQLite. Past the bound the pass is left to finish on its own, which is safe:
         // SQLite commits or rolls back atomically even if the process then exits under it.

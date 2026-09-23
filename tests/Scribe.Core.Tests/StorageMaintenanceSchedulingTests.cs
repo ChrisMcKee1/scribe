@@ -324,10 +324,14 @@ public class StorageMaintenanceSchedulingTests
         var pass = Task.Run(timer.Fire);
         Assert.True(settings.Entered.Wait(Generous));
 
+        var activityBeforeDispose = db.ActivityCount;
         var dispose = Task.Run(maintenance.Dispose);
 
-        // Dispose disposes the timer, then waits: the pass is still blocked, so it cannot return.
+        // Dispose disposes the timer, then stops and waits: the pass is still blocked, so it cannot
+        // return. The stop counts as activity, so the counter moving proves the stop was requested
+        // before the pass is released; the timer alone is disposed a step earlier.
         Assert.True(SpinWait.SpinUntil(() => timer.Disposed, Generous));
+        Assert.True(SpinWait.SpinUntil(() => db.ActivityCount != activityBeforeDispose, Generous));
         Assert.False(dispose.IsCompleted);
 
         settings.Release.Set();
