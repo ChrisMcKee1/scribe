@@ -71,8 +71,9 @@ privacy/offline promise.
 - AI cleanup across four providers: Foundry Local (default), managed Ollama, any
   OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth,
   secrets in Keychain, an https resource or pasted Foundry project URL works). Each provider is
-  built once per configuration and reused across dictations, Test Connection runs one real
-  cleanup of a test word, and em and en dashes are rewritten out of the model's answer
+  built once per configuration and reused across dictations, Test Connection sends a real
+  cleanup request for a test word and passes only if the model answers with text, and em and en
+  dashes are rewritten out of the model's answer
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, opt-in AI summary)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded

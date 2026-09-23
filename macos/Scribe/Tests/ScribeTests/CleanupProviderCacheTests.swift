@@ -526,10 +526,10 @@ final class CleanupProviderCacheTests: XCTestCase {
 
     // MARK: - Test Connection passes wherever dictation works
 
-    /// A reasoning model can spend the probe's whole ceiling thinking and stop at `length` with nothing visible. It
-    /// answered, and the dictation that follows, which sends no ceiling, cleans with it, so the check passes, and says
-    /// only that the model answered.
-    func testAModelThatThoughtThroughTheWholeCeilingIsConnected() async throws {
+    /// A reasoning model can spend the probe's whole ceiling thinking and stop at `length` with nothing visible. One
+    /// request without the ceiling then comes back with text, so the check passes, says only that the model answered,
+    /// and the dictation that follows cleans with it. The confirmation carries neither field.
+    func testAModelThatThoughtThroughTheWholeCeilingIsConnectedOnceItAnswersWithoutOne() async throws {
         let rig = try makeRig { request in
             RecordedRequest(request).jsonBody["max_completion_tokens"] == nil
                 ? StubReply.completion(request, "Cleaned.")
@@ -544,9 +544,45 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertTrue(
             check.message.hasPrefix("OpenAI-compatible endpoint is connected: the model answered the test in "),
             check.message)
-        XCTAssertTrue(check.message.hasSuffix("dictations have no such limit."), check.message)
+        XCTAssertTrue(check.message.hasSuffix("so Scribe asked once more without one, and it answered."), check.message)
         XCTAssertFalse(check.message.contains("clean"), "a check claims no cleanup: \(check.message)")
-        XCTAssertEqual(rig.requests.count, 2, "one probe, not retried, then the dictation")
+        let bodies = rig.requests.all.map(\.jsonBody)
+        XCTAssertEqual(bodies.count, 3, "the capped probe, its confirmation, then the dictation")
+        XCTAssertEqual(bodies[0]["max_completion_tokens"] as? Int, 16)
+        XCTAssertNil(bodies[1]["max_completion_tokens"])
+        XCTAssertNil(bodies[1]["max_tokens"])
+    }
+
+    /// A server that stops every request at `length` with nothing visible (a deployment cap, a proxy, a model that
+    /// never writes text) would fail every dictation, so it fails the check: the confirmation without a ceiling stops
+    /// the same way. A confirmation refused outright fails it too. Either way there is no third request.
+    func testAServerThatStopsEveryRequestAtLengthFailsTheCheck() async throws {
+        let replies: [(name: String, reply: @Sendable (URLRequest) -> (HTTPURLResponse, Data))] = [
+            ("always length", { request in StubReply.completion(request, nil, finishReason: "length") }),
+            (
+                "length, then refused",
+                { request in
+                    RecordedRequest(request).jsonBody["max_completion_tokens"] == nil
+                        ? StubReply.json(request, status: 400, #"{"error":{"message":"refused"}}"#)
+                        : StubReply.completion(request, nil, finishReason: "length")
+                }
+            ),
+        ]
+        for (name, reply) in replies {
+            let rig = try makeRig(reply: reply)
+            configureOpenAICompatible(rig.store)
+
+            let check = try await boundedCheck(rig.cache)
+
+            XCTAssertFalse(check.reachable, "\(name): \(check.message)")
+            XCTAssertEqual(rig.requests.count, 2, name)
+            XCTAssertNil(rig.requests.all.last?.jsonBody["max_completion_tokens"], name)
+        }
+        let alwaysLength = try makeRig { request in StubReply.completion(request, nil, finishReason: "length") }
+        configureOpenAICompatible(alwaysLength.store)
+        let check = try await boundedCheck(alwaysLength.cache)
+        XCTAssertEqual(
+            check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
     }
 
     /// An empty answer that did not stop at the ceiling, or an answer that is no completion at all, still fails, and
@@ -570,8 +606,9 @@ final class CleanupProviderCacheTests: XCTestCase {
         }
     }
 
-    /// A `length` stop with nothing visible counts only when the probe's own ceiling caused it. After the retry with no
-    /// ceiling it is the server's own limit, which a dictation would meet too, so the check fails and says why.
+    /// After a 400 to the ceiling field, the request without a ceiling is the last one: its `length` stop with nothing
+    /// visible is the server's own limit, which a dictation would meet too, so the check fails, says why, and sends no
+    /// third request.
     func testALengthStopWithoutTheProbesCeilingStillFails() async throws {
         let rig = try makeRig { request in
             RecordedRequest(request).jsonBody["max_completion_tokens"] == nil
@@ -641,8 +678,10 @@ final class CleanupProviderCacheTests: XCTestCase {
     // MARK: - The deadline covers the whole check
 
     /// The deadline starts with the button, before the provider is built: when it passes during the Keychain read,
-    /// the check waits for the read, which cannot be interrupted, and then ends at the deadline without asking the
-    /// endpoint anything more.
+    /// the check waits for the read, which cannot be interrupted, and then ends at the deadline without sending a
+    /// request. The read is let go only once the deadline's cancellation has reached it, so only the checks after the
+    /// build stand between it and a request: `URLSession` cannot be relied on to refuse a request made from a
+    /// cancelled task, and with those checks removed it sometimes sent this one.
     func testTheDeadlineCoversBuildingTheProvider() async throws {
         let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
         let timer = ManualTimer()
@@ -659,12 +698,35 @@ final class CleanupProviderCacheTests: XCTestCase {
         await waitBounded("the build to read the API key") { await pause.waitUntilReached() }
         await waitBounded("the deadline to be running during the read") { await timer.waitUntilStarted() }
         timer.fire()
-        pause.release()
+        pause.releaseOnceCancelled()
         await waitBounded("the check to end") { await checking.value }
 
         let check = try XCTUnwrap(result.value)
         XCTAssertFalse(check.reachable)
-        XCTAssertTrue(check.message.hasPrefix("OpenAI-compatible endpoint did not finish the test within"), check.message)
+        XCTAssertTrue(
+            check.message.hasPrefix("OpenAI-compatible endpoint did not finish the test within"), check.message)
+        XCTAssertEqual(rig.requests.count, 0, "nothing is sent after a build that outlasted the deadline")
+        XCTAssertEqual(apiKeys.reads, 1)
+    }
+
+    /// A check cancelled before it began, by a Cancel pressed at once or Settings closing, builds nothing: no Keychain
+    /// read, which could put up a prompt, and no request.
+    func testACheckCancelledBeforeItBeganReadsNoSecretAndSendsNothing() async throws {
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let rig = try makeRig(apiKeys: apiKeys)
+        configureOpenAICompatible(rig.store)
+        let cache = rig.cache
+        let result = LockedValue<CleanupConnectionCheck>()
+
+        let checking = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            result.set(await cache.checkConnection())
+        }
+        await waitBounded("the cancelled check to end") { await checking.value }
+
+        XCTAssertEqual(result.value?.message, "OpenAI-compatible endpoint: The check was cancelled.")
+        XCTAssertEqual(apiKeys.reads, 0)
+        XCTAssertEqual(rig.requests.count, 0)
     }
 
     /// Messages about a provider that was not built use the name the provider gives itself.

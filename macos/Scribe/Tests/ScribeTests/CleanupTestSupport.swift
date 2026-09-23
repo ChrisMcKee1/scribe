@@ -765,11 +765,19 @@ final class ManualTimer: Sendable {
 final class ReadPause: Sendable {
     private let reached = FirstOutcome()
     private let gate = DispatchSemaphore(value: 0)
+    private let returnsOnceCancelled = OSAllocatedUnfairLock(initialState: false)
 
-    /// Called by the reading thread: reports the arrival, then blocks until `release()`.
+    /// Called by the reading thread: reports the arrival, then blocks until `release()`, or until its own task is
+    /// cancelled once `releaseOnceCancelled()` has been called.
     func arrive() {
         reached.settle(true)
-        gate.wait()
+        // No call tells synchronous code that its task was cancelled, so after `releaseOnceCancelled()` the held
+        // thread looks at its task every millisecond. It waits for that condition, not for any length of time.
+        while gate.wait(timeout: .now() + .milliseconds(1)) == .timedOut {
+            if returnsOnceCancelled.withLock({ $0 }), Task.isCancelled {
+                return
+            }
+        }
     }
 
     func waitUntilReached() async {
@@ -778,6 +786,41 @@ final class ReadPause: Sendable {
 
     func release() {
         gate.signal()
+    }
+
+    /// Lets the held read return as soon as the task doing it has been cancelled, and not before.
+    func releaseOnceCancelled() {
+        returnsOnceCancelled.withLock { $0 = true }
+    }
+}
+
+/// A provider that answers each request with the next of the steps a test scripted, and records every request it
+/// was asked. A step returns the cleaned text or throws; it runs on the task that made the request, so a step can
+/// also cancel that task, as a Cancel press between two requests would.
+final class ScriptedCleanupProvider: CleanupProvider {
+    typealias Step = @Sendable (CleanupRequest) throws -> String
+
+    let id = "scripted"
+    let displayName = "Scripted"
+    private let state: OSAllocatedUnfairLock<(steps: [Step], requests: [CleanupRequest])>
+
+    init(_ steps: [Step]) {
+        state = OSAllocatedUnfairLock(initialState: (steps: steps, requests: []))
+    }
+
+    var requests: [CleanupRequest] {
+        state.withLock { $0.requests }
+    }
+
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        let step = state.withLock { current -> Step? in
+            current.requests.append(request)
+            return current.steps.isEmpty ? nil : current.steps.removeFirst()
+        }
+        guard let step else {
+            throw CleanupProviderError.invalidResponse(.undecodable)
+        }
+        return CleanupResponse(cleanedText: try step(request), latency: 0, providerID: id, modelID: "scripted")
     }
 }
 

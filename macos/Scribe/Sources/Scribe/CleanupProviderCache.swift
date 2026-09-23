@@ -63,11 +63,12 @@ final class CleanupProviderCache: Sendable {
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
     }
 
-    /// Test Connection: one real cleanup request for a one-word transcript, with the default writing style, through the
-    /// provider dictation would use. A configuration that cannot serve a completion (a wrong deployment or model, a
-    /// missing role, a model that was never pulled) fails here the way a dictation would, rather than passing a token
-    /// fetch or a model list. As Windows' readiness probe does, it asks whether the model answers, not what it
-    /// answered, so any configuration that dictates passes (`probe`).
+    /// Test Connection: a real cleanup request for a one-word transcript, with the default writing style, through the
+    /// provider dictation would use, and at most one more without the output ceiling (`probe`). A configuration that
+    /// cannot serve a completion (a wrong deployment or model, a missing role, a model that was never pulled) fails
+    /// here the way a dictation would, rather than passing a token fetch or a model list. As Windows' readiness probe
+    /// does, it asks whether the model answers, not what it answered, and it asks for text: it passes where dictation
+    /// works and fails where dictation would (`probe`).
     ///
     /// The whole check, from the button to the result, runs against one deadline (`checkDeadline(for:)`): building
     /// the provider with its Keychain read, the credential, Foundry Local's endpoint lookup and the completion. Only
@@ -103,46 +104,77 @@ final class CleanupProviderCache: Sendable {
         }
     }
 
-    /// What answered Test Connection's request.
-    private enum ProbeAnswer: Sendable, Equatable {
-        /// The model wrote text.
+    /// How the model answered Test Connection.
+    enum ProbeAnswer: Sendable, Equatable {
+        /// With text, under the probe's output ceiling.
         case text
-        /// The model used the probe's whole output ceiling before writing any text, as a reasoning model does.
-        case outputLimit
+        /// It stopped at the ceiling with nothing visible, and then answered with text when asked without one.
+        case textAfterOutputLimit
+        /// The endpoint refused the ceiling field, and the model answered with text when asked without one.
+        case textWithoutOutputLimit
     }
 
-    /// Test Connection's request, as Windows' readiness probe makes it (`ProbeAgentAsync` awaits the answer and
-    /// discards it): the model served the request, or it did not.
+    /// What one probe request came back with, short of a failure.
+    private enum AttemptResult: Sendable, Equatable {
+        case text
+        /// `length` with nothing visible, under the request's own output ceiling.
+        case stoppedAtCeiling
+    }
+
+    /// Test Connection's requests, as Windows' readiness probe makes them (`ProbeAgentAsync` awaits the answer and
+    /// discards it): the model served a request with text, or it did not. At most two attempts, both inside the check's
+    /// one deadline, and neither the older `max_tokens` field nor both fields together are ever sent. (As for a
+    /// dictation, Foundry Local's provider sends an attempt once more when its remembered endpoint refused the
+    /// connection, to the endpoint `foundry status` reports now; the refused connection delivered nothing.)
     ///
-    /// The request carries the probe's output ceiling (`checkOutputCeiling(for:)`), sent as `max_completion_tokens`.
-    /// Two answers that a dictation, which sends no ceiling, would not meet are no failure here. A reasoning model can
-    /// spend the whole ceiling thinking and stop at `length` with nothing visible: it answered. And a server that
-    /// refuses the field outright (vLLM 0.6.0 declares only `max_tokens` and forbids anything else) answers 400 or
-    /// 422: the request goes once more without any ceiling, inside the same deadline. Neither the older field nor both
-    /// fields together are sent.
-    private static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
-        let request = CleanupRequest(
+    /// The first request carries the probe's output ceiling (`checkOutputCeiling(for:)`), sent as
+    /// `max_completion_tokens`. Two answers to it are not yet verdicts, so one request without any ceiling follows:
+    ///
+    /// - A `length` stop with nothing visible. A reasoning model that spent the whole ceiling thinking does that, but
+    ///   so does anything that stops every request (a deployment cap, a proxy, a model that never writes text), which
+    ///   no dictation would get past. The request without a ceiling tells them apart: the check passes only if it
+    ///   comes back with text, and a `length` stop there too is a failure.
+    /// - HTTP 400 or 422, from a server that refuses the field outright (vLLM 0.6.0 declares only `max_tokens` and
+    ///   forbids anything else). The request without a ceiling is the retry, and its answer is the verdict: text
+    ///   passes, and anything else, a `length` stop included, fails without a third request.
+    ///
+    /// Every request first checks for cancellation, so a check stopped between two requests sends no second one.
+    static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
+        let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
             writingStylePrompt: CleanupPrompt.systemPrompt(
                 writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
             timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
             maxOutputTokens: checkOutputCeiling(for: kind))
+        let uncapped = capped.withoutOutputLimit()
+
+        let first: AttemptResult
         do {
-            return try await attempt(provider, request)
+            first = try await attempt(provider, capped)
         } catch let error as CleanupProviderError {
-            guard request.maxOutputTokens != nil, case .rejected(let status, _, _) = error,
-                status == 400 || status == 422
-            else {
+            guard case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
                 throw error
             }
             ScribeLog.info(
                 .cleanup, "Test Connection retrying without an output limit", .name("provider", kind), .failure(error))
-            return try await attempt(provider, request.withoutOutputLimit())
+            return try await lastAttempt(provider, uncapped, answer: .textWithoutOutputLimit)
+        }
+
+        switch first {
+        case .text:
+            return .text
+        case .stoppedAtCeiling:
+            ScribeLog.info(.cleanup, "Test Connection confirming without an output limit", .name("provider", kind))
+            return try await lastAttempt(provider, uncapped, answer: .textAfterOutputLimit)
         }
     }
 
-    /// One probe request. A `length` stop with nothing visible is an answer only when this request set the limit.
-    private static func attempt(_ provider: any CleanupProvider, _ request: CleanupRequest) async throws -> ProbeAnswer {
+    /// One probe request. A `length` stop with nothing visible is `stoppedAtCeiling` only when this request set the
+    /// ceiling; without one, it stays the failure it is for a dictation.
+    private static func attempt(
+        _ provider: any CleanupProvider, _ request: CleanupRequest
+    ) async throws -> AttemptResult {
+        try Task.checkCancellation()
         do {
             _ = try await provider.clean(request)
             return .text
@@ -150,7 +182,19 @@ final class CleanupProviderCache: Sendable {
             guard request.maxOutputTokens != nil, error == .invalidResponse(.outputLimitReachedBeforeText) else {
                 throw error
             }
-            return .outputLimit
+            return .stoppedAtCeiling
+        }
+    }
+
+    /// The second and last request, without a ceiling: text is `answer`, and anything else is a failure.
+    private static func lastAttempt(
+        _ provider: any CleanupProvider, _ request: CleanupRequest, answer: ProbeAnswer
+    ) async throws -> ProbeAnswer {
+        switch try await attempt(provider, request) {
+        case .text:
+            return answer
+        case .stoppedAtCeiling:
+            throw CleanupProviderError.invalidResponse(.outputLimitReachedBeforeText)
         }
     }
 
@@ -158,6 +202,9 @@ final class CleanupProviderCache: Sendable {
     /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
     private func check(_ connection: CleanupConnection) async throws -> CleanupConnectionCheck {
         let kind = connection.kind
+        // A check cancelled before it began (Cancel pressed at once, Settings closed) builds nothing and reads no
+        // Keychain item: the task group still starts its child when the group is already cancelled.
+        try Task.checkCancellation()
         let provider: any CleanupProvider
         do {
             provider = try entry(for: connection).provider
@@ -190,10 +237,13 @@ final class CleanupProviderCache: Sendable {
         switch answer {
         case .text:
             return connected
-        case .outputLimit:
+        case .textAfterOutputLimit:
             return connected
-                + " It spent the test's small output allowance thinking before writing any text; dictations have no such"
-                + " limit."
+                + " Its first answer stopped at the test's small output allowance before any text, so Scribe asked once"
+                + " more without one, and it answered."
+        case .textWithoutOutputLimit:
+            return connected
+                + " The endpoint refused the test's output allowance, so Scribe asked once more without one."
         }
     }
 

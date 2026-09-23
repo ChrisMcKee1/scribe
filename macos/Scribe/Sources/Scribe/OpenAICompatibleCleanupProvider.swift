@@ -134,7 +134,7 @@ struct ChatCompletionsTransport: Sendable {
         guard !text.isEmpty else {
             // `length` with nothing visible: the output limit ran out before any text, which a reasoning model does
             // when a request caps its output tightly. Kept apart from an empty answer so Test Connection, which sends
-            // such a cap, can tell a model that answered from one that did not; either way there is no text.
+            // such a cap, knows to ask once more without one; for a dictation either one is no text.
             throw CleanupProviderError.invalidResponse(
                 choice?.finishReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
         }
