@@ -23,6 +23,10 @@ extension AppProfileSettingsAccess {
 @MainActor
 final class AppProfileSettingsModel: ObservableObject {
     @Published private(set) var profiles: [AppProfile] = []
+    /// Why the newest read failed. Kept apart from `errorMessage`, so a read that finishes after an action failed
+    /// never clears the action's failure.
+    @Published private(set) var loadError: String?
+    /// Why the last action (an add, switch, delete, import and the like) failed.
     @Published private(set) var errorMessage: String?
     @Published private(set) var isAdding = false
     @Published private(set) var load = SettingsSectionLoad()
@@ -49,12 +53,12 @@ final class AppProfileSettingsModel: ObservableObject {
                 return
             }
             profiles = loaded
-            errorMessage = nil
+            loadError = nil
         } catch {
             guard load.fail(ticket) else {
                 return
             }
-            errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
         }
     }
 

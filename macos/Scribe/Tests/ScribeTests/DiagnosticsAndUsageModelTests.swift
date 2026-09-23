@@ -152,7 +152,7 @@ final class DiagnosticsAndUsageModelTests: XCTestCase {
         XCTAssertEqual(model.snapshot?.dictations, 4)
         XCTAssertFalse(model.periodCapped)
         XCTAssertNil(model.coverageNote)
-        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.loadError)
     }
 
     @MainActor
@@ -183,7 +183,7 @@ final class DiagnosticsAndUsageModelTests: XCTestCase {
         await gates.gate(0).open()
         await older.value
 
-        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.loadError)
         XCTAssertEqual(model.snapshot?.dictations, 4)
     }
 
@@ -203,6 +203,34 @@ final class DiagnosticsAndUsageModelTests: XCTestCase {
         XCTAssertEqual(
             model.coverageNote,
             "Covers the newest \(UsageAnalyzer.historyLimit.formatted()) dictations in this period.")
+    }
+
+    @MainActor
+    func testAFailedTermAddStaysShownWhenAnOlderReloadFinishesAfterIt() async {
+        let gate = SettingsTestGate()
+        let now = fixedNow
+        let model = UsageInsightsModel(
+            access: UsageInsightsAccess(
+                loadReport: { _, _ in
+                    await gate.pass()
+                    return Self.report(dictations: 2, capped: false)
+                },
+                addTerm: { _ in throw StorageTestFailure(message: "the term was not added") }),
+            onChanged: {},
+            now: { now })
+
+        let loading = Task { await model.reload() }
+        await gate.waitForArrival()
+        await model.addTermToDictionary(
+            UsageAnalyzer.TermUsage(text: "ReBAC", dictations: 3, occurrences: 4, covered: false))
+        XCTAssertEqual(model.errorMessage, "the term was not added")
+
+        await gate.open()
+        await loading.value
+
+        XCTAssertEqual(model.snapshot?.dictations, 2)
+        XCTAssertEqual(model.errorMessage, "the term was not added")
+        XCTAssertNil(model.loadError)
     }
 
     @MainActor

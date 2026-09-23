@@ -217,4 +217,47 @@ final class LastTranscriptStoreTests: XCTestCase {
         XCTAssertTrue(store.update(original: "aspire is great", updated: "Aspire is great"))
         XCTAssertEqual(store.get(), "Aspire is great")
     }
+
+    // MARK: - Recovery generation (a Clear fences off reads that began before it)
+
+    func testASeedReadBeforeAClearIsRefusedAfterIt() {
+        let store = LastTranscriptStore()
+        let generation = store.generation
+
+        store.removeAll()
+
+        XCTAssertFalse(store.seed(["text the user deleted"], readAt: generation))
+        XCTAssertTrue(store.recent().isEmpty)
+        XCTAssertTrue(store.seed(["read after the clear"], readAt: store.generation))
+        XCTAssertEqual(store.recent(), ["read after the clear"])
+    }
+
+    func testARecoveryReadThatFinishesAfterASuccessfulClearIsDropped() async {
+        let store = LastTranscriptStore()
+        let gate = SettingsTestGate()
+        let seeding = Task {
+            await store.seed(from: {
+                await gate.pass()
+                return ["text the user deleted"]
+            })
+        }
+        await gate.waitForArrival()
+
+        // The successful Clear's callback runs while the read is still out.
+        store.removeAll()
+        await gate.open()
+
+        let seeded = await seeding.value
+        XCTAssertFalse(seeded)
+        XCTAssertTrue(store.recent().isEmpty)
+    }
+
+    func testARecoveryReadWithNoClearInTheMeantimeStillSeeds() async {
+        let store = LastTranscriptStore()
+
+        let seeded = await store.seed(from: { ["from history"] })
+
+        XCTAssertTrue(seeded)
+        XCTAssertEqual(store.recent(), ["from history"])
+    }
 }

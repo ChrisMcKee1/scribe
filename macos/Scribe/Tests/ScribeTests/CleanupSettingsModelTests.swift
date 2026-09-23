@@ -155,7 +155,10 @@ final class CleanupSettingsModelTests: XCTestCase {
         let model = makeModel(backing)
         backing.drafts.openAIApiKey = "typed but not saved"
 
-        backing.storeFromElsewhere { $0.isEnabled = true }
+        // The model has to be alive, and observing, when the change arrives from elsewhere.
+        withExtendedLifetime(model) {
+            backing.storeFromElsewhere { $0.isEnabled = true }
+        }
 
         XCTAssertEqual(backing.drafts.openAIApiKey, "typed but not saved")
         XCTAssertNil(backing.apiKey)

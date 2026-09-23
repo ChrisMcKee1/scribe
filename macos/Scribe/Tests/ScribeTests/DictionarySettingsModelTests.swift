@@ -63,7 +63,7 @@ final class DictionarySettingsModelTests: XCTestCase {
 
         XCTAssertEqual(model.entries.map(\.pattern), ["newer"])
         XCTAssertTrue(model.load.isLoaded)
-        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.loadError)
     }
 
     @MainActor
@@ -90,7 +90,7 @@ final class DictionarySettingsModelTests: XCTestCase {
         await gates.gate(0).open()
         await older.value
 
-        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(model.loadError)
         XCTAssertEqual(model.entries.map(\.pattern), ["newer"])
         XCTAssertTrue(model.load.isLoaded)
     }
@@ -119,9 +119,38 @@ final class DictionarySettingsModelTests: XCTestCase {
         await gates.gate(0).open()
         await older.value
 
-        XCTAssertEqual(model.errorMessage, "the newer read failed")
+        XCTAssertEqual(model.loadError, "the newer read failed")
         XCTAssertTrue(model.entries.isEmpty)
         XCTAssertEqual(model.load.state, .failed)
+    }
+
+    // MARK: - A read never clears an action's failure
+
+    @MainActor
+    func testAFailedAddStaysShownWhenAnOlderReloadFinishesAfterIt() async {
+        let gate = SettingsTestGate()
+        let drafts = SettingsDrafts()
+        var access = Self.access(loadEntries: {
+            await gate.pass()
+            return [Self.rule(1, "stored")]
+        })
+        access.addEntry = { _ in throw StorageTestFailure(message: "the rule was not saved") }
+        let model = DictionarySettingsModel(access: access, drafts: drafts, onChanged: {})
+
+        let loading = Task { await model.reload() }
+        await gate.waitForArrival()
+        drafts.dictionaryPattern = "kay eight ess"
+        drafts.dictionaryReplacement = "K8s"
+        await model.addFromDrafts()
+        XCTAssertEqual(model.errorMessage, "the rule was not saved")
+
+        await gate.open()
+        await loading.value
+
+        XCTAssertEqual(model.entries.map(\.pattern), ["stored"])
+        XCTAssertEqual(model.errorMessage, "the rule was not saved")
+        XCTAssertNil(model.loadError)
+        XCTAssertEqual(drafts.dictionaryPattern, "kay eight ess")
     }
 
     // MARK: - An import plans against what is stored, never against the rows on screen

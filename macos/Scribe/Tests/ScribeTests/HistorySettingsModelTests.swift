@@ -167,6 +167,42 @@ final class HistorySettingsModelTests: XCTestCase {
         writer.complete(timeout: 5)
     }
 
+    /// A startup or Quick Add seed that read the old transcripts before the Clear, and finishes after the Clear's
+    /// callback emptied the ring, must not put the deleted text back.
+    @MainActor
+    func testARecoveryReadBegunBeforeASuccessfulClearDoesNotRestoreTheClearedText() async throws {
+        let store = try makeStore()
+        try record(store, "text the user clears")
+        let writer = HistoryWriter(recorder: store)
+        let ring = LastTranscriptStore()
+        let readGate = SettingsTestGate()
+        let model = HistorySettingsModel(
+            access: .live(store: store, maintenance: StorageMaintenance(store: store, historyWriter: writer)),
+            onCleared: { ring.removeAll() })
+        await model.reload()
+
+        let seeding = Task {
+            await ring.seed(from: {
+                let transcripts = try await store.loadRecentTranscripts(limit: LastTranscriptStore.capacity)
+                await readGate.pass()
+                return transcripts
+            })
+        }
+        await readGate.waitForArrival()
+
+        model.requestClear()
+        await model.confirmClear()
+        XCTAssertEqual(model.statusMessage, "Cleared 1 dictation.")
+        XCTAssertEqual(try store.historyCount(), 0)
+
+        await readGate.open()
+        let seeded = await seeding.value
+
+        XCTAssertFalse(seeded)
+        XCTAssertTrue(ring.recent().isEmpty)
+        writer.complete(timeout: 5)
+    }
+
     @MainActor
     func testASecondClearWhileOneRunsDoesNothing() async {
         let gate = SettingsTestGate()

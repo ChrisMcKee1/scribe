@@ -46,6 +46,10 @@ extension DictionarySettingsAccess {
 @MainActor
 final class DictionarySettingsModel: ObservableObject {
     @Published private(set) var entries: [DictionaryEntry] = []
+    /// Why the newest read failed. Kept apart from `errorMessage`, so a read that finishes after an action failed
+    /// never clears the action's failure.
+    @Published private(set) var loadError: String?
+    /// Why the last action (an add, switch, delete, import and the like) failed.
     @Published private(set) var errorMessage: String?
     @Published private(set) var statusMessage: String?
     @Published private(set) var isAdding = false
@@ -83,12 +87,12 @@ final class DictionarySettingsModel: ObservableObject {
                 return
             }
             entries = loaded
-            errorMessage = nil
+            loadError = nil
         } catch {
             guard load.fail(ticket) else {
                 return
             }
-            errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
         }
     }
 

@@ -33,6 +33,10 @@ extension UsageInsightsAccess {
 final class UsageInsightsModel: ObservableObject {
     @Published private(set) var snapshot: UsageAnalyzer.Snapshot?
     @Published private(set) var periodCapped = false
+    /// Why the newest read failed. Kept apart from `errorMessage`, so a read that finishes after an add failed
+    /// never clears the add's failure.
+    @Published private(set) var loadError: String?
+    /// Why the last "Add to Dictionary" failed.
     @Published private(set) var errorMessage: String?
     @Published private(set) var statusMessage: String?
     @Published private(set) var load = SettingsSectionLoad()
@@ -72,12 +76,12 @@ final class UsageInsightsModel: ObservableObject {
             }
             snapshot = report.snapshot
             periodCapped = report.periodCapped
-            errorMessage = nil
+            loadError = nil
         } catch {
             guard load.fail(ticket) else {
                 return
             }
-            errorMessage = error.localizedDescription
+            loadError = error.localizedDescription
         }
     }
 

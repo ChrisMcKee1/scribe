@@ -122,6 +122,48 @@ struct UsagePeriodInputs: Sendable {
     let knownTerms: [DictionaryEntry]
 }
 
+/// The migration `PersistenceStore.beginPreparing()` queued, to wait on later. It settles once, when the
+/// migration has run or could not start.
+///
+/// `@unchecked Sendable` because the compiler cannot see the locking: `outcome` and `waiters` are only
+/// read or written while `lock` is held.
+final class StoragePreparation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: Result<Void, any Error>?
+    private var waiters: [CheckedContinuation<Void, any Error>] = []
+
+    fileprivate init() {}
+
+    fileprivate func settle(_ result: Result<Void, any Error>) {
+        lock.lock()
+        guard outcome == nil else {
+            lock.unlock()
+            return
+        }
+        outcome = result
+        let waiting = waiters
+        waiters.removeAll()
+        lock.unlock()
+        for waiter in waiting {
+            waiter.resume(with: result)
+        }
+    }
+
+    /// Returns once the migration has run, and throws its error if it failed.
+    func finish() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            lock.lock()
+            if let outcome {
+                lock.unlock()
+                continuation.resume(with: outcome)
+                return
+            }
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+}
+
 /// The app's one SQLite database: dictation history, the dictionary, snippets, app profiles and the
 /// history retention choice.
 ///
@@ -208,18 +250,38 @@ final class PersistenceStore: Sendable {
         logger.info("Database ready (new history table: \(createdHistory)).")
     }
 
-    /// `initialize()` for main-actor callers: the migration runs on the storage queue, not the
-    /// caller's thread. The queue runs operations in the order they reach it, so anything queued on
-    /// the store after this call runs against the migrated schema.
+    /// `initialize()` for main-actor callers: queues the migration and waits for it without holding the
+    /// caller's thread. `beginPreparing()` describes the ordering it gives.
     func prepare() async throws {
-        try createDatabaseDirectory()
-        let createdHistory = try await owner.withSessionAsync(.foreground) { session in
+        try await beginPreparing().finish()
+    }
+
+    /// Queues the migration on the storage queue now, from the calling thread, and returns a handle to
+    /// wait on. The queue runs operations in the order they reach it, so every read and write queued after
+    /// this returns (from Settings, Quick Add, the history writer or maintenance) meets the migrated schema,
+    /// or the migration's failure. The app calls it first thing at launch, before the hotkeys start.
+    /// Creating the database folder is the only work done on the calling thread.
+    func beginPreparing() -> StoragePreparation {
+        let preparation = StoragePreparation()
+        do {
+            try createDatabaseDirectory()
+        } catch {
+            preparation.settle(.failure(error))
+            return preparation
+        }
+
+        let logger = self.logger
+        owner.enqueue(.foreground) { session in
             try session.transaction(.migrate) {
                 try Self.migrate(session)
             }
+        } completion: { result in
+            if case .success(let createdHistory) = result {
+                logger.info("Database ready (new history table: \(createdHistory)).")
+            }
+            preparation.settle(result.map { _ in () })
         }
-
-        logger.info("Database ready (new history table: \(createdHistory)).")
+        return preparation
     }
 
     private func createDatabaseDirectory() throws {
@@ -1260,6 +1322,19 @@ private final class ConnectionOwner: @unchecked Sendable {
             queue.async { [self] in
                 continuation.resume(with: Result { try runSession(purpose, body) })
             }
+        }
+    }
+
+    /// Queues `body` on the storage queue now, from the calling thread, and hands its result to
+    /// `completion` there. Everything queued after this returns runs after `body`.
+    func enqueue<T>(
+        _ purpose: ConnectionPurpose,
+        _ body: @escaping @Sendable (SQLiteSession) throws -> T,
+        completion: @escaping @Sendable (Result<T, any Error>) -> Void
+    ) {
+        registerWaiter(purpose)
+        queue.async { [self] in
+            completion(Result { try runSession(purpose, body) })
         }
     }
 

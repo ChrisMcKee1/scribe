@@ -401,6 +401,9 @@ private struct DictionarySettingsTab: View {
                 Spacer()
             }
 
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
             if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
@@ -729,6 +732,9 @@ private struct SnippetsSettingsTab: View {
                 .disabled(!model.canAdd)
             }
 
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
             if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
@@ -804,6 +810,9 @@ private struct AppProfilesSettingsTab: View {
                 .disabled(!model.canAdd)
             }
 
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
             if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
@@ -1236,6 +1245,10 @@ private struct UsageInsightsSettingsTab: View {
                 }
             }
 
+            if let loadError = model.loadError {
+                Text(loadError)
+                    .foregroundStyle(.red)
+            }
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .foregroundStyle(.red)

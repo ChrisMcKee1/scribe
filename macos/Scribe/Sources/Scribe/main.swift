@@ -46,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         load: { [persistenceStore] in try await persistenceStore.loadRuleSet() },
         apply: { [weak self] rules in self?.applyRules(rules) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
+    /// Opens once the database is migrated and the first rule load has finished; dictation post-processing and
+    /// Quick Add wait for it. The lifecycle owner is expected to take this over.
+    private let startupGate = StartupGate()
     private let audioCaptureEngine = AudioCaptureEngine()
     private lazy var transcriptionEngine = try? TranscriptionEngine(
         logSink: { message in AppDelegate.writeLogLine(message) })
@@ -88,7 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
-        Task { await prepareStorage() }
+        // First, before anything can reach the store and before the hotkeys start: the storage queue runs
+        // operations in order, so every storage call made after this meets the migrated schema.
+        let preparation = persistenceStore.beginPreparing()
+        Task { await prepareStorage(after: preparation) }
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
@@ -150,29 +156,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     /// Fills `lastTranscriptStore` from durable history on launch, so the "Recent Dictations" tray
     /// submenu and the Quick Add popup both survive an app restart instead of starting empty, the
-    /// same as Windows' history-backed recovery fallback. `LastTranscriptStore.seed` only ever
-    /// fills an empty ring, so this is safe to call again defensively before Quick Add opens. The read
-    /// waits on the storage queue, not the main actor, and covers only the newest few rows.
+    /// same as Windows' history-backed recovery fallback. `LastTranscriptStore.seed(from:)` only ever
+    /// fills an empty ring and refuses a read that a successful Clear overtook, so this is safe to call
+    /// again before Quick Add opens. The read waits on the storage queue, not the main actor, and covers
+    /// only the newest few rows.
     private func seedLastTranscriptStoreFromHistory() async {
-        guard lastTranscriptStore.recent().isEmpty else {
-            return
-        }
-        if let transcripts = try? await persistenceStore.loadRecentTranscripts(limit: LastTranscriptStore.capacity) {
-            lastTranscriptStore.seed(transcripts)
-        }
+        let store = persistenceStore
+        await lastTranscriptStore.seed(from: {
+            try await store.loadRecentTranscripts(limit: LastTranscriptStore.capacity)
+        })
     }
 
     /// Opens the quick "Add to Dictionary" popup, mirroring Windows' `ShowQuickAdd()`. Seeds
     /// `LastTranscriptStore` from durable history the first time the ring is empty (e.g. right
     /// after launch, before any dictation has happened this run), so the popup has real transcripts
-    /// to pick a word from rather than an empty list.
+    /// to pick a word from rather than an empty list. It shows and changes rules, so it waits for
+    /// startup's first rule load (`startupGate`).
     @objc private func openQuickAdd(_ sender: Any?) {
         Task { [weak self] in
             guard let self else { return }
+            _ = await startupGate.wait()
             await seedLastTranscriptStoreFromHistory()
-            let recent = lastTranscriptStore.recent()
             let existing = (try? await persistenceStore.loadAllDictionaryEntries()) ?? []
-            presentQuickAdd(recent: recent, existing: existing)
+            // The transcripts are taken only now, after the reads: a Clear that succeeded while they ran has
+            // emptied the ring and made the read above stale, so the popup never shows text the user deleted.
+            presentQuickAdd(recent: lastTranscriptStore.recent(), existing: existing)
         }
     }
 
@@ -497,20 +505,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         }
     }
 
-    /// Opens and migrates the database on the storage queue, then starts maintenance, loads the rules
-    /// and seeds the recovery ring, none of it on the main actor. The storage queue runs operations in
-    /// the order they reach it, so a write or read queued after the migration runs against the
-    /// migrated schema.
-    private func prepareStorage() async {
-        do {
-            try await persistenceStore.prepare()
-        } catch {
-            Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
-            logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
-            return
+    /// Waits for the migration queued at launch, starts maintenance, makes the first attempt to load the rules
+    /// and opens `startupGate`, then seeds the recovery ring; none of it holds the main actor. If the migration or
+    /// the first rule read fails, the gate still opens: dictation works without stored rules, and the user is told
+    /// once (a log line and a notification) rather than dictation waiting forever.
+    private func prepareStorage(after preparation: StoragePreparation) async {
+        let state = await startupGate.open(
+            afterMigrating: { [weak self] in
+                do {
+                    try await preparation.finish()
+                } catch {
+                    self?.reportStorageUnavailable(error)
+                    throw error
+                }
+            },
+            then: { [weak self] in self?.storageMaintenance.start() },
+            loadingRules: { [weak self] in
+                await self?.ruleRefresher.refreshUntilSettled() == .applied
+            })
+        if state == .withoutStoredRules {
+            notifyDictationWithoutStoredRules()
         }
-        storageMaintenance.start()
-        await ruleRefresher.refresh()
         await seedLastTranscriptStoreFromHistory()
     }
 
@@ -591,8 +606,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     /// A failed refresh keeps the rules already in use.
     private func reportRuleLoadFailure(_ error: any Error) {
-        Self.writeLogLine("Failed to load dictionary/snippets/profiles: \(error.localizedDescription)")
-        logger.error("Failed to load dictionary/snippets/profiles: \(error.localizedDescription, privacy: .public)")
+        ScribeLog.error(.persistence, "Could not load the dictionary rules, snippets and app profiles", .failure(error))
+    }
+
+    private func reportStorageUnavailable(_ error: any Error) {
+        ScribeLog.error(.persistence, "Could not open or migrate the database", .failure(error))
+    }
+
+    /// Startup's decision when the migration or the first rule read fails: dictation keeps working without the
+    /// stored rules, and the user is told once, through the notification path injection failures use.
+    private func notifyDictationWithoutStoredRules() {
+        ScribeLog.warning(.persistence, "Dictation runs without stored rules until they load")
+        postNotification(
+            title: "Your dictionary rules are not loaded",
+            body: "Scribe could not read your dictionary rules, snippets and app profiles, so dictation works "
+                + "without them for now. Restarting Scribe tries again.",
+            categoryIdentifier: nil)
     }
 
     private func startCapture() {
@@ -797,10 +826,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         title: String = "Dictation could not be inserted",
         body: String = "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it."
     ) {
+        postNotification(title: title, body: body, categoryIdentifier: Self.injectionFailureCategoryIdentifier)
+    }
+
+    /// Posts one local notification, with `categoryIdentifier`'s actions when given. Best-effort: a denied
+    /// authorization or a failed add is logged and ignored.
+    private func postNotification(title: String, body: String, categoryIdentifier: String?) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.categoryIdentifier = Self.injectionFailureCategoryIdentifier
+        if let categoryIdentifier {
+            content.categoryIdentifier = categoryIdentifier
+        }
         content.sound = .default
 
         let request = UNNotificationRequest(
@@ -810,7 +847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
         UNUserNotificationCenter.current().add(request) { error in
             if let error {
-                AppDelegate.writeLogLine("Failed to show the injection recovery notification: \(error.localizedDescription)")
+                AppDelegate.writeLogLine("Failed to show a notification: \(error.localizedDescription)")
             }
         }
     }
@@ -875,9 +912,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             let decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart.uptimeNanoseconds) / 1_000_000.0
             Self.writeLogLine("Real transcript (\(source)): \(transcript)")
 
-            let postProcessStart = DispatchTime.now()
-            let postProcessing = textPostProcessor.processDetailed(transcript)
-            let postProcessMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - postProcessStart.uptimeNanoseconds) / 1_000_000.0
+            // Waits for startup's first rule load, so a dictation that finishes before the user's rules are in
+            // place is never processed against the empty rule set; afterwards it returns at once (`StartupGate`).
+            let (postProcessing, postProcessMilliseconds) = await startupGate.whenOpen {
+                () -> (TextPostProcessingResult, Double) in
+                let postProcessStart = DispatchTime.now()
+                let result = textPostProcessor.processDetailed(transcript)
+                let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - postProcessStart.uptimeNanoseconds) / 1_000_000.0
+                return (result, milliseconds)
+            }
             var processedText = postProcessing.text
             if processedText != transcript {
                 Self.writeLogLine("Post-processed transcript: \(processedText)")

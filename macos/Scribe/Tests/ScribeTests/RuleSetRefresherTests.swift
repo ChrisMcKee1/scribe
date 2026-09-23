@@ -50,9 +50,12 @@ final class RuleSetRefresherTests: XCTestCase {
         await gates.gate(1).waitForArrival()
 
         await gates.gate(1).open()
-        await newer.value
+        let newerOutcome = await newer.value
         await gates.gate(0).open()
-        await older.value
+        let olderOutcome = await older.value
+
+        XCTAssertEqual(newerOutcome, .applied)
+        XCTAssertEqual(olderOutcome, .superseded)
 
         XCTAssertEqual(sink.applied, [Self.rules("newer")])
         XCTAssertEqual(sink.failures, 0)
@@ -96,9 +99,12 @@ final class RuleSetRefresherTests: XCTestCase {
         await gates.gate(1).waitForArrival()
 
         await gates.gate(1).open()
-        await newer.value
+        let newerOutcome = await newer.value
         await gates.gate(0).open()
-        await older.value
+        let olderOutcome = await older.value
+
+        XCTAssertEqual(newerOutcome, .applied)
+        XCTAssertEqual(olderOutcome, .superseded)
 
         XCTAssertEqual(sink.applied, [Self.rules("newer")])
         XCTAssertEqual(sink.failures, 0)

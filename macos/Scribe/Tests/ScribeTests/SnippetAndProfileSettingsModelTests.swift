@@ -139,6 +139,67 @@ final class SnippetAndProfileSettingsModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAFailedSnippetAddStaysShownWhenAnOlderReloadFinishesAfterIt() async {
+        let gate = SettingsTestGate()
+        let drafts = SettingsDrafts()
+        let model = SnippetSettingsModel(
+            access: SnippetSettingsAccess(
+                loadSnippets: {
+                    await gate.pass()
+                    return [Snippet(id: 1, phrase: "stored", template: "Stored")]
+                },
+                addSnippet: { _ in throw StorageTestFailure(message: "the snippet was not saved") },
+                setEnabled: { _, _ in },
+                deleteSnippet: { _ in }),
+            drafts: drafts,
+            onChanged: {})
+
+        let loading = Task { await model.reload() }
+        await gate.waitForArrival()
+        drafts.snippetPhrase = "sign off block"
+        drafts.snippetTemplate = "Best"
+        await model.addFromDrafts()
+        XCTAssertEqual(model.errorMessage, "the snippet was not saved")
+
+        await gate.open()
+        await loading.value
+
+        XCTAssertEqual(model.snippets.map(\.phrase), ["stored"])
+        XCTAssertEqual(model.errorMessage, "the snippet was not saved")
+        XCTAssertNil(model.loadError)
+    }
+
+    @MainActor
+    func testAFailedProfileAddStaysShownWhenAnOlderReloadFinishesAfterIt() async {
+        let gate = SettingsTestGate()
+        let drafts = SettingsDrafts()
+        let model = AppProfileSettingsModel(
+            access: AppProfileSettingsAccess(
+                loadProfiles: {
+                    await gate.pass()
+                    return [AppProfile(id: 1, name: "Stored", bundleIdentifiers: ["com.apple.Terminal"], processNames: [])]
+                },
+                addProfile: { _ in throw StorageTestFailure(message: "the profile was not saved") },
+                deleteProfile: { _ in }),
+            drafts: drafts,
+            onChanged: {})
+
+        let loading = Task { await model.reload() }
+        await gate.waitForArrival()
+        drafts.profileName = "Chat"
+        drafts.profileBundleIdentifiers = "com.tinyspeck.slackmacgap"
+        await model.addFromDrafts()
+        XCTAssertEqual(model.errorMessage, "the profile was not saved")
+
+        await gate.open()
+        await loading.value
+
+        XCTAssertEqual(model.profiles.map(\.name), ["Stored"])
+        XCTAssertEqual(model.errorMessage, "the profile was not saved")
+        XCTAssertNil(model.loadError)
+    }
+
+    @MainActor
     func testAFailedProfileWriteIsShownAndKeepsTheDrafts() async {
         let drafts = SettingsDrafts()
         let refreshes = SettingsTestCounter()
