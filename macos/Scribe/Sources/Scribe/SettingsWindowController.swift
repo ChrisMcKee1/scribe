@@ -35,6 +35,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        onClose(self) // MUTATION M10: released inside AppKit's close
+        // Released on the next turn of the main actor: AppKit is still inside the window's close when this runs,
+        // and dropping the last reference to the window here could free it while AppKit is using it.
+        let onClose = self.onClose
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            onClose(self)
+        }
     }
 }

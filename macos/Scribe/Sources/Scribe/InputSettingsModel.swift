@@ -13,7 +13,10 @@ final class HotkeyBindingModel: ObservableObject {
     init(store: HotkeySettingsStore, center: NotificationCenter = .default) {
         self.store = store
         binding = store.binding
-        _ = center // MUTATION M8: Welcome keeps the key it was created with
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
+            [weak self] in
+            self?.reload()
+        }
     }
 
     func reload() {
@@ -80,7 +83,8 @@ final class InputSettingsModel: ObservableObject {
     func selectDevice(uid: String?) {
         guard uid != selectedDeviceUID else { return }
         if let uid {
-            deviceStore.select(devices.first(where: { $0.uid == uid })) // MUTATION M12: unlisted UID clears
+            guard let device = devices.first(where: { $0.uid == uid }) else { return }
+            deviceStore.select(device)
         } else {
             deviceStore.select(nil)
         }

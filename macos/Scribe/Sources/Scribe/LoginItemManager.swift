@@ -27,7 +27,7 @@ enum LoginItemState: Equatable, Sendable {
 
     /// Only `.enabled` means Scribe will actually open at login, so it is the only state the switch shows as on.
     var isOn: Bool {
-        self == .enabled || self == .requiresApproval // MUTATION M4
+        self == .enabled
     }
 }
 
@@ -231,8 +231,7 @@ final class LoginItemSwitch: ObservableObject {
         let ticket = version
         let read = await service.state()
         isReading = false
-        guard pendingRequest == nil else { return } // MUTATION M3: no ticket check
-        _ = ticket
+        guard pendingRequest == nil, ticket == version else { return }
         state = read
         refusal = nil
     }

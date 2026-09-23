@@ -125,14 +125,17 @@ final class CleanupSettingsModel: ObservableObject {
     init(access: CleanupSettingsAccess, center: NotificationCenter = .default) {
         self.access = access
         values = access.load()
-        _ = center // MUTATION M2: no observation
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
+            [weak self] in
+            self?.reload()
+        }
     }
 
     /// Whether a control is disabled now. The switch never is: the provider controls depend on it, it does not.
     func isDisabled(_ control: Control) -> Bool {
         switch control {
         case .enableSwitch:
-            return !values.isEnabled // MUTATION M1
+            return false
         case .provider, .providerDetails:
             return !values.isEnabled
         case .connectionTest:
@@ -218,7 +221,7 @@ final class CleanupSettingsModel: ObservableObject {
         errorMessage = nil
         let result = await access.checkConnection()
         isTesting = false
-        _ = started // MUTATION M13: result for older settings is shown
+        guard started == revision else { return }
         if result.reachable {
             statusMessage = result.message
         } else {
@@ -229,7 +232,7 @@ final class CleanupSettingsModel: ObservableObject {
     private func store(changesFrom old: CleanupSettingsValues) {
         guard values != old else { return }
         revision += 1
-        if true { // MUTATION M14: a reload is stored back
+        if !isReloading {
             isSaving = true
             access.save(values, old)
             isSaving = false

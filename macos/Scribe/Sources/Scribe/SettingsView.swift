@@ -175,7 +175,9 @@ final class OverlayAnchorSelection: ObservableObject {
         self.controller = controller
         self.defaults = defaults
         anchor = controller.anchor
-        // MUTATION M11: the Overlay tab keeps the anchor it showed first
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification) { [weak self] in
+            self?.reload()
+        }
     }
 
     func select(_ anchor: OverlayAnchor) {
