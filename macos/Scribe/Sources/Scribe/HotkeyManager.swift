@@ -18,7 +18,7 @@ final class HotkeyManager {
     /// key code, so an already-held key finishes normally via its own release event... except that
     /// release event will no longer match the new code either. Settings therefore only allows
     /// recording a new key while no capture is active (see `HotkeySettingsTab`).
-    var keyCode: CGKeyCode = HotkeySettingsStore.keyCode
+    var keyCode: CGKeyCode
 
     /// Mirrors Windows' `DictationController.IsPaused`: the hook stays installed, but a hotkey
     /// press is ignored while paused rather than removing the event tap outright, so resuming
@@ -29,8 +29,13 @@ final class HotkeyManager {
     var onCaptureStopped: ((AudioCaptureSummary?) -> Void)?
     var onCaptureStartError: ((AudioCaptureEngineError) -> Void)?
 
-    init(audioCaptureEngine: AudioCaptureEngine, logSink: @escaping (String) -> Void) {
+    init(
+        audioCaptureEngine: AudioCaptureEngine,
+        keyCode: CGKeyCode = HotkeySettingsStore.keyCode,
+        logSink: @escaping (String) -> Void
+    ) {
         self.audioCaptureEngine = audioCaptureEngine
+        self.keyCode = keyCode
         self.logSink = logSink
     }
 

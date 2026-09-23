@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 /// The Settings window: a sidebar of sections, one tab per feature area. Tabs that show preferences re-read them
 /// after any preference write in this process, so a change made from the tray (AI cleanup, the overlay position)
 /// shows in an open window; tabs backed by `PersistenceStore` load when they appear. `SettingsWindowController`
-/// builds the window afresh on every open, so nothing a closed window showed is shown again later.
+/// builds the window afresh on every open, so nothing a closed window showed is shown again later, while what the
+/// user typed but did not save, and the section that was showing, live in the app-owned `SettingsDrafts`.
 ///
 /// A `NavigationSplitView` sidebar rather than `TabView`'s segmented control: with eleven sections the segmented
 /// strip truncated its labels and became unreadable, while a sidebar `List` scales the way System Settings does.
@@ -66,14 +67,14 @@ struct SettingsView: View {
     let dictionaryLibraryService: DictionaryLibraryService
     let onProfilesOrRulesChanged: () -> Void
     let onHotkeyChanged: (CGKeyCode) -> Void
+    /// Owned by the app, not the window, so unsaved entries and the section on screen survive the window closing.
+    @ObservedObject var drafts: SettingsDrafts
     var hotkeyStore: HotkeySettingsStore = .live
     var audioDeviceStore: AudioDeviceStore = .live
 
-    @State private var selection: SettingsSection? = .overlay
-
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selection) { section in
+            List(SettingsSection.allCases, selection: $drafts.section) { section in
                 Label(section.label, systemImage: section.systemImage)
                     .tag(section)
             }
@@ -90,7 +91,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        switch selection ?? .overlay {
+        switch drafts.section ?? .overlay {
         case .overlay:
             OverlaySettingsTab(overlayPanelController: overlayPanelController)
         case .hotkey:
@@ -99,15 +100,15 @@ struct SettingsView: View {
                 audioDeviceStore: audioDeviceStore,
                 onHotkeyChanged: onHotkeyChanged)
         case .dictionary:
-            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .libraries:
             DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
         case .snippets:
-            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .appProfiles:
-            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .aiCleanup:
-            CleanupSettingsTab()
+            CleanupSettingsTab(drafts: drafts)
         case .playground:
             PlaygroundSettingsTab(pipelineReportStore: pipelineReportStore)
         case .diagnostics:
@@ -352,8 +353,7 @@ private struct DictionarySettingsTab: View {
     let onChanged: () -> Void
 
     @State private var entries: [DictionaryEntry] = []
-    @State private var newPattern = ""
-    @State private var newReplacement = ""
+    @ObservedObject var drafts: SettingsDrafts
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var isLearning = false
@@ -367,11 +367,11 @@ private struct DictionarySettingsTab: View {
                 .font(.headline)
 
             HStack {
-                TextField("Spoken form (e.g. \"sherpa onnx\")", text: $newPattern)
-                TextField("Written form (e.g. \"sherpa-onnx\")", text: $newReplacement)
+                TextField("Spoken form (e.g. \"sherpa onnx\")", text: $drafts.dictionaryPattern)
+                TextField("Written form (e.g. \"sherpa-onnx\")", text: $drafts.dictionaryReplacement)
                 Button("Add", action: addEntry)
-                    .disabled(newPattern.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(drafts.dictionaryPattern.trimmingCharacters(in: .whitespaces).isEmpty
+                        || drafts.dictionaryReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
             HStack {
@@ -448,9 +448,9 @@ private struct DictionarySettingsTab: View {
     private func addEntry() {
         do {
             _ = try persistenceStore.insertDictionaryEntry(
-                DictionaryEntry(pattern: newPattern, replacement: newReplacement))
-            newPattern = ""
-            newReplacement = ""
+                DictionaryEntry(pattern: drafts.dictionaryPattern, replacement: drafts.dictionaryReplacement))
+            drafts.dictionaryPattern = ""
+            drafts.dictionaryReplacement = ""
             reload()
             onChanged()
         } catch {
@@ -869,8 +869,7 @@ private struct SnippetsSettingsTab: View {
     let onChanged: () -> Void
 
     @State private var snippets: [Snippet] = []
-    @State private var newPhrase = ""
-    @State private var newTemplate = ""
+    @ObservedObject var drafts: SettingsDrafts
     @State private var errorMessage: String?
 
     var body: some View {
@@ -879,13 +878,13 @@ private struct SnippetsSettingsTab: View {
                 .font(.headline)
 
             HStack(alignment: .top) {
-                TextField("Trigger phrase (e.g. \"sign off block\")", text: $newPhrase)
-                TextEditor(text: $newTemplate)
+                TextField("Trigger phrase (e.g. \"sign off block\")", text: $drafts.snippetPhrase)
+                TextEditor(text: $drafts.snippetTemplate)
                     .frame(height: 60)
                     .border(Color.gray.opacity(0.3))
                 Button("Add", action: addSnippet)
-                    .disabled(newPhrase.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newTemplate.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(drafts.snippetPhrase.trimmingCharacters(in: .whitespaces).isEmpty
+                        || drafts.snippetTemplate.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
             if let errorMessage {
@@ -934,9 +933,9 @@ private struct SnippetsSettingsTab: View {
 
     private func addSnippet() {
         do {
-            _ = try persistenceStore.insertSnippet(Snippet(phrase: newPhrase, template: newTemplate))
-            newPhrase = ""
-            newTemplate = ""
+            _ = try persistenceStore.insertSnippet(Snippet(phrase: drafts.snippetPhrase, template: drafts.snippetTemplate))
+            drafts.snippetPhrase = ""
+            drafts.snippetTemplate = ""
             reload()
             onChanged()
         } catch {
@@ -972,10 +971,7 @@ private struct AppProfilesSettingsTab: View {
     let onChanged: () -> Void
 
     @State private var profiles: [AppProfile] = []
-    @State private var newName = ""
-    @State private var newBundleIdentifiers = ""
-    @State private var newWritingStyle = ""
-    @State private var newNewlineMode: NewlineInjectionMode = .smartFlatten
+    @ObservedObject var drafts: SettingsDrafts
     @State private var errorMessage: String?
 
     var body: some View {
@@ -987,17 +983,17 @@ private struct AppProfilesSettingsTab: View {
                 .font(.caption)
 
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Profile name (e.g. \"Terminal\")", text: $newName)
-                TextField("Bundle identifiers, comma-separated", text: $newBundleIdentifiers)
-                TextField("Writing style override (optional)", text: $newWritingStyle)
-                Picker("Newline handling", selection: $newNewlineMode) {
+                TextField("Profile name (e.g. \"Terminal\")", text: $drafts.profileName)
+                TextField("Bundle identifiers, comma-separated", text: $drafts.profileBundleIdentifiers)
+                TextField("Writing style override (optional)", text: $drafts.profileWritingStyle)
+                Picker("Newline handling", selection: $drafts.profileNewlineMode) {
                     Text("Smart Flatten").tag(NewlineInjectionMode.smartFlatten)
                     Text("Always Flatten").tag(NewlineInjectionMode.alwaysFlatten)
                     Text("Keep Newlines").tag(NewlineInjectionMode.keepNewlines)
                 }
                 Button("Add Profile", action: addProfile)
-                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty
-                        || newBundleIdentifiers.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(drafts.profileName.trimmingCharacters(in: .whitespaces).isEmpty
+                        || drafts.profileBundleIdentifiers.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
             if let errorMessage {
@@ -1041,20 +1037,20 @@ private struct AppProfilesSettingsTab: View {
 
     private func addProfile() {
         do {
-            let bundleIdentifiers = newBundleIdentifiers
+            let bundleIdentifiers = drafts.profileBundleIdentifiers
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
             _ = try persistenceStore.insertAppProfile(AppProfile(
-                name: newName,
+                name: drafts.profileName,
                 bundleIdentifiers: bundleIdentifiers,
                 processNames: [],
-                writingStylePrompt: newWritingStyle.isEmpty ? nil : newWritingStyle,
-                newlineHandling: newNewlineMode))
-            newName = ""
-            newBundleIdentifiers = ""
-            newWritingStyle = ""
-            newNewlineMode = .smartFlatten
+                writingStylePrompt: drafts.profileWritingStyle.isEmpty ? nil : drafts.profileWritingStyle,
+                newlineHandling: drafts.profileNewlineMode))
+            drafts.profileName = ""
+            drafts.profileBundleIdentifiers = ""
+            drafts.profileWritingStyle = ""
+            drafts.profileNewlineMode = .smartFlatten
             reload()
             onChanged()
         } catch {
@@ -1079,12 +1075,14 @@ private struct AppProfilesSettingsTab: View {
 /// connection details and credentials. `CleanupSettingsModel` stores every non-secret field the moment it changes
 /// and re-reads them after a change made elsewhere, such as the tray's AI Cleanup item. The two secrets
 /// (OpenAI-compatible API key, Azure service-principal client secret) are explicit Save and Clear actions against
-/// Keychain, so a partly typed secret is never stored.
+/// Keychain, so a partly typed secret is never stored; until it is saved, what was typed lives in `SettingsDrafts`.
 private struct CleanupSettingsTab: View {
     @StateObject private var model: CleanupSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    init(access: CleanupSettingsAccess = .live) {
-        _model = StateObject(wrappedValue: CleanupSettingsModel(access: access))
+    init(drafts: SettingsDrafts, access: CleanupSettingsAccess = .live) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(wrappedValue: CleanupSettingsModel(access: access, drafts: drafts))
     }
 
     var body: some View {
@@ -1162,7 +1160,7 @@ private struct CleanupSettingsTab: View {
                 TextField("Model", text: $model.values.openAIModel)
                 SecureField(
                     model.hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
-                    text: $model.openAIApiKeyInput)
+                    text: $drafts.openAIApiKey)
                 HStack {
                     Button("Save Key") { model.saveOpenAIApiKey() }
                         .disabled(!model.canSaveOpenAIApiKey)
@@ -1191,7 +1189,7 @@ private struct CleanupSettingsTab: View {
                     TextField("Client ID", text: $model.values.azureClientId)
                     SecureField(
                         model.hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
-                        text: $model.azureClientSecretInput)
+                        text: $drafts.azureClientSecret)
                     HStack {
                         Button("Save Secret") { model.saveAzureClientSecret() }
                             .disabled(!model.canSaveAzureClientSecret)

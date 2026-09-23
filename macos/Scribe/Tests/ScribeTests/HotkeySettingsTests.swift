@@ -143,16 +143,24 @@ final class HotkeyBindingModelTests: XCTestCase {
 
 /// `HotkeyManager.keyCode` is a plain, publicly settable property (no event tap needs recreating
 /// to change it; `isPushToTalkEvent` reads it live), so this only needs to verify the starting key
-/// and that assignment sticks, without standing up a real CGEvent tap.
+/// and that assignment sticks, without standing up a real CGEvent tap. The starting key is passed in,
+/// so neither test reads the binding saved on this Mac.
 final class HotkeyManagerKeyCodeTests: XCTestCase {
-    func testStartsFromTheStoredKey() {
-        // Reads the live store without writing it; the value is whatever this Mac has saved.
-        let manager = HotkeyManager(audioCaptureEngine: AudioCaptureEngine(), logSink: { _ in })
-        XCTAssertEqual(manager.keyCode, HotkeySettingsStore.keyCode)
+    func testStartsFromTheStoredBindingItIsGiven() throws {
+        let suite = try SettingsTestDefaults()
+        defer { suite.remove() }
+        let store = HotkeySettingsStore(defaults: suite.defaults)
+        store.keyCode = 61
+
+        let manager = HotkeyManager(
+            audioCaptureEngine: AudioCaptureEngine(), keyCode: store.keyCode, logSink: { _ in })
+
+        XCTAssertEqual(manager.keyCode, 61)
     }
 
     func testKeyCodeCanBeReassignedLive() {
-        let manager = HotkeyManager(audioCaptureEngine: AudioCaptureEngine(), logSink: { _ in })
+        let manager = HotkeyManager(
+            audioCaptureEngine: AudioCaptureEngine(), keyCode: HotkeySettingsStore.defaultKeyCode, logSink: { _ in })
         manager.keyCode = 105
         XCTAssertEqual(manager.keyCode, 105)
     }

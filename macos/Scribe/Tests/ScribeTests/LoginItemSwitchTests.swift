@@ -8,6 +8,7 @@ import XCTest
 actor LoginItemServiceFake: LoginItemService {
     private(set) var current: LoginItemState
     private(set) var requests: [Bool] = []
+    private(set) var reads = 0
     private var refusal: LoginItemRefusal?
     private var stateAfterAcceptedRequest: LoginItemState?
     private var heldRead: SettingsTestGate?
@@ -18,6 +19,7 @@ actor LoginItemServiceFake: LoginItemService {
     }
 
     func state() async -> LoginItemState {
+        reads += 1
         let read = current
         if let gate = heldRead {
             heldRead = nil
@@ -267,6 +269,178 @@ final class LoginItemSwitchTests: XCTestCase {
         await loginItem.refresh()
 
         XCTAssertNil(loginItem.refusal)
+    }
+
+    /// Registered but waiting for approval is already a successful registration, and registering again is not an
+    /// approval: turning the switch on sends the user to Login Items and asks macOS for nothing.
+    @MainActor
+    func testTurningOnARegistrationThatAwaitsApprovalOpensLoginItemsAndRegistersNothing() async {
+        let service = LoginItemServiceFake(.requiresApproval)
+        let opened = SettingsTestCounter()
+        let loginItem = makeSwitch(service, openLoginItems: { opened.increment() })
+        await loginItem.refresh()
+
+        let outcome = await loginItem.setEnabled(true)
+
+        XCTAssertEqual(outcome, .needsApproval)
+        XCTAssertEqual(opened.count, 1)
+        let requests = await service.requests
+        XCTAssertEqual(requests, [])
+        XCTAssertFalse(loginItem.isOn)
+        XCTAssertTrue(loginItem.showsOpenLoginItems)
+        XCTAssertTrue(loginItem.message.contains("Login Items"), loginItem.message)
+    }
+
+    @MainActor
+    func testANeverRegisteredCopyThatReportsNotFoundCanBeTurnedOn() async {
+        let service = LoginItemServiceFake(.notFound)
+        let loginItem = makeSwitch(service)
+        await loginItem.refresh()
+        XCTAssertEqual(loginItem.message, "Open Scribe automatically when you log in.")
+
+        let outcome = await loginItem.setEnabled(true)
+
+        XCTAssertEqual(outcome, .applied)
+        let requests = await service.requests
+        XCTAssertEqual(requests, [true])
+    }
+
+    @MainActor
+    func testAnUnrecognizedStateCannotBeFlipped() async {
+        let service = LoginItemServiceFake(.unrecognized)
+        let loginItem = makeSwitch(service)
+        await loginItem.refresh()
+
+        XCTAssertFalse(loginItem.canFlip)
+        XCTAssertTrue(loginItem.showsOpenLoginItems)
+        let outcome = await loginItem.setEnabled(true)
+
+        XCTAssertEqual(outcome, .unchanged)
+        let requests = await service.requests
+        XCTAssertEqual(requests, [])
+    }
+
+    /// The user turns Scribe off in System Settings while a read that already saw it on is still out; coming back
+    /// to Scribe must end on the new state, not the one that read brings back.
+    @MainActor
+    func testAnActivationDuringAReadGetsAReadOfItsOwn() async {
+        let center = NotificationCenter()
+        let service = LoginItemServiceFake(.enabled)
+        let loginItem = makeSwitch(service, center: center)
+
+        let gate = SettingsTestGate()
+        await service.holdNextRead(at: gate)
+        let heldRead = Task { await loginItem.refresh() }
+        await gate.waitForArrival()
+
+        await service.set(.notRegistered)
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await loginItem.refreshTask?.value
+        await gate.open()
+        await heldRead.value
+
+        XCTAssertEqual(loginItem.state, .notRegistered)
+        XCTAssertFalse(loginItem.isOn)
+        let reads = await service.reads
+        XCTAssertEqual(reads, 2, "the overtaken read and exactly one read after it")
+    }
+}
+
+/// Which native call each state permits: the part of the login item below `LoginItemService`, where a wrong
+/// answer would register again, unregister nothing or act on a state Scribe cannot read.
+final class LoginItemOperationTests: XCTestCase {
+    func testEveryStateAndRequestPermitsExactlyTheExpectedCall() {
+        let expected: [(LoginItemState, Bool, LoginItemOperation)] = [
+            (.enabled, true, .nothingToDo),
+            (.enabled, false, .unregister),
+            (.notRegistered, true, .register),
+            (.notRegistered, false, .nothingToDo),
+            (.requiresApproval, true, .awaitApproval),
+            (.requiresApproval, false, .unregister),
+            (.notFound, true, .register),
+            (.notFound, false, .nothingToDo),
+            (.unrecognized, true, .unavailable),
+            (.unrecognized, false, .unavailable),
+        ]
+        for (state, enabling, operation) in expected {
+            XCTAssertEqual(
+                LoginItemOperation(enabling: enabling, from: state), operation, "\(state), enabling: \(enabling)")
+        }
+    }
+}
+
+/// Stands in for `SMAppService.mainApp`, recording which calls `LoginItemManager.apply` makes.
+final class LoginItemControlFake: LoginItemControl {
+    var status: SMAppService.Status
+    private(set) var calls: [String] = []
+    var registerError: NSError?
+
+    init(_ status: SMAppService.Status) {
+        self.status = status
+    }
+
+    func register() throws {
+        calls.append("register")
+        if let registerError {
+            throw registerError
+        }
+        status = .enabled
+    }
+
+    func unregister() throws {
+        calls.append("unregister")
+        status = .notRegistered
+    }
+}
+
+final class LoginItemApplyTests: XCTestCase {
+    private func apply(_ enabled: Bool, from status: SMAppService.Status) -> ([String], LoginItemRefusal?) {
+        let control = LoginItemControlFake(status)
+        let refusal = LoginItemManager.apply(enabled: enabled, control: control)
+        return (control.calls, refusal)
+    }
+
+    func testEnablingAnApprovalPendingRegistrationDoesNotRegisterAgain() {
+        let (calls, refusal) = apply(true, from: .requiresApproval)
+        XCTAssertEqual(calls, [])
+        XCTAssertNil(refusal)
+    }
+
+    func testDisablingAnApprovalPendingRegistrationUnregistersIt() {
+        XCTAssertEqual(apply(false, from: .requiresApproval).0, ["unregister"])
+    }
+
+    func testNotFoundIsNotTreatedAsRegistered() {
+        XCTAssertEqual(apply(false, from: .notFound).0, [], "nothing is registered, so nothing is unregistered")
+        XCTAssertEqual(apply(true, from: .notFound).0, ["register"])
+    }
+
+    func testTheCurrentStateIsNeverRequestedAgain() {
+        XCTAssertEqual(apply(true, from: .enabled).0, [])
+        XCTAssertEqual(apply(false, from: .notRegistered).0, [])
+    }
+
+    func testRegisteringAndUnregisteringFromTheOtherState() {
+        XCTAssertEqual(apply(true, from: .notRegistered).0, ["register"])
+        XCTAssertEqual(apply(false, from: .enabled).0, ["unregister"])
+    }
+
+    func testAnUnknownStateChangesNothing() throws {
+        let unknown = try XCTUnwrap(SMAppService.Status(rawValue: 99))
+        XCTAssertEqual(LoginItemState(unknown), .unrecognized)
+
+        let (calls, refusal) = apply(true, from: unknown)
+
+        XCTAssertEqual(calls, [])
+        XCTAssertEqual(refusal, .unrecognizedState)
+    }
+
+    func testARefusedRegistrationReportsWhy() {
+        let control = LoginItemControlFake(.notRegistered)
+        control.registerError = NSError(domain: "SMAppServiceErrorDomain", code: Int(kSMErrorLaunchDeniedByUser))
+
+        XCTAssertEqual(LoginItemManager.apply(enabled: true, control: control), .deniedByUser)
+        XCTAssertEqual(control.calls, ["register"])
     }
 }
 

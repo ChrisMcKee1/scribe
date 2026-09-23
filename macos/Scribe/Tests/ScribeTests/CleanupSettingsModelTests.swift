@@ -7,6 +7,8 @@ import XCTest
 @MainActor
 final class CleanupSettingsBackingFake {
     let center = NotificationCenter()
+    /// Stands in for the app-owned drafts, which outlive any one tab.
+    let drafts = SettingsDrafts()
     var stored = CleanupSettingsValues(
         isEnabled: false,
         providerKind: .foundryLocal,
@@ -60,7 +62,7 @@ final class CleanupSettingsBackingFake {
 final class CleanupSettingsModelTests: XCTestCase {
     @MainActor
     private func makeModel(_ backing: CleanupSettingsBackingFake) -> CleanupSettingsModel {
-        CleanupSettingsModel(access: backing.access, center: backing.center)
+        CleanupSettingsModel(access: backing.access, drafts: backing.drafts, center: backing.center)
     }
 
     /// Pins the fix for an outer `.disabled(!isEnabled)` that also disabled the Enable switch itself, so cleanup
@@ -134,11 +136,11 @@ final class CleanupSettingsModelTests: XCTestCase {
     func testWhatIsTypedIntoASecretFieldSurvivesAReload() {
         let backing = CleanupSettingsBackingFake()
         let model = makeModel(backing)
-        model.openAIApiKeyInput = "typed but not saved"
+        backing.drafts.openAIApiKey = "typed but not saved"
 
         backing.storeFromElsewhere { $0.isEnabled = true }
 
-        XCTAssertEqual(model.openAIApiKeyInput, "typed but not saved")
+        XCTAssertEqual(backing.drafts.openAIApiKey, "typed but not saved")
         XCTAssertNil(backing.apiKey)
     }
 
@@ -150,12 +152,12 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertFalse(model.hasSavedOpenAIApiKey)
         XCTAssertFalse(model.canSaveOpenAIApiKey)
 
-        model.openAIApiKeyInput = "key"
+        backing.drafts.openAIApiKey = "key"
         model.saveOpenAIApiKey()
 
         XCTAssertEqual(backing.apiKey, "key")
         XCTAssertTrue(model.hasSavedOpenAIApiKey)
-        XCTAssertEqual(model.openAIApiKeyInput, "")
+        XCTAssertEqual(backing.drafts.openAIApiKey, "")
 
         model.clearOpenAIApiKey()
 
@@ -176,7 +178,7 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertFalse(model.hasSavedAzureClientSecret)
         XCTAssertFalse(model.canSaveAzureClientSecret)
 
-        model.azureClientSecretInput = "another"
+        backing.drafts.azureClientSecret = "another"
         XCTAssertTrue(model.canSaveAzureClientSecret)
     }
 
@@ -226,5 +228,124 @@ final class CleanupSettingsModelTests: XCTestCase {
         backing.configured.insert(.openAICompatible)
 
         XCTAssertFalse(model.isDisabled(.connectionTest))
+    }
+
+    /// Settings is rebuilt on every open; a key typed but not saved lives in the drafts, which outlive the tab.
+    @MainActor
+    func testATypedKeySurvivesTheTabBeingBuiltAgain() {
+        let backing = CleanupSettingsBackingFake()
+        do {
+            let closedTab = makeModel(backing)
+            backing.drafts.openAIApiKey = "typed before the window closed"
+            withExtendedLifetime(closedTab) {}
+        }
+
+        let rebuilt = makeModel(backing)
+        XCTAssertTrue(rebuilt.canSaveOpenAIApiKey)
+        rebuilt.saveOpenAIApiKey()
+
+        XCTAssertEqual(backing.apiKey, "typed before the window closed")
+        XCTAssertEqual(backing.drafts.openAIApiKey, "")
+    }
+
+    // A connection check that was running when a stored credential changed checked the credential that was
+    // replaced; its result must not appear against the new one or overwrite the message about the change.
+
+    @MainActor
+    func testClearingTheKeyDuringAConnectionTestDropsTheOldResult() async {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "old"
+
+        let model = await runConnectionTest(backing) { $0.clearOpenAIApiKey() }
+
+        XCTAssertNil(backing.apiKey)
+        XCTAssertEqual(model.statusMessage, "API key removed.")
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isTesting)
+    }
+
+    @MainActor
+    func testReplacingTheKeyDuringAConnectionTestDropsTheOldResult() async {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "old"
+
+        let model = await runConnectionTest(backing) { model in
+            backing.drafts.openAIApiKey = "new"
+            model.saveOpenAIApiKey()
+        }
+
+        XCTAssertEqual(backing.apiKey, "new")
+        XCTAssertEqual(model.statusMessage, "API key saved to Keychain.")
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testClearingTheClientSecretDuringAConnectionTestDropsTheOldResult() async {
+        let backing = servicePrincipalBacking()
+        backing.clientSecrets["app-a"] = "old"
+
+        let model = await runConnectionTest(backing) { $0.clearAzureClientSecret() }
+
+        XCTAssertNil(backing.clientSecrets["app-a"])
+        XCTAssertEqual(model.statusMessage, "Client secret removed.")
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    func testReplacingTheClientSecretDuringAConnectionTestDropsTheOldResult() async {
+        let backing = servicePrincipalBacking()
+        backing.clientSecrets["app-a"] = "old"
+
+        let model = await runConnectionTest(backing) { model in
+            backing.drafts.azureClientSecret = "new"
+            model.saveAzureClientSecret()
+        }
+
+        XCTAssertEqual(backing.clientSecrets["app-a"], "new")
+        XCTAssertEqual(model.statusMessage, "Client secret saved to Keychain.")
+        XCTAssertNil(model.errorMessage)
+    }
+
+    @MainActor
+    private func openAICompatibleBacking() -> CleanupSettingsBackingFake {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .openAICompatible
+        backing.stored.openAIBaseURL = "http://localhost:1234"
+        backing.stored.openAIModel = "local-model"
+        backing.configured.insert(.openAICompatible)
+        return backing
+    }
+
+    @MainActor
+    private func servicePrincipalBacking() -> CleanupSettingsBackingFake {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .microsoftFoundry
+        backing.stored.azureAuthMode = .servicePrincipal
+        backing.stored.azureClientId = "app-a"
+        backing.configured.insert(.microsoftFoundry)
+        return backing
+    }
+
+    /// Holds a successful connection check at a gate, applies `change` while it is held, then lets it finish.
+    @MainActor
+    private func runConnectionTest(
+        _ backing: CleanupSettingsBackingFake,
+        whileRunning change: (CleanupSettingsModel) -> Void
+    ) async -> CleanupSettingsModel {
+        let gate = SettingsTestGate()
+        backing.checkGate = gate
+        backing.connectionCheck = CleanupConnectionCheck(reachable: true, message: "Reachable with the old credential")
+        let model = makeModel(backing)
+        model.refreshSecretState()
+
+        let test = Task { await model.testConnection() }
+        await gate.waitForArrival()
+        XCTAssertTrue(model.isTesting)
+        change(model)
+        await gate.open()
+        await test.value
+        return model
     }
 }
