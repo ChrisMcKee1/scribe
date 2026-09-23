@@ -3155,10 +3155,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The optional CLI tenant box pins the az login account to a tenant. In service principal
         // mode the app registration names its own tenant, so a second tenant field would be two
-        // controls claiming the same setting.
-        if (AzureCliTenantPanel is not null)
+        // controls claiming the same setting, and an API key never asks Entra for a token. The box is
+        // the expander's only content, so the expander goes with it rather than opening onto nothing.
+        if (AzureAdvancedExpander is not null)
         {
-            AzureCliTenantPanel.Visibility = apiKeyMode || servicePrincipal ? Visibility.Collapsed : Visibility.Visible;
+            AzureAdvancedExpander.Visibility = AzureSettingsAccess.ShowCliTenant(SelectedAzureAuthMode, apiKeyMode)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         if (AzureStatusTitle is not null)

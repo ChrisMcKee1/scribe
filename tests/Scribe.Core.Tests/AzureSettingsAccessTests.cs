@@ -326,6 +326,21 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowServicePrincipalFields);
     }
 
+    // The "Optional Azure details" expander holds only the CLI tenant field. It used to stay on screen
+    // in the other two sign-in methods and expand onto an empty panel.
+    [Theory]
+    [InlineData(AzureAuthMode.AzureCli, false, true)]
+    [InlineData(AzureAuthMode.AzureCli, true, false)]
+    [InlineData(AzureAuthMode.ServicePrincipal, false, false)]
+    [InlineData(AzureAuthMode.ServicePrincipal, true, false)]
+    public void The_optional_cli_tenant_shows_only_for_an_azure_cli_sign_in(
+        AzureAuthMode authMode,
+        bool apiKeySelected,
+        bool expected)
+    {
+        Assert.Equal(expected, AzureSettingsAccess.ShowCliTenant(authMode, apiKeySelected));
+    }
+
     [Fact]
     public void An_incomplete_service_principal_blocks_saving()
     {
