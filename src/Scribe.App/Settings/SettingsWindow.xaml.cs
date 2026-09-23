@@ -141,6 +141,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ExternalSwitchSync _externalAiCleanup = new();
     private bool _showingExternalAiCleanup;
 
+    // The microphone chosen from the tray, held while the picker's list is open: rebuilding its items under the user's
+    // pointer would close the list in their hand. The devices it offers, and whether a refresh waits for the list too.
+    private readonly ExternalChoiceSync<MicrophoneSelection> _externalMicrophone = new();
+    private IReadOnlyList<AudioDevice> _inputDevices = [];
+    private bool _showingMicrophones;
+    private bool _microphonesStale;
+
     public SettingsWindow(
         ISettingsRepository settingsRepository,
         IAudioCaptureService audio,
@@ -845,33 +852,110 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PopulateDevices()
     {
-        var choices = new List<DeviceChoice> { new(null, "System default (recommended)") };
         try
         {
-            foreach (var device in _audio.GetInputDevices())
-            {
-                var label = device.IsDefault ? $"{device.Name} (default)" : device.Name;
-                choices.Add(new DeviceChoice(device.Id, label));
-            }
+            _inputDevices = _audio.GetInputDevices();
         }
-        catch
+        catch (Exception ex)
         {
-            // Device enumeration can fail transiently; the default choice is always available.
+            // Device enumeration can fail transiently; the Windows default choice is always available.
+            TryLog(ex, "Could not list the microphones.");
+            _inputDevices = [];
         }
 
-        if (!string.IsNullOrWhiteSpace(_settings.InputDeviceId) &&
-            choices.All(choice => !string.Equals(choice.Id, _settings.InputDeviceId, StringComparison.Ordinal)))
-        {
-            choices.Add(new DeviceChoice(
-                _settings.InputDeviceId,
-                $"Unavailable: {_settings.InputDeviceName ?? "saved microphone"}",
-                _settings.InputDeviceName));
-        }
-
-        DeviceCombo.ItemsSource = choices;
-        DeviceCombo.SelectedItem =
-            choices.FirstOrDefault(c => c.Id == _settings.InputDeviceId) ?? choices[0];
+        ShowMicrophones(MicrophoneSelection.From(_settings));
     }
+
+    /// <summary>
+    /// The devices Windows offers changed while the window is open (the capture service's watcher, posted to this
+    /// thread). The list is rebuilt around whatever the picker shows, saved or not, so a choice the user has made and not
+    /// saved yet survives; while the list is open the refresh waits for it to close.
+    /// </summary>
+    public void ShowInputDevices(IReadOnlyList<AudioDevice> devices)
+    {
+        _inputDevices = devices;
+        if (DeviceCombo.IsDropDownOpen)
+        {
+            _microphonesStale = true;
+            return;
+        }
+
+        ShowMicrophones(ShownMicrophone);
+    }
+
+    /// <summary>
+    /// Adopts the microphone chosen from the tray, so this window's next save carries it instead of putting back its own
+    /// older choice: when the tray asks for the change, and again when it says how the change ended. As with
+    /// <see cref="AdoptExternalAiCleanup"/>, <paramref name="revision"/> is the one the change took when it was made, so
+    /// word of a change older than one this window already has, such as the user's own later choice here, changes
+    /// nothing. While the picker's list is open it shows the change once the list closes, and a save made before then
+    /// carries it at once.
+    /// </summary>
+    public void AdoptExternalMicrophone(MicrophoneSelection selection, long revision)
+    {
+        var chosen = MicrophoneSelection.Normalize(selection.DeviceId, selection.DeviceName);
+        if (!_externalMicrophone.TryAdopt(chosen, revision, canShowNow: !DeviceCombo.IsDropDownOpen, out var showNow))
+        {
+            return;
+        }
+
+        chosen.ApplyTo(_settings);
+        if (showNow)
+        {
+            ShowMicrophones(chosen);
+        }
+    }
+
+    // What the picker shows now, which a save writes unless a tray change is still waiting to be shown.
+    private MicrophoneSelection ShownMicrophone =>
+        DeviceCombo.SelectedItem is MicrophoneChoice choice ? choice.Selection : MicrophoneSelection.From(_settings);
+
+    // Rebuilds the picker around a choice without that counting as the user's: showing the list, or refreshing it, never
+    // changes what is chosen, only what is offered and how the Windows default reads.
+    private void ShowMicrophones(MicrophoneSelection selection)
+    {
+        var menu = MicrophoneChoices.Build(_inputDevices, selection);
+        _showingMicrophones = true;
+        try
+        {
+            DeviceCombo.ItemsSource = menu.Choices;
+            DeviceCombo.SelectedIndex = menu.SelectedIndex;
+        }
+        finally
+        {
+            _showingMicrophones = false;
+        }
+    }
+
+    private void DeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_showingMicrophones || _loadingUi)
+        {
+            return;
+        }
+
+        // The user's own choice, newer than any tray change made before it.
+        _externalMicrophone.UserChanged();
+    }
+
+    // A tray change, or a refresh of the devices, that arrived while the list was open shows now.
+    private void DeviceCombo_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (_externalMicrophone.Release() is { } waiting)
+        {
+            _microphonesStale = false;
+            ShowMicrophones(waiting);
+        }
+        else if (_microphonesStale)
+        {
+            _microphonesStale = false;
+            ShowMicrophones(ShownMicrophone);
+        }
+    }
+
+    private void SoundSettings_Click(object sender, RoutedEventArgs e) =>
+        OpenExternalLink("ms-settings:sound",
+            "Could not open the Windows sound settings. Open Windows Settings > System > Sound.");
 
     private void PopulateChoices()
     {
@@ -4841,11 +4925,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            var device = (DeviceChoice?)DeviceCombo.SelectedItem;
-            _settings.InputDeviceId = device?.Id;
-            _settings.InputDeviceName = device?.Id is null
-                ? null
-                : device.PersistedName ?? StripDefaultSuffix(device.Name);
+            // A tray change still waiting on the open list is newer than what the picker shows, so it is what is saved.
+            _externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);
 
             _settings.Hotkey = standardBinding;
             _settings.DictationOnlyHotkey = dictationOnlyBinding;
@@ -4937,15 +5018,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             _settings.LaunchOnLogin = StartupPreference.Observed(observedStartup, _settings.LaunchOnLogin);
 
-            // With the window's intent for the AI cleanup switch, read before Saved() forgets it. Once the save commits, a
-            // tray change up to that intent is superseded. With no intent the stored switch is kept and _settings takes
-            // it, so the switch here shows what is stored rather than a value the settings no longer hold.
-            _settingsRepository.SaveBundle(_settings, entries, snippets, _externalAiCleanup.NewestRevision);
+            // With the window's intents for the AI cleanup switch and the microphone, read before Saved() forgets them.
+            // Once the save commits, a tray change up to the intent for its own setting is superseded. With no intent for
+            // one, its stored value is kept and _settings takes it, so the window shows what is stored rather than a value
+            // the settings no longer hold.
+            _settingsRepository.SaveBundle(
+                _settings,
+                entries,
+                snippets,
+                new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
             _settingsRecovered = false;
             _externalAiCleanup.Saved();
+            _externalMicrophone.Saved();
             if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
             {
                 ShowExternalAiCleanup(_settings.EnableAiCleanup);
+            }
+
+            if (ShownMicrophone != MicrophoneSelection.From(_settings))
+            {
+                ShowMicrophones(MicrophoneSelection.From(_settings));
             }
 
             _startupSwitch.Show(observedStartup);
@@ -6490,14 +6582,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         return (plan.Added, plan.Updated, plan.Unchanged);
     }
 
-    private static string StripDefaultSuffix(string name)
-    {
-        const string suffix = " (default)";
-        return name.EndsWith(suffix, StringComparison.Ordinal)
-            ? name[..^suffix.Length]
-            : name;
-    }
-
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -6514,12 +6598,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // These records back ComboBoxes that use DisplayMemberPath, which sets what is drawn but not
     // what is announced: without a ToString override a screen reader reads the record's default
     // representation ("ProviderChoice { Provider = FoundryLocal, Label = ... }") instead of the
-    // option, so the lists are unusable by ear.
-    private sealed record DeviceChoice(string? Id, string Name, string? PersistedName = null)
-    {
-        public override string ToString() => Name;
-    }
-
+    // option, so the lists are unusable by ear. The microphone picker's entries (MicrophoneChoice,
+    // built in Core) do the same.
     private sealed record InjectionChoice(InjectionMethod Method, string Label)
     {
         public override string ToString() => Label;

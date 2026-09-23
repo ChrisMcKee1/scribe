@@ -6,6 +6,7 @@ using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
 using Scribe.Core.Lifecycle;
 using Scribe.Core.PostProcessing;
+using Scribe.Core.Settings;
 using Wpf.Ui.Appearance;
 
 namespace Scribe.App.Tray;
@@ -75,6 +76,18 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user toggles AI cleanup; the argument is the requested enabled state.</summary>
     public event Action<bool>? AiCleanupToggled;
 
+    /// <summary>
+    /// Supplies the microphone picker (the devices Windows offers now, and the current choice) each time the tray menu
+    /// opens. Injected by the app shell so this class stays free of Core audio wiring.
+    /// </summary>
+    public Func<MicrophoneMenu>? MicrophoneMenuProvider { get; set; }
+
+    /// <summary>Raised when the user picks an entry from the "Microphone" submenu.</summary>
+    public event Action<MicrophoneSelection>? MicrophoneChosen;
+
+    /// <summary>Raised when the user picks "Sound settings" from the "Microphone" submenu.</summary>
+    public event Action? SoundSettingsRequested;
+
     /// <param name="onUpdateFailure">
     /// Told about a tray update that threw. Updates are best effort and many run posted, where nobody else could see the
     /// failure.
@@ -124,10 +137,15 @@ internal sealed class TrayIconHost : IDisposable
         // transcripts that are actually recoverable right now.
         var copyRecentDictation = new MenuItem { Header = "Copy recent dictation" };
         menu.Items.Add(copyRecentDictation);
+
+        // Rebuilt on every open as well, so it lists the microphones Windows offers right now and names the device the
+        // Windows default means at that moment.
+        var microphone = new MenuItem { Header = "Microphone" };
         menu.Opened += (_, _) =>
         {
             ApplyMenuTheme();
             PopulateRecentDictations(copyRecentDictation);
+            PopulateMicrophones(microphone);
         };
 
         // Lets a user who dismissed the first-run intro reopen it to re-learn the gesture.
@@ -144,6 +162,9 @@ internal sealed class TrayIconHost : IDisposable
         shareApp.Click += (_, _) => ShareAppRequested?.Invoke();
         menu.Items.Add(shareApp);
         menu.Items.Add(new Separator());
+
+        // The quick toggles, led by the microphone submenu built above.
+        menu.Items.Add(microphone);
 
         // Checkable items: WPF flips IsChecked before Click fires, so it already reflects the
         // requested state by the time the handler runs. Programmatic IsChecked updates
@@ -267,6 +288,65 @@ internal sealed class TrayIconHost : IDisposable
             item.Click += (_, _) => CopyRecentDictationRequested?.Invoke(fullText);
             parent.Items.Add(item);
         }
+    }
+
+    /// <summary>
+    /// Fills the "Microphone" submenu: the Windows default first, naming the device it means now, then every microphone
+    /// Windows offers, a check mark on the current choice, and a way into the Windows sound settings. Runs on the UI
+    /// thread (the menu's Opened event). The entries are checkable so a screen reader announces which one is chosen;
+    /// choosing the one already chosen changes nothing, and the menu is rebuilt on the next open either way.
+    /// </summary>
+    private void PopulateMicrophones(MenuItem parent)
+    {
+        parent.Items.Clear();
+
+        MicrophoneMenu? picker;
+        try
+        {
+            picker = MicrophoneMenuProvider?.Invoke();
+        }
+        catch
+        {
+            // Listing the devices can fail while the audio service restarts; the tray menu must still open, and the
+            // Windows sound settings stay one click away.
+            picker = null;
+        }
+
+        if (picker is null)
+        {
+            parent.Items.Add(new MenuItem { Header = "Microphones unavailable", IsEnabled = false });
+        }
+        else
+        {
+            for (var i = 0; i < picker.Choices.Count; i++)
+            {
+                var choice = picker.Choices[i];
+                var item = new MenuItem
+                {
+                    // WPF reads "_" in a header as an access key, so a device name keeps its underscores doubled.
+                    Header = choice.Label.Replace("_", "__"),
+                    IsCheckable = true,
+                    IsChecked = i == picker.SelectedIndex,
+
+                    // Listed, and checked, so the saved choice stays visible while its device is away; there is nothing
+                    // to choose about it until it comes back.
+                    IsEnabled = choice.Kind != MicrophoneChoiceKind.Unavailable,
+                };
+                var selection = choice.Selection;
+                item.Click += (_, _) => MicrophoneChosen?.Invoke(selection);
+                parent.Items.Add(item);
+
+                if (choice.Kind == MicrophoneChoiceKind.WindowsDefault && picker.Choices.Count > 1)
+                {
+                    parent.Items.Add(new Separator());
+                }
+            }
+        }
+
+        parent.Items.Add(new Separator());
+        var soundSettings = new MenuItem { Header = "Sound settings" };
+        soundSettings.Click += (_, _) => SoundSettingsRequested?.Invoke();
+        parent.Items.Add(soundSettings);
     }
 
     /// <summary>

@@ -66,6 +66,9 @@ public partial class App : Application
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
 
+    // A microphone chosen from the tray whose write has not come back yet, so the tray shows the choice at once.
+    private (Scribe.Core.Settings.MicrophoneSelection Selection, long Revision)? _pendingTrayMicrophone;
+
     // Kept so the first stage of OnExit can stop it before anything it uses is torn down.
     private StorageMaintenance? _storageMaintenance;
 
@@ -298,6 +301,9 @@ public partial class App : Application
         _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
+        _tray.MicrophoneMenuProvider = BuildTrayMicrophoneMenu;
+        _tray.MicrophoneChosen += ChooseMicrophone;
+        _tray.SoundSettingsRequested += OpenSoundSettings;
 
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
@@ -351,7 +357,10 @@ public partial class App : Application
         {
             // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
             _tray!.ShowNotification(warning.Message, isError: true);
-            OnRecordingWarning(warning.RecordingRevision, "Microphone muted");
+            if (warning.PillText is { } pillText)
+            {
+                OnRecordingWarning(warning.RecordingRevision, pillText);
+            }
         };
         _controller.CleanupFailed += OnCleanupFailed;
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
@@ -383,6 +392,9 @@ public partial class App : Application
                 log.LogWarning("Failed to show the injection recovery notification ({Failure}).", FailureShape.Describe(ex));
             }
         };
+
+        // An open Settings window keeps its microphone list current; the tray reads the devices whenever its menu opens.
+        services.GetRequiredService<IAudioCaptureService>().InputDevicesChanged += OnInputDevicesChanged;
 
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
         // dictation is fast and does not stall on model initialization.
@@ -987,6 +999,167 @@ public partial class App : Application
         _settingsWindow?.AdoptExternalAiCleanup(current, revision);
         _tray?.SetAiCleanupChecked(current);
         _tray?.ShowError("couldn't toggle AI cleanup");
+    }
+
+    /// <summary>
+    /// The tray's microphone picker, built each time the menu opens from the devices Windows offers now and the current
+    /// choice: a tray choice still being saved, otherwise what dictation uses. Throws when the devices cannot be read,
+    /// which the tray shows as "Microphones unavailable".
+    /// </summary>
+    private Scribe.Core.Settings.MicrophoneMenu BuildTrayMicrophoneMenu()
+    {
+        var devices = _host!.Services.GetRequiredService<IAudioCaptureService>().GetInputDevices();
+        return Scribe.Core.Settings.MicrophoneChoices.Build(devices, CurrentTrayMicrophone());
+    }
+
+    private Scribe.Core.Settings.MicrophoneSelection CurrentTrayMicrophone() =>
+        _pendingTrayMicrophone?.Selection
+        ?? (_controller is { } controller
+            ? Scribe.Core.Settings.MicrophoneSelection.From(controller.CurrentSettings)
+            : Scribe.Core.Settings.MicrophoneSelection.WindowsDefault);
+
+    /// <summary>
+    /// The tray's microphone choice, saved exactly like the AI cleanup toggle: a revision taken first, a one-field change
+    /// written on the settings lane (superseded only by a Settings save whose own microphone intent accounts for it), and
+    /// an open settings window told at once so its next save keeps the choice. Dictation uses it from the next press,
+    /// once it is stored.
+    /// </summary>
+    private void ChooseMicrophone(Scribe.Core.Settings.MicrophoneSelection chosen)
+    {
+        // Taken first, so an open settings window can tell this change, and word of how it ended, from anything newer.
+        var revision = Scribe.Core.Settings.ExternalSwitchSync.NextRevision();
+        var selection = Scribe.Core.Settings.MicrophoneSelection.Normalize(chosen.DeviceId, chosen.DeviceName);
+        try
+        {
+            var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
+            if (repo.LastLoadFailed)
+            {
+                _tray?.ShowError(SavedSettingsNotice.FromTray("the microphone"));
+                return;
+            }
+
+            // Choosing what is already chosen writes nothing.
+            if (selection == CurrentTrayMicrophone())
+            {
+                return;
+            }
+
+            // Refused only once quitting has begun, when nothing is left to apply the change to.
+            if (_settingsWrites?.Submit(
+                    stored => selection.ApplyTo(stored),
+                    ExternalSetting.Microphone,
+                    revision,
+                    (stored, superseded) => OnMicrophoneChoiceSaved(stored, superseded, revision),
+                    error => OnMicrophoneChoiceFailed(error, revision)) == true)
+            {
+                _pendingTrayMicrophone = (selection, revision);
+                _settingsWindow?.AdoptExternalMicrophone(selection, revision);
+            }
+        }
+        catch (Exception ex)
+        {
+            OnMicrophoneChoiceFailed(ex, revision);
+        }
+    }
+
+    // Runs on the UI thread with the settings as stored, which are the truth even when a Settings save landed meanwhile,
+    // so dictation and the tray always take them, never the choice asked for. A superseded change was never written: a
+    // Settings save that accounted for it committed first, so the window already holds a newer choice and is not told
+    // again. Otherwise an open window takes it unless something newer, such as a later choice in it, has set its picker.
+    private void OnMicrophoneChoiceSaved(AppSettings stored, bool superseded, long revision)
+    {
+        ClearPendingTrayMicrophone(revision);
+        _controller?.ApplySettings(stored);
+        var storedChoice = Scribe.Core.Settings.MicrophoneSelection.From(stored);
+        if (!superseded)
+        {
+            _settingsWindow?.AdoptExternalMicrophone(storedChoice, revision);
+        }
+
+        _tray?.ShowInfo($"dictating with {Scribe.Core.Settings.MicrophoneChoices.Describe(storedChoice)}");
+    }
+
+    private void OnMicrophoneChoiceFailed(Exception ex, long revision)
+    {
+        try
+        {
+            _appLog?.LogWarning("Choosing a microphone from the tray failed ({Failure}).", FailureShape.Describe(ex));
+        }
+        catch
+        {
+            // The log must never stop the tray from showing the real state.
+        }
+
+        // Back to what dictation is actually using.
+        ClearPendingTrayMicrophone(revision);
+        if (_controller is { } controller)
+        {
+            _settingsWindow?.AdoptExternalMicrophone(
+                Scribe.Core.Settings.MicrophoneSelection.From(controller.CurrentSettings), revision);
+        }
+
+        _tray?.ShowError("couldn't change the microphone");
+    }
+
+    // Only the choice this word is about: a newer tray choice keeps showing until its own word arrives.
+    private void ClearPendingTrayMicrophone(long revision)
+    {
+        if (_pendingTrayMicrophone is { } pending && pending.Revision == revision)
+        {
+            _pendingTrayMicrophone = null;
+        }
+    }
+
+    /// <summary>
+    /// Opens Windows Settings at System, Sound, where the default input device is chosen
+    /// (https://learn.microsoft.com/windows/apps/develop/launch/launch-settings-app lists ms-settings:sound).
+    /// </summary>
+    private void OpenSoundSettings()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-settings:sound") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _appLog?.LogWarning("Opening the Windows sound settings failed ({Failure}).", FailureShape.Describe(ex));
+            }
+            catch
+            {
+                // Best effort, like the notice below.
+            }
+
+            _tray?.ShowNotification("Couldn't open the Windows sound settings. Open Settings, System, Sound.", isError: true);
+        }
+    }
+
+    /// <summary>
+    /// Raised on the thread pool by the capture service's device watcher. Posted, never invoked: that thread must not wait
+    /// for the UI thread, and a failure here must never reach it.
+    /// </summary>
+    private void OnInputDevicesChanged(IReadOnlyList<AudioDevice> devices)
+    {
+        try
+        {
+            if (Dispatcher.HasShutdownStarted)
+            {
+                return;
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_controller?.IsClosing != true)
+                {
+                    _settingsWindow?.ShowInputDevices(devices);
+                }
+            });
+        }
+        catch
+        {
+            // Keeping an open window's list live is a courtesy.
+        }
     }
 
     /// <summary>

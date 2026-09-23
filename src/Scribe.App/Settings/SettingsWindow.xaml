@@ -275,9 +275,15 @@
                                     <StackPanel>
                                         <TextBlock Text="Microphone" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="The capture device used while dictating. 'System default' follows your Windows sound settings."/>
-                                        <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Name"
+                                                   Text="The microphone Scribe records from. Windows default follows the input device chosen in Windows Settings, and a change there applies from your next dictation. Choose a microphone by name to keep using it whatever the Windows default is."/>
+                                        <ComboBox x:Name="DeviceCombo" DisplayMemberPath="Label"
+                                                  AutomationProperties.Name="Microphone"
+                                                  SelectionChanged="DeviceCombo_SelectionChanged"
+                                                  DropDownClosed="DeviceCombo_DropDownClosed"
                                                   Margin="0,10,0,0" HorizontalAlignment="Stretch"/>
+                                        <ui:Button Content="Open Windows sound settings"
+                                                   HorizontalAlignment="Left" Margin="0,8,0,0"
+                                                   Click="SoundSettings_Click"/>
                                     </StackPanel>
                                 </ui:Card>
 

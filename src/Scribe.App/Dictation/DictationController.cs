@@ -68,6 +68,9 @@ internal sealed class DictationController : IDisposable
     private AppSettings _settings = AppSettings.CreateDefault();
     private bool _started;
 
+    // Tells the user once, not on every press, that the chosen microphone is unavailable and the default is recording.
+    private readonly UnavailableMicrophoneNotice _unavailableMicrophone = new();
+
     // The cleanup configuration most recently handed to the service, and the announcement waiting
     // for it to become Ready. Both are touched from the UI thread and from the service's status
     // callback, so they are guarded rather than relying on the caller's thread.
@@ -673,13 +676,24 @@ internal sealed class DictationController : IDisposable
 
             Raise(shown);
 
+            // A chosen microphone that is unplugged, disabled or gone records from the Windows default instead (the
+            // capture service falls back by itself). The user hears about it once per episode, not on every press while
+            // it lasts, through the same notice a muted microphone uses; the log gets the device names.
+            if (_unavailableMicrophone.ShouldNotify(settings.InputDeviceId, _audio.LastRequestedDeviceUnavailable))
+            {
+                _log.LogWarning(
+                    "#{Id} the chosen microphone '{Chosen}' is not available; recording from the Windows default '{Device}'.",
+                    id, settings.InputDeviceName ?? "unnamed", _audio.LastDeviceName ?? "unknown");
+                RaiseWarning(UnavailableMicrophoneMessage(settings.InputDeviceName, _audio.LastDeviceName), id, "Using default mic");
+            }
+
             // Muted endpoints (headset mute, Win11 taskbar mic mute during a meeting) still record,
             // they just record silence. Warn immediately so the user can unmute mid-dictation
             // instead of speaking into a dead capture; recording continues in case they do.
             if (_audio.LastDeviceMuted)
             {
                 _log.LogWarning("Recording started on a muted microphone.");
-                RaiseWarning("microphone is muted, unmute it to dictate", id);
+                RaiseWarning("microphone is muted, unmute it to dictate", id, "Microphone muted");
             }
 
             // Only for a toggle, judged by the binding that fired, and attached only while this recording is still the
@@ -850,7 +864,7 @@ internal sealed class DictationController : IDisposable
                 "A forgotten toggle looks exactly like this.",
                 id, minutes);
 
-            RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id);
+            RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id, pillText: null);
 
             _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.DurationLimit, id);
@@ -1528,7 +1542,8 @@ internal sealed class DictationController : IDisposable
 
     // The revision is taken under the lifecycle's gate: a warning raised late for a recording that a pause or a stop has
     // already ended carries 0, and one raised just before is dropped by the shell once a newer change has been shown.
-    private void RaiseWarning(string message, long dictationId)
+    // The pill text is what the recording pill shows while that recording is live; null shows nothing there.
+    private void RaiseWarning(string message, long dictationId, string? pillText)
     {
         if (_lifecycle.IsClosing)
         {
@@ -1538,12 +1553,21 @@ internal sealed class DictationController : IDisposable
         try
         {
             var revision = _lifecycle.TryGetRecordingPresentation(dictationId)?.Revision ?? 0;
-            Warning?.Invoke(new DictationWarning(message, revision));
+            Warning?.Invoke(new DictationWarning(message, revision, pillText));
         }
         catch (Exception ex)
         {
             _log.LogWarning("A Warning handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
+    }
+
+    // Names both microphones: the one the user chose and the one this dictation is really using.
+    private static string UnavailableMicrophoneMessage(string? chosenName, string? usedName)
+    {
+        var chosen = string.IsNullOrWhiteSpace(chosenName) ? "your chosen microphone" : $"'{chosenName}'";
+        var used = string.IsNullOrWhiteSpace(usedName) ? string.Empty : $", '{usedName}'";
+        return $"{chosen} isn't available, so Scribe is using the Windows default microphone{used}. " +
+            "Choose a microphone from the tray menu or in Settings";
     }
 
     private void RaisePipelineReport(DictationPipelineReport report)
@@ -1750,7 +1774,8 @@ internal readonly record struct DictationStateChange(DictationState State, long 
 /// The revision of the Recording change the warning belongs to (see <see cref="PresentationRelay{T}.PublishIfCurrent"/>),
 /// or 0 when that recording was already over when the warning was raised.
 /// </param>
-internal readonly record struct DictationWarning(string Message, long RecordingRevision);
+/// <param name="PillText">What the recording pill shows for it while that recording is live, or null for nothing.</param>
+internal readonly record struct DictationWarning(string Message, long RecordingRevision, string? PillText);
 
 internal sealed class DictationPipelineReport(
     nint targetWindow,

@@ -222,6 +222,7 @@ inserted.
 | Feature | What it does |
 |---|---|
 | Push-to-talk | Separate AI-capable and optional dictation-only hotkeys, each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
+| Microphone choice | Follows the Windows default input device (the one Windows Settings shows under Sound, Input) from your next dictation, with no restart; or pick any microphone in Settings or from the tray's Microphone menu. A chosen microphone that is unplugged falls back to the Windows default, and Scribe tells you once |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
