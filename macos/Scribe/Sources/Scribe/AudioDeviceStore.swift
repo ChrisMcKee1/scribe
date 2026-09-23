@@ -12,35 +12,80 @@ struct AudioInputDevice: Identifiable, Equatable {
     var id: String { uid }
 }
 
-/// `UserDefaults`-backed storage for the selected microphone, the same stopgap pattern used by
-/// `HotkeySettingsStore` (a general structured settings store doesn't exist yet on macOS).
-/// `nil` means "system default", matching Windows' `InputDeviceId == null` convention. Bluetooth
-/// microphones (AirPods, headsets) need no special handling here: CoreAudio surfaces them as
-/// ordinary input devices the moment macOS has them connected as an audio input.
-enum AudioDeviceStore {
+/// The chosen microphone, kept in `UserDefaults` by its persistent UID. Production uses `UserDefaults.standard`
+/// through `live`; tests pass a suite of their own. `nil` means "system default", matching Windows'
+/// `InputDeviceId == null` convention. Bluetooth microphones (AirPods, headsets) need no special handling here:
+/// CoreAudio surfaces them as ordinary input devices the moment macOS has them connected as an audio input.
+///
+/// The device list comes from live CoreAudio hardware rather than stored state, so those queries stay static.
+struct AudioDeviceStore {
     private static let uidKey = "ScribeInputDeviceUID"
     private static let nameKey = "ScribeInputDeviceName"
 
-    /// The persisted device UID, or `nil` for "system default". Stored alongside `selectedDeviceName`
-    /// so the Settings UI can still show something meaningful (e.g. "Unavailable: My Headset") if the
-    /// device is unplugged, the same fallback Windows shows for a saved-but-missing device.
+    static var live: AudioDeviceStore {
+        AudioDeviceStore(defaults: .standard)
+    }
+
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    /// The saved device UID, or `nil` for "system default". Saved alongside `selectedDeviceName` so Settings can
+    /// still name a saved microphone that is unplugged ("Unavailable: My Headset"), the same fallback Windows
+    /// shows for a saved but missing device.
+    var selectedDeviceUID: String? {
+        get { defaults.string(forKey: Self.uidKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.uidKey) }
+    }
+
+    var selectedDeviceName: String? {
+        get { defaults.string(forKey: Self.nameKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.nameKey) }
+    }
+
+    /// Saves the chosen device, or clears the choice back to "system default" when passed `nil`.
+    func select(_ device: AudioInputDevice?) {
+        selectedDeviceUID = device?.uid
+        selectedDeviceName = device?.name
+    }
+
+    /// The saved UID resolved to a live `AudioDeviceID` for this boot session, so `AudioCaptureEngine` can point
+    /// the capture unit at it. `nil` means "use the system default", including when the saved device can no
+    /// longer be found (unplugged, out of range).
+    func resolveSelectedDeviceID() -> AudioDeviceID? {
+        guard let uid = selectedDeviceUID, let deviceIDs = Self.allDeviceIDs() else { return nil }
+        return deviceIDs.first { Self.deviceUID($0) == uid }
+    }
+
+    // MARK: Live store, for callers that cannot take a store yet (AudioCaptureEngine, the CLI verbs)
+
     static var selectedDeviceUID: String? {
-        get { UserDefaults.standard.string(forKey: uidKey) }
+        get { live.selectedDeviceUID }
         set {
-            UserDefaults.standard.set(newValue, forKey: uidKey)
+            let store = live
+            store.selectedDeviceUID = newValue
         }
     }
 
     static var selectedDeviceName: String? {
-        get { UserDefaults.standard.string(forKey: nameKey) }
-        set { UserDefaults.standard.set(newValue, forKey: nameKey) }
+        get { live.selectedDeviceName }
+        set {
+            let store = live
+            store.selectedDeviceName = newValue
+        }
     }
 
-    /// Records the chosen device (or clears it back to "system default" when passed `nil`).
     static func select(_ device: AudioInputDevice?) {
-        selectedDeviceUID = device?.uid
-        selectedDeviceName = device?.name
+        live.select(device)
     }
+
+    static func resolveSelectedDeviceID() -> AudioDeviceID? {
+        live.resolveSelectedDeviceID()
+    }
+
+    // MARK: Hardware
 
     /// Every currently connected input-capable device (built-in mic, USB, Bluetooth HFP/AirPods,
     /// or a virtual device such as a conferencing app's audio device), each with its stable UID.
@@ -54,14 +99,6 @@ enum AudioDeviceStore {
             }
             return AudioInputDevice(uid: uid, name: name, isDefault: deviceID == defaultDeviceID)
         }
-    }
-
-    /// Resolves the persisted UID (if any) to a live `AudioDeviceID` for this boot session, so
-    /// `AudioCaptureEngine` can point the capture unit at it. Returns `nil` for "use system
-    /// default" and also when a saved device can no longer be found (e.g. unplugged/out of range).
-    static func resolveSelectedDeviceID() -> AudioDeviceID? {
-        guard let uid = selectedDeviceUID, let deviceIDs = allDeviceIDs() else { return nil }
-        return deviceIDs.first { deviceUID($0) == uid }
     }
 
     /// Looks up the UID/name for an arbitrary `AudioDeviceID`, e.g. one read back from a live

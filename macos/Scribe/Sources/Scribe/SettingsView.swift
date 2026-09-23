@@ -4,17 +4,13 @@ import CoreGraphics
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Full Settings window replacing the earlier static scaffold text. Sections mirror the feature
-/// areas already implemented: overlay position, input (hotkey and microphone), dictionary, snippets, and per-app
-/// profiles. Backed directly by `PersistenceStore` (no separate view-model layer yet; the store's
-/// CRUD surface is already small and synchronous, matching the CLI verbs used to verify each
-/// feature).
+/// The Settings window: a sidebar of sections, one tab per feature area. Tabs that show preferences re-read them
+/// after any preference write in this process, so a change made from the tray (AI cleanup, the overlay position)
+/// shows in an open window; tabs backed by `PersistenceStore` load when they appear. `SettingsWindowController`
+/// builds the window afresh on every open, so nothing a closed window showed is shown again later.
 ///
-/// Uses a `NavigationSplitView` sidebar rather than `TabView`'s top segmented control: once the
-/// section count reached double digits (Overlay/Hotkey/Dictionary/Libraries/Snippets/App
-/// Profiles/AI Cleanup/Playground/Diagnostics/Usage Insights/About), the segmented strip truncated
-/// labels and became unreadable. A sidebar `List` scales to any number of sections the same way
-/// System Settings itself does.
+/// A `NavigationSplitView` sidebar rather than `TabView`'s segmented control: with eleven sections the segmented
+/// strip truncated its labels and became unreadable, while a sidebar `List` scales the way System Settings does.
 enum SettingsSection: String, CaseIterable, Identifiable {
     case overlay
     case hotkey
@@ -70,6 +66,8 @@ struct SettingsView: View {
     let dictionaryLibraryService: DictionaryLibraryService
     let onProfilesOrRulesChanged: () -> Void
     let onHotkeyChanged: (CGKeyCode) -> Void
+    var hotkeyStore: HotkeySettingsStore = .live
+    var audioDeviceStore: AudioDeviceStore = .live
 
     @State private var selection: SettingsSection? = .overlay
 
@@ -96,7 +94,10 @@ struct SettingsView: View {
         case .overlay:
             OverlaySettingsTab(overlayPanelController: overlayPanelController)
         case .hotkey:
-            HotkeySettingsTab(onHotkeyChanged: onHotkeyChanged)
+            HotkeySettingsTab(
+                hotkeyStore: hotkeyStore,
+                audioDeviceStore: audioDeviceStore,
+                onHotkeyChanged: onHotkeyChanged)
         case .dictionary:
             DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
         case .libraries:
@@ -122,10 +123,11 @@ struct SettingsView: View {
 // MARK: - Overlay tab
 
 private struct OverlaySettingsTab: View {
-    let overlayPanelController: OverlayPanelController
-    @State private var selectedAnchor: OverlayAnchor = .bottomCenter
+    @StateObject private var selection: OverlayAnchorSelection
 
-    private static let overlayAnchorDefaultsKey = "ScribeOverlayAnchor"
+    init(overlayPanelController: OverlayPanelController) {
+        _selection = StateObject(wrappedValue: OverlayAnchorSelection(controller: overlayPanelController))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -137,14 +139,12 @@ private struct OverlaySettingsTab: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                 ForEach(OverlayAnchor.allCases, id: \.self) { anchor in
                     Button {
-                        selectedAnchor = anchor
-                        overlayPanelController.anchor = anchor
-                        UserDefaults.standard.set(anchor.rawValue, forKey: Self.overlayAnchorDefaultsKey)
+                        selection.select(anchor)
                     } label: {
                         Text(anchor.displayName)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(selectedAnchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(selection.anchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -153,7 +153,39 @@ private struct OverlaySettingsTab: View {
             Spacer()
         }
         .onAppear {
-            selectedAnchor = overlayPanelController.anchor
+            selection.reload()
+        }
+    }
+}
+
+/// The Overlay tab's anchor. The tray's Overlay Position menu moves the pill and stores the anchor, so the tab
+/// re-reads the pill's anchor after any preference write instead of keeping the one it showed first.
+@MainActor
+private final class OverlayAnchorSelection: ObservableObject {
+    private static let defaultsKey = "ScribeOverlayAnchor"
+
+    @Published private(set) var anchor: OverlayAnchor
+
+    private let controller: OverlayPanelController
+    private var observation: SettingsNotificationObservation?
+
+    init(controller: OverlayPanelController) {
+        self.controller = controller
+        anchor = controller.anchor
+        observation = SettingsNotificationObservation(UserDefaults.didChangeNotification) { [weak self] in
+            self?.reload()
+        }
+    }
+
+    func select(_ anchor: OverlayAnchor) {
+        controller.anchor = anchor
+        UserDefaults.standard.set(anchor.rawValue, forKey: Self.defaultsKey)
+        reload()
+    }
+
+    func reload() {
+        if controller.anchor != anchor {
+            anchor = controller.anchor
         }
     }
 }
@@ -161,14 +193,21 @@ private struct OverlaySettingsTab: View {
 // MARK: - Hotkey tab
 
 private struct HotkeySettingsTab: View {
-    let onHotkeyChanged: (CGKeyCode) -> Void
-
-    @State private var currentKeyCode: CGKeyCode = HotkeySettingsStore.keyCode
+    @StateObject private var model: InputSettingsModel
     @State private var isRecording = false
     @State private var localMonitor: Any?
 
-    @State private var availableDevices: [AudioInputDevice] = AudioDeviceStore.availableInputDevices()
-    @State private var selectedDeviceUID: String? = AudioDeviceStore.selectedDeviceUID
+    init(
+        hotkeyStore: HotkeySettingsStore,
+        audioDeviceStore: AudioDeviceStore,
+        onHotkeyChanged: @escaping (CGKeyCode) -> Void
+    ) {
+        _model = StateObject(
+            wrappedValue: InputSettingsModel(
+                hotkeyStore: hotkeyStore,
+                deviceStore: audioDeviceStore,
+                onHotkeyChanged: onHotkeyChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -178,9 +217,7 @@ private struct HotkeySettingsTab: View {
 
             Text("Push-to-Talk Key")
                 .font(.headline)
-            Text(currentKeyCode == 57
-                ? "Tap Caps Lock once to start dictating, and tap it again to stop, just like Caps Lock's own on/off light."
-                : "Hold this key anywhere on your Mac to start dictating, and release it to stop.")
+            Text(model.hint)
                 .foregroundStyle(.secondary)
             // Input Monitoring is what a global push-to-talk key requires, and is easy to miss
             // since (unlike Microphone/Accessibility) macOS never shows a system prompt for it;
@@ -191,7 +228,7 @@ private struct HotkeySettingsTab: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
-                Text(isRecording ? "Press any key..." : HotkeyKeyCodeCatalog.displayName(for: currentKeyCode))
+                Text(isRecording ? "Press any key..." : model.binding.displayName)
                     .font(.title3.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -208,9 +245,9 @@ private struct HotkeySettingsTab: View {
                     }
                 }
 
-                if currentKeyCode != HotkeySettingsStore.defaultKeyCode {
+                if !model.isDefaultBinding {
                     Button("Reset to \(HotkeyKeyCodeCatalog.displayName(for: HotkeySettingsStore.defaultKeyCode))") {
-                        apply(keyCode: HotkeySettingsStore.defaultKeyCode)
+                        model.apply(keyCode: HotkeySettingsStore.defaultKeyCode)
                     }
                 }
             }
@@ -221,18 +258,21 @@ private struct HotkeySettingsTab: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                 ForEach(HotkeyKeyCodeCatalog.entries) { entry in
                     Button {
-                        apply(keyCode: entry.keyCode)
+                        model.apply(keyCode: entry.keyCode)
                     } label: {
                         Text(entry.name)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .background(currentKeyCode == entry.keyCode ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(model.binding.keyCode == entry.keyCode ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
                 }
             }
             Spacer()
+        }
+        .onAppear {
+            model.reload()
         }
         .onDisappear {
             stopRecording()
@@ -257,7 +297,7 @@ private struct HotkeySettingsTab: View {
                 }
             }
 
-            apply(keyCode: candidateKeyCode)
+            model.apply(keyCode: candidateKeyCode)
             stopRecording()
             return nil
         }
@@ -271,12 +311,6 @@ private struct HotkeySettingsTab: View {
         localMonitor = nil
     }
 
-    private func apply(keyCode: CGKeyCode) {
-        currentKeyCode = keyCode
-        HotkeySettingsStore.keyCode = keyCode
-        onHotkeyChanged(keyCode)
-    }
-
     @ViewBuilder
     private var microphoneSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -286,28 +320,24 @@ private struct HotkeySettingsTab: View {
                 .foregroundStyle(.secondary)
 
             Picker("Microphone", selection: Binding(
-                get: { selectedDeviceUID },
-                set: { newValue in
-                    selectedDeviceUID = newValue
-                    let device = availableDevices.first { $0.uid == newValue }
-                    AudioDeviceStore.select(device)
-                }
+                get: { model.selectedDeviceUID },
+                set: { model.selectDevice(uid: $0) }
             )) {
                 Text("System default (recommended)").tag(String?.none)
-                ForEach(availableDevices) { device in
+                ForEach(model.devices) { device in
                     Text(device.isDefault ? "\(device.name) (default)" : device.name)
                         .tag(String?.some(device.uid))
                 }
-                if let selectedDeviceUID, !availableDevices.contains(where: { $0.uid == selectedDeviceUID }) {
-                    Text("Unavailable: \(AudioDeviceStore.selectedDeviceName ?? "saved microphone")")
-                        .tag(String?.some(selectedDeviceUID))
+                if let label = model.unavailableSelectionLabel, let uid = model.selectedDeviceUID {
+                    Text(label)
+                        .tag(String?.some(uid))
                 }
             }
             .labelsHidden()
             .frame(maxWidth: 360)
         }
         .onAppear {
-            availableDevices = AudioDeviceStore.availableInputDevices()
+            model.refreshDevices()
         }
     }
 }
@@ -1042,37 +1072,23 @@ private struct AppProfilesSettingsTab: View {
 
 // MARK: - AI Cleanup tab
 
-/// Settings surface for AI cleanup: turning it on, picking a provider, and configuring that
-/// provider's connection details and credentials, replacing the original env-var-only
-/// configuration story. Reads and writes `CleanupSettingsStore` directly (no separate view-model
-/// layer, matching every other tab in this file); non-secret fields save on every change, while
-/// the two secret fields (OpenAI-compatible API key, Azure service-principal client secret) are
-/// explicit "Save"/"Clear" actions against Keychain so a partially-typed secret is never persisted.
+/// Settings surface for AI cleanup: turning it on, picking a provider, and configuring that provider's
+/// connection details and credentials. `CleanupSettingsModel` stores every non-secret field the moment it changes
+/// and re-reads them after a change made elsewhere, such as the tray's AI Cleanup item. The two secrets
+/// (OpenAI-compatible API key, Azure service-principal client secret) are explicit Save and Clear actions against
+/// Keychain, so a partly typed secret is never stored.
 private struct CleanupSettingsTab: View {
-    @State private var isEnabled = CleanupSettingsStore.isEnabled
-    @State private var providerKind = CleanupSettingsStore.providerKind
-    @State private var foundryLocalModelAlias = CleanupSettingsStore.foundryLocalModelAlias
-    @State private var ollamaModel = CleanupSettingsStore.ollamaModel
-    @State private var openAIBaseURL = CleanupSettingsStore.openAIBaseURL
-    @State private var openAIModel = CleanupSettingsStore.openAIModel
-    @State private var openAIApiKeyInput = ""
-    @State private var hasSavedOpenAIApiKey = CleanupSettingsStore.openAIApiKey() != nil
-    @State private var azureEndpoint = CleanupSettingsStore.azureEndpoint
-    @State private var azureDeployment = CleanupSettingsStore.azureDeployment
-    @State private var azureAuthMode = CleanupSettingsStore.azureAuthMode
-    @State private var azureTenantId = CleanupSettingsStore.azureTenantId
-    @State private var azureClientId = CleanupSettingsStore.azureClientId
-    @State private var azureClientSecretInput = ""
-    @State private var hasSavedAzureClientSecret = false
-    @State private var statusMessage: String?
-    @State private var errorMessage: String?
-    @State private var isTesting = false
+    @StateObject private var model: CleanupSettingsModel
+
+    init(access: CleanupSettingsAccess = .live) {
+        _model = StateObject(wrappedValue: CleanupSettingsModel(access: access))
+    }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Enable AI Cleanup", isOn: $isEnabled)
-                    .onChange(of: isEnabled) { _ in CleanupSettingsStore.isEnabled = isEnabled }
+                Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
+                    .disabled(model.isDisabled(.enableSwitch))
                 Text("Cleans up punctuation and phrasing after each dictation using a locally or "
                     + "remotely hosted model. Strictly opt-in and off by default: only the "
                     + "transcribed text is ever sent to a cleanup provider, never audio.")
@@ -1081,47 +1097,48 @@ private struct CleanupSettingsTab: View {
             }
 
             Section("Provider") {
-                Picker("Provider", selection: $providerKind) {
+                Picker("Provider", selection: $model.values.providerKind) {
                     ForEach(CleanupProviderKind.allCases) { kind in
                         Text(kind.displayName).tag(kind)
                     }
                 }
-                .onChange(of: providerKind) { _ in CleanupSettingsStore.providerKind = providerKind }
-                .disabled(!isEnabled)
             }
+            .disabled(model.isDisabled(.provider))
 
             providerConfigurationSection
+                .disabled(model.isDisabled(.providerDetails))
 
             Section {
                 HStack {
-                    Button(isTesting ? "Testing\u{2026}" : "Test Connection", action: testConnection)
-                        .disabled(isTesting || !CleanupSettingsStore.isConfigured(for: providerKind))
-                    if isTesting {
+                    Button(model.isTesting ? "Testing\u{2026}" : "Test Connection") {
+                        Task { await model.testConnection() }
+                    }
+                    .disabled(model.isDisabled(.connectionTest))
+                    if model.isTesting {
                         ProgressView().controlSize(.small)
                     }
                     Spacer()
                 }
-                if let errorMessage {
+                if let errorMessage = model.errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.caption)
-                } else if let statusMessage {
+                } else if let statusMessage = model.statusMessage {
                     Text(statusMessage).foregroundStyle(.secondary).font(.caption)
                 }
             }
         }
         .formStyle(.grouped)
-        .disabled(!isEnabled)
-        .onAppear { refreshAzureSecretState() }
+        .onAppear {
+            model.reload()
+            model.refreshSecretState()
+        }
     }
 
     @ViewBuilder
     private var providerConfigurationSection: some View {
-        switch providerKind {
+        switch model.values.providerKind {
         case .foundryLocal:
             Section("Foundry Local") {
-                TextField("Model alias", text: $foundryLocalModelAlias)
-                    .onChange(of: foundryLocalModelAlias) { _ in
-                        CleanupSettingsStore.foundryLocalModelAlias = foundryLocalModelAlias
-                    }
+                TextField("Model alias", text: $model.values.foundryLocalModelAlias)
                 Text("Runs fully on-device via Foundry Local. Requires "
                     + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
                     + "first use.")
@@ -1130,8 +1147,7 @@ private struct CleanupSettingsTab: View {
             }
         case .ollama:
             Section("Local model (Ollama managed)") {
-                TextField("Model", text: $ollamaModel)
-                    .onChange(of: ollamaModel) { _ in CleanupSettingsStore.ollamaModel = ollamaModel }
+                TextField("Model", text: $model.values.ollamaModel)
                 Text("Runs fully on-device via a local Ollama installation "
                     + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools.")
                     .font(.caption)
@@ -1139,18 +1155,16 @@ private struct CleanupSettingsTab: View {
             }
         case .openAICompatible:
             Section("OpenAI-compatible endpoint") {
-                TextField("Base URL (e.g. http://localhost:1234)", text: $openAIBaseURL)
-                    .onChange(of: openAIBaseURL) { _ in CleanupSettingsStore.openAIBaseURL = openAIBaseURL }
-                TextField("Model", text: $openAIModel)
-                    .onChange(of: openAIModel) { _ in CleanupSettingsStore.openAIModel = openAIModel }
+                TextField("Base URL (e.g. http://localhost:1234)", text: $model.values.openAIBaseURL)
+                TextField("Model", text: $model.values.openAIModel)
                 SecureField(
-                    hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
-                    text: $openAIApiKeyInput)
+                    model.hasSavedOpenAIApiKey ? "API key saved (leave blank to keep)" : "API key (optional)",
+                    text: $model.openAIApiKeyInput)
                 HStack {
-                    Button("Save Key", action: saveOpenAIApiKey)
-                        .disabled(openAIApiKeyInput.isEmpty)
-                    if hasSavedOpenAIApiKey {
-                        Button("Clear Key", role: .destructive, action: clearOpenAIApiKey)
+                    Button("Save Key") { model.saveOpenAIApiKey() }
+                        .disabled(!model.canSaveOpenAIApiKey)
+                    if model.hasSavedOpenAIApiKey {
+                        Button("Clear Key", role: .destructive) { model.clearOpenAIApiKey() }
                     }
                 }
                 Text("For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
@@ -1160,33 +1174,26 @@ private struct CleanupSettingsTab: View {
             }
         case .microsoftFoundry:
             Section("Microsoft Foundry (cloud)") {
-                TextField("Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)", text: $azureEndpoint)
-                    .onChange(of: azureEndpoint) { _ in CleanupSettingsStore.azureEndpoint = azureEndpoint }
-                TextField("Deployment name", text: $azureDeployment)
-                    .onChange(of: azureDeployment) { _ in CleanupSettingsStore.azureDeployment = azureDeployment }
-                Picker("Authentication", selection: $azureAuthMode) {
+                TextField(
+                    "Endpoint (e.g. https://my-resource.cognitiveservices.azure.com)",
+                    text: $model.values.azureEndpoint)
+                TextField("Deployment name", text: $model.values.azureDeployment)
+                Picker("Authentication", selection: $model.values.azureAuthMode) {
                     Text("Azure CLI (az login)").tag(AzureAuthMode.azureCli)
                     Text("Service principal").tag(AzureAuthMode.servicePrincipal)
                 }
-                .onChange(of: azureAuthMode) { _ in CleanupSettingsStore.azureAuthMode = azureAuthMode }
 
-                if azureAuthMode == .servicePrincipal {
-                    TextField("Tenant ID", text: $azureTenantId)
-                        .onChange(of: azureTenantId) { _ in CleanupSettingsStore.azureTenantId = azureTenantId }
-                    TextField("Client ID", text: $azureClientId)
-                        .onChange(of: azureClientId) { _ in
-                            CleanupSettingsStore.azureClientId = azureClientId
-                            refreshAzureSecretState()
-                        }
+                if model.values.azureAuthMode == .servicePrincipal {
+                    TextField("Tenant ID", text: $model.values.azureTenantId)
+                    TextField("Client ID", text: $model.values.azureClientId)
                     SecureField(
-                        hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
-                        text: $azureClientSecretInput)
+                        model.hasSavedAzureClientSecret ? "Client secret saved (leave blank to keep)" : "Client secret",
+                        text: $model.azureClientSecretInput)
                     HStack {
-                        Button("Save Secret", action: saveAzureClientSecret)
-                            .disabled(azureClientSecretInput.isEmpty
-                                || azureClientId.trimmingCharacters(in: .whitespaces).isEmpty)
-                        if hasSavedAzureClientSecret {
-                            Button("Clear Secret", role: .destructive, action: clearAzureClientSecret)
+                        Button("Save Secret") { model.saveAzureClientSecret() }
+                            .disabled(!model.canSaveAzureClientSecret)
+                        if model.hasSavedAzureClientSecret {
+                            Button("Clear Secret", role: .destructive) { model.clearAzureClientSecret() }
                         }
                     }
                     Text("The client secret is stored in Keychain, never in an environment "
@@ -1199,81 +1206,6 @@ private struct CleanupSettingsTab: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            }
-        }
-    }
-
-    private func refreshAzureSecretState() {
-        hasSavedAzureClientSecret = CleanupSettingsStore.azureClientSecret(clientId: azureClientId) != nil
-    }
-
-    private func saveOpenAIApiKey() {
-        do {
-            try CleanupSettingsStore.setOpenAIApiKey(openAIApiKeyInput)
-            openAIApiKeyInput = ""
-            hasSavedOpenAIApiKey = true
-            statusMessage = "API key saved to Keychain."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to save API key: \(error.localizedDescription)"
-        }
-    }
-
-    private func clearOpenAIApiKey() {
-        do {
-            try CleanupSettingsStore.setOpenAIApiKey(nil)
-            hasSavedOpenAIApiKey = false
-            statusMessage = "API key removed."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to remove API key: \(error.localizedDescription)"
-        }
-    }
-
-    private func saveAzureClientSecret() {
-        do {
-            try CleanupSettingsStore.setAzureClientSecret(azureClientSecretInput, clientId: azureClientId)
-            azureClientSecretInput = ""
-            hasSavedAzureClientSecret = true
-            statusMessage = "Client secret saved to Keychain."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to save client secret: \(error.localizedDescription)"
-        }
-    }
-
-    private func clearAzureClientSecret() {
-        do {
-            try CleanupSettingsStore.setAzureClientSecret(nil, clientId: azureClientId)
-            hasSavedAzureClientSecret = false
-            statusMessage = "Client secret removed."
-            errorMessage = nil
-        } catch {
-            errorMessage = "Failed to remove client secret: \(error.localizedDescription)"
-        }
-    }
-
-    /// Builds a provider from current settings and runs its cheap reachability check. Uses
-    /// `CleanupProviderResolver`, so an env-var override (if one happens to be set) is tested
-    /// exactly the same way the live dictation pipeline would resolve it, avoiding a UI that lies
-    /// about which provider is actually about to run.
-    private func testConnection() {
-        isTesting = true
-        statusMessage = nil
-        errorMessage = nil
-        Task {
-            do {
-                let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
-                let snapshot = await provider.healthSnapshot()
-                isTesting = false
-                if snapshot.reachable {
-                    statusMessage = "\(provider.displayName): \(snapshot.detail)"
-                } else {
-                    errorMessage = "\(provider.displayName): \(snapshot.detail)"
-                }
-            } catch {
-                isTesting = false
-                errorMessage = error.localizedDescription
             }
         }
     }
@@ -1341,11 +1273,9 @@ private struct PlaygroundSettingsTab: View {
                         .padding(.vertical, 4)
                     }
 
-                    // NOTE: There is no timing row here for "AI cleanup" or a Silero-style "VAD
-                    // decode" stage. macOS's live pipeline does not yet call AI cleanup (only
-                    // reachable via the `--cleanup-text` CLI verb), and macOS's capture uses an
-                    // energy-threshold auto-stop detector rather than a true VAD model with a
-                    // discrete inference step to time. See PORTING-PLAN.md for tracking.
+                    // No row for a voice activity model: capture ends on an energy-threshold
+                    // auto-stop detector, which has no separate inference step to time. See
+                    // PORTING-PLAN.md.
                 } else {
                     Text("No dictation captured yet this session.")
                         .foregroundStyle(.secondary)
@@ -1508,9 +1438,10 @@ private struct DiagnosticsSettingsTab: View {
 
 /// Local-only usage totals, a trend chart, top apps, and recurring-term mining, backed by
 /// `UsageAnalyzer`. The AI summary section is the one part of this tab that leaves the device: it
-/// is opt-in per generation (never automatic) and sends only the aggregate `UsageInsight` payload
-/// (counts and dictionary-covered term labels), never raw transcripts. Mirrors Windows' Usage
-/// Insights page, split across the totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
+/// is opt-in per generation (never automatic), available only while AI cleanup is on, and sends
+/// only the aggregate `UsageInsight` payload (counts and dictionary-covered term labels), never raw
+/// transcripts (see `UsageSummaryModel`). Mirrors Windows' Usage Insights page, split across the
+/// totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
 private struct UsageInsightsSettingsTab: View {
     let persistenceStore: PersistenceStore
     let onChanged: () -> Void
@@ -1519,9 +1450,7 @@ private struct UsageInsightsSettingsTab: View {
     @State private var errorMessage: String?
     @State private var windowDays: Double = 30
 
-    @State private var aiSummaryText: String?
-    @State private var aiSummaryError: String?
-    @State private var isGeneratingSummary = false
+    @StateObject private var summaryModel = UsageSummaryModel()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1536,7 +1465,10 @@ private struct UsageInsightsSettingsTab: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
-                .onChange(of: windowDays) { _ in reload() }
+                .onChange(of: windowDays) { _ in
+                    summaryModel.reset()
+                    reload()
+                }
             }
 
             if let errorMessage {
@@ -1566,6 +1498,9 @@ private struct UsageInsightsSettingsTab: View {
             Spacer()
         }
         .onAppear(perform: reload)
+        .onDisappear {
+            summaryModel.cancelInFlight()
+        }
     }
 
     // MARK: Totals
@@ -1677,48 +1612,31 @@ private struct UsageInsightsSettingsTab: View {
                 .foregroundStyle(.secondary)
 
             HStack {
-                Button(isGeneratingSummary ? "Generating..." : "Generate AI Summary") {
-                    generateSummary(snapshot)
+                Button(summaryModel.isGenerating ? "Generating..." : "Generate AI Summary") {
+                    summaryModel.generate(payload: UsageInsight.buildSummary(snapshot))
                 }
-                .disabled(isGeneratingSummary)
-                if isGeneratingSummary {
+                .disabled(!summaryModel.canGenerate)
+                if summaryModel.isGenerating {
                     ProgressView()
                         .controlSize(.small)
                 }
             }
 
-            if let aiSummaryError {
-                Text(aiSummaryError)
+            if !summaryModel.isCleanupEnabled {
+                Text("Turn on AI cleanup to generate a summary.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let error = summaryModel.errorMessage {
+                Text(error)
                     .foregroundStyle(.red)
             }
 
-            if let aiSummaryText {
-                Text(aiSummaryText)
+            if let summary = summaryModel.summary {
+                Text(summary)
                     .textSelection(.enabled)
                     .padding(.top, 4)
-            }
-        }
-    }
-
-    private func generateSummary(_ snapshot: UsageAnalyzer.Snapshot) {
-        isGeneratingSummary = true
-        aiSummaryError = nil
-        let payload = UsageInsight.buildSummary(snapshot)
-        Task {
-            do {
-                let provider = CleanupProviderResolver.resolveDefaultProvider()
-                let response = try await provider.clean(
-                    CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
-                let parsed = UsageInsight.parse(response.cleanedText)
-                await MainActor.run {
-                    aiSummaryText = parsed ?? "The AI provider returned no usable summary."
-                    isGeneratingSummary = false
-                }
-            } catch {
-                await MainActor.run {
-                    aiSummaryError = error.localizedDescription
-                    isGeneratingSummary = false
-                }
             }
         }
     }

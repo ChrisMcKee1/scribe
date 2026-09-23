@@ -148,9 +148,8 @@ struct QuickAddView: View {
         }
     }
 
-    /// Persisting is injected via `persistAction` in production so a `.invalid`/`.noChange` plan
-    /// (which carries no writable entry) never reaches here; `save()` already guards on
-    /// `plan.entry`. Exposed as a var so previews/tests can stub it without a real database.
+    /// Injected so the view never opens the database itself: production passes a closure that inserts a new
+    /// rule or updates the existing one. `save()` only calls it for a plan that carries an entry.
     var persistAction: ((DictionaryEntry) throws -> Int64)?
 
     private func persist(_ entry: DictionaryEntry) throws -> Int64 {
