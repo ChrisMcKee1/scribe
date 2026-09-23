@@ -57,8 +57,9 @@ privacy/offline promise.
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2` (`TranscriptionEngine.swift`)
 - Overlay pill with a 9-anchor position picker and live recording/processing state
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
-  Playground, Diagnostics, Usage Insights, and About sections; a change made from the tray shows in an
-  open window, and Open at Login shows what macOS reports
+  Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
+  shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
+  on the main thread
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), voice
   snippets, and per-app profiles (writing style + newline mode by focused app)
 - AI cleanup across four providers: Foundry Local (default), managed Ollama, any
@@ -72,12 +73,12 @@ privacy/offline promise.
   best-effort until committed: a crash in that moment loses the entry. A new install keeps 90 days of
   text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
   unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
-  reclaimed only while no dictation is running
+  reclaimed only while no dictation is running. Settings > History chooses the limit (7, 30, 90 days,
+  1 year or Forever) and clears all history after a confirmation, which also empties Recent Dictations
 
 ## Known gaps vs. Windows
 
 See `PORTING-PLAN.md` for the authoritative, row-by-row feature checklist. As of this writing the
-main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, no history
-retention picker or Clear history button in Settings yet (the storage side exists), and no release
-packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
+main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, and no
+release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
 Accessibility persistence only).

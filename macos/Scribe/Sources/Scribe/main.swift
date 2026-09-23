@@ -41,6 +41,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// Applies the history retention choice and reclaims space while the app is idle.
     private lazy var storageMaintenance = StorageMaintenance(
         store: persistenceStore, historyWriter: historyWriter, activity: foregroundActivity)
+    /// Reads the rules every dictation applies off the main actor; the newest refresh wins.
+    private lazy var ruleRefresher = RuleSetRefresher(
+        load: { [persistenceStore] in try await persistenceStore.loadRuleSet() },
+        apply: { [weak self] rules in self?.applyRules(rules) },
+        onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
     private let audioCaptureEngine = AudioCaptureEngine()
     private lazy var transcriptionEngine = try? TranscriptionEngine(
         logSink: { message in AppDelegate.writeLogLine(message) })
@@ -83,8 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
-        initializePersistenceStore()
-        Task { await seedLastTranscriptStoreFromHistory() }
+        Task { await prepareStorage() }
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
@@ -128,8 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                     overlayPanelController: overlayPanelController,
                     pipelineReportStore: pipelineReportStore,
                     dictionaryLibraryService: dictionaryLibraryService,
-                    onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() },
+                    onProfilesOrRulesChanged: { [weak self] in self?.refreshPostProcessorRules() },
                     onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode },
+                    historyAccess: .live(store: persistenceStore, maintenance: storageMaintenance),
+                    onHistoryCleared: { [weak self] in self?.lastTranscriptStore.removeAll() },
                     drafts: settingsDrafts),
                 onClose: { [weak self] closed in
                     if self?.settingsWindowController === closed {
@@ -177,7 +183,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 existing: existing,
                 onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
                 onClose: { [weak self] in self?.quickAddWindowController?.close() },
-                persistAction: { [weak self] entry in try self?.persistQuickAddEntry(entry) ?? 0 }))
+                persistAction: { [weak self] entry in
+                    guard let self else {
+                        throw QuickAddPersistError.noPersistAction
+                    }
+                    return try await self.persistQuickAddEntry(entry)
+                }))
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Add to Dictionary"
         window.styleMask.insert(.titled)
@@ -194,24 +205,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     }
 
     /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a
-    /// non-zero id) and returns the row's id, mirroring Windows' `persist` delegate.
-    private func persistQuickAddEntry(_ entry: DictionaryEntry) throws -> Int64 {
+    /// non-zero id) and returns the row's id, mirroring Windows' `persist` delegate. The write waits on
+    /// the storage queue, not the main actor.
+    private func persistQuickAddEntry(_ entry: DictionaryEntry) async throws -> Int64 {
         if entry.id != 0 {
-            try persistenceStore.updateDictionaryEntry(entry)
+            try await persistenceStore.saveDictionaryEntry(entry)
             return entry.id
         }
-        return try persistenceStore.insertDictionaryEntry(entry)
+        return try await persistenceStore.addDictionaryEntry(entry)
     }
 
-    /// After a successful save: reloads the post-processor so the new rule takes effect on the
-    /// very next dictation, repairs the retained copy of the transcript the correction came from
-    /// (so "copy last dictation" hands back the corrected wording), and closes the popup.
+    /// After a successful save: refreshes the post-processor so the new rule takes effect on the
+    /// next dictation, repairs the retained copy of the transcript the correction came from (so
+    /// "copy last dictation" hands back the corrected wording), and closes the popup. The log line
+    /// says only that a rule was saved: rules are dictated content.
     private func handleQuickAddSaved(_ result: QuickAddView.SavedResult) {
-        reloadPostProcessorRules()
+        refreshPostProcessorRules()
         if let source = result.sourceTranscript, let corrected = result.correctedTranscript {
             lastTranscriptStore.update(original: source, updated: corrected)
         }
-        Self.writeLogLine("Saved a dictionary rule from Quick Add: '\(result.entry.pattern)' -> '\(result.entry.replacement)'.")
+        Self.writeLogLine("Saved a dictionary rule from Quick Add.")
         quickAddWindowController?.close()
     }
 
@@ -484,15 +497,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         }
     }
 
-    private func initializePersistenceStore() {
+    /// Opens and migrates the database on the storage queue, then starts maintenance, loads the rules
+    /// and seeds the recovery ring, none of it on the main actor. The storage queue runs operations in
+    /// the order they reach it, so a write or read queued after the migration runs against the
+    /// migrated schema.
+    private func prepareStorage() async {
         do {
-            try persistenceStore.initialize()
-            reloadPostProcessorRules()
-            storageMaintenance.start()
+            try await persistenceStore.prepare()
         } catch {
             Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
             logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
+            return
         }
+        storageMaintenance.start()
+        await ruleRefresher.refresh()
+        await seedLastTranscriptStoreFromHistory()
     }
 
     /// Stopgap persistence for the overlay position: a single UserDefaults value rather than a
@@ -555,19 +574,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         button.toolTip = paused ? "Scribe: paused" : "Scribe"
     }
 
-    private func reloadPostProcessorRules() {
-        do {
-            let dictionaryEntries = try persistenceStore.fetchEnabledDictionaryEntries()
-            let snippets = try persistenceStore.fetchEnabledSnippets()
-            let libraryEntries = dictionaryLibraryService.enabledLibraryEntries()
-            textPostProcessor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets, libraryEntries: libraryEntries)
-            appProfiles = try persistenceStore.fetchAppProfiles()
-            Self.writeLogLine(
-                "Post-processor loaded \(dictionaryEntries.count) dictionary entr(y/ies), \(libraryEntries.count) library entr(y/ies), \(snippets.count) snippet(s), and \(appProfiles.count) app profile(s).")
-        } catch {
-            Self.writeLogLine("Failed to load dictionary/snippets/profiles: \(error.localizedDescription)")
-            logger.error("Failed to load dictionary/snippets/profiles: \(error.localizedDescription, privacy: .public)")
-        }
+    /// Starts reading the rules every dictation applies. The read runs off the main actor, and only
+    /// the newest refresh is applied (`RuleSetRefresher`).
+    private func refreshPostProcessorRules() {
+        Task { await ruleRefresher.refresh() }
+    }
+
+    private func applyRules(_ rules: PersistenceRuleSet) {
+        let libraryEntries = dictionaryLibraryService.enabledLibraryEntries()
+        textPostProcessor.reload(
+            dictionaryEntries: rules.dictionaryEntries, snippets: rules.snippets, libraryEntries: libraryEntries)
+        appProfiles = rules.appProfiles
+        Self.writeLogLine(
+            "Post-processor loaded \(rules.dictionaryEntries.count) dictionary entr(y/ies), \(libraryEntries.count) library entr(y/ies), \(rules.snippets.count) snippet(s), and \(appProfiles.count) app profile(s).")
+    }
+
+    /// A failed refresh keeps the rules already in use.
+    private func reportRuleLoadFailure(_ error: any Error) {
+        Self.writeLogLine("Failed to load dictionary/snippets/profiles: \(error.localizedDescription)")
+        logger.error("Failed to load dictionary/snippets/profiles: \(error.localizedDescription, privacy: .public)")
     }
 
     private func startCapture() {

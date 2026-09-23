@@ -316,7 +316,7 @@ final class PersistenceStoreHistoryTests: XCTestCase {
         XCTAssertEqual(history, try store.fetchDictationHistory(limit: 10))
         XCTAssertEqual(recent, ["second", "first"])
 
-        try await store.saveDictionaryChanges(inserts: [DictionaryEntry(pattern: "a", replacement: "A")], updates: [])
+        _ = try await store.addDictionaryEntry(DictionaryEntry(pattern: "a", replacement: "A"))
         let entries = try await store.loadAllDictionaryEntries()
         XCTAssertEqual(entries, try store.fetchAllDictionaryEntries())
         XCTAssertEqual(entries.map(\.pattern), ["a"])

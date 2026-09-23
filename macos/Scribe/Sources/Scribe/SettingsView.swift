@@ -6,11 +6,13 @@ import UniformTypeIdentifiers
 
 /// The Settings window: a sidebar of sections, one tab per feature area. Tabs that show preferences re-read them
 /// after any preference write in this process, so a change made from the tray (AI cleanup, the overlay position)
-/// shows in an open window; tabs backed by `PersistenceStore` load when they appear. `SettingsWindowController`
-/// builds the window afresh on every open, so nothing a closed window showed is shown again later, while what the
-/// user typed but did not save, and the section that was showing, live in the app-owned `SettingsDrafts`.
+/// shows in an open window; tabs backed by `PersistenceStore` load when they appear, through a main-actor model whose
+/// storage calls are all asynchronous and whose reads publish only if they are still the newest
+/// (`SettingsSectionLoad`). `SettingsWindowController` builds the window afresh on every open, so nothing a closed
+/// window showed is shown again later, while what the user typed but did not save, and the section that was showing,
+/// live in the app-owned `SettingsDrafts`.
 ///
-/// A `NavigationSplitView` sidebar rather than `TabView`'s segmented control: with eleven sections the segmented
+/// A `NavigationSplitView` sidebar rather than `TabView`'s segmented control: with a dozen sections the segmented
 /// strip truncated its labels and became unreadable, while a sidebar `List` scales the way System Settings does.
 enum SettingsSection: String, CaseIterable, Identifiable {
     case overlay
@@ -23,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case playground
     case diagnostics
     case usageInsights
+    case history
     case about
 
     var id: String { rawValue }
@@ -39,6 +42,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .playground: return "Playground"
         case .diagnostics: return "Diagnostics"
         case .usageInsights: return "Usage Insights"
+        case .history: return "History"
         case .about: return "About"
         }
     }
@@ -55,6 +59,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .playground: return "wand.and.rays"
         case .diagnostics: return "waveform.path.ecg"
         case .usageInsights: return "chart.bar.xaxis"
+        case .history: return "clock.arrow.circlepath"
         case .about: return "info.circle"
         }
     }
@@ -65,8 +70,13 @@ struct SettingsView: View {
     let overlayPanelController: OverlayPanelController
     let pipelineReportStore: PipelineReportStore
     let dictionaryLibraryService: DictionaryLibraryService
-    let onProfilesOrRulesChanged: () -> Void
+    /// Refreshes the rules every dictation applies after a Settings edit; runs on the main actor.
+    let onProfilesOrRulesChanged: @MainActor () -> Void
     let onHotkeyChanged: (CGKeyCode) -> Void
+    /// Reads and writes the history limit and runs Clear history (`HistorySettingsAccess.live` in the app).
+    let historyAccess: HistorySettingsAccess
+    /// Empties the tray's recent dictations after a successful Clear history.
+    let onHistoryCleared: @MainActor () -> Void
     /// Owned by the app, not the window, so unsaved entries and the section on screen survive the window closing.
     @ObservedObject var drafts: SettingsDrafts
     var hotkeyStore: HotkeySettingsStore = .live
@@ -115,6 +125,8 @@ struct SettingsView: View {
             DiagnosticsSettingsTab(persistenceStore: persistenceStore)
         case .usageInsights:
             UsageInsightsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged)
+        case .history:
+            HistorySettingsTab(access: historyAccess, onCleared: onHistoryCleared)
         case .about:
             AboutView(persistenceStore: persistenceStore)
         }
@@ -349,17 +361,14 @@ private struct HotkeySettingsTab: View {
 // MARK: - Dictionary tab
 
 private struct DictionarySettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: DictionarySettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var entries: [DictionaryEntry] = []
-    @ObservedObject var drafts: SettingsDrafts
-    @State private var errorMessage: String?
-    @State private var statusMessage: String?
-    @State private var isLearning = false
-    @State private var isCleaning = false
-    @State private var cleanupReport: DictionaryUsageReport?
-    @State private var cleanupSelection: Set<Int64> = []
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: DictionarySettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -369,32 +378,38 @@ private struct DictionarySettingsTab: View {
             HStack {
                 TextField("Spoken form (e.g. \"sherpa onnx\")", text: $drafts.dictionaryPattern)
                 TextField("Written form (e.g. \"sherpa-onnx\")", text: $drafts.dictionaryReplacement)
-                Button("Add", action: addEntry)
-                    .disabled(drafts.dictionaryPattern.trimmingCharacters(in: .whitespaces).isEmpty
-                        || drafts.dictionaryReplacement.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
             HStack {
-                Button("Import CSV\u{2026}", action: importCsv)
+                Button(model.isImporting ? "Importing\u{2026}" : "Import CSV\u{2026}", action: importCsv)
+                    .disabled(model.isImporting)
                 Button("Export CSV\u{2026}", action: exportCsv)
-                    .disabled(entries.isEmpty)
+                    .disabled(!model.canExport)
                 Button("Get Template\u{2026}", action: saveTemplate)
-                Button("Learn from History", action: learnFromHistory)
-                    .disabled(isLearning)
-                Button("Clean Up\u{2026}", action: runCleanup)
-                    .disabled(isCleaning)
+                Button("Learn from History") {
+                    Task { await model.learnFromHistory() }
+                }
+                .disabled(model.isLearning)
+                Button("Clean Up\u{2026}") {
+                    Task { await model.reviewUsage() }
+                }
+                .disabled(model.isCleaning)
                 Spacer()
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
-            if let statusMessage {
+            if let statusMessage = model.statusMessage {
                 Text(statusMessage).foregroundStyle(.secondary).font(.caption)
             }
 
             List {
-                ForEach(entries, id: \.id) { entry in
+                ForEach(model.entries, id: \.id) { entry in
                     HStack {
                         Toggle("", isOn: binding(for: entry))
                             .labelsHidden()
@@ -404,7 +419,7 @@ private struct DictionarySettingsTab: View {
                         Text(entry.replacement)
                         Spacer()
                         Button(role: .destructive) {
-                            deleteEntry(entry)
+                            Task { await model.delete(entry) }
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -413,19 +428,20 @@ private struct DictionarySettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
         .sheet(isPresented: Binding(
-            get: { cleanupReport != nil },
-            set: { if !$0 { cleanupReport = nil } }
+            get: { model.cleanupReport != nil },
+            set: { if !$0 { model.cleanupReport = nil } }
         )) {
-            if let report = cleanupReport {
+            if let report = model.cleanupReport {
                 DictionaryCleanupView(
                     report: report,
                     onApply: { idsToDisable in
-                        applyCleanup(idsToDisable: idsToDisable)
-                        cleanupReport = nil
+                        Task { await model.applyCleanup(disabling: idsToDisable) }
                     },
-                    onCancel: { cleanupReport = nil })
+                    onCancel: { model.cleanupReport = nil })
             }
         }
     }
@@ -433,61 +449,14 @@ private struct DictionarySettingsTab: View {
     private func binding(for entry: DictionaryEntry) -> Binding<Bool> {
         Binding(
             get: { entry.enabled },
-            set: { newValue in setEnabled(entry, enabled: newValue) })
+            set: { newValue in
+                Task { await model.setEnabled(entry, enabled: newValue) }
+            })
     }
 
-    private func reload() {
-        // The read waits on the storage queue, not the main actor. That queue is FIFO, so when
-        // reloads overlap the later one's result still lands last.
-        Task {
-            do {
-                entries = try await persistenceStore.loadAllDictionaryEntries()
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func addEntry() {
-        do {
-            _ = try persistenceStore.insertDictionaryEntry(
-                DictionaryEntry(pattern: drafts.dictionaryPattern, replacement: drafts.dictionaryReplacement))
-            drafts.dictionaryPattern = ""
-            drafts.dictionaryReplacement = ""
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func setEnabled(_ entry: DictionaryEntry, enabled: Bool) {
-        do {
-            try persistenceStore.setDictionaryEntryEnabled(id: entry.id, enabled: enabled)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteEntry(_ entry: DictionaryEntry) {
-        do {
-            try persistenceStore.deleteDictionaryEntry(id: entry.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    // MARK: - CSV import/export
+    // MARK: - CSV import/export: the panels live here, the model reads and writes the files
 
     private func importCsv() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.commaSeparatedText, .plainText]
         panel.allowsMultipleSelection = false
@@ -496,49 +465,10 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        let csv: String
-        do {
-            csv = try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            errorMessage = "Couldn't import that file: \(error.localizedDescription)"
-            return
-        }
-
-        let result = DictionaryCsv.parse(csv)
-        let existingRows = entries.enumerated().map { index, entry in
-            DictionaryImportMerger.ExistingRow(
-                index: index,
-                id: entry.id,
-                pattern: entry.pattern,
-                replacement: entry.replacement,
-                wholeWord: entry.wholeWord,
-                enabled: entry.enabled)
-        }
-        let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
-        let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
-
-        let skipped = result.errors.isEmpty
-            ? ""
-            : " \(result.errors.count) row(s) skipped: \(result.errors.joined(separator: "; "))"
-        let summary = "Imported: \(plan.added) added, \(plan.updated) updated, \(plan.unchanged) unchanged." + skipped
-
-        Task {
-            do {
-                try await persistenceStore.saveDictionaryChanges(inserts: changes.inserts, updates: changes.updates)
-                reload()
-                onChanged()
-                statusMessage = summary
-            } catch {
-                errorMessage = "Couldn't import that file: \(error.localizedDescription)"
-            }
-        }
+        Task { await model.importCsvFile(at: url) }
     }
 
     private func exportCsv() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "scribe-dictionary.csv"
@@ -546,20 +476,10 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        do {
-            let csv = DictionaryCsv.export(entries)
-            try csv.write(to: url, atomically: true, encoding: .utf8)
-            statusMessage = "Exported \(entries.count) entr\(entries.count == 1 ? "y" : "ies") to \(url.lastPathComponent)."
-        } catch {
-            errorMessage = "Couldn't export the dictionary: \(error.localizedDescription)"
-        }
+        Task { await model.exportCsv(to: url) }
     }
 
     private func saveTemplate() {
-        errorMessage = nil
-        statusMessage = nil
-
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
         panel.nameFieldStringValue = "scribe-dictionary-template.csv"
@@ -567,100 +487,7 @@ private struct DictionarySettingsTab: View {
         guard panel.runModal() == .OK, let url = panel.url else {
             return
         }
-
-        do {
-            try DictionaryCsv.template.write(to: url, atomically: true, encoding: .utf8)
-            statusMessage = "Saved the template to \(url.lastPathComponent)."
-        } catch {
-            errorMessage = "Couldn't save the template: \(error.localizedDescription)"
-        }
-    }
-
-    // MARK: - Learn from history
-
-    /// Mines recent dictation history for recurring jargon (`DictionaryHistoryLearner`) and adds
-    /// any newly discovered entries. Guarded by `isLearning` because the mining scan, while quick,
-    /// still shouldn't be re-entrant if the user clicks twice.
-    private func learnFromHistory() {
-        guard !isLearning else { return }
-        isLearning = true
-        errorMessage = nil
-        statusMessage = nil
-
-        // The history read waits on the storage queue, not the main actor.
-        Task {
-            defer { isLearning = false }
-
-            do {
-                let history = try await persistenceStore.loadDictationHistory()
-                let learned = DictionaryHistoryLearner.buildEntries(history: history, existing: entries)
-
-                guard !learned.isEmpty else {
-                    statusMessage = "No new recurring terms found in your dictation history yet."
-                    return
-                }
-
-                for entry in learned {
-                    _ = try persistenceStore.insertDictionaryEntry(entry)
-                }
-
-                reload()
-                onChanged()
-                statusMessage = "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
-            } catch {
-                errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    // MARK: - Clean up unused entries
-
-    /// Scans dictation history for entries that never appear, in either their spoken or written
-    /// form (`DictionaryUsageAnalyzer`), and presents them for review. Nothing is disabled until
-    /// the user confirms in the sheet.
-    private func runCleanup() {
-        guard !isCleaning else { return }
-        isCleaning = true
-        errorMessage = nil
-        statusMessage = nil
-
-        // The history read waits on the storage queue, not the main actor.
-        Task {
-            defer { isCleaning = false }
-
-            do {
-                let history = try await persistenceStore.loadDictationHistory()
-                let transcripts = history.compactMap { $0.transcriptText }
-                let report = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: entries)
-
-                guard report.hasFindings else {
-                    statusMessage = report.hasEnoughEvidence
-                        ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
-                        : report.summary
-                    return
-                }
-
-                cleanupReport = report
-            } catch {
-                errorMessage = "Couldn't check dictionary usage: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    /// Soft-disables the confirmed entries rather than deleting them, mirroring Windows: the
-    /// evidence is a sample of recent history, not proof the term will never be needed again.
-    private func applyCleanup(idsToDisable: Set<Int64>) {
-        guard !idsToDisable.isEmpty else { return }
-        do {
-            for id in idsToDisable {
-                try persistenceStore.setDictionaryEntryEnabled(id: id, enabled: false)
-            }
-            reload()
-            onChanged()
-            statusMessage = "Turned off \(idsToDisable.count) unused entr\(idsToDisable.count == 1 ? "y" : "ies")."
-        } catch {
-            errorMessage = "Couldn't update the dictionary: \(error.localizedDescription)"
-        }
+        Task { await model.saveTemplate(to: url) }
     }
 }
 
@@ -745,7 +572,7 @@ private struct DictionaryCleanupView: View {
 
 private struct DictionaryLibrariesSettingsTab: View {
     let dictionaryLibraryService: DictionaryLibraryService
-    let onChanged: () -> Void
+    let onChanged: @MainActor () -> Void
 
     @State private var libraries: [DictionaryLibrary] = []
     @State private var enabledIds: Set<String> = []
@@ -877,12 +704,14 @@ private struct DictionaryLibrariesSettingsTab: View {
 // MARK: - Snippets tab
 
 private struct SnippetsSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: SnippetSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var snippets: [Snippet] = []
-    @ObservedObject var drafts: SettingsDrafts
-    @State private var errorMessage: String?
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: SnippetSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -894,17 +723,18 @@ private struct SnippetsSettingsTab: View {
                 TextEditor(text: $drafts.snippetTemplate)
                     .frame(height: 60)
                     .border(Color.gray.opacity(0.3))
-                Button("Add", action: addSnippet)
-                    .disabled(drafts.snippetPhrase.trimmingCharacters(in: .whitespaces).isEmpty
-                        || drafts.snippetTemplate.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
 
             List {
-                ForEach(snippets, id: \.id) { snippet in
+                ForEach(model.snippets, id: \.id) { snippet in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Toggle("", isOn: binding(for: snippet))
@@ -912,7 +742,7 @@ private struct SnippetsSettingsTab: View {
                             Text(snippet.phrase).fontWeight(.medium)
                             Spacer()
                             Button(role: .destructive) {
-                                deleteSnippet(snippet)
+                                Task { await model.delete(snippet) }
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -925,66 +755,31 @@ private struct SnippetsSettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
     }
 
     private func binding(for snippet: Snippet) -> Binding<Bool> {
         Binding(
             get: { snippet.enabled },
-            set: { newValue in setEnabled(snippet, enabled: newValue) })
-    }
-
-    private func reload() {
-        do {
-            snippets = try persistenceStore.fetchAllSnippets()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addSnippet() {
-        do {
-            _ = try persistenceStore.insertSnippet(Snippet(phrase: drafts.snippetPhrase, template: drafts.snippetTemplate))
-            drafts.snippetPhrase = ""
-            drafts.snippetTemplate = ""
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func setEnabled(_ snippet: Snippet, enabled: Bool) {
-        do {
-            try persistenceStore.setSnippetEnabled(id: snippet.id, enabled: enabled)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteSnippet(_ snippet: Snippet) {
-        do {
-            try persistenceStore.deleteSnippet(id: snippet.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+            set: { newValue in
+                Task { await model.setEnabled(snippet, enabled: newValue) }
+            })
     }
 }
 
 // MARK: - App profiles tab
 
 private struct AppProfilesSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
+    @StateObject private var model: AppProfileSettingsModel
+    @ObservedObject private var drafts: SettingsDrafts
 
-    @State private var profiles: [AppProfile] = []
-    @ObservedObject var drafts: SettingsDrafts
-    @State private var errorMessage: String?
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
+        _drafts = ObservedObject(wrappedValue: drafts)
+        _model = StateObject(
+            wrappedValue: AppProfileSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1003,23 +798,24 @@ private struct AppProfilesSettingsTab: View {
                     Text("Always Flatten").tag(NewlineInjectionMode.alwaysFlatten)
                     Text("Keep Newlines").tag(NewlineInjectionMode.keepNewlines)
                 }
-                Button("Add Profile", action: addProfile)
-                    .disabled(drafts.profileName.trimmingCharacters(in: .whitespaces).isEmpty
-                        || drafts.profileBundleIdentifiers.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Add Profile") {
+                    Task { await model.addFromDrafts() }
+                }
+                .disabled(!model.canAdd)
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).font(.caption)
             }
 
             List {
-                ForEach(profiles, id: \.id) { profile in
+                ForEach(model.profiles, id: \.id) { profile in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(profile.name).fontWeight(.medium)
                             Spacer()
                             Button(role: .destructive) {
-                                deleteProfile(profile)
+                                Task { await model.delete(profile) }
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -1035,48 +831,8 @@ private struct AppProfilesSettingsTab: View {
                 }
             }
         }
-        .onAppear(perform: reload)
-    }
-
-    private func reload() {
-        do {
-            profiles = try persistenceStore.fetchAppProfiles()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func addProfile() {
-        do {
-            let bundleIdentifiers = drafts.profileBundleIdentifiers
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            _ = try persistenceStore.insertAppProfile(AppProfile(
-                name: drafts.profileName,
-                bundleIdentifiers: bundleIdentifiers,
-                processNames: [],
-                writingStylePrompt: drafts.profileWritingStyle.isEmpty ? nil : drafts.profileWritingStyle,
-                newlineHandling: drafts.profileNewlineMode))
-            drafts.profileName = ""
-            drafts.profileBundleIdentifiers = ""
-            drafts.profileWritingStyle = ""
-            drafts.profileNewlineMode = .smartFlatten
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func deleteProfile(_ profile: AppProfile) {
-        do {
-            try persistenceStore.deleteAppProfile(id: profile.id)
-            reload()
-            onChanged()
-        } catch {
-            errorMessage = error.localizedDescription
+        .onAppear {
+            Task { await model.reload() }
         }
     }
 }
@@ -1349,11 +1105,11 @@ private struct PlaygroundSettingsTab: View {
 /// (P50/P95 decode latency, real-time factor). Computed with `DictationStats.compute`, the same
 /// aggregation used by `Scribe --diagnostics` for headless verification.
 private struct DiagnosticsSettingsTab: View {
-    let persistenceStore: PersistenceStore
+    @StateObject private var model: DiagnosticsSettingsModel
 
-    @State private var snapshot: DictationStats.Snapshot?
-    @State private var errorMessage: String?
-    @State private var windowDays: Double = 7
+    init(persistenceStore: PersistenceStore) {
+        _model = StateObject(wrappedValue: DiagnosticsSettingsModel(access: .live(persistenceStore)))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1361,24 +1117,31 @@ private struct DiagnosticsSettingsTab: View {
                 Text("Performance")
                     .font(.headline)
                 Spacer()
-                Picker("Window", selection: $windowDays) {
+                Picker("Window", selection: $model.windowDays) {
                     Text("24 hours").tag(1.0)
                     Text("7 days").tag(7.0)
                     Text("30 days").tag(30.0)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
-                .onChange(of: windowDays) { _ in reload() }
+                .onChange(of: model.windowDays) { _ in
+                    Task { await model.reload() }
+                }
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
 
-            if let snapshot {
+            if let snapshot = model.stats {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
+                        if let coverageNote = model.coverageNote {
+                            Text(coverageNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         metricRow(label: "Dictations", value: "\(snapshot.count)")
                         metricRow(
                             label: "Total audio",
@@ -1422,7 +1185,9 @@ private struct DiagnosticsSettingsTab: View {
 
             Spacer()
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
     }
 
     private func metricRow(label: String, value: String) -> some View {
@@ -1432,19 +1197,6 @@ private struct DiagnosticsSettingsTab: View {
             Spacer()
             Text(value)
                 .monospacedDigit()
-        }
-    }
-
-    private func reload() {
-        let since = Date().addingTimeInterval(-windowDays * 86400)
-        Task {
-            do {
-                let history = try await persistenceStore.loadDictationHistory()
-                snapshot = DictationStats.compute(entries: history, since: since)
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-            }
         }
     }
 }
@@ -1458,14 +1210,12 @@ private struct DiagnosticsSettingsTab: View {
 /// transcripts (see `UsageSummaryModel`). Mirrors Windows' Usage Insights page, split across the
 /// totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
 private struct UsageInsightsSettingsTab: View {
-    let persistenceStore: PersistenceStore
-    let onChanged: () -> Void
-
-    @State private var snapshot: UsageAnalyzer.Snapshot?
-    @State private var errorMessage: String?
-    @State private var windowDays: Double = 30
-
+    @StateObject private var model: UsageInsightsModel
     @StateObject private var summaryModel = UsageSummaryModel()
+
+    init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void) {
+        _model = StateObject(wrappedValue: UsageInsightsModel(access: .live(persistenceStore), onChanged: onChanged))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1473,27 +1223,37 @@ private struct UsageInsightsSettingsTab: View {
                 Text("Usage Insights")
                     .font(.headline)
                 Spacer()
-                Picker("Window", selection: $windowDays) {
+                Picker("Window", selection: $model.windowDays) {
                     Text("7 days").tag(7.0)
                     Text("30 days").tag(30.0)
                     Text("90 days").tag(90.0)
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 260)
-                .onChange(of: windowDays) { _ in
+                .onChange(of: model.windowDays) { _ in
                     summaryModel.reset()
-                    reload()
+                    Task { await model.reload() }
                 }
             }
 
-            if let errorMessage {
+            if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .foregroundStyle(.red)
             }
+            if let statusMessage = model.statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
-            if let snapshot {
+            if let snapshot = model.snapshot {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
+                        if let coverageNote = model.coverageNote {
+                            Text(coverageNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         totalsSection(snapshot)
                         Divider()
                         trendSection(snapshot)
@@ -1512,7 +1272,9 @@ private struct UsageInsightsSettingsTab: View {
 
             Spacer()
         }
-        .onAppear(perform: reload)
+        .onAppear {
+            Task { await model.reload() }
+        }
         .onDisappear {
             summaryModel.cancelInFlight()
         }
@@ -1597,22 +1359,13 @@ private struct UsageInsightsSettingsTab: View {
                                 .foregroundStyle(.secondary)
                                 .font(.caption)
                         } else {
-                            Button("Add to Dictionary") { addTermToDictionary(term) }
+                            Button("Add to Dictionary") {
+                                Task { await model.addTermToDictionary(term) }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
-
-    private func addTermToDictionary(_ term: UsageAnalyzer.TermUsage) {
-        do {
-            _ = try persistenceStore.insertDictionaryEntry(
-                DictionaryEntry(pattern: term.text, replacement: term.text, wholeWord: true, enabled: true))
-            onChanged()
-            reload()
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -1665,22 +1418,88 @@ private struct UsageInsightsSettingsTab: View {
                 .monospacedDigit()
         }
     }
+}
 
-    private func reload() {
-        let now = Date()
-        let since = now.addingTimeInterval(-windowDays * 86400)
-        Task {
-            do {
-                let knownTerms = try await persistenceStore.loadAllDictionaryEntries()
-                let records = try await persistenceStore.loadDictationHistory(
-                    since: since, limit: UsageAnalyzer.historyLimit + 1)
-                snapshot = UsageAnalyzer.report(
-                    records: records, knownTerms: knownTerms, sinceUtc: since, nowUtc: now
-                ).snapshot
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
+// MARK: - History tab
+
+/// How long dictation text is kept, and Clear history (`HistorySettingsModel`). Windows keeps the limit on its storage
+/// card and Clear on its History page; macOS has no history list, so both live here.
+private struct HistorySettingsTab: View {
+    @StateObject private var model: HistorySettingsModel
+
+    init(access: HistorySettingsAccess, onCleared: @escaping @MainActor () -> Void) {
+        _model = StateObject(wrappedValue: HistorySettingsModel(access: access, onCleared: onCleared))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Dictation History")
+                .font(.headline)
+
+            Picker("Keep dictation history for", selection: Binding(
+                get: { model.selection },
+                set: { choice in _ = model.choose(choice) }
+            )) {
+                ForEach(model.options, id: \.self) { option in
+                    Text(option.label).tag(option)
+                }
             }
+            .frame(maxWidth: 360)
+            .disabled(!model.canChooseRetention)
+
+            Text(model.hint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            if let storedCountText = model.storedCountText {
+                Text(storedCountText)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button(model.isClearing ? "Clearing\u{2026}" : "Clear History\u{2026}", role: .destructive) {
+                    model.requestClear()
+                }
+                .disabled(!model.canClear)
+                if model.isClearing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Spacer()
+            }
+
+            Text("Clear deletes every stored dictation and also empties Recent Dictations in the menu bar.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let loadError = model.loadError {
+                Text(loadError).foregroundStyle(.red).font(.caption)
+            }
+            if let errorMessage = model.errorMessage {
+                Text(errorMessage).foregroundStyle(.red).font(.caption)
+            }
+            if let statusMessage = model.statusMessage {
+                Text(statusMessage).foregroundStyle(.secondary).font(.caption)
+            }
+
+            Spacer()
+        }
+        .onAppear {
+            Task { await model.reload() }
+        }
+        .confirmationDialog(
+            "Clear all dictation history?",
+            isPresented: $model.isConfirmingClear,
+            titleVisibility: .visible
+        ) {
+            Button("Clear All", role: .destructive) {
+                Task { await model.confirmClear() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone.")
         }
     }
 }

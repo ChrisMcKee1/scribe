@@ -273,6 +273,123 @@ final class StorageTestSerialTaskExecutor: TaskExecutor {
     }
 }
 
+/// Drives a store's test hooks: holds one chosen storage-queue operation, the way a write waiting out another
+/// process's lock holds the queue, and tells an async test when a foreground caller has queued up behind it. Nothing
+/// here blocks the main actor: `holding` and the caller signals are awaited, and only the held operation, which runs
+/// on the storage queue, waits on `release`.
+final class StorageTestQueueControl: @unchecked Sendable {
+    // `@unchecked Sendable`: `operationsToSkip` and `callerSignals` are only read or written while `lock` is held,
+    // and the signals are thread-safe themselves.
+    private let lock = NSLock()
+    private var operationsToSkip: Int?
+    private var callerSignals: [StorageTestAsyncSignal] = []
+
+    /// Fires once the held operation has started holding the queue.
+    let holding = StorageTestAsyncSignal()
+    /// Lets the held operation go on.
+    let release = StorageTestSignal()
+
+    var hooks: PersistenceStore.TestHooks {
+        var hooks = PersistenceStore.TestHooks()
+        hooks.onOperationBegin = { [self] _ in
+            operationBegan()
+        }
+        hooks.onForegroundWait = { [self] in
+            foregroundCallerQueued()
+        }
+        return hooks
+    }
+
+    /// Holds the storage operation that begins after `skipping` more operations have begun.
+    func holdOperation(afterSkipping skipping: Int = 0) {
+        lock.lock()
+        operationsToSkip = skipping
+        lock.unlock()
+    }
+
+    /// A signal that fires when the next foreground caller registers that it is waiting for the queue.
+    func nextForegroundCaller() -> StorageTestAsyncSignal {
+        let signal = StorageTestAsyncSignal()
+        lock.lock()
+        callerSignals.append(signal)
+        lock.unlock()
+        return signal
+    }
+
+    private func operationBegan() {
+        lock.lock()
+        guard let remaining = operationsToSkip else {
+            lock.unlock()
+            return
+        }
+        guard remaining == 0 else {
+            operationsToSkip = remaining - 1
+            lock.unlock()
+            return
+        }
+        operationsToSkip = nil
+        lock.unlock()
+        holding.fire()
+        // Bounded, so a test that forgets to release fails instead of hanging the run.
+        _ = release.wait()
+    }
+
+    private func foregroundCallerQueued() {
+        lock.lock()
+        let signals = callerSignals
+        callerSignals.removeAll()
+        lock.unlock()
+        for signal in signals {
+            signal.fire()
+        }
+    }
+}
+
+/// Background work a storage test starts on another thread.
+enum StorageTestBackground {
+    /// Starts a history write on another thread and returns a signal for when it finishes.
+    static func recordDictation(on store: PersistenceStore, text: String = "held write") -> StorageTestSignal {
+        let done = StorageTestSignal()
+        DispatchQueue.global().async {
+            try? store.recordDictation(startedAt: Date(), durationSeconds: 1, sampleCount: 16_000, transcriptText: text)
+            done.signal()
+        }
+        return done
+    }
+}
+
+/// Gives each call of a faked storage read its own `SettingsTestGate`, in call order, so a test can let reads finish
+/// in whatever order it wants.
+actor StorageTestCallGates {
+    private let gates: [SettingsTestGate]
+    private var calls = 0
+
+    init(count: Int) {
+        gates = (0..<count).map { _ in SettingsTestGate() }
+    }
+
+    /// Called by the fake: waits at this call's gate, then returns the call's number, counting from 0.
+    func pass() async -> Int {
+        let call = calls
+        calls += 1
+        await gates[call].pass()
+        return call
+    }
+
+    func gate(_ call: Int) -> SettingsTestGate {
+        gates[call]
+    }
+}
+
+/// A failure a faked storage call throws.
+struct StorageTestFailure: LocalizedError, Equatable {
+    var message = "The storage call failed."
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 /// A `UserDefaults` suite of the test's own, removed in tearDown, so no test reads or writes the
 /// user's real preferences.
 final class StorageTestDefaults {

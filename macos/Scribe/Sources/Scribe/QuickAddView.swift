@@ -30,6 +30,7 @@ struct QuickAddView: View {
     @State private var written = ""
     @State private var wholeWord = true
     @State private var errorMessage: String?
+    @State private var isSaving = false
 
     private var transcript: String {
         recentTranscripts.indices.contains(selectedTranscriptIndex) ? recentTranscripts[selectedTranscriptIndex] : ""
@@ -106,7 +107,7 @@ struct QuickAddView: View {
                     .accessibilityLabel("Cancel")
                 Button(saveButtonTitle) { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!plan.canSave)
+                    .disabled(!plan.canSave || isSaving)
                     .accessibilityLabel(saveButtonTitle)
             }
 
@@ -127,36 +128,43 @@ struct QuickAddView: View {
     }
 
     private func save() {
-        guard let entry = plan.entry else { return }
+        guard let entry = plan.entry, !isSaving else { return }
 
         let sourceTranscript = transcript.isEmpty ? nil : transcript
-        do {
-            let savedID = try persist(entry)
-            let saved = DictionaryEntry(
-                id: savedID,
-                pattern: entry.pattern,
-                replacement: entry.replacement,
-                wholeWord: entry.wholeWord,
-                enabled: entry.enabled)
-            let corrected = sourceTranscript.map { QuickDictionaryAdd.apply($0, entry: saved) }
-            onSave(SavedResult(
-                entry: saved,
-                sourceTranscript: sourceTranscript,
-                correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
-        } catch {
-            errorMessage = "Couldn't save that rule: \(error.localizedDescription)"
+        isSaving = true
+        errorMessage = nil
+        // The write waits on the storage queue, not the main actor, and Save stays off until it settles.
+        Task {
+            defer { isSaving = false }
+            do {
+                let savedID = try await persist(entry)
+                let saved = DictionaryEntry(
+                    id: savedID,
+                    pattern: entry.pattern,
+                    replacement: entry.replacement,
+                    wholeWord: entry.wholeWord,
+                    enabled: entry.enabled)
+                let corrected = sourceTranscript.map { QuickDictionaryAdd.apply($0, entry: saved) }
+                onSave(SavedResult(
+                    entry: saved,
+                    sourceTranscript: sourceTranscript,
+                    correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
+            } catch {
+                errorMessage = "Couldn't save that rule: \(error.localizedDescription)"
+            }
         }
     }
 
     /// Injected so the view never opens the database itself: production passes a closure that inserts a new
-    /// rule or updates the existing one. `save()` only calls it for a plan that carries an entry.
-    var persistAction: ((DictionaryEntry) throws -> Int64)?
+    /// rule or updates the existing one through the store's asynchronous forms. `save()` only calls it for a
+    /// plan that carries an entry.
+    var persistAction: (@MainActor (DictionaryEntry) async throws -> Int64)?
 
-    private func persist(_ entry: DictionaryEntry) throws -> Int64 {
+    private func persist(_ entry: DictionaryEntry) async throws -> Int64 {
         guard let persistAction else {
             throw QuickAddPersistError.noPersistAction
         }
-        return try persistAction(entry)
+        return try await persistAction(entry)
     }
 }
 

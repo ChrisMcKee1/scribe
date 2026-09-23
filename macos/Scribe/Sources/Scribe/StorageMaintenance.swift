@@ -3,7 +3,7 @@ import OSLog
 
 /// How long dictation text is kept: a number of days, or forever. Mirrors Windows
 /// `AppSettings.HistoryRetentionDays`, which stores forever as 0.
-enum HistoryRetention: Equatable, Sendable {
+enum HistoryRetention: Hashable, Sendable {
     case keepForever
     case days(Int)
 
@@ -22,6 +22,24 @@ enum HistoryRetention: Equatable, Sendable {
 
     /// Shown while no limit is on record, which is how every history that predates the setting starts.
     static let notChosenHint = "No limit has been chosen, so Scribe keeps all of your dictation history."
+
+    /// Shown while the stored limit cannot be read, which also keeps everything.
+    static let unreadableHint =
+        "The saved limit could not be read, so Scribe keeps all of your dictation history. Choose a limit to replace it."
+
+    /// How a Settings picker names this choice.
+    var label: String {
+        switch self {
+        case .keepForever:
+            return "Forever"
+        case .days(1):
+            return "1 day"
+        case .days(365):
+            return "1 year"
+        case .days(let days):
+            return "\(days) days"
+        }
+    }
 
     /// 0 or less keeps forever; anything past `maximumDays` is clamped to it.
     init(days: Int) {
@@ -399,6 +417,11 @@ final class StorageMaintenance: @unchecked Sendable {
     /// request can land once this has returned. If the step has not started within
     /// `Options.clearTimeout` it is withdrawn and this throws, having deleted nothing; it never runs
     /// later. A running maintenance pass is asked to stop so the space comes back sooner.
+    ///
+    /// A dictation still being processed when Clear is requested (transcribing, cleaning up or being
+    /// inserted) has not handed its entry to the writer yet, so it is recorded after the Clear, as on
+    /// Windows, where Clear deletes what the database holds at that moment. The caller empties the
+    /// tray's in-memory recent dictations itself (`LastTranscriptStore.removeAll()`).
     func clearHistory() async throws -> Int {
         setYieldRequested(true)
         let result: Result<Int, Error>

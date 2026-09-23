@@ -186,6 +186,11 @@ final class HistoryWriter: @unchecked Sendable {
     /// and returns how many entries went. If the step has not started within `timeout`, it is withdrawn
     /// and this throws `HistoryWriterError.clearTimedOut`, having deleted nothing; a withdrawn Clear
     /// never runs later. Once started it always finishes (bounded by the store's busy timeout).
+    ///
+    /// What it removes is every entry whose write was accepted before the call. A dictation still being
+    /// transcribed, cleaned up or inserted when Clear is requested has not reached the writer yet, so it
+    /// is recorded afterwards. That matches Windows, whose Clear deletes what the database holds at that
+    /// moment.
     func clearHistory(timeout: TimeInterval) async throws -> Int {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, Error>) in
             condition.lock()

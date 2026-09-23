@@ -93,6 +93,35 @@ enum RetentionBatchOutcome: Equatable, Sendable {
     case authorizationChanged(HistoryRetentionSetting)
 }
 
+/// What a dictionary import changed, by count.
+struct DictionaryImportSummary: Equatable, Sendable {
+    let added: Int
+    let updated: Int
+    let unchanged: Int
+}
+
+/// What every dictation applies: the enabled dictionary rules, the enabled snippets and the app
+/// profiles, read together so they agree with each other.
+struct PersistenceRuleSet: Equatable, Sendable {
+    let dictionaryEntries: [DictionaryEntry]
+    let snippets: [Snippet]
+    let appProfiles: [AppProfile]
+}
+
+/// Recent dictations and every stored dictionary rule, read together for mining and the Clean Up
+/// review.
+struct DictionaryReviewInputs: Sendable {
+    let history: [DictationHistoryRecord]
+    let entries: [DictionaryEntry]
+}
+
+/// One Usage Insights period: its newest dictations, oldest first, and every stored dictionary rule,
+/// read together.
+struct UsagePeriodInputs: Sendable {
+    let records: [DictationHistoryRecord]
+    let knownTerms: [DictionaryEntry]
+}
+
 /// The app's one SQLite database: dictation history, the dictionary, snippets, app profiles and the
 /// history retention choice.
 ///
@@ -169,14 +198,7 @@ final class PersistenceStore: Sendable {
     /// failure part way leaves the previous schema intact, and a second process migrating at the same
     /// moment waits and then finds the work done.
     func initialize() throws {
-        do {
-            try FileManager.default.createDirectory(
-                at: databaseURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-        } catch {
-            throw PersistenceError.directoryUnavailable(code: (error as NSError).code)
-        }
-
+        try createDatabaseDirectory()
         let createdHistory = try owner.withSession(.foreground) { session in
             try session.transaction(.migrate) {
                 try Self.migrate(session)
@@ -184,6 +206,30 @@ final class PersistenceStore: Sendable {
         }
 
         logger.info("Database ready (new history table: \(createdHistory)).")
+    }
+
+    /// `initialize()` for main-actor callers: the migration runs on the storage queue, not the
+    /// caller's thread. The queue runs operations in the order they reach it, so anything queued on
+    /// the store after this call runs against the migrated schema.
+    func prepare() async throws {
+        try createDatabaseDirectory()
+        let createdHistory = try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.migrate) {
+                try Self.migrate(session)
+            }
+        }
+
+        logger.info("Database ready (new history table: \(createdHistory)).")
+    }
+
+    private func createDatabaseDirectory() throws {
+        do {
+            try FileManager.default.createDirectory(
+                at: databaseURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+        } catch {
+            throw PersistenceError.directoryUnavailable(code: (error as NSError).code)
+        }
     }
 
     /// Returns whether the history table was created by this call, which is what makes the default
@@ -437,8 +483,29 @@ final class PersistenceStore: Sendable {
 
     func historyCount() throws -> Int {
         try owner.withSession(.foreground) { session in
-            try Int(session.scalarInt64("SELECT count(*) FROM dictation_history;", .read))
+            try Self.countHistory(session)
         }
+    }
+
+    /// `historyCount()` for main-actor callers.
+    func loadHistoryCount() async throws -> Int {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.countHistory(session)
+        }
+    }
+
+    /// The newest `limit` dictations that started at or after `since`, oldest first, and every stored
+    /// dictionary rule, read in one visit to the storage queue for a Usage Insights period.
+    func loadUsagePeriod(since: Date, limit: Int) async throws -> UsagePeriodInputs {
+        try await owner.withSessionAsync(.foreground) { session in
+            let records = try Self.readDictationHistory(session, since: since, limit: limit)
+            let knownTerms = try Self.readDictionaryEntries(enabledOnly: false, session)
+            return UsagePeriodInputs(records: records, knownTerms: knownTerms)
+        }
+    }
+
+    private static func countHistory(_ session: SQLiteSession) throws -> Int {
+        try Int(session.scalarInt64("SELECT count(*) FROM dictation_history;", .read))
     }
 
     /// Deletes every history row and returns how many went. This is not ordered against the
@@ -606,10 +673,54 @@ final class PersistenceStore: Sendable {
     }
 
     // MARK: - Dictionary entries
+    //
+    // The synchronous forms serve the CLI verbs, the tests and code already off the main actor.
+    // Main-actor callers use the asynchronous `load`, `add`, `save` and `remove` forms. Every decision
+    // that depends on what is stored (an import's merge, whether a learned or added term is new) is
+    // made inside one transaction here, never against rows a Settings tab happens to have on screen,
+    // which may not have loaded yet.
 
     func insertDictionaryEntry(_ entry: DictionaryEntry) throws -> Int64 {
         try owner.withSession(.foreground) { session in
             try Self.insertDictionaryEntry(entry, in: session)
+        }
+    }
+
+    /// `insertDictionaryEntry(_:)` for main-actor callers.
+    func addDictionaryEntry(_ entry: DictionaryEntry) async throws -> Int64 {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.insertDictionaryEntry(entry, in: session)
+        }
+    }
+
+    /// Adds each of `entries` whose spoken form (trimmed, ignoring case) no stored rule has and no earlier
+    /// entry in the batch repeats, deciding and writing in one transaction. Returns what it added, with
+    /// the new ids.
+    func addDictionaryEntriesIfAbsent(_ entries: [DictionaryEntry]) async throws -> [DictionaryEntry] {
+        guard !entries.isEmpty else {
+            return []
+        }
+        return try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) { () -> [DictionaryEntry] in
+                let stored = try Self.readDictionaryEntries(enabledOnly: false, session)
+                var known = Set(stored.map { Self.spokenFormKey($0.pattern) })
+                var added: [DictionaryEntry] = []
+                for entry in entries {
+                    let key = Self.spokenFormKey(entry.pattern)
+                    guard !key.isEmpty, known.insert(key).inserted else {
+                        continue
+                    }
+                    let id = try Self.insertDictionaryEntry(entry, in: session)
+                    added.append(
+                        DictionaryEntry(
+                            id: id,
+                            pattern: entry.pattern,
+                            replacement: entry.replacement,
+                            wholeWord: entry.wholeWord,
+                            enabled: entry.enabled))
+                }
+                return added
+            }
         }
     }
 
@@ -623,10 +734,38 @@ final class PersistenceStore: Sendable {
         try fetchDictionaryEntries(enabledOnly: false)
     }
 
+    /// `fetchAllDictionaryEntries()` for main-actor callers.
+    func loadAllDictionaryEntries() async throws -> [DictionaryEntry] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readDictionaryEntries(enabledOnly: false, session)
+        }
+    }
+
     func setDictionaryEntryEnabled(id: Int64, enabled: Bool) throws {
-        try executeUpdate("UPDATE dictionary_entries SET enabled = ?1 WHERE id = ?2;") { statement in
-            try statement.bind(enabled, at: 1)
-            try statement.bind(id, at: 2)
+        try owner.withSession(.foreground) { session in
+            try Self.setDictionaryEntryEnabled(id: id, enabled: enabled, in: session)
+        }
+    }
+
+    /// `setDictionaryEntryEnabled(id:enabled:)` for main-actor callers.
+    func saveDictionaryEntryEnabled(id: Int64, enabled: Bool) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.setDictionaryEntryEnabled(id: id, enabled: enabled, in: session)
+        }
+    }
+
+    /// Turns every entry in `ids` off in one transaction, so a Clean Up applies whole or not at all.
+    func disableDictionaryEntries(ids: Set<Int64>) async throws {
+        guard !ids.isEmpty else {
+            return
+        }
+        let ordered = ids.sorted()
+        try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) {
+                for id in ordered {
+                    try Self.setDictionaryEntryEnabled(id: id, enabled: false, in: session)
+                }
+            }
         }
     }
 
@@ -638,57 +777,118 @@ final class PersistenceStore: Sendable {
         }
     }
 
-    func deleteDictionaryEntry(id: Int64) throws {
-        try executeUpdate("DELETE FROM dictionary_entries WHERE id = ?1;") { statement in
-            try statement.bind(id, at: 1)
+    /// `updateDictionaryEntry(_:)` for main-actor callers.
+    func saveDictionaryEntry(_ entry: DictionaryEntry) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.updateDictionaryEntry(entry, in: session)
         }
     }
 
-    /// Persists a dictionary import in one transaction, so either every added and updated row lands
-    /// or none does. An update that no longer matches a row fails the whole import rather than
+    func deleteDictionaryEntry(id: Int64) throws {
+        try owner.withSession(.foreground) { session in
+            try Self.deleteDictionaryEntry(id: id, in: session)
+        }
+    }
+
+    /// `deleteDictionaryEntry(id:)` for main-actor callers.
+    func removeDictionaryEntry(id: Int64) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.deleteDictionaryEntry(id: id, in: session)
+        }
+    }
+
+    /// Persists planned dictionary changes in one transaction, so either every added and updated row
+    /// lands or none does. An update that no longer matches a row fails the whole batch rather than
     /// reporting a change that never happened.
     func applyDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) throws {
         guard !inserts.isEmpty || !updates.isEmpty else {
             return
         }
         try owner.withSession(.foreground) { session in
-            try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            try session.transaction(.write) {
+                try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            }
         }
     }
 
-    /// `applyDictionaryChanges(inserts:updates:)` for main-actor callers.
-    func saveDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) async throws {
-        guard !inserts.isEmpty || !updates.isEmpty else {
-            return
-        }
+    /// Imports parsed CSV rows against the dictionary as it is stored at that moment: the stored rows
+    /// are read, merged with `imported` by spoken form (`DictionaryImportMerger`) and the result is
+    /// written, all in one `BEGIN IMMEDIATE` transaction. So an import never plans against rows a
+    /// Settings tab has not loaded yet or against rows an earlier import has just changed, and nothing
+    /// can write in between. All or nothing.
+    func importDictionary(_ imported: [DictionaryEntry]) async throws -> DictionaryImportSummary {
         try await owner.withSessionAsync(.foreground) { session in
-            try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            try session.transaction(.write) { () -> DictionaryImportSummary in
+                try Self.importDictionary(imported, session)
+            }
         }
     }
 
-    /// `fetchAllDictionaryEntries()` for main-actor callers.
-    func loadAllDictionaryEntries() async throws -> [DictionaryEntry] {
+    /// Mines recent history for recurring terms and adds the ones no stored rule covers. History and
+    /// rules are read together, the mining runs off the storage queue, and the additions are checked
+    /// again against what is stored in the transaction that writes them
+    /// (`addDictionaryEntriesIfAbsent`), so a rule a Settings tab has not loaded is never added twice.
+    /// Returns what it added.
+    func learnDictionaryEntries(
+        historyLimit: Int = PersistenceStore.defaultHistoryReadLimit
+    ) async throws -> [DictionaryEntry] {
+        let inputs = try await loadDictionaryReviewInputs(historyLimit: historyLimit)
+        let candidates = DictionaryHistoryLearner.buildEntries(history: inputs.history, existing: inputs.entries)
+        return try await addDictionaryEntriesIfAbsent(candidates)
+    }
+
+    /// The newest `historyLimit` dictations and every stored rule, read in one visit to the storage
+    /// queue, for mining and the dictionary Clean Up review.
+    func loadDictionaryReviewInputs(
+        historyLimit: Int = PersistenceStore.defaultHistoryReadLimit
+    ) async throws -> DictionaryReviewInputs {
         try await owner.withSessionAsync(.foreground) { session in
-            try Self.readDictionaryEntries(enabledOnly: false, session)
+            let history = try Self.readDictationHistory(session, since: nil, limit: historyLimit)
+            let entries = try Self.readDictionaryEntries(enabledOnly: false, session)
+            return DictionaryReviewInputs(history: history, entries: entries)
         }
     }
 
+    private static func importDictionary(
+        _ imported: [DictionaryEntry],
+        _ session: SQLiteSession
+    ) throws -> DictionaryImportSummary {
+        let stored = try readDictionaryEntries(enabledOnly: false, session)
+        let existing = stored.enumerated().map { index, entry in
+            DictionaryImportMerger.ExistingRow(
+                index: index,
+                id: entry.id,
+                pattern: entry.pattern,
+                replacement: entry.replacement,
+                wholeWord: entry.wholeWord,
+                enabled: entry.enabled)
+        }
+        let plan = DictionaryImportMerger.merge(existing: existing, imported: imported)
+        let changes = DictionaryImportMerger.changes(applying: plan, to: existing)
+        try writeDictionaryChanges(inserts: changes.inserts, updates: changes.updates, session)
+        return DictionaryImportSummary(added: plan.added, updated: plan.updated, unchanged: plan.unchanged)
+    }
+
+    /// Writes planned changes. The caller holds the transaction.
     private static func writeDictionaryChanges(
         inserts: [DictionaryEntry],
         updates: [DictionaryEntry],
         _ session: SQLiteSession
     ) throws {
-        try session.transaction(.write) {
-            for entry in inserts {
-                _ = try insertDictionaryEntry(entry, in: session)
-            }
-            for entry in updates {
-                try updateDictionaryEntry(entry, in: session)
-                guard session.changes == 1 else {
-                    throw PersistenceError.rowMissing(operation: .write)
-                }
+        for entry in inserts {
+            _ = try insertDictionaryEntry(entry, in: session)
+        }
+        for entry in updates {
+            try updateDictionaryEntry(entry, in: session)
+            guard session.changes == 1 else {
+                throw PersistenceError.rowMissing(operation: .write)
             }
         }
+    }
+
+    /// The duplicate rule the import merger and the learner use: a spoken form, trimmed, ignoring case.
+    private static func spokenFormKey(_ pattern: String) -> String {
+        pattern.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     private func fetchDictionaryEntries(enabledOnly: Bool) throws -> [DictionaryEntry] {
@@ -744,18 +944,31 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    private static func setDictionaryEntryEnabled(id: Int64, enabled: Bool, in session: SQLiteSession) throws {
+        try runUpdate("UPDATE dictionary_entries SET enabled = ?1 WHERE id = ?2;", in: session) { statement in
+            try statement.bind(enabled, at: 1)
+            try statement.bind(id, at: 2)
+        }
+    }
+
+    private static func deleteDictionaryEntry(id: Int64, in session: SQLiteSession) throws {
+        try runUpdate("DELETE FROM dictionary_entries WHERE id = ?1;", in: session) { statement in
+            try statement.bind(id, at: 1)
+        }
+    }
+
     // MARK: - Snippets
 
     func insertSnippet(_ snippet: Snippet) throws -> Int64 {
-        let insert = "INSERT INTO snippets(phrase, template, enabled) VALUES (?1, ?2, ?3);"
-        return try owner.withSession(.foreground) { session in
-            try session.withStatement(insert, .write) { statement in
-                try statement.bind(snippet.phrase, at: 1)
-                try statement.bind(snippet.template, at: 2)
-                try statement.bind(snippet.enabled, at: 3)
-                try statement.run()
-                return session.lastInsertRowID
-            }
+        try owner.withSession(.foreground) { session in
+            try Self.insertSnippet(snippet, in: session)
+        }
+    }
+
+    /// `insertSnippet(_:)` for main-actor callers.
+    func addSnippet(_ snippet: Snippet) async throws -> Int64 {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.insertSnippet(snippet, in: session)
         }
     }
 
@@ -768,36 +981,84 @@ final class PersistenceStore: Sendable {
         try fetchSnippets(enabledOnly: false)
     }
 
+    /// `fetchAllSnippets()` for main-actor callers.
+    func loadAllSnippets() async throws -> [Snippet] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readSnippets(enabledOnly: false, session)
+        }
+    }
+
     func setSnippetEnabled(id: Int64, enabled: Bool) throws {
-        try executeUpdate("UPDATE snippets SET enabled = ?1 WHERE id = ?2;") { statement in
+        try owner.withSession(.foreground) { session in
+            try Self.setSnippetEnabled(id: id, enabled: enabled, in: session)
+        }
+    }
+
+    /// `setSnippetEnabled(id:enabled:)` for main-actor callers.
+    func saveSnippetEnabled(id: Int64, enabled: Bool) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.setSnippetEnabled(id: id, enabled: enabled, in: session)
+        }
+    }
+
+    func deleteSnippet(id: Int64) throws {
+        try owner.withSession(.foreground) { session in
+            try Self.deleteSnippet(id: id, in: session)
+        }
+    }
+
+    /// `deleteSnippet(id:)` for main-actor callers.
+    func removeSnippet(id: Int64) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.deleteSnippet(id: id, in: session)
+        }
+    }
+
+    private func fetchSnippets(enabledOnly: Bool) throws -> [Snippet] {
+        try owner.withSession(.foreground) { session in
+            try Self.readSnippets(enabledOnly: enabledOnly, session)
+        }
+    }
+
+    private static func readSnippets(enabledOnly: Bool, _ session: SQLiteSession) throws -> [Snippet] {
+        let sql = enabledOnly
+            ? "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;"
+            : "SELECT id, phrase, template, enabled FROM snippets ORDER BY id;"
+        return try session.withStatement(sql, .read) { statement in
+            var snippets: [Snippet] = []
+            while try statement.step() {
+                snippets.append(
+                    Snippet(
+                        id: statement.int64(at: 0) ?? 0,
+                        phrase: statement.text(at: 1) ?? "",
+                        template: statement.text(at: 2) ?? "",
+                        enabled: statement.bool(at: 3)))
+            }
+            return snippets
+        }
+    }
+
+    private static func insertSnippet(_ snippet: Snippet, in session: SQLiteSession) throws -> Int64 {
+        let insert = "INSERT INTO snippets(phrase, template, enabled) VALUES (?1, ?2, ?3);"
+        return try session.withStatement(insert, .write) { statement in
+            try statement.bind(snippet.phrase, at: 1)
+            try statement.bind(snippet.template, at: 2)
+            try statement.bind(snippet.enabled, at: 3)
+            try statement.run()
+            return session.lastInsertRowID
+        }
+    }
+
+    private static func setSnippetEnabled(id: Int64, enabled: Bool, in session: SQLiteSession) throws {
+        try runUpdate("UPDATE snippets SET enabled = ?1 WHERE id = ?2;", in: session) { statement in
             try statement.bind(enabled, at: 1)
             try statement.bind(id, at: 2)
         }
     }
 
-    func deleteSnippet(id: Int64) throws {
-        try executeUpdate("DELETE FROM snippets WHERE id = ?1;") { statement in
+    private static func deleteSnippet(id: Int64, in session: SQLiteSession) throws {
+        try runUpdate("DELETE FROM snippets WHERE id = ?1;", in: session) { statement in
             try statement.bind(id, at: 1)
-        }
-    }
-
-    private func fetchSnippets(enabledOnly: Bool) throws -> [Snippet] {
-        let sql = enabledOnly
-            ? "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;"
-            : "SELECT id, phrase, template, enabled FROM snippets ORDER BY id;"
-        return try owner.withSession(.foreground) { session in
-            try session.withStatement(sql, .read) { statement in
-                var snippets: [Snippet] = []
-                while try statement.step() {
-                    snippets.append(
-                        Snippet(
-                            id: statement.int64(at: 0) ?? 0,
-                            phrase: statement.text(at: 1) ?? "",
-                            template: statement.text(at: 2) ?? "",
-                            enabled: statement.bool(at: 3)))
-                }
-                return snippets
-            }
         }
     }
 
@@ -805,52 +1066,87 @@ final class PersistenceStore: Sendable {
 
     func insertAppProfile(_ profile: AppProfile) throws -> Int64 {
         try owner.withSession(.foreground) { session in
-            try session.withStatement(
-                """
-                INSERT INTO app_profiles(name, bundle_identifiers, process_names, writing_style_prompt, newline_handling)
-                VALUES (?1, ?2, ?3, ?4, ?5);
-                """,
-                .write
-            ) { statement in
-                try statement.bind(profile.name, at: 1)
-                try statement.bind(profile.bundleIdentifiers.joined(separator: ","), at: 2)
-                try statement.bind(profile.processNames.joined(separator: ","), at: 3)
-                try statement.bind(profile.writingStylePrompt, at: 4)
-                try statement.bind(profile.newlineHandling?.rawValue, at: 5)
-                try statement.run()
-                return session.lastInsertRowID
-            }
+            try Self.insertAppProfile(profile, in: session)
+        }
+    }
+
+    /// `insertAppProfile(_:)` for main-actor callers.
+    func addAppProfile(_ profile: AppProfile) async throws -> Int64 {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.insertAppProfile(profile, in: session)
         }
     }
 
     func fetchAppProfiles() throws -> [AppProfile] {
         try owner.withSession(.foreground) { session in
-            try session.withStatement(
-                """
-                SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling
-                FROM app_profiles
-                ORDER BY id;
-                """,
-                .read
-            ) { statement in
-                var profiles: [AppProfile] = []
-                while try statement.step() {
-                    profiles.append(
-                        AppProfile(
-                            id: statement.int64(at: 0) ?? 0,
-                            name: statement.text(at: 1) ?? "",
-                            bundleIdentifiers: Self.splitList(statement.text(at: 2)),
-                            processNames: Self.splitList(statement.text(at: 3)),
-                            writingStylePrompt: statement.text(at: 4),
-                            newlineHandling: statement.text(at: 5).flatMap { NewlineInjectionMode(rawValue: $0) }))
-                }
-                return profiles
-            }
+            try Self.readAppProfiles(session)
+        }
+    }
+
+    /// `fetchAppProfiles()` for main-actor callers.
+    func loadAppProfiles() async throws -> [AppProfile] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readAppProfiles(session)
         }
     }
 
     func deleteAppProfile(id: Int64) throws {
-        try executeUpdate("DELETE FROM app_profiles WHERE id = ?1;") { statement in
+        try owner.withSession(.foreground) { session in
+            try Self.deleteAppProfile(id: id, in: session)
+        }
+    }
+
+    /// `deleteAppProfile(id:)` for main-actor callers.
+    func removeAppProfile(id: Int64) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.deleteAppProfile(id: id, in: session)
+        }
+    }
+
+    private static func insertAppProfile(_ profile: AppProfile, in session: SQLiteSession) throws -> Int64 {
+        try session.withStatement(
+            """
+            INSERT INTO app_profiles(name, bundle_identifiers, process_names, writing_style_prompt, newline_handling)
+            VALUES (?1, ?2, ?3, ?4, ?5);
+            """,
+            .write
+        ) { statement in
+            try statement.bind(profile.name, at: 1)
+            try statement.bind(profile.bundleIdentifiers.joined(separator: ","), at: 2)
+            try statement.bind(profile.processNames.joined(separator: ","), at: 3)
+            try statement.bind(profile.writingStylePrompt, at: 4)
+            try statement.bind(profile.newlineHandling?.rawValue, at: 5)
+            try statement.run()
+            return session.lastInsertRowID
+        }
+    }
+
+    private static func readAppProfiles(_ session: SQLiteSession) throws -> [AppProfile] {
+        try session.withStatement(
+            """
+            SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling
+            FROM app_profiles
+            ORDER BY id;
+            """,
+            .read
+        ) { statement in
+            var profiles: [AppProfile] = []
+            while try statement.step() {
+                profiles.append(
+                    AppProfile(
+                        id: statement.int64(at: 0) ?? 0,
+                        name: statement.text(at: 1) ?? "",
+                        bundleIdentifiers: splitList(statement.text(at: 2)),
+                        processNames: splitList(statement.text(at: 3)),
+                        writingStylePrompt: statement.text(at: 4),
+                        newlineHandling: statement.text(at: 5).flatMap { NewlineInjectionMode(rawValue: $0) }))
+            }
+            return profiles
+        }
+    }
+
+    private static func deleteAppProfile(id: Int64, in session: SQLiteSession) throws {
+        try runUpdate("DELETE FROM app_profiles WHERE id = ?1;", in: session) { statement in
             try statement.bind(id, at: 1)
         }
     }
@@ -859,13 +1155,28 @@ final class PersistenceStore: Sendable {
         (text ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
     }
 
+    // MARK: - Rule set
+
+    /// What every dictation applies (the enabled dictionary rules, the enabled snippets and the app
+    /// profiles), read in one visit to the storage queue. For main-actor callers.
+    func loadRuleSet() async throws -> PersistenceRuleSet {
+        try await owner.withSessionAsync(.foreground) { session in
+            let dictionaryEntries = try Self.readDictionaryEntries(enabledOnly: true, session)
+            let snippets = try Self.readSnippets(enabledOnly: true, session)
+            let appProfiles = try Self.readAppProfiles(session)
+            return PersistenceRuleSet(dictionaryEntries: dictionaryEntries, snippets: snippets, appProfiles: appProfiles)
+        }
+    }
+
     /// One-shot UPDATE or DELETE that binds parameters and returns no rows.
-    private func executeUpdate(_ sql: String, bind: (SQLiteStatement) throws -> Void) throws {
-        try owner.withSession(.foreground) { session in
-            try session.withStatement(sql, .write) { statement in
-                try bind(statement)
-                try statement.run()
-            }
+    private static func runUpdate(
+        _ sql: String,
+        in session: SQLiteSession,
+        bind: (SQLiteStatement) throws -> Void
+    ) throws {
+        try session.withStatement(sql, .write) { statement in
+            try bind(statement)
+            try statement.run()
         }
     }
 }
