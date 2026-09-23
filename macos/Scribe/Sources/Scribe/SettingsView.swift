@@ -161,16 +161,19 @@ private struct OverlaySettingsTab: View {
 /// The Overlay tab's anchor. The tray's Overlay Position menu moves the pill and stores the anchor, so the tab
 /// re-reads the pill's anchor after any preference write instead of keeping the one it showed first.
 @MainActor
-private final class OverlayAnchorSelection: ObservableObject {
-    private static let defaultsKey = "ScribeOverlayAnchor"
+final class OverlayAnchorSelection: ObservableObject {
+    /// Shared with `AppDelegate`, which restores the anchor at launch and stores the tray's choice under it.
+    static let defaultsKey = "ScribeOverlayAnchor"
 
     @Published private(set) var anchor: OverlayAnchor
 
     private let controller: OverlayPanelController
+    private let defaults: UserDefaults
     private var observation: SettingsNotificationObservation?
 
-    init(controller: OverlayPanelController) {
+    init(controller: OverlayPanelController, defaults: UserDefaults = .standard) {
         self.controller = controller
+        self.defaults = defaults
         anchor = controller.anchor
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification) { [weak self] in
             self?.reload()
@@ -179,7 +182,7 @@ private final class OverlayAnchorSelection: ObservableObject {
 
     func select(_ anchor: OverlayAnchor) {
         controller.anchor = anchor
-        UserDefaults.standard.set(anchor.rawValue, forKey: Self.defaultsKey)
+        defaults.set(anchor.rawValue, forKey: Self.defaultsKey)
         reload()
     }
 

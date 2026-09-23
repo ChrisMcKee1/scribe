@@ -97,12 +97,14 @@ final class InputSettingsModelTests: XCTestCase {
     }
 
     @MainActor
-    func testAUIDThatIsNotListedIsNotStored() {
+    func testAUIDThatIsNotListedLeavesTheSavedMicrophoneAlone() {
+        deviceStore.select(builtIn)
         let model = makeModel(devices: [builtIn])
 
         model.selectDevice(uid: "not-connected")
 
-        XCTAssertNil(deviceStore.selectedDeviceUID)
+        XCTAssertEqual(deviceStore.selectedDeviceUID, builtIn.uid)
+        XCTAssertEqual(model.selectedDeviceUID, builtIn.uid)
     }
 
     @MainActor

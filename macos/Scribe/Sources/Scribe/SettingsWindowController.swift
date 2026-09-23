@@ -9,17 +9,24 @@ import SwiftUI
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: @MainActor @Sendable (SettingsWindowController) -> Void
 
-    init(rootView: SettingsView, onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void) {
-        self.onClose = onClose
+    convenience init(
+        rootView: SettingsView,
+        onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void
+    ) {
         let window = NSWindow(contentViewController: NSHostingController(rootView: rootView))
         window.title = "Scribe Settings"
         window.setContentSize(NSSize(width: 720, height: 520))
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])
         window.isReleasedWhenClosed = false
         window.center()
+        self.init(window: window, onClose: onClose)
+    }
+
+    init(window: NSWindow?, onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void) {
+        self.onClose = onClose
         super.init(window: window)
         shouldCascadeWindows = false
-        window.delegate = self
+        window?.delegate = self
     }
 
     @available(*, unavailable)
