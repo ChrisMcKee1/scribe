@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MachO
 import XCTest
 
 @testable import Scribe
@@ -169,6 +170,9 @@ final class ScribeLogTests: XCTestCase {
         // Xcode's console mode copies unified log events to standard error with a writer Scribe does not
         // own, which is not what this checks.
         environment["OS_ACTIVITY_DT_MODE"] = nil
+        if let runtime = Self.sanitizerRuntime() {
+            environment["DYLD_INSERT_LIBRARIES"] = runtime
+        }
 
         let bundlePath = Bundle(for: StandardErrorProbe.self).bundlePath
         let outcome = try await ProcessRunner.run(
@@ -190,6 +194,21 @@ final class ScribeLogTests: XCTestCase {
         guard length > 0 else { return nil }
         let bytes = path.prefix(Int(length)).map { UInt8(bitPattern: $0) }
         return URL(fileURLWithPath: String(decoding: bytes, as: UTF8.self))
+    }
+
+    /// The sanitizer runtime this process runs with, if any. The runtime takes itself out of
+    /// DYLD_INSERT_LIBRARIES once it has loaded, so a child test process has to be given it again, or the
+    /// instrumented test bundle aborts as it loads.
+    private static func sanitizerRuntime() -> String? {
+        for index in 0..<_dyld_image_count() {
+            guard let name = _dyld_get_image_name(index) else { continue }
+            let path = String(cString: name)
+            let file = URL(fileURLWithPath: path).lastPathComponent
+            if file.hasPrefix("libclang_rt."), file.hasSuffix("_osx_dynamic.dylib") {
+                return path
+            }
+        }
+        return nil
     }
 
     func testEveryLevelAndCategoryCanBeLogged() {

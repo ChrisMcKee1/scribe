@@ -23,7 +23,7 @@ import os
 ///   caller, the main actor included, is only ever suspended.
 ///
 /// When `run` returns, the child has been reaped and the run has let go of everything it held: its
-/// supervisor thread has ended and every pipe and queue it opened is closed.
+/// supervisor thread has returned and been joined, and every pipe and queue it opened is closed.
 ///
 /// Signalling is by process group, not by walking the process tree. A descendant that leaves the
 /// group (`setsid`, `setpgid`, a daemon that double-forks) is not signalled, and if it keeps one of
@@ -920,7 +920,8 @@ private final class CStringArray {
 }
 
 /// A joinable POSIX thread. The run's outcome is delivered only after the thread that owned its child,
-/// descriptors and buffers has ended, so a caller holding an outcome holds nothing else of the run.
+/// descriptors and buffers has returned and been joined, so a caller holding an outcome holds nothing
+/// else of the run.
 private enum SupervisorThread {
     /// The thread, as a number so it can travel in a `@Sendable` closure.
     struct Handle: Sendable {
@@ -966,6 +967,9 @@ private enum SupervisorThread {
                 let entry = Unmanaged<Start>.fromOpaque(pointer).takeRetainedValue()
                 pthread_setname_np(entry.name)
                 entry.body(Handle(bits: UInt(bitPattern: pthread_self())))
+                // The joiner wakes before the kernel has finished removing this thread, so the name goes
+                // first: a thread listed under it is always one still working for a run.
+                pthread_setname_np("")
                 return nil
             }, context)
         guard result == 0 else {

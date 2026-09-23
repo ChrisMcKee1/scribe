@@ -218,8 +218,8 @@ final class ProcessRunnerTests: XCTestCase {
     }
 
     /// Each run's descendant stays behind a gate holding standard input (with a megabyte still unwritten),
-    /// standard output and standard error. Once an outcome is back, the run must hold nothing: its
-    /// supervisor thread has ended and every pipe and kqueue it opened is closed, however many of those
+    /// standard output and standard error. Once an outcome is back, the run must hold nothing: no thread
+    /// is still working for it and every pipe and kqueue it opened is closed, however many of those
     /// descendants are still waiting.
     func testADescendantHoldingEveryPipeLeavesNothingOfTheRunBehind() async throws {
         let gate = try makeTemporaryDirectory(label: "process").appendingPathComponent("gate")
