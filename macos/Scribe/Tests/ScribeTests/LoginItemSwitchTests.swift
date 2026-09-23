@@ -13,6 +13,7 @@ actor LoginItemServiceFake: LoginItemService {
     private var stateAfterAcceptedRequest: LoginItemState?
     private var heldRead: SettingsTestGate?
     private var heldRequest: SettingsTestGate?
+    private var heldReadAfterRequest: SettingsTestGate?
 
     init(_ state: LoginItemState) {
         current = state
@@ -30,6 +31,10 @@ actor LoginItemServiceFake: LoginItemService {
 
     func request(enabled: Bool) async -> LoginItemRefusal? {
         requests.append(enabled)
+        if let gate = heldReadAfterRequest {
+            heldReadAfterRequest = nil
+            heldRead = gate
+        }
         if let gate = heldRequest {
             heldRequest = nil
             await gate.pass()
@@ -59,6 +64,11 @@ actor LoginItemServiceFake: LoginItemService {
 
     func holdNextRequest(at gate: SettingsTestGate) {
         heldRequest = gate
+    }
+
+    /// Holds the first read after the next request: the flip's own read of what macOS did.
+    func holdReadAfterNextRequest(at gate: SettingsTestGate) {
+        heldReadAfterRequest = gate
     }
 }
 
@@ -343,6 +353,38 @@ final class LoginItemSwitchTests: XCTestCase {
         XCTAssertFalse(loginItem.isOn)
         let reads = await service.reads
         XCTAssertEqual(reads, 2, "the overtaken read and exactly one read after it")
+    }
+
+    /// The flip's own read of what macOS did saw Scribe on, the user turned it off in System Settings while that
+    /// read was out, and came back: the switch must end on what macOS reports now, with no refusal, since the flip
+    /// itself worked.
+    @MainActor
+    func testAnActivationDuringAFlipsFinalReadEndsOnTheNewerState() async {
+        let center = NotificationCenter()
+        let service = LoginItemServiceFake(.notRegistered)
+        let loginItem = makeSwitch(service, center: center)
+        await loginItem.refresh()
+
+        let gate = SettingsTestGate()
+        await service.holdReadAfterNextRequest(at: gate)
+        let flip = Task { await loginItem.setEnabled(true) }
+        await gate.waitForArrival()
+
+        await service.set(.notRegistered)
+        center.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        await loginItem.refreshTask?.value
+        await gate.open()
+        let outcome = await flip.value
+
+        XCTAssertEqual(outcome, .applied)
+        let current = await service.current
+        XCTAssertEqual(loginItem.state, current)
+        XCTAssertEqual(loginItem.state, .notRegistered)
+        XCTAssertFalse(loginItem.isOn)
+        XCTAssertNil(loginItem.refusal)
+        XCTAssertTrue(loginItem.canFlip)
+        let reads = await service.reads
+        XCTAssertEqual(reads, 3, "the first read, the flip's own read, and exactly one read after the activation")
     }
 }
 

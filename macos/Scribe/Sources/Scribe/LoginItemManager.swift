@@ -186,9 +186,10 @@ enum LoginItemManager {
 /// The "Open at Login" switch. It shows what macOS reports: read when the switch appears, again whenever Scribe
 /// becomes active (after a visit to System Settings, say) and after every change it makes. A flip applies at once,
 /// like Windows' Start with Windows switch, and there is nothing to save. Turning on a registration that is waiting
-/// for approval opens Login Items instead, since only the user can approve it. A read that something newer
-/// overtook is dropped when it finishes (a flip, or another request to read, which then gets a read of its own),
-/// so an older state is never painted over a newer one, and a read in flight never blocks a flip.
+/// for approval opens Login Items instead, since only the user can approve it. A request to read that arrives while
+/// a read or a flip is running overtakes whatever that read brings back, since the user may have changed the state
+/// in System Settings after it began, and is answered by a read begun after it. So an older state is never painted
+/// over a newer one, and a read in flight never blocks a flip.
 @MainActor
 final class LoginItemSwitch: ObservableObject {
     enum Outcome: Equatable {
@@ -196,11 +197,11 @@ final class LoginItemSwitch: ObservableObject {
         case unchanged
         /// An earlier flip is still being applied, so this one was not started.
         case busy
-        /// macOS now reports the requested state.
+        /// The read after the request reported the requested state.
         case applied
         /// macOS will only open Scribe at login once the user allows it in System Settings.
         case needsApproval
-        /// macOS refused or kept the old state; `refusal` says why.
+        /// macOS refused or kept the old state; `refusal` says why while the switch still shows that state.
         case declined
     }
 
@@ -218,6 +219,9 @@ final class LoginItemSwitch: ObservableObject {
     private var isReading = false
     /// Set when a read was requested while one was running; the running one then reads again before it stops.
     private var readAgain = false
+    /// Set when a read was requested while a flip was being applied; the flip then reads again before it shows
+    /// anything, including when the request arrived during the flip's own final read.
+    private var readAgainAfterFlip = false
     private var observation: SettingsNotificationObservation?
     private(set) var refreshTask: Task<Void, Never>?
 
@@ -280,9 +284,13 @@ final class LoginItemSwitch: ObservableObject {
 
     /// Reads what macOS reports. A request that arrives while a read is running overtakes it, because the user
     /// may have changed the state in System Settings after that read began, and the running read then reads again.
-    /// Nothing is read while a flip is applied: the flip reads the state itself when it finishes.
+    /// A request that arrives while a flip is applied is left to the flip, which reads again before it shows its
+    /// result.
     func refresh() async {
-        guard pendingRequest == nil else { return }
+        guard pendingRequest == nil else {
+            readAgainAfterFlip = true
+            return
+        }
         guard !isReading else {
             readAgain = true
             generation += 1
@@ -308,7 +316,9 @@ final class LoginItemSwitch: ObservableObject {
         }
     }
 
-    /// Asks macOS for `requested`, then shows what macOS reports afterwards.
+    /// Asks macOS for `requested`, then shows what macOS reports afterwards. The outcome describes what the flip
+    /// itself did; the switch shows the newest state, which a change made in System Settings while the flip ran
+    /// can make different, and a refusal is shown only while it still describes that state.
     @discardableResult
     func setEnabled(_ requested: Bool) async -> Outcome {
         guard pendingRequest == nil else { return .busy }
@@ -326,25 +336,30 @@ final class LoginItemSwitch: ObservableObject {
 
         pendingRequest = requested
         generation += 1
+        readAgainAfterFlip = false
         let refused = await service.request(enabled: requested)
-        let after = await service.state()
+        let settled = await service.state()
+        var latest = settled
+        while readAgainAfterFlip {
+            readAgainAfterFlip = false
+            latest = await service.state()
+        }
         pendingRequest = nil
-        state = after
+        state = latest
 
         let outcome: Outcome
-        if after.isOn == requested {
-            refusal = nil
+        if settled.isOn == requested {
             outcome = .applied
-        } else if requested, after == .requiresApproval, refused == nil {
-            refusal = nil
+        } else if requested, settled == .requiresApproval, refused == nil {
             outcome = .needsApproval
         } else {
-            refusal = refused ?? .noEffect
             outcome = .declined
         }
+        refusal = (outcome == .declined && latest == settled) ? (refused ?? .noEffect) : nil
         // Enum names, a flag and an error code only, never a message from macOS.
         let refusalShape = refused.map { "\($0)" } ?? "none"
-        let shape = "requested=\(requested) before=\(shown) after=\(after) refusal=\(refusalShape) outcome=\(outcome)"
+        let shape = "requested=\(requested) before=\(shown) after=\(settled) latest=\(latest) "
+            + "refusal=\(refusalShape) outcome=\(outcome)"
         logger.info("Login item change: \(shape, privacy: .public)")
         return outcome
     }

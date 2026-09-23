@@ -27,6 +27,8 @@ final class CleanupSettingsBackingFake {
     var configured: Set<CleanupProviderKind> = [.foundryLocal, .ollama]
     var connectionCheck = CleanupConnectionCheck(reachable: true, message: "Foundry Local: ready")
     var checkGate: SettingsTestGate?
+    /// Makes the next Keychain write or removal throw, as a locked or unavailable Keychain would.
+    var failNextKeychainWrite = false
 
     /// A write made outside the tab, such as the tray's AI Cleanup item.
     func storeFromElsewhere(_ change: (inout CleanupSettingsValues) -> Void) {
@@ -47,9 +49,15 @@ final class CleanupSettingsBackingFake {
             },
             isConfigured: { self.configured.contains($0) },
             hasOpenAIApiKey: { self.apiKey != nil },
-            setOpenAIApiKey: { key in self.apiKey = (key?.isEmpty == false) ? key : nil },
+            setOpenAIApiKey: { key in
+                try self.failIfAsked()
+                self.apiKey = (key?.isEmpty == false) ? key : nil
+            },
             hasAzureClientSecret: { self.clientSecrets[$0] != nil },
-            setAzureClientSecret: { secret, clientId in self.clientSecrets[clientId] = secret },
+            setAzureClientSecret: { secret, clientId in
+                try self.failIfAsked()
+                self.clientSecrets[clientId] = secret
+            },
             checkConnection: {
                 if let gate {
                     await gate.pass()
@@ -57,7 +65,16 @@ final class CleanupSettingsBackingFake {
                 return check
             })
     }
+
+    private func failIfAsked() throws {
+        if failNextKeychainWrite {
+            failNextKeychainWrite = false
+            throw SettingsKeychainWriteFailure()
+        }
+    }
 }
+
+struct SettingsKeychainWriteFailure: Error {}
 
 final class CleanupSettingsModelTests: XCTestCase {
     @MainActor
@@ -246,6 +263,70 @@ final class CleanupSettingsModelTests: XCTestCase {
 
         XCTAssertEqual(backing.apiKey, "typed before the window closed")
         XCTAssertEqual(backing.drafts.openAIApiKey, "")
+    }
+
+    // Clear means no credential: a replacement typed but not saved goes with it, so it cannot come back when
+    // Settings reopens and offer Save for a key the user just removed.
+
+    @MainActor
+    func testClearingTheKeyAlsoDropsATypedReplacement() {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "saved"
+        do {
+            let tab = makeModel(backing)
+            tab.refreshSecretState()
+            backing.drafts.openAIApiKey = "typed replacement"
+
+            tab.clearOpenAIApiKey()
+
+            XCTAssertEqual(tab.statusMessage, "API key removed.")
+        }
+
+        let reopened = makeModel(backing)
+        reopened.refreshSecretState()
+        XCTAssertNil(backing.apiKey)
+        XCTAssertEqual(backing.drafts.openAIApiKey, "")
+        XCTAssertFalse(reopened.canSaveOpenAIApiKey)
+        XCTAssertFalse(reopened.hasSavedOpenAIApiKey)
+    }
+
+    @MainActor
+    func testClearingTheClientSecretAlsoDropsATypedReplacement() {
+        let backing = servicePrincipalBacking()
+        backing.clientSecrets["app-a"] = "saved"
+        do {
+            let tab = makeModel(backing)
+            tab.refreshSecretState()
+            backing.drafts.azureClientSecret = "typed replacement"
+
+            tab.clearAzureClientSecret()
+
+            XCTAssertEqual(tab.statusMessage, "Client secret removed.")
+        }
+
+        let reopened = makeModel(backing)
+        reopened.refreshSecretState()
+        XCTAssertNil(backing.clientSecrets["app-a"])
+        XCTAssertEqual(backing.drafts.azureClientSecret, "")
+        XCTAssertFalse(reopened.canSaveAzureClientSecret)
+        XCTAssertFalse(reopened.hasSavedAzureClientSecret)
+    }
+
+    @MainActor
+    func testAFailedClearKeepsTheSavedKeyAndWhatWasTyped() {
+        let backing = openAICompatibleBacking()
+        backing.apiKey = "saved"
+        let model = makeModel(backing)
+        model.refreshSecretState()
+        backing.drafts.openAIApiKey = "typed replacement"
+        backing.failNextKeychainWrite = true
+
+        model.clearOpenAIApiKey()
+
+        XCTAssertEqual(backing.apiKey, "saved")
+        XCTAssertEqual(backing.drafts.openAIApiKey, "typed replacement")
+        XCTAssertTrue(model.hasSavedOpenAIApiKey)
+        XCTAssertNotNil(model.errorMessage)
     }
 
     // A connection check that was running when a stored credential changed checked the credential that was
