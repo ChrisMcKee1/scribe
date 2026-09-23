@@ -28,7 +28,7 @@ namespace Scribe.Core.Settings;
 /// glossary slot; a false "dead" costs them a rule they were relying on.
 /// </para>
 /// </remarks>
-public static class DictionaryUsageAnalyzer
+public static partial class DictionaryUsageAnalyzer
 {
     /// <summary>Dictations required before an "unused" verdict means anything.</summary>
     public const int MinimumTranscripts = 25;
@@ -39,7 +39,9 @@ public static class DictionaryUsageAnalyzer
     /// </summary>
     public const int MinimumWords = 1_500;
 
-    private static readonly Regex WordLike = new(@"[\p{L}\p{N}][\p{L}\p{N}'’\-]*", RegexOptions.Compiled);
+    // Source-generated rather than RegexOptions.Compiled, which emits and jits it on first use.
+    [GeneratedRegex(@"[\p{L}\p{N}][\p{L}\p{N}'’\-]*")]
+    private static partial Regex WordLike { get; }
 
     /// <summary>
     /// Scores every term against the dictation corpus. Base entries are reported individually

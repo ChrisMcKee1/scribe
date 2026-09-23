@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Hotkeys;
@@ -50,8 +51,23 @@ public static class CoreServiceCollectionExtensions
         services.AddSingleton<ISettingsRepository, SettingsRepository>();
         services.AddSingleton<IDictionaryRepository, DictionaryRepository>();
         services.AddSingleton<ISnippetRepository, SnippetRepository>();
-        services.AddSingleton<IHistoryRepository, HistoryRepository>();
+
+        // History commits in the background, in order, through the one concrete repository. IHistoryRepository is
+        // that same repository behind a barrier that makes reads and maintenance wait for writes accepted before them.
+        services.AddSingleton<HistoryRepository>();
+        services.AddSingleton(sp => new HistoryWriter(
+            sp.GetRequiredService<HistoryRepository>(), sp.GetRequiredService<ILogger<HistoryWriter>>()));
+        services.AddSingleton<IHistoryWriter>(sp => sp.GetRequiredService<HistoryWriter>());
+        services.AddSingleton<IHistoryRepository>(sp => new OrderedHistoryRepository(
+            sp.GetRequiredService<HistoryRepository>(),
+            sp.GetRequiredService<HistoryWriter>(),
+            sp.GetRequiredService<ILogger<OrderedHistoryRepository>>()));
         services.AddSingleton<ICleanupFailureLog, CleanupFailureLog>();
+
+        // Retention runs against the concrete repository, never through an IHistoryRepository
+        // wrapper: the database write gate is what serializes it with history writes.
+        services.AddSingleton<IHistoryMaintenance>(sp => sp.GetRequiredService<HistoryRepository>());
+        services.AddSingleton<StorageMaintenance>();
         services.AddSingleton<LastTranscriptStore>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();

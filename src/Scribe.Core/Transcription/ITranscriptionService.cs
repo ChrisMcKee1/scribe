@@ -21,9 +21,22 @@ public interface ITranscriptionService : IDisposable
     TranscriptionResult Transcribe(CapturedAudio audio);
 
     /// <summary>
-    /// Releases the loaded recognizer and every byte ONNX Runtime's arena is holding — the only
-    /// way that memory returns to the OS, since the arena never shrinks on its own. The service
-    /// stays usable: the next <see cref="Initialize"/> or <see cref="Transcribe"/> reloads the
+    /// Decodes a capture to text, loading the model first if it is not resident. Loading and decoding happen as one
+    /// step, so a concurrent <see cref="Unload"/> lands before (and this call reloads) or after, never in between.
+    /// <see cref="TranscriptionResult.DecodeDuration"/> covers decoding only; a cold load is logged separately.
+    /// </summary>
+    /// <remarks>
+    /// Cancellation is cooperative. It is observed before the model loads, once the engine has been acquired, and
+    /// between the chunks of a long capture, and it throws <see cref="OperationCanceledException"/> rather than returning
+    /// the chunks decoded so far, so a partial transcript is never reported as complete. A native decode already in
+    /// progress runs to completion, because the engine offers no way to interrupt it.
+    /// </remarks>
+    TranscriptionResult Transcribe(CapturedAudio audio, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Releases the loaded recognizer and every byte ONNX Runtime's arena is holding, which is the
+    /// only way that memory returns to the OS, since the arena never shrinks on its own. The service
+    /// stays usable: the next <see cref="Initialize"/> or <see cref="Transcribe(CapturedAudio)"/> reloads the
     /// model on demand. No-op when nothing is loaded.
     /// </summary>
     void Unload();

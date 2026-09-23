@@ -123,4 +123,111 @@ public class DiagnosticsBundleTests : IDisposable
 
         Assert.Equal("scribe-diagnostics-20260820-140509.zip", name);
     }
+
+    [Fact]
+    public void Known_sensitive_lines_are_redacted_in_the_copy_and_the_report_counts_them()
+    {
+        // Synthetic lines in the exact shapes earlier builds wrote: a Debug decode line carrying the
+        // transcript, a cleanup skip warning naming a custom endpoint's host, an invalid snippet warning
+        // with its exception, and a discovery line naming an Azure account.
+        var decode = "09:15:02.001 [Debug] TranscriptionService: Decoded 3100 ms of audio in 140 ms (RTF 0.05): " +
+            "\"my account number is 4417 1234\"";
+        var skip = "09:15:02.200 [Warning] DictationController: AI cleanup was skipped for this dictation: " +
+            "AI cleanup is enabled but Initializing (Connecting to llm.contoso.internal\u2026). The raw transcription was used.";
+        var snippet = "09:15:03.000 [Warning] TextPostProcessor: Skipping invalid snippet 4 ('merger memo')." +
+            Environment.NewLine + "System.ArgumentException: merger memo" + Environment.NewLine + "   at X.Y()";
+        var account = "09:15:04.000 [Debug] AzureFoundryDiscovery: Could not list deployments for account fabrikam-ai.";
+        WriteLog(Today.AddDays(-1), string.Join(Environment.NewLine, decode, skip, snippet, account) + Environment.NewLine);
+        WriteLog(Today, "09:20:00.000 [Information] App: ordinary" + Environment.NewLine);
+
+        var result = DiagnosticsBundle.Create(LogsDir, Destination(), "environment report", Today);
+
+        var yesterday = ReadEntry(result.Path, "logs/scribe-20260819.log");
+        Assert.DoesNotContain("4417", yesterday);
+        Assert.DoesNotContain("contoso", yesterday);
+        Assert.DoesNotContain("merger", yesterday);
+        Assert.DoesNotContain("fabrikam", yesterday);
+        Assert.Contains("(RTF 0.05): \"[transcript redacted, 30 chars]\"", yesterday);
+        Assert.Contains("   at X.Y()", yesterday);
+        Assert.Equal(new LogRedactionCounts(1, 1, 1, 2, 0), result.Redactions);
+
+        var report = ReadEntry(result.Path, "report.txt");
+        Assert.StartsWith("environment report", report);
+        Assert.Contains("--- privacy redaction ---", report);
+        Assert.Contains("This is not a general scan", report);
+        Assert.Contains("dictation text replaced: 1", report);
+        Assert.Contains("custom AI endpoint addresses replaced: 1", report);
+        Assert.Contains("Azure deployment, account and subscription names replaced: 1", report);
+        Assert.Contains("dictionary, snippet, dictionary library and profile text replaced: 2", report);
+        Assert.Contains("AI provider and failure text replaced: 0", report);
+        Assert.Contains("  - speech decoding lines from TranscriptionService (Debug), versions 0.3.11 to 0.4.2", report);
+        Assert.DoesNotContain("4417", report);
+        Assert.DoesNotContain("contoso", report);
+    }
+
+    [Fact]
+    public void The_report_lists_every_recognized_format_with_its_versions()
+    {
+        var report = DiagnosticsBundle.WithRedactionSummary("r", default);
+
+        foreach (var format in HistoricalLogRedaction.KnownFormats)
+        {
+            Assert.Contains($"  - {format.Lines}, versions {format.Versions}", report);
+        }
+    }
+
+    [Fact]
+    public void Settings_warnings_from_earlier_versions_lose_what_their_exceptions_quoted_in_the_copy()
+    {
+        // The two Settings shapes 0.2.4 to 0.4.2 wrote: an API-key check against an endpoint behind a VPN that was
+        // down, whose connection failure named the host, and a report mailto: no mail client would open.
+        var verify = "10:01:02.003 [Warning] SettingsWindow: Could not reach the Azure API-key endpoint." + Environment.NewLine +
+            "System.Net.Http.HttpRequestException: No such host is known. (contoso-ai.openai.azure.com:443)" + Environment.NewLine +
+            " ---> System.Net.Sockets.SocketException (11001): No such host is known." + Environment.NewLine +
+            "   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port)";
+        var mail = "10:05:00.000 [Warning] SettingsWindow: Could not open a mail client for the AI report." + Environment.NewLine +
+            "System.ComponentModel.Win32Exception (1155): An error occurred trying to start process " +
+            "'mailto:support@mckeesolutions.ai?subject=x&body=my%20account%20number%20is%204417' with working directory 'C:\\x'." +
+            Environment.NewLine + "   at System.Diagnostics.Process.StartWithShellExecuteEx(ProcessStartInfo startInfo)";
+        var local = "10:06:00.000 [Warning] SettingsWindow: Could not load the dictionary for Settings." + Environment.NewLine +
+            "Microsoft.Data.Sqlite.SqliteException (0x80004005): SQLite Error 5: 'database is locked'.";
+        WriteLog(Today.AddDays(-1), string.Join(Environment.NewLine, verify, mail, local) + Environment.NewLine);
+
+        var result = DiagnosticsBundle.Create(LogsDir, Destination(), "environment report", Today);
+
+        var copy = ReadEntry(result.Path, "logs/scribe-20260819.log");
+        Assert.DoesNotContain("contoso", copy);
+        Assert.DoesNotContain("4417", copy);
+        Assert.Contains("SettingsWindow: Could not reach the Azure API-key endpoint.", copy);
+        Assert.Contains($"System.Net.Http.HttpRequestException: {HistoricalLogRedaction.MessagePlaceholder}", copy);
+        Assert.Contains("   at System.Net.Http.HttpConnectionPool.ConnectToTcpHostAsync(String host, Int32 port)", copy);
+        Assert.Contains("SQLite Error 5: 'database is locked'.", copy);
+        Assert.Equal(new LogRedactionCounts(1, 0, 0, 0, 1), result.Redactions);
+
+        var report = ReadEntry(result.Path, "report.txt");
+        Assert.Contains("dictation text replaced: 1", report);
+        Assert.Contains("AI provider and failure text replaced: 1", report);
+        Assert.Contains("Settings warnings about Azure sign-in", report);
+    }
+
+    [Fact]
+    public void Logs_without_a_known_format_are_copied_byte_for_byte()
+    {
+        var content = "09:20:00.000 [Information] App: ordinary\r\n09:20:01.000 [Warning] Overlay: pill\n" +
+            "no terminator on the last line";
+        WriteLog(Today, content);
+
+        var result = DiagnosticsBundle.Create(LogsDir, Destination(), "report", Today);
+
+        Assert.Equal(content, ReadEntry(result.Path, "logs/scribe-20260820.log"));
+        Assert.Equal(default, result.Redactions);
+        Assert.Contains("dictation text replaced: 0", ReadEntry(result.Path, "report.txt"));
+    }
+
+    private static string ReadEntry(string zipPath, string entryName)
+    {
+        using var archive = ZipFile.OpenRead(zipPath);
+        using var reader = new StreamReader(archive.GetEntry(entryName)!.Open());
+        return reader.ReadToEnd();
+    }
 }

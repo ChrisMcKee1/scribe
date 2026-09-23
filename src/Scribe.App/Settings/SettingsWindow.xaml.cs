@@ -33,11 +33,13 @@ using Scribe.Core.Transcription;
 namespace Scribe.App.Settings;
 
 /// <summary>
-/// Modeless settings editor. Loads the persisted <see cref="AppSettings"/> and the user
-/// dictionary, lets the user change the microphone, hotkey, behaviour toggles, text-insertion
-/// method and decode threads, and edit the dictionary inline. On save it persists everything,
-/// reconciles the "launch at logon" registration, and calls back into the dictation controller
-/// so the new binding and dictionary take effect without a restart.
+/// Modeless settings editor. Loads the persisted <see cref="AppSettings"/>, then reads the
+/// dictionary, snippets, libraries, history and diagnostics off the UI thread so the window opens
+/// at once; each of those sections stays read-only until its rows arrive. Lets the user change the
+/// microphone, hotkey, behaviour toggles, text-insertion method and decode threads, and edit the
+/// dictionary inline. On save it persists everything and calls back into the dictation controller
+/// so the new binding and dictionary take effect without a restart. Start with Windows is the
+/// exception: like Windows' own toggles it applies the moment it is flipped, without Save.
 /// </summary>
 public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 {
@@ -58,8 +60,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ITranscriptionModelInstaller _transcriptionModelInstaller;
     private readonly AppPaths _paths;
     private readonly StartupRegistration _startup;
-    private StartupRegistrationStatus? _startupStatus;
-    private bool _refreshingStartup;
+    private readonly StartupToggle _startupToggle;
+    private readonly StartupSwitchState _startupSwitch = new();
+    private bool _showingStartupStatus;
+    private Task? _startupApply;
+    // The settings document could not be parsed and the window holds defaults. Only an explicit
+    // Save may replace the stored copy, so Start with Windows must not write around it.
+    private bool _settingsRecovered;
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
@@ -80,9 +87,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _loadingProfile;
     private readonly ObservableCollection<HistoryRow> _historyRows = new();
     private readonly ObservableCollection<FailureRow> _failures = new();
+
+    // Sections read off the UI thread. Until one has loaded, Save treats it as untouched.
+    private readonly SettingsSectionLoad _dictionaryLoad = new();
+    private readonly SettingsSectionLoad _libraryLoad = new();
+    private readonly SettingsSectionLoad _snippetLoad = new();
+    private readonly SettingsSectionLoad _historyLoad = new();
+    private readonly SettingsSectionLoad _failureLoad = new();
+    private readonly SettingsSectionLoad _statsLoad = new();
+    private readonly PendingRowUpdates<long, AiRating> _ratingWrites = new();
+
+    // Hint texts as written in the XAML, restored once a section's loading message is no longer needed.
+    private string _historyEmptyText = string.Empty;
+    private string _noFailuresText = string.Empty;
+    private string _snippetEmptyText = string.Empty;
+    private string _libraryDetailEmptyText = string.Empty;
+    private string _statsSummaryEmptyText = string.Empty;
+
     private UsageAnalyzer.Snapshot? _usageSnapshot;
     private bool _usageInsightRunning;
-    private int _usageLoadVersion;
+    private readonly LatestRequestCoalescer<UsagePeriodChoice> _usageLoads = new();
     private int _azureDeploymentLoadVersion;
     private readonly Dictionary<string, CleanupModel> _foundryCuratedByAlias = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FoundryModelOption> _foundryExecutionBuilds = new(StringComparer.OrdinalIgnoreCase);
@@ -112,6 +136,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _capturing;
     private bool _finalized;
     private bool _loadingUi;
+
+    // The tray's AI cleanup switch, held while a hotkey capture keeps the window's switch from showing it.
+    private readonly ExternalSwitchSync _externalAiCleanup = new();
+    private bool _showingExternalAiCleanup;
 
     public SettingsWindow(
         ISettingsRepository settingsRepository,
@@ -155,6 +183,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _log = log;
 
         _settings = settingsRepository.Load();
+        _settingsRecovered = settingsRepository.LastLoadFailed;
+        _startupToggle = new StartupToggle(
+            startup, enabled => StartupPreference.PersistAsync(settingsRepository, enabled), log);
         _pendingBinding = _settings.Hotkey;
         _pendingDictationOnlyBinding = _settings.DictationOnlyHotkey;
 
@@ -174,11 +205,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PopulateDevices();
         PopulateChoices();
         LoadFromSettings();
-        LoadDictionary();
-        LoadLibraries();
-        LoadSnippets();
+        InitializeDictionaryGrid();
+        InitializeLibraryGrid();
+        InitializeSnippetList();
         LoadProfiles();
-        HistoryGrid.ItemsSource = _historyRows;
+        InitializeReadOnlySections();
+
+        // Everything read from the database now arrives off the UI thread, so a large history or
+        // dictionary no longer holds the window back from appearing.
+        LoadDictionaryAsync();
+        LoadLibrariesAsync();
+        LoadSnippetsAsync();
         LoadHistory();
         LoadFailures();
         LoadPerformanceStats();
@@ -212,6 +249,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AboutLogsPathBox.Text = live.Path;
         }
         AboutDatabasePathBox.Text = _paths.EffectiveDatabasePath;
+        AboutDataFileHintText.Text = StorageRetentionPolicy.DataFileHint;
         AboutStoreLinkBox.Text = ScribeLinks.StoreWeb;
         if (_paths.IsFallbackRoot)
         {
@@ -289,21 +327,74 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateApplyButton.Visibility = Visibility.Visible;
     });
 
-    public void ReloadExternalSettings()
+    /// <summary>
+    /// Adopts the AI cleanup switch from the tray, so this window's next save carries it instead of putting back its
+    /// own older value: when the tray asks for the change, and again when it says how the change ended.
+    /// <paramref name="revision"/> is the one the change took when it was made
+    /// (<see cref="ExternalSwitchSync.NextRevision"/>), so word of a change older than one this window already has,
+    /// such as the user's own later click, changes nothing. Takes the value rather than reading the stored settings
+    /// again here, on the UI thread. While a hotkey is being recorded the switch shows the change once the recording
+    /// ends, and the document, and any save made before then, carry it at once.
+    /// </summary>
+    public void AdoptExternalAiCleanup(bool enabled, long revision)
     {
-        if (_capturing)
+        if (!_externalAiCleanup.TryAdopt(enabled, revision, canShowNow: !_capturing, out var showNow))
         {
             return;
         }
 
-        var latest = _settingsRepository.Load();
-        _settings.EnableAiCleanup = latest.EnableAiCleanup;
-        AiCleanupCheck.IsChecked = latest.EnableAiCleanup;
+        _settings.EnableAiCleanup = enabled;
+        if (showNow)
+        {
+            ShowExternalAiCleanup(enabled);
+        }
+    }
+
+    // A hotkey recording has ended, so a tray change that arrived during it can be shown now.
+    private void ShowWaitingExternalAiCleanup()
+    {
+        if (_externalAiCleanup.Release() is { } waiting)
+        {
+            ShowExternalAiCleanup(waiting);
+        }
+    }
+
+    // Flagged, so the switch's own handler does not take the tray's value for the user's.
+    private void ShowExternalAiCleanup(bool enabled)
+    {
+        _showingExternalAiCleanup = true;
+        try
+        {
+            AiCleanupCheck.IsChecked = enabled;
+        }
+        finally
+        {
+            _showingExternalAiCleanup = false;
+        }
     }
 
     public IReadOnlyList<DictionaryEntry> PersistLearnedDictionaryEntries(IReadOnlyList<DictionaryEntry> entries)
     {
-        var wasDirty = DictionarySignature() != _dictionarySnapshot;
+        if (!_dictionaryLoad.IsLoaded)
+        {
+            // No rows on screen yet, so there are no unsaved edits to protect and storage is the
+            // whole truth. The read still in flight may predate these entries, so it is redone.
+            var stored = _dictionary.GetAll();
+            var fresh = entries
+                .Where(entry => !stored.Any(existing =>
+                    string.Equals(existing.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(existing.Replacement.Trim(), entry.Replacement, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            var added = _dictionary.AddRange(fresh);
+            if (added.Count > 0 && _dictionaryLoad.Invalidate())
+            {
+                LoadDictionaryAsync();
+            }
+
+            return added;
+        }
+
+        var wasDirty = _dictionaryLoad.HasChanges(DictionarySignature());
         var candidates = entries
             .Where(entry => !_rows.Any(row =>
                 string.Equals(row.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase) ||
@@ -324,7 +415,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         if (!wasDirty)
         {
-            _dictionarySnapshot = DictionarySignature();
+            _dictionaryLoad.MarkSaved(DictionarySignature());
         }
 
         return persisted;
@@ -346,7 +437,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        var wasDirty = DictionarySignature() != _dictionarySnapshot;
+        if (!_dictionaryLoad.IsLoaded)
+        {
+            // Before the rows arrive there is no grid to merge into: write storage by spoken form,
+            // then redo the read, which may have started before this write.
+            var stored = _dictionary.GetAll().FirstOrDefault(existing =>
+                string.Equals(existing.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase));
+            DictionaryEntry written;
+            if (stored is null)
+            {
+                written = _dictionary.Add(entry with { Id = 0 });
+            }
+            else
+            {
+                written = entry with { Id = stored.Id };
+                _dictionary.Update(written);
+            }
+
+            if (_dictionaryLoad.Invalidate())
+            {
+                LoadDictionaryAsync();
+            }
+
+            return written;
+        }
+
+        var wasDirty = _dictionaryLoad.HasChanges(DictionarySignature());
 
         var row = _rows.FirstOrDefault(r =>
             string.Equals(r.Pattern.Trim(), entry.Pattern, StringComparison.OrdinalIgnoreCase));
@@ -389,7 +505,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // user to save edits they never made.
         if (!wasDirty)
         {
-            _dictionarySnapshot = DictionarySignature();
+            _dictionaryLoad.MarkSaved(DictionarySignature());
         }
 
         return persisted;
@@ -398,13 +514,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// <summary>
     /// The dictionary as the user currently sees it, including edits that have not been saved yet.
     /// The quick-add popup checks duplicates against this rather than the database so it agrees
-    /// with what is on screen.
+    /// with what is on screen. Before the rows have loaded there is nothing unsaved, so storage is
+    /// the answer.
     /// </summary>
-    public IReadOnlyList<DictionaryEntry> CurrentDictionaryEntries() => _rows
-        .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-        .Select(r => new DictionaryEntry(
-            r.Id, r.Pattern.Trim(), r.Replacement.Trim(), r.WholeWord, r.Enabled))
-        .ToList();
+    public IReadOnlyList<DictionaryEntry> CurrentDictionaryEntries() => !_dictionaryLoad.IsLoaded
+        ? _dictionary.GetAll()
+        : _rows
+            .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
+            .Select(r => new DictionaryEntry(
+                r.Id, r.Pattern.Trim(), r.Replacement.Trim(), r.WholeWord, r.Enabled))
+            .ToList();
     private async void UpdateCheckButton_Click(object sender, RoutedEventArgs e)
     {
         if (_updates?.IsStoreManaged == true)
@@ -589,13 +708,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return "Skipped, AI cleanup is off";
         }
 
+        // The playground is on screen and local, so it shows the endpoint's own explanation when
+        // there is one; the diagnostics-safe reason is the fallback.
+        var failure = cleanup.DisplayDetail ?? cleanup.FailureReason;
         return cleanup.Outcome switch
         {
             CleanupOutcome.Cleaned when cleanup.FailureReason is not null =>
-                $"Cleaned with a partial fallback: {cleanup.FailureReason}",
+                $"Cleaned with a partial fallback: {failure}",
             CleanupOutcome.Cleaned => "Cleaned",
             CleanupOutcome.Unchanged => "Ran, no changes needed",
-            CleanupOutcome.Failed => $"Failed, raw text kept: {cleanup.FailureReason}",
+            CleanupOutcome.Failed => $"Failed, raw text kept: {failure}",
             _ => "Skipped, cleanup model is not ready",
         };
     }
@@ -792,10 +914,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AutoStopCheck.IsChecked = _settings.AutoStopOnSilence;
             PostCheck.IsChecked = _settings.ApplyPostProcessing;
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
+            StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
             MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
             IdleReleaseBox.Value = Math.Clamp(_settings.ReleaseModelsAfterIdleMinutes, 0, 120);
             HistoryRetentionBox.Value = Math.Clamp(_settings.HistoryRetentionDays, 0, 3650);
+            HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
 
             var items = (InjectionChoice[])InjectionCombo.ItemsSource;
             InjectionCombo.SelectedItem =
@@ -819,26 +943,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    // Runs on Loaded and on every activation, so coming back from Windows Settings > Apps > Startup
+    // shows what the user changed there.
     private async void RefreshStartupStatus(object? sender, EventArgs e)
     {
-        if (_saveInProgress || _refreshingStartup ||
-            (_startupStatus is { IsKnown: true } previous && LaunchCheck.IsChecked != previous.IsEnabled))
+        if (_closed || !_startupSwitch.TryBeginRefresh(_saveInProgress, out var ticket))
         {
             return;
         }
 
-        _refreshingStartup = true;
-        LaunchCheck.IsEnabled = false;
+        // Only the first read disables the switch. A later one, run because the window was just
+        // activated, must leave it usable, or the click that activated the window is lost.
+        if (_startupSwitch.DisablesSwitchWhileRefreshing)
+        {
+            LaunchCheck.IsEnabled = false;
+        }
+
+        StartupRegistrationStatus status;
         try
         {
-            ShowStartupStatus(await _startup.GetStatusAsync());
+            status = await _startup.GetStatusAsync();
         }
-        finally
+        catch (Exception ex)
         {
-            _refreshingStartup = false;
+            // GetStatusAsync reports its own failures as an unknown state. This only keeps a bug from
+            // leaving the switch disabled on "Checking..." with nothing to say why.
+            TryLog(ex, "Could not refresh the Windows startup setting.");
+            status = new StartupRegistrationStatus(null);
+        }
+
+        // A flip or a save that started while this read was running shows its own, newer state.
+        if (_startupSwitch.CompleteRefresh(ticket, status))
+        {
+            ShowStartupStatus(status);
         }
     }
 
+    // Renders a state already recorded in _startupSwitch.
     private void ShowStartupStatus(StartupRegistrationStatus status)
     {
         if (_closed)
@@ -846,10 +987,138 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        _startupStatus = status;
-        LaunchCheck.IsChecked = status.IsEnabled;
+        _showingStartupStatus = true;
+        try
+        {
+            LaunchCheck.IsChecked = status.IsEnabled;
+        }
+        finally
+        {
+            _showingStartupStatus = false;
+        }
+
         LaunchCheck.IsEnabled = status.CanChange;
-        LaunchStatusText.Text = status.Message;
+        LaunchStatusText.Text = _startup.IsIsolated
+            ? $"{status.Message} {StartupRegistration.IsolatedDataNote}"
+            : status.Message;
+    }
+
+    /// <summary>
+    /// Start with Windows applies as soon as the switch is flipped, as Windows' own toggles do.
+    /// </summary>
+    /// <remarks>
+    /// It used to wait for Save, so closing the window, or a Save stopped by a problem on another
+    /// page, dropped the change without a word and Windows' startup setting never moved. Checked
+    /// and Unchecked are used rather than Click so keyboard and UI Automation toggles apply too;
+    /// the switch's own updates from <see cref="ShowStartupStatus"/> are ignored. A flip while a
+    /// read of Windows' state is running is allowed; see <see cref="StartupSwitchState"/>.
+    /// </remarks>
+    private async void LaunchCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_showingStartupStatus || _closed)
+        {
+            return;
+        }
+
+        var requested = LaunchCheck.IsChecked == true;
+        var decision = _startupSwitch.TryBeginApply(requested, _saveInProgress, _settingsRecovered);
+        if (decision == StartupFlipDecision.Unchanged)
+        {
+            return;
+        }
+
+        if (decision != StartupFlipDecision.Apply)
+        {
+            // The switch goes back to what Windows last said rather than claim a state nobody
+            // applied.
+            TryLogRefusedFlip(decision);
+            RevertLaunchSwitch();
+            if (decision == StartupFlipDecision.RecoveredSettings)
+            {
+                ShowInfo(
+                    SavedSettingsNotice.InSettings("Start with Windows"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            }
+
+            return;
+        }
+
+        var apply = ApplyStartupChangeAsync(requested, _startupSwitch.Shown!);
+        _startupApply = apply;
+        await apply;
+    }
+
+    private void TryLogRefusedFlip(StartupFlipDecision decision)
+    {
+        try
+        {
+            _log.LogDebug("Start with Windows change refused: {Reason}.", decision);
+        }
+        catch
+        {
+            // Diagnostics must never disrupt the settings window.
+        }
+    }
+
+    // Touches only the checked state: a refresh or an apply still running owns the rest of the row.
+    private void RevertLaunchSwitch()
+    {
+        _showingStartupStatus = true;
+        try
+        {
+            LaunchCheck.IsChecked = _startupSwitch.Shown?.IsEnabled == true;
+        }
+        finally
+        {
+            _showingStartupStatus = false;
+        }
+    }
+
+    private async Task ApplyStartupChangeAsync(bool requested, StartupRegistrationStatus shown)
+    {
+        // Disabling a focused control drops keyboard focus, so a keyboard user who pressed Space
+        // would otherwise be left with focus somewhere else once the change lands.
+        var hadKeyboardFocus = LaunchCheck.IsKeyboardFocusWithin;
+        LaunchCheck.IsEnabled = false;
+        LaunchStatusText.Text = requested
+            ? "Turning on Start with Windows..."
+            : "Turning off Start with Windows...";
+
+        StartupToggleResult result;
+        try
+        {
+            result = await _startupToggle.ApplyAsync(requested, shown, _settings.LaunchOnLogin);
+        }
+        catch (Exception ex)
+        {
+            // ApplyAsync does not throw by contract; this keeps a bug from stranding the switch.
+            TryLog(ex, "Could not apply the Start with Windows change.");
+            result = new StartupToggleResult(
+                new StartupRegistrationStatus(null), _settings.LaunchOnLogin, StartupToggleOutcome.Unknown);
+        }
+
+        // Keep the window's copy in step: the next Save writes this whole object, and a stale value
+        // would hand the next launch's reconcile the old preference.
+        _settings.LaunchOnLogin = result.Preference;
+        _startupSwitch.CompleteApply(result.Status);
+        ShowStartupStatus(result.Status);
+        if (_closed)
+        {
+            return;
+        }
+
+        // Only when focus is still where WPF put it on disabling, never away from a control the
+        // user moved to while the change was applying.
+        if (hadKeyboardFocus && LaunchCheck.IsEnabled && IsActive &&
+            (Keyboard.FocusedElement is null || ReferenceEquals(Keyboard.FocusedElement, this)))
+        {
+            LaunchCheck.Focus();
+        }
+
+        if (result.Outcome == StartupToggleOutcome.SaveFailed)
+        {
+            ShowInfo(result.Status.Message, Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
     }
 
     private void StartupSettings_Click(object sender, RoutedEventArgs e) =>
@@ -945,9 +1214,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAzureProjectApiKeyHint();
 
         // Best-effort: merge the live on-device catalog + loaded status in without blocking window open.
+        // Only a runtime that is already running is read: opening this page must never be what
+        // downloads the hardware runtime or a model. "Set up Foundry Local" is the explicit way to start it.
         if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.FoundryLocal)
         {
-            _ = RefreshFoundryModelsAsync();
+            _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
         else if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
         {
@@ -956,30 +1227,90 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void LoadDictionary()
+    private void InitializeDictionaryGrid()
     {
-        foreach (var entry in _dictionary.GetAll())
-        {
-            _rows.Add(new DictionaryRow
-            {
-                Id = entry.Id,
-                Pattern = entry.Pattern,
-                Replacement = entry.Replacement,
-                WholeWord = entry.WholeWord,
-                Enabled = entry.Enabled,
-            });
-        }
-
         DictionaryGrid.ItemsSource = _rows;
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
-        foreach (var row in _rows)
+        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        SetDictionaryEditable(false);
+        RefreshDictionaryStatus();
+    }
+
+    // Until the rows arrive there is nothing to edit, and an edit on an empty grid would be saved as
+    // if the user had deleted every entry.
+    private void SetDictionaryEditable(bool editable)
+    {
+        DictionaryGrid.IsEnabled = editable;
+        DictionaryAddButton.IsEnabled = editable;
+        DictionarySuggestButton.IsEnabled = editable;
+        DictionaryCleanupButton.IsEnabled = editable;
+        DictionaryImportButton.IsEnabled = editable;
+        DictionaryExportButton.IsEnabled = editable;
+    }
+
+    private async void LoadDictionaryAsync()
+    {
+        if (!_dictionaryLoad.TryBegin(DictionarySignature(), out var ticket))
         {
-            row.PropertyChanged += DictionaryRow_PropertyChanged;
+            return;
         }
 
-        DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        IReadOnlyList<DictionaryEntry> entries;
+        try
+        {
+            entries = await Task.Run(() => _dictionary.GetAll());
+        }
+        catch (Exception ex)
+        {
+            if (_dictionaryLoad.Fail(ticket))
+            {
+                TryLog(ex, "Could not load the dictionary for Settings.");
+                RefreshDictionaryStatus();
+            }
+
+            return;
+        }
+
+        if (!_dictionaryLoad.CanPublish(ticket))
+        {
+            return;
+        }
+
+        // Rows go in before the grid is bound and with the collection handler detached, as the old
+        // synchronous load did, so a large dictionary does not queue one full status refresh per row.
+        DictionaryGrid.ItemsSource = null;
+        _rows.CollectionChanged -= DictionaryRows_CollectionChanged;
+        try
+        {
+            foreach (var stale in _rows)
+            {
+                stale.PropertyChanged -= DictionaryRow_PropertyChanged;
+            }
+
+            _rows.Clear();
+            foreach (var entry in entries)
+            {
+                var row = new DictionaryRow
+                {
+                    Id = entry.Id,
+                    Pattern = entry.Pattern,
+                    Replacement = entry.Replacement,
+                    WholeWord = entry.WholeWord,
+                    Enabled = entry.Enabled,
+                };
+                row.PropertyChanged += DictionaryRow_PropertyChanged;
+                _rows.Add(row);
+            }
+        }
+        finally
+        {
+            _rows.CollectionChanged += DictionaryRows_CollectionChanged;
+            DictionaryGrid.ItemsSource = _rows;
+        }
+
+        _dictionaryLoad.Publish(ticket, DictionarySignature());
+        SetDictionaryEditable(true);
         RefreshDictionaryStatus();
-        _dictionarySnapshot = DictionarySignature();
     }
 
     // Rows are watched individually as well as collectively: a checkbox click commits without
@@ -1083,7 +1414,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Could not compute dictionary library coverage.");
+            _log.LogWarning("Could not compute dictionary library coverage: {Failure}", FailureShape.DescribeWithStack(ex));
         }
     }
 
@@ -1129,6 +1460,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         if (DictionaryGlossaryHint is null)
         {
+            return;
+        }
+
+        if (!_dictionaryLoad.IsLoaded)
+        {
+            DictionaryGlossaryHint.Text = _dictionaryLoad.State == SettingsSectionState.Failed
+                ? "Couldn't load your dictionary, so it can't be edited right now. Close Settings and open it again to retry."
+                : "Loading your dictionary...";
             return;
         }
 
@@ -1203,11 +1542,62 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Libraries -----------------------------------------------------------------------
 
-    private void LoadLibraries()
+    private void InitializeLibraryGrid()
     {
+        LibraryGrid.ItemsSource = _libraryRows;
+
+        // Switching a library on or off changes which dictionary entries are redundant, so the
+        // Library column on the dictionary page has to follow it rather than wait for a save.
+        LibraryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+
+        _libraryDetailEmptyText = LibraryDetailEmpty.Text;
+        LibraryDetailEmpty.Text = "Loading libraries...";
+        SetLibrariesEditable(false);
+        UpdateLibraryDetail(null);
+    }
+
+    // The enabled set is saved from these rows, so an unloaded list must not be editable: saving it
+    // would switch every library off.
+    private void SetLibrariesEditable(bool editable)
+    {
+        LibraryGrid.IsEnabled = editable;
+        LibraryImportButton.IsEnabled = editable;
+        LibraryExportButton.IsEnabled = editable;
+        LibraryRemoveButton.IsEnabled = editable;
+    }
+
+    private async void LoadLibrariesAsync()
+    {
+        if (!_libraryLoad.TryBegin(LibrarySignature(), out var ticket))
+        {
+            return;
+        }
+
+        IReadOnlyList<DictionaryLibrary> libraries;
+        try
+        {
+            libraries = await Task.Run(() => _libraries.GetLibraries());
+        }
+        catch (Exception ex)
+        {
+            if (_libraryLoad.Fail(ticket))
+            {
+                TryLog(ex, "Could not load dictionary libraries for Settings.");
+                LibraryDetailEmpty.Text =
+                    "Couldn't load libraries, so they can't be changed right now. Close Settings and open it again to retry.";
+            }
+
+            return;
+        }
+
+        if (!_libraryLoad.CanPublish(ticket))
+        {
+            return;
+        }
+
         var enabled = new HashSet<string>(_settings.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
         _loadedLibraries.Clear();
-        _loadedLibraries.AddRange(_libraries.GetLibraries());
+        _loadedLibraries.AddRange(libraries);
 
         _libraryRows.Clear();
         foreach (var library in _loadedLibraries)
@@ -1224,11 +1614,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             });
         }
 
-        LibraryGrid.ItemsSource = _libraryRows;
-
-        // Switching a library on or off changes which dictionary entries are redundant, so the
-        // Library column on the dictionary page has to follow it rather than wait for a save.
-        LibraryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        _libraryLoad.Publish(ticket, LibrarySignature());
+        LibraryDetailEmpty.Text = _libraryDetailEmptyText;
+        SetLibrariesEditable(true);
 
         // Preview the first library so the detail panel is never blank when the page opens.
         if (_libraryRows.Count > 0)
@@ -1239,6 +1627,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             UpdateLibraryDetail(null);
         }
+
+        // Coverage badges and the glossary count depend on which libraries are on.
+        RefreshDictionaryStatus();
     }
 
     private void LibraryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
@@ -1419,15 +1810,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Save skips sections the user never touched, so a pre-existing data problem in one section
     // (e.g. a duplicate dictionary entry loaded from disk) can never block saving a change made in
-    // another. The signatures capture everything the section's SaveAll would write.
+    // another. The signatures capture everything the section's SaveAll would write; the matching
+    // snapshots live in the section's SettingsSectionLoad.
     private string DictionarySignature() => string.Join(
         "", _rows.Select(r => $"{r.Id}|{r.Pattern}|{r.Replacement}|{r.WholeWord}|{r.Enabled}"));
 
     private string SnippetSignature() => string.Join(
         "", _snippetRows.Select(r => $"{r.Id}|{r.Phrase}|{r.Template}|{r.Enabled}"));
-
-    private string _dictionarySnapshot = string.Empty;
-    private string _snippetSnapshot = string.Empty;
 
     /// <summary>
     /// Which libraries are on. Used to detect a change made while an asynchronous scan was running,
@@ -1439,11 +1828,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// <summary>Set once the window has closed, so async continuations know not to touch its controls.</summary>
     private bool _closed;
 
-    private void LoadSystemCapability()
+    private void ShowSystemCapability(ComputeCapabilityReport? report)
     {
         try
         {
-            var report = ComputeCapabilityReport.Detect();
+            if (report is null)
+            {
+                SystemCapabilityText.Text = "Hardware details unavailable.";
+                return;
+            }
+
             SystemCapabilityText.Text = report.Describe();
 
             if (report.Recommendation is { } advice)
@@ -1464,19 +1858,73 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void LoadPerformanceStats()
+    private async void LoadPerformanceStats()
     {
-        LoadSystemCapability();
+        if (!_statsLoad.TryBegin(null, out var ticket))
+        {
+            return;
+        }
+
+        var since = DateTimeOffset.UtcNow.AddDays(-7);
+        ComputeCapabilityReport? capability;
+        Scribe.Core.Diagnostics.DictationStats.Snapshot? stats;
+        try
+        {
+            (capability, stats) = await Task.Run(() => ReadPerformanceData(since));
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Could not read diagnostics for Settings.");
+            (capability, stats) = (null, null);
+        }
+
+        if (!_statsLoad.Publish(ticket, string.Empty))
+        {
+            return;
+        }
+
+        ShowSystemCapability(capability);
+        ShowPerformanceStats(stats);
+    }
+
+    // Runs on a worker thread, so it touches no controls. Hardware detection is descriptive only and
+    // the stats are a nicety, so neither failure may take the Diagnostics page down.
+    private (ComputeCapabilityReport? Capability, Scribe.Core.Diagnostics.DictationStats.Snapshot? Stats)
+        ReadPerformanceData(DateTimeOffset since)
+    {
+        ComputeCapabilityReport? capability = null;
+        try
+        {
+            capability = ComputeCapabilityReport.Detect();
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Compute capability detection failed.");
+        }
+
+        Scribe.Core.Diagnostics.DictationStats.Snapshot? stats = null;
+        try
+        {
+            stats = Scribe.Core.Diagnostics.DictationStats.Compute(_history.GetRecent(1000), since);
+        }
+        catch (Exception ex)
+        {
+            TryLog(ex, "Performance stats unavailable.");
+        }
+
+        return (capability, stats);
+    }
+
+    private void ShowPerformanceStats(Scribe.Core.Diagnostics.DictationStats.Snapshot? stats)
+    {
+        if (stats is null)
+        {
+            StatsSummaryText.Text = _statsSummaryEmptyText; // the friendly empty-state text
+            return;
+        }
 
         try
         {
-            var entries = _history.GetRecent(1000);
-            var stats = Scribe.Core.Diagnostics.DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
-            if (stats is null)
-            {
-                return; // keep the friendly empty-state text
-            }
-
             StatsSummaryText.Text =
                 "A local snapshot of your current rhythm. Lower latency is faster; " +
                 "pace shows how quickly Scribe processes speech compared with its duration.";
@@ -1573,10 +2021,57 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             rtf > 0 ? $"{1.0 / rtf:0.0}x" : "n/a";
     }
 
-    private void LoadFailures()
+    // Grids and hints for the sections that only display stored data. Their rows arrive later.
+    private void InitializeReadOnlySections()
     {
+        HistoryGrid.ItemsSource = _historyRows;
+        _historyEmptyText = HistoryEmptyHint.Text;
+        HistoryEmptyHint.Text = "Loading history...";
+        HistoryEmptyHint.Visibility = Visibility.Visible;
+        HistoryClearButton.IsEnabled = false;
+
+        FailuresGrid.ItemsSource = _failures;
+        _noFailuresText = NoFailuresText.Text;
+        NoFailuresText.Text = "Loading...";
+        NoFailuresText.Visibility = Visibility.Visible;
+        ClearFailuresButton.IsEnabled = false;
+
+        _statsSummaryEmptyText = StatsSummaryText.Text;
+        StatsSummaryText.Text = "Calculating from local history...";
+    }
+
+    private async void LoadFailures()
+    {
+        if (!_failureLoad.TryBegin(null, out var ticket))
+        {
+            return;
+        }
+
+        IReadOnlyList<CleanupFailure> failures;
+        try
+        {
+            failures = await Task.Run(() => _failureLog.GetRecent(50));
+        }
+        catch (Exception ex)
+        {
+            if (_failureLoad.Fail(ticket))
+            {
+                TryLog(ex, "Could not load the AI cleanup failure log for Settings.");
+                NoFailuresText.Text = "Couldn't load the failure list. Close Settings and open it again to retry.";
+                NoFailuresText.Visibility = Visibility.Visible;
+                ClearFailuresButton.IsEnabled = true;
+            }
+
+            return;
+        }
+
+        if (!_failureLoad.Publish(ticket, string.Empty))
+        {
+            return;
+        }
+
         _failures.Clear();
-        foreach (var failure in _failureLog.GetRecent(50))
+        foreach (var failure in failures)
         {
             _failures.Add(new FailureRow
             {
@@ -1587,21 +2082,36 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             });
         }
 
-        FailuresGrid.ItemsSource = _failures;
+        NoFailuresText.Text = _noFailuresText;
         NoFailuresText.Visibility = _failures.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ClearFailuresButton.IsEnabled = true;
     }
 
-    private void ClearFailuresButton_Click(object sender, RoutedEventArgs e)
+    private async void ClearFailuresButton_Click(object sender, RoutedEventArgs e)
     {
+        ClearFailuresButton.IsEnabled = false;
         try
         {
-            _failureLog.Clear();
+            await Task.Run(() => _failureLog.Clear());
+            if (_closed)
+            {
+                return;
+            }
+
             _failures.Clear();
+            NoFailuresText.Text = _noFailuresText;
             NoFailuresText.Visibility = Visibility.Visible;
+
+            // A read that started before the clear would bring the old rows back.
+            LoadFailures();
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not clear the failure log:\n{ex.Message}");
+            if (!_closed)
+            {
+                ShowThemedMessage("Scribe", $"Could not clear the failure log:\n{ex.Message}");
+                ClearFailuresButton.IsEnabled = true;
+            }
         }
     }
 
@@ -1707,6 +2217,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
         _setHotkeyCaptureMode(false);
+        ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = HotkeyCapture.Describe(binding);
         Keyboard.ClearFocus();
 
@@ -1729,6 +2240,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturedKeys.Clear();
         _pressedCaptureKeys.Clear();
         _setHotkeyCaptureMode(false);
+        ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = CurrentHotkeyDescription();
         Keyboard.ClearFocus();
     }
@@ -1858,6 +2370,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        if (!_showingExternalAiCleanup)
+        {
+            _externalAiCleanup.UserChanged();
+        }
+
         UpdateAiEnabledState();
         if (AiCleanupCheck.IsChecked == true && SelectedProvider == CleanupProvider.AzureFoundry)
         {
@@ -1875,9 +2392,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAiProviderPanels();
         RefreshAiStatus();
 
+        // Merely selecting Foundry Local shows what is already running and downloads nothing; saving
+        // with cleanup on, or pressing "Set up Foundry Local", is what starts the runtime.
         if (SelectedProvider == CleanupProvider.FoundryLocal)
         {
-            _ = RefreshFoundryModelsAsync();
+            // RefreshAiStatus reports the saved provider. When that is another one, its status is not
+            // Foundry Local's and must not stand in the Foundry Local panel.
+            if (_settings.AiCleanupProvider != CleanupProvider.FoundryLocal)
+            {
+                AiStatusText.Text = FoundryIdleStatus;
+            }
+
+            _ = RefreshFoundryModelsAsync(initializeRuntime: false);
         }
         else if (SelectedProvider == CleanupProvider.AzureFoundry)
         {
@@ -2007,54 +2533,68 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateAzureDeploymentHint();
     }
 
-    private async void AiCheckButton_Click(object sender, RoutedEventArgs e)
+    // The Foundry Local panel's resting status line, the same text the XAML starts with.
+    private const string FoundryIdleStatus =
+        "Nothing downloads while you browse. Load, or saving with AI cleanup on, downloads the selected model. " +
+        "Switching to another provider, or restarting with another one saved, removes what Foundry Local downloaded.";
+
+    // "Set up Foundry Local" is the one explicit way to start the runtime from this page, and the first
+    // time it downloads the hardware runtime (several GB). The warning about that lives in its own
+    // text block, which nothing writes to, so a status update can never replace it.
+    private async void AiSetupButton_Click(object sender, RoutedEventArgs e)
     {
-        AiCheckButton.IsEnabled = false;
-        AiStatusText.Text = "Checking Foundry Local…";
+        AiSetupButton.IsEnabled = false;
+        AiStatusText.Text = "Setting up Foundry Local… The first setup downloads the hardware runtime for this PC, which can take a while.";
         try
         {
             var available = await Task.Run(() => _cleanup.ProbeAsync());
             if (!available)
             {
-                AiStatusText.Text = "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then check again.";
+                AiStatusText.Text = "Foundry Local was not detected. Install it (winget install Microsoft.FoundryLocal), then try again.";
                 return;
             }
 
             // The old message said the check had passed and stopped there, while the real work
             // (repopulating the picker) happened invisibly. Reporting the counts is what makes the
             // button's effect observable, since the list it refreshes is behind a closed dropdown.
-            var count = await RefreshFoundryModelsAsync();
+            // An explicit press is the one place browsing may start the runtime.
+            var count = await RefreshFoundryModelsAsync(initializeRuntime: true);
             var loaded = _foundryExecutionBuilds.Values.FirstOrDefault(m => m.Loaded);
             var running = loaded is null
-                ? "No model is loaded yet; the one you pick downloads on first use."
+                ? "No model is loaded yet; the one you pick downloads when you press Load, or save with AI cleanup on."
                 : $"{loaded.Alias} is loaded and running on the {loaded.DeviceLabel ?? "default device"}.";
 
             AiStatusText.Text = count switch
             {
                 null => $"Foundry Local is running, but its model list could not be read. {running}",
-                0 => "Foundry Local is running but reported no models. Check that it finished starting, then check again.",
+                0 => "Foundry Local is running but reported no models. Check that it finished starting, then try again.",
                 _ => $"Foundry Local is running. {count} models are in the dropdown above. {running}",
             };
         }
         catch
         {
-            AiStatusText.Text = "Couldn't verify Foundry Local. Make sure it's installed and try again.";
+            AiStatusText.Text = "Couldn't set up Foundry Local. Make sure it's installed and try again.";
         }
         finally
         {
-            AiCheckButton.IsEnabled = true;
+            AiSetupButton.IsEnabled = true;
         }
     }
 
     // Merges the live Foundry Local catalog into the searchable picker and refreshes the loaded-model
     // status. Best-effort: if Foundry Local isn't installed the curated alias list stays in place.
     // Returns how many models the catalog reported, or null when the catalog could not be read, so
-    // the caller can tell "no models" apart from "could not ask".
-    private async Task<int?> RefreshFoundryModelsAsync()
+    // the caller can tell "no models" apart from "could not ask". initializeRuntime is true only for
+    // an explicit request: starting the runtime registers its execution providers, which can mean a
+    // download of several GB, so showing the page or selecting the provider only reads a runtime that
+    // is already running.
+    private async Task<int?> RefreshFoundryModelsAsync(bool initializeRuntime)
     {
         try
         {
-            var models = await _cleanup.ListFoundryModelsAsync();
+            var models = initializeRuntime
+                ? await _cleanup.ListFoundryModelsAsync()
+                : await _cleanup.ListFoundryModelsIfInitializedAsync();
             if (models.Count > 0)
             {
                 // Keep the currently typed alias selectable even if it isn't in the live catalog.
@@ -2151,7 +2691,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _foundryModelOp = false;
             AiLoadButton.IsEnabled = true;
-            await RefreshFoundryModelsAsync();
+            // The explicit load already started the runtime; this only reads it.
+            await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
 
@@ -2183,7 +2724,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _foundryModelOp = false;
             AiLoadButton.IsEnabled = true;
-            await RefreshFoundryModelsAsync();
+            await RefreshFoundryModelsAsync(initializeRuntime: false);
         }
     }
 
@@ -3522,11 +4063,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    // By shape only (FailureShape): most of what arrives here came back from the endpoint, Azure or Entra being
+    // configured, and those messages quote the host (.NET 10 appends "(host:port)"), the tenant, the account or
+    // resource names.
     private void TryLog(Exception ex, string message)
     {
         try
         {
-            _log.LogWarning(ex, message);
+            _log.LogWarning("{Message} ({Failure})", message, FailureShape.Describe(ex));
         }
         catch
         {
@@ -3785,14 +4329,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Surface the live engine status on whichever provider is actually running.
-        if (_settings.AiCleanupProvider == CleanupProvider.AzureFoundry)
+        // Surface the live engine status on the panel of the provider that is running, which is the saved
+        // one. Only Foundry Local and Microsoft Foundry have a status line: another provider's status in the
+        // Foundry Local panel would describe an engine that is not running, and stay there once the user
+        // switched back.
+        switch (_settings.AiCleanupProvider)
         {
-            AzureCleanupStatusText.Text = detail;
-        }
-        else
-        {
-            AiStatusText.Text = detail;
+            case CleanupProvider.AzureFoundry:
+                AzureCleanupStatusText.Text = detail;
+                break;
+            case CleanupProvider.FoundryLocal:
+                AiStatusText.Text = detail;
+                break;
         }
     }
 
@@ -3820,6 +4368,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // A running DispatcherTimer roots this window (and its loaded history rows) in the
         // dispatcher's timer list until the tick fires; stop it so close releases everything now.
         _infoDismissTimer?.Stop();
+
+        // Reads still running off the UI thread finish on their own; these make sure nothing they
+        // return is published to the closed window, and cancel the usage computation between steps.
+        // A Start with Windows change still applying is left to finish, because its saved
+        // preference must land together with the Windows change.
+        _dictionaryLoad.Close();
+        _libraryLoad.Close();
+        _snippetLoad.Close();
+        _historyLoad.Close();
+        _failureLoad.Close();
+        _statsLoad.Close();
+        _usageLoads.Close();
 
         Closed -= OnClosed;
         Loaded -= RefreshStartupStatus;
@@ -3860,7 +4420,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Could not copy the AI report to the clipboard.");
+            _log.LogWarning("Could not copy the AI report to the clipboard ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -3925,7 +4485,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 // No mail client, or the shell refused the handler. Falling back to the clipboard
                 // keeps the report recoverable instead of losing the user's effort to a dead end.
-                _log.LogWarning(ex, "Could not open a mail client for the AI report.");
+                // By shape: a failed launch's message quotes the mailto: it was given, report and all.
+                _log.LogWarning("Could not open a mail client for the AI report ({Failure}).", FailureShape.Describe(ex));
                 CopyReportToClipboard(report);
                 ShowThemedMessage(
                     "Report copied",
@@ -4064,7 +4625,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
-            if (DictionarySignature() == _dictionarySnapshot)
+            if (!_dictionaryLoad.HasChanges(DictionarySignature()))
             {
                 return true; // nothing changed, so nothing new to warn about
             }
@@ -4139,7 +4700,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             // A hygiene prompt must never be the reason a save fails.
-            _log.LogWarning(ex, "Could not check the dictionary against enabled libraries.");
+            _log.LogWarning("Could not check the dictionary against enabled libraries: {Failure}", FailureShape.DescribeWithStack(ex));
             return true;
         }
     }
@@ -4148,15 +4709,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // or a save error it surfaces its own message, leaves the window open, and returns false.
     private async Task<bool> TrySaveAsync()
     {
+        // A Start with Windows change may still be saving its preference; writing the whole
+        // document over it now would race it.
+        if (_startupApply is { IsCompleted: false } pendingStartup)
+        {
+            try
+            {
+                await pendingStartup;
+            }
+            catch (Exception ex)
+            {
+                // The switch reports its own outcome; a fault there must not also fail this save.
+                TryLog(ex, "A Start with Windows change failed while a save waited for it.");
+            }
+        }
+
+        // Start with Windows is applied by its switch, never by Save. Save only adopts what Windows
+        // says now, so an untouched switch cannot undo a change made in Windows Settings at the
+        // next launch. Read before the grids are captured, so no await separates capturing the rows
+        // from writing them.
+        var observedStartup = await _startup.GetStatusAsync();
+        if (_closed)
+        {
+            return false;
+        }
+
         // Commit any in-progress grid edit first so validation sees the latest input.
         DictionaryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
         LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
 
         // Only validate and save the dictionary/snippets when the user actually changed them.
         // Pre-existing bad data in an untouched section (e.g. a duplicate entry that was loaded
-        // from disk) must never block saving a change made on a different page.
-        var dictionaryDirty = DictionarySignature() != _dictionarySnapshot;
-        var snippetsDirty = SnippetSignature() != _snippetSnapshot;
+        // from disk) must never block saving a change made on a different page. A section whose
+        // rows have not loaded yet has no changes by definition and is passed as null.
+        var dictionarySignature = DictionarySignature();
+        var snippetSignature = SnippetSignature();
+        var dictionaryDirty = _dictionaryLoad.HasChanges(dictionarySignature);
+        var snippetsDirty = _snippetLoad.HasChanges(snippetSignature);
 
         // Validate the dictionary before touching anything: a duplicate spoken form would violate
         // the unique index, and the user deserves a pointer to the offending row rather than a
@@ -4215,8 +4804,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return false;
         }
 
+        // A tray change still waiting on a hotkey recording is newer than the switch as shown, so it is what is saved.
+        var aiCleanupEnabled = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
         var azureValidation = AzureSettingsAccess.ValidateCleanup(
-            enabled: AiCleanupCheck.IsChecked == true,
+            enabled: aiCleanupEnabled,
             usesAzureProvider: SelectedProvider == CleanupProvider.AzureFoundry,
             signedIn: _azureSignInStatus.IsSignedIn,
             apiKey: SelectedAzureApiKey,
@@ -4278,13 +4869,19 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
             _settings.Profiles = BuildProfiles();
-            _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
+            // The enabled set is written from the library rows, so until they load it stays as
+            // stored; an unloaded list would otherwise switch every library off.
+            if (_libraryLoad.IsLoaded)
+            {
+                _settings.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
+            }
+
             _settings.DecodeThreads = (int)ThreadsSlider.Value;
             _settings.TranscriptionModelId =
                 ((TranscriptionModel?)TranscriptionModelCombo.SelectedItem)?.Id ??
                 TranscriptionModelCatalog.DefaultId;
 
-            _settings.EnableAiCleanup = AiCleanupCheck.IsChecked == true;
+            _settings.EnableAiCleanup = aiCleanupEnabled;
             _settings.AiCleanupProvider = SelectedProvider;
             _settings.AiCleanupModel =
                 NullIfBlank(AiModelBox.Text) ?? CleanupModelCatalog.DefaultAlias;
@@ -4338,80 +4935,41 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                     ? string.Empty
                     : localPrompt;
 
-            var requestedLaunch = LaunchCheck.IsChecked == true;
-            var startupChanged = _startupStatus is { IsKnown: true } shown &&
-                requestedLaunch != shown.IsEnabled;
-            var previousLaunchState = await _startup.GetStatusAsync();
-            if (_closed)
+            _settings.LaunchOnLogin = StartupPreference.Observed(observedStartup, _settings.LaunchOnLogin);
+
+            // With the window's intent for the AI cleanup switch, read before Saved() forgets it. Once the save commits, a
+            // tray change up to that intent is superseded. With no intent the stored switch is kept and _settings takes
+            // it, so the switch here shows what is stored rather than a value the settings no longer hold.
+            _settingsRepository.SaveBundle(_settings, entries, snippets, _externalAiCleanup.NewestRevision);
+            _settingsRecovered = false;
+            _externalAiCleanup.Saved();
+            if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
             {
-                return false;
+                ShowExternalAiCleanup(_settings.EnableAiCleanup);
             }
 
-            var launchState = previousLaunchState;
-            if (startupChanged)
-            {
-                if (!previousLaunchState.IsKnown)
-                {
-                    ShowStartupStatus(previousLaunchState);
-                    throw new InvalidOperationException(previousLaunchState.Message);
-                }
-
-                launchState = await _startup.SetEnabledAsync(requestedLaunch);
-                ShowStartupStatus(launchState);
-                if (!launchState.Matches(requestedLaunch))
-                {
-                    throw new InvalidOperationException(launchState.Message);
-                }
-            }
-
-            // An unchanged toggle must not undo an external Windows change, or block saving
-            // unrelated settings when startup registration is temporarily unavailable.
-            if (launchState.IsKnown)
-            {
-                _settings.LaunchOnLogin = launchState.IsEnabled;
-            }
-
-            try
-            {
-                if (_closed)
-                {
-                    throw new OperationCanceledException("Settings closed before the startup change could be saved.");
-                }
-
-                _settingsRepository.SaveBundle(_settings, entries, snippets);
-            }
-            catch
-            {
-                if (startupChanged && launchState.IsEnabled != previousLaunchState.IsEnabled)
-                {
-                    var restored = await _startup.SetEnabledAsync(previousLaunchState.IsEnabled);
-                    ShowStartupStatus(restored);
-                    if (!restored.Matches(previousLaunchState.IsEnabled))
-                    {
-                        _log.LogWarning("Could not restore the startup setting after a failed settings save.");
-                    }
-                }
-
-                if (previousLaunchState.IsKnown)
-                {
-                    _settings.LaunchOnLogin = previousLaunchState.IsEnabled;
-                }
-
-                throw;
-            }
-
-            ShowStartupStatus(launchState);
+            _startupSwitch.Show(observedStartup);
+            ShowStartupStatus(observedStartup);
             _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
-            // no-op; important now that Save keeps the window open for page-by-page editing.
-            _dictionarySnapshot = DictionarySignature();
-            _snippetSnapshot = SnippetSignature();
+            // no-op; important now that Save keeps the window open for page-by-page editing. Only
+            // what was actually written counts: a section passed as null did not change storage.
+            if (entries is not null)
+            {
+                _dictionaryLoad.MarkSaved(dictionarySignature);
+            }
+
+            if (snippets is not null)
+            {
+                _snippetLoad.MarkSaved(snippetSignature);
+            }
+
             return true;
         }
         catch (Exception ex) when (_closed)
         {
-            _log.LogWarning(ex, "Settings save did not complete before the window closed.");
+            _log.LogWarning("Settings save did not complete before the window closed ({Failure}).", FailureShape.Describe(ex));
             return false;
         }
         catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode == 19)
@@ -4450,9 +5008,53 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- Voice snippets --------------------------------------------------------------------
 
-    private void LoadSnippets()
+    private void InitializeSnippetList()
     {
-        foreach (var snippet in _snippets.GetAll())
+        SnippetList.ItemsSource = _snippetRows;
+        _snippetEmptyText = SnippetEmptyHint.Text;
+        SnippetEmptyHint.Text = "Loading snippets...";
+        SetSnippetsEditable(false);
+    }
+
+    // Same reason as the dictionary: an edit before the rows arrive would be saved as a deletion.
+    private void SetSnippetsEditable(bool editable)
+    {
+        SnippetList.IsEnabled = editable;
+        SnippetAddButton.IsEnabled = editable;
+        SnippetDeleteButton.IsEnabled = editable;
+    }
+
+    private async void LoadSnippetsAsync()
+    {
+        if (!_snippetLoad.TryBegin(SnippetSignature(), out var ticket))
+        {
+            return;
+        }
+
+        IReadOnlyList<Snippet> snippets;
+        try
+        {
+            snippets = await Task.Run(() => _snippets.GetAll());
+        }
+        catch (Exception ex)
+        {
+            if (_snippetLoad.Fail(ticket))
+            {
+                TryLog(ex, "Could not load snippets for Settings.");
+                SnippetEmptyHint.Text =
+                    "Couldn't load your snippets, so they can't be edited right now. Close Settings and open it again to retry.";
+            }
+
+            return;
+        }
+
+        if (!_snippetLoad.CanPublish(ticket))
+        {
+            return;
+        }
+
+        _snippetRows.Clear();
+        foreach (var snippet in snippets)
         {
             _snippetRows.Add(new SnippetRow
             {
@@ -4463,8 +5065,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             });
         }
 
-        SnippetList.ItemsSource = _snippetRows;
-        _snippetSnapshot = SnippetSignature();
+        _snippetLoad.Publish(ticket, SnippetSignature());
+        SnippetEmptyHint.Text = _snippetEmptyText;
+        SetSnippetsEditable(true);
     }
 
     private SnippetRow? SelectedSnippet => SnippetList.SelectedItem as SnippetRow;
@@ -4789,11 +5392,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
-            await SuggestWithAiAsync(current);
+            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current));
         }
         else
         {
-            SuggestWithMiner(current);
+            await RunDictionarySuggestionAsync(() => SuggestWithMinerAsync(current));
+        }
+    }
+
+    // The history read now runs off the UI thread, so the button has to stay off for the whole run
+    // or a second click would add every suggestion twice.
+    private async Task RunDictionarySuggestionAsync(Func<Task> suggest)
+    {
+        DictionarySuggestButton.ToolTip = null;
+        DictionarySuggestButton.IsEnabled = false;
+        DictionarySuggestBusy.Visibility = Visibility.Visible;
+        try
+        {
+            await suggest();
+        }
+        finally
+        {
+            if (!_closed)
+            {
+                DictionarySuggestBusy.Visibility = Visibility.Collapsed;
+                DictionarySuggestButton.IsEnabled = true;
+                DictionarySuggestButton.ToolTip =
+                    "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
+                    "a bounded text sample only after you confirm; otherwise Scribe scans locally.";
+            }
         }
     }
 
@@ -4802,11 +5429,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         List<HistoryEntry> history;
         try
         {
-            history = _history.GetRecent(1000).ToList();
+            history = await Task.Run(() => _history.GetRecent(1000).ToList());
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
+            if (!_closed)
+            {
+                ShowThemedMessage("Scribe", $"Could not read your history:\n{ex.Message}");
+            }
+
+            return;
+        }
+
+        // A dialog owned by a closed window throws, and this runs under an async void handler.
+        if (_closed)
+        {
             return;
         }
 
@@ -4819,23 +5456,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        DictionarySuggestButton.ToolTip = null;
-        DictionarySuggestButton.IsEnabled = false;
-        DictionarySuggestBusy.Visibility = Visibility.Visible;
         try
         {
             var response = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample);
+            if (_closed)
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(response))
             {
                 // The model was unavailable or returned nothing: fall back to the deterministic miner.
-                SuggestWithMiner(current, aiRanFirst: true);
+                await SuggestWithMinerAsync(current, aiRanFirst: true);
                 return;
             }
 
             var suggestions = AiDictionarySuggester.ParseSuggestions(response, current);
             if (suggestions.Count == 0)
             {
-                SuggestWithMiner(current, aiRanFirst: true);
+                await SuggestWithMinerAsync(current, aiRanFirst: true);
                 return;
             }
 
@@ -4847,28 +5486,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
-        }
-        finally
-        {
-            DictionarySuggestBusy.Visibility = Visibility.Collapsed;
-            DictionarySuggestButton.IsEnabled = true;
-            DictionarySuggestButton.ToolTip =
-                "Learn vocabulary from recent dictations. A configured remote AI provider receives " +
-                "a bounded text sample only after you confirm; otherwise Scribe scans locally.";
+            if (!_closed)
+            {
+                ShowThemedMessage("Scribe", $"Could not get AI suggestions:\n{ex.Message}");
+            }
         }
     }
 
-    private void SuggestWithMiner(IReadOnlyList<DictionaryEntry> current, bool aiRanFirst = false)
+    private async Task SuggestWithMinerAsync(IReadOnlyList<DictionaryEntry> current, bool aiRanFirst = false)
     {
         IReadOnlyList<DictionaryEntry> suggestions;
         try
         {
-            suggestions = DictionaryHistoryLearner.BuildEntries(_history.GetRecent(1000), current);
+            suggestions = await Task.Run(() => DictionaryHistoryLearner.BuildEntries(_history.GetRecent(1000), current));
         }
         catch (Exception ex)
         {
-            ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+            if (!_closed)
+            {
+                ShowThemedMessage("Scribe", $"Could not scan your history:\n{ex.Message}");
+            }
+
+            return;
+        }
+
+        if (_closed)
+        {
             return;
         }
 
@@ -5153,15 +5796,48 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // --- History --------------------------------------------------------------------------
 
-    private void LoadHistory()
+    private async void LoadHistory()
     {
-        _historyRows.Clear();
-        foreach (var entry in _history.GetRecent(200))
+        if (!_historyLoad.TryBegin(null, out var ticket))
         {
-            _historyRows.Add(HistoryRow.From(entry));
+            return;
+        }
+
+        IReadOnlyList<HistoryEntry> entries;
+        try
+        {
+            entries = await Task.Run(() => _history.GetRecent(200));
+        }
+        catch (Exception ex)
+        {
+            if (_historyLoad.Fail(ticket))
+            {
+                TryLog(ex, "Could not load dictation history for Settings.");
+                HistoryEmptyHint.Text = "Couldn't load your history. Close Settings and open it again to retry.";
+                HistoryEmptyHint.Visibility = Visibility.Visible;
+            }
+
+            return;
+        }
+
+        if (!_historyLoad.Publish(ticket, string.Empty))
+        {
+            return;
+        }
+
+        _historyRows.Clear();
+        foreach (var entry in entries)
+        {
+            var row = HistoryRow.From(entry);
+
+            // A rating still being written was read back before it landed; show the new value.
+            _historyRows.Add(_ratingWrites.IsPending(row.Id)
+                ? row with { Rating = _ratingWrites.Resolve(row.Id, row.Rating), RatingPending = true }
+                : row);
         }
 
         var hasRows = _historyRows.Count > 0;
+        HistoryEmptyHint.Text = _historyEmptyText;
         HistoryEmptyHint.Visibility = hasRows ? Visibility.Collapsed : Visibility.Visible;
         HistoryClearButton.IsEnabled = hasRows;
         UpdateHistorySelection();
@@ -5179,92 +5855,125 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UsageRefreshButton_Click(object sender, RoutedEventArgs e) => LoadUsage();
 
-    private async void LoadUsage()
+    /// <summary>
+    /// Recomputes the usage page for the selected period.
+    /// </summary>
+    /// <remarks>
+    /// Period changes, refresh clicks and dictionary adds can arrive faster than a full history read
+    /// and analysis completes. At most one computation runs; a request made meanwhile waits as the
+    /// only pending one, replacing any older pending request, and the running one is cancelled at its
+    /// next step because its answer is already stale. Only the newest request may publish, whether
+    /// it succeeded or failed, and nothing publishes after the window closes.
+    /// </remarks>
+    private void LoadUsage()
     {
-        const int historyLimit = 5000;
-        var loadVersion = Interlocked.Increment(ref _usageLoadVersion);
+        if (_closed)
+        {
+            return;
+        }
+
         var period = UsagePeriodBox.SelectedItem as UsagePeriodChoice ?? UsagePeriodChoice.All[1];
         UsageCoverageText.Text = "Calculating from local history…";
 
-        try
+        // The shown snapshot no longer matches the request, so the insight button must not send it.
+        _usageSnapshot = null;
+        RefreshUsageInsightAvailability();
+
+        if (_usageLoads.Submit(period) is { } work)
         {
-            var result = await Task.Run(() =>
+            RunUsageLoads(work);
+        }
+    }
+
+    private async void RunUsageLoads(CoalescedRequest<UsagePeriodChoice> first)
+    {
+        for (var work = first; work is not null; work = _usageLoads.Complete(work))
+        {
+            UsageReport.Result? result = null;
+            Exception? failure = null;
+            try
             {
+                var request = work;
                 var now = DateTimeOffset.UtcNow;
-                var recent = _history.GetRecent(historyLimit + 1);
-                var entries = recent.Take(historyLimit).ToList();
-                var since = period.Days is { } days
-                    ? now.AddDays(-(days - 1))
-                    : entries.Count == 0
-                        ? now
-                        : entries.Min(entry => entry.TimestampUtc);
-                var knownTerms = _dictionary.GetEnabled()
-                    .Concat(_libraries.GetEnabledLibraryEntries())
-                    .ToList();
-                var snapshot = UsageAnalyzer.Compute(entries, knownTerms, since, now);
-                var periodCapped = recent.Count > historyLimit &&
-                    (period.Days is null || recent[historyLimit].TimestampUtc >= since);
-                return (Snapshot: snapshot, PeriodCapped: periodCapped);
-            });
-
-            if (loadVersion != Volatile.Read(ref _usageLoadVersion))
+                result = await Task.Run(
+                    () => UsageReport.Build(
+                        _history, _dictionary, _libraries, request.Value.Days, now, request.Cancellation),
+                    request.Cancellation);
+            }
+            catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested)
             {
-                return;
+                // Superseded by a newer request, or the window closed. Nothing to show.
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
             }
 
-            _usageSnapshot = result.Snapshot;
-            var snapshot = _usageSnapshot;
-
-            UsageCoverageText.Text = result.PeriodCapped
-                ? $"{period.Label}, based on the latest {historyLimit:N0} retained dictations."
-                : $"{period.Label}, {_usageSnapshot.Dictations:N0} retained dictation" +
-                  (_usageSnapshot.Dictations == 1 ? "." : "s.");
-            UsageDictationsText.Text = snapshot.Dictations.ToString("N0");
-            UsageWordsText.Text = snapshot.Words.ToString("N0");
-            UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
-            UsageSpeechText.Text = FormatDuration(snapshot.Speech);
-            UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
-            UsageAppsGrid.ItemsSource = snapshot.TopApps;
-
-            var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
-            var trendRows = UsageTrendNormalizer.Normalize(snapshot.Trend)
-                .Select(point => new UsageTrendRow(
-                    weekly ? $"Week of {point.Trend.Start:MMM d}" : point.Trend.Start.ToString("MMM d"),
-                    point.Trend.Dictations,
-                    point.Trend.Words,
-                    point.RelativeHeight))
-                .ToList();
-            UsageTrendChart.ItemsSource = trendRows;
-            UsageTrendGrid.ItemsSource = trendRows;
-
-            var covered = snapshot.Terms.Where(term => term.Covered).ToList();
-            var novel = snapshot.Terms.Where(term => !term.Covered).ToList();
-            UsageKnownTerms.ItemsSource = covered.Count == 0
-                ? ["No recognized technologies in this period."]
-                : covered.Select(FormatUsageTerm).ToList();
-            UsageNovelEmptyHint.Visibility = novel.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            UsageNovelTerms.Visibility = novel.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-            UsageNovelTerms.ItemsSource = novel
-                .Select(term => new UsageTermRow(term.Text, term.Dictations))
-                .ToList();
-
-            UsageInsightText.Text = snapshot.Dictations == 0
-                ? "Record a dictation to make usage insight available."
-                : "Generate a short summary. Only totals and dictionary term labels are sent.";
-            RefreshUsageInsightAvailability();
-        }
-        catch (Exception ex)
-        {
-            if (loadVersion != Volatile.Read(ref _usageLoadVersion))
+            if (!_usageLoads.IsCurrent(work))
             {
-                return;
+                continue;
             }
 
-            _usageSnapshot = null;
-            UsageCoverageText.Text = "Usage is temporarily unavailable.";
-            UsageInsightText.Text = ex.Message;
-            UsageInsightButton.IsEnabled = false;
+            try
+            {
+                if (result is not null)
+                {
+                    ShowUsage(work.Value, result);
+                }
+                else if (failure is not null)
+                {
+                    ShowUsageFailure(failure);
+                }
+            }
+            catch (Exception ex)
+            {
+                TryLog(ex, "Could not show usage insights.");
+            }
         }
+    }
+
+    private void ShowUsage(UsagePeriodChoice period, UsageReport.Result result)
+    {
+        _usageSnapshot = result.Snapshot;
+        var snapshot = _usageSnapshot;
+
+        UsageCoverageText.Text = result.PeriodCapped
+            ? $"{period.Label}, based on the latest {UsageReport.HistoryLimit:N0} retained dictations."
+            : $"{period.Label}, {_usageSnapshot.Dictations:N0} retained dictation" +
+              (_usageSnapshot.Dictations == 1 ? "." : "s.");
+        UsageDictationsText.Text = snapshot.Dictations.ToString("N0");
+        UsageWordsText.Text = snapshot.Words.ToString("N0");
+        UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
+        UsageSpeechText.Text = FormatDuration(snapshot.Speech);
+        UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
+        UsageAppsGrid.ItemsSource = snapshot.TopApps;
+
+        var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
+        var trendRows = UsageTrendNormalizer.Normalize(snapshot.Trend)
+            .Select(point => new UsageTrendRow(
+                weekly ? $"Week of {point.Trend.Start:MMM d}" : point.Trend.Start.ToString("MMM d"),
+                point.Trend.Dictations,
+                point.Trend.Words,
+                point.RelativeHeight))
+            .ToList();
+        UsageTrendChart.ItemsSource = trendRows;
+        UsageTrendGrid.ItemsSource = trendRows;
+
+        var covered = snapshot.Terms.Where(term => term.Covered).ToList();
+        var novel = snapshot.Terms.Where(term => !term.Covered).ToList();
+        UsageKnownTerms.ItemsSource = covered.Count == 0
+            ? ["No recognized technologies in this period."]
+            : covered.Select(FormatUsageTerm).ToList();
+        UsageNovelEmptyHint.Visibility = novel.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UsageNovelTerms.Visibility = novel.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        UsageNovelTerms.ItemsSource = novel
+            .Select(term => new UsageTermRow(term.Text, term.Dictations))
+            .ToList();
+
+        UsageInsightText.Text = snapshot.Dictations == 0
+            ? "Record a dictation to make usage insight available."
+            : "Generate a short summary. Only totals and dictionary term labels are sent.";
+        RefreshUsageInsightAvailability();
 
         static string FormatDuration(TimeSpan duration) => duration.TotalHours >= 1
             ? $"{duration.TotalHours:0.#} hr"
@@ -5272,6 +5981,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         static string FormatUsageTerm(UsageAnalyzer.TermUsage term) =>
             $"{term.Text} ({term.Dictations:N0} dictation{(term.Dictations == 1 ? string.Empty : "s")})";
+    }
+
+    private void ShowUsageFailure(Exception failure)
+    {
+        _usageSnapshot = null;
+        UsageCoverageText.Text = "Usage is temporarily unavailable.";
+        UsageInsightText.Text = failure.Message;
+        UsageInsightButton.IsEnabled = false;
     }
 
     private async void UsageNovelTermAddButton_Click(object sender, RoutedEventArgs e)
@@ -5343,18 +6060,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var response = await _cleanup.CompleteAsync(
                 UsageInsight.SystemPrompt,
                 UsageInsight.BuildSummary(snapshot));
+            if (!InsightStillApplies(snapshot))
+            {
+                return;
+            }
+
             UsageInsightText.Text = UsageInsight.Parse(response)
                 ?? "The configured model did not return an insight.";
         }
         catch (Exception ex)
         {
+            if (!InsightStillApplies(snapshot))
+            {
+                return;
+            }
+
             UsageInsightText.Text = $"Insight failed: {ex.Message}";
         }
         finally
         {
             _usageInsightRunning = false;
-            RefreshUsageInsightAvailability();
+            if (!_closed)
+            {
+                RefreshUsageInsightAvailability();
+            }
         }
+    }
+
+    // An insight describes the snapshot it was asked about. Once the page has moved to another
+    // period or been refreshed, showing it would describe numbers that are no longer on screen.
+    private bool InsightStillApplies(UsageAnalyzer.Snapshot asked)
+    {
+        if (_closed)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(_usageSnapshot, asked))
+        {
+            return true;
+        }
+
+        if (_usageSnapshot is null)
+        {
+            UsageInsightText.Text =
+                "Usage changed while the insight was being generated. Generate it again once the page has updated.";
+        }
+
+        return false;
     }
 
     private HistoryRow? SelectedHistory => HistoryGrid.SelectedItem as HistoryRow;
@@ -5381,13 +6134,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// Records an opinion about one AI result, or clears it when the same thumb is pressed twice.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Stays local. This is a quality signal about a rewrite, never a rating of Scribe: Store policy
     /// requires an in-app rating OF THE APP to route to the Store's own mechanism regardless of
     /// sentiment, and treats sending positive sentiment to the Store while keeping negative
     /// sentiment private as a fraudulent practice. The Store rating action lives in About, is
     /// unconditional, and is deliberately not wired to these buttons.
+    /// </para>
+    /// <para>
+    /// The write runs off the UI thread and the row shows the new rating at once. The row's thumbs
+    /// stay off until the write finishes, the row is found again by id afterwards because the list
+    /// may have been reloaded, and a failed write puts the old rating back.
+    /// </para>
     /// </remarks>
-    private void RateHistoryRow(object sender, AiRating rating)
+    private async void RateHistoryRow(object sender, AiRating rating)
     {
         if (sender is not FrameworkElement { Tag: long id })
         {
@@ -5402,19 +6162,49 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Pressing the same thumb again clears it, so a misclick is undoable without a second
         // control explaining itself.
-        var next = _historyRows[index].Rating == rating ? AiRating.Unrated : rating;
-
-        try
+        var row = _historyRows[index];
+        var next = row.Rating == rating ? AiRating.Unrated : rating;
+        if (!_ratingWrites.TryBegin(id, row.Rating, next))
         {
-            _history.SetAiRating(id, next);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Could not save the rating for history entry {Id}.", id);
             return;
         }
 
-        _historyRows[index] = _historyRows[index] with { Rating = next };
+        _historyRows[index] = row with { Rating = next, RatingPending = true };
+
+        var saved = false;
+        try
+        {
+            await Task.Run(() => _history.SetAiRating(id, next));
+            saved = true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Could not save the rating for history entry {Id} ({Failure}).", id, FailureShape.Describe(ex));
+        }
+
+        var shown = _ratingWrites.Complete(id, saved);
+        if (_closed)
+        {
+            return;
+        }
+
+        var current = IndexOfHistoryRow(id);
+        if (current >= 0)
+        {
+            _historyRows[current] = _historyRows[current] with { Rating = shown, RatingPending = false };
+        }
+
+        // A refresh still running may have read this row before the write landed. It would publish
+        // the old rating now that nothing is pending, so it is restarted to read the new one.
+        if (saved && _historyLoad.Invalidate())
+        {
+            LoadHistory();
+        }
+
+        if (!saved)
+        {
+            ShowInfo("Couldn't save that rating. Try again.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
     }
 
     /// <summary>
@@ -5481,11 +6271,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             await Task.Run(() => _history.Delete(row.Id));
+            if (_closed)
+            {
+                return;
+            }
+
             LoadHistory();
             ShowInfo("Deleted the selected history entry.");
         }
         catch (Exception ex)
         {
+            if (_closed)
+            {
+                return;
+            }
+
             ShowInfo($"Couldn't delete the history entry: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
             UpdateHistorySelection();
         }
@@ -5506,11 +6306,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             await Task.Run(_history.Clear);
+            if (_closed)
+            {
+                return;
+            }
+
             LoadHistory();
             ShowInfo("Cleared dictation history.");
         }
         catch (Exception ex)
         {
+            if (_closed)
+            {
+                return;
+            }
+
             ShowInfo($"Couldn't clear history: {ex.Message}", Wpf.Ui.Controls.InfoBarSeverity.Error);
             HistoryClearButton.IsEnabled = _historyRows.Count > 0;
         }
@@ -5882,6 +6692,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         /// <summary>What the user said about the result, if anything.</summary>
         public AiRating Rating { get; init; } = AiRating.Unrated;
+
+        /// <summary>A rating write for this row is still running; its thumbs stay off until it lands.</summary>
+        public bool RatingPending { get; init; }
+
+        public bool CanRate => !RatingPending;
 
         /// <summary>Filled glyph when chosen, outline when not. Segoe MDL2 Assets.</summary>
         public string ThumbUpGlyph => Rating == AiRating.Useful ? "" : "";

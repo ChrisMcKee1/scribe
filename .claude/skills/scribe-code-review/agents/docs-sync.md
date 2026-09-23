@@ -71,7 +71,7 @@ staying silent. Line numbers below are hints and the file names are the anchors.
 | `docs/model-leaderboard.md` | The golden-suite benchmark report. Hand-written prose on top (revision notes, TL;DR table, key findings), machine-generated report body below. | `CleanupModelCatalog`, `CleanupPrompt`. |
 | `docs/gpt56-phonetic-benchmark.md` | A focused prompt A/B report, linked from the leaderboard header. | Prompt work. |
 | `docs/local-performance-benchmark.md` | A BenchmarkDotNet report. | `tools/Scribe.Benchmarks`. |
-| `docs/release-notes-*.md` | Historical per-release notes. Present for 0.2.19, 0.2.20, 0.3.1, 0.3.2, and 0.3.11 only. | Nothing reads them. See Exceptions. |
+| `docs/release-notes-*.md` | Historical per-release notes. Present for 0.2.19, 0.2.20, 0.3.1, 0.3.2, 0.3.11, 0.4.0 and 0.4.3 only. | No workflow or script reads them; `AGENTS.md` names the latest one under Releases. See Exceptions. |
 | `Scribe-0.2.x-Teams-Update.md` | A one-off historical announcement covering 0.2.1 to 0.2.15. | Nothing. See Exceptions. |
 
 Two verified couplings that make `PRIVACY.md` different in kind from the rest:
@@ -129,13 +129,13 @@ clipboard paragraph, say so in the finding: no 🔴-capped lens covered this sur
 | Policy claim | Kept true by |
 | --- | --- |
 | Microphone audio is never transmitted off the device. | `AGENTS.md` "Never": *"Send audio anywhere off the device."* |
-| Captured audio is held in memory and discarded unless audio history is enabled. | `AppSettings.StoreAudioHistory`, off by default; the `audio_blobs` table. |
-| Diagnostic logs never contain transcripts, dictionary entries, snippet contents, custom prompts, API keys, or service-principal secrets, and an endpoint appears only as configured or unset. | `SessionBanner.Presence(...)`, pinned by `SessionBannerTests.Banner_never_contains_a_secret`. |
-| Logs are kept for seven days, and the folder is size-limited so it cannot grow without bound. | `LogRetentionPolicy.DefaultRetentionDays = 7`, `DefaultDailyBudgetBytes` 16 MB, `DefaultTotalBudgetBytes` 64 MB. |
+| Captured audio is held in memory and discarded unless audio history is enabled, and stored recordings are kept at most seven days and 250 MB in total, oldest first. | `AppSettings.StoreAudioHistory`, off by default; the `audio_blobs` table; `StorageRetentionPolicy` and `StorageMaintenance`. |
+| Diagnostic logs never contain transcripts, dictionary entries, snippet contents, custom dictionary library names, custom prompts, API keys, or service-principal secrets, and an endpoint or Azure resource name appears only as configured or unset. | `SessionBanner.Presence(...)`, pinned by `SessionBannerTests.Banner_never_contains_a_secret`; the live-sink redaction in `DailyLogFile` through `HistoricalLogRedaction.RedactEntry`. |
+| Logs are kept for seven days, with soft size budgets of about 16 MB per day and 64 MB in total, and earlier versions' known leak formats are replaced in retained files and in the bundle. | `LogRetentionPolicy.DefaultRetentionDays = 7`, `DefaultDailyBudgetBytes` 16 MB, `DefaultTotalBudgetBytes` 64 MB; `HistoricalLogRedaction.KnownFormats`. |
 | "Save diagnostics" never includes `scribe.db`. | `DiagnosticsBundle.Create` enumerating through `ScribeLogFiles.Enumerate`. |
 | Clipboard writes Scribe performs itself are marked so Windows excludes them from clipboard history and cloud sync. | `Win32Clipboard.MarkPrivate`, writing `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`, and `CanUploadToCloudClipboard`. |
-| Scribe reads the previous clipboard only to restore it, and does not retain or transmit it. | `TextInjector` borrow and restore. |
-| Cleanup failure samples are shortened and pruned after approximately seven days. | `CleanupFailureLog.SampleMaxChars` (200) and its rolling one-week window. |
+| Scribe reads the previous clipboard only to restore it, does not retain or transmit it, and restores it only when the clipboard still holds what Scribe placed there. | `TextInjector` with `ClipboardBorrower` (the random receipt and the sequence-number check). |
+| Cleanup failure samples are shortened and deleted after seven days, whether or not later cleanups succeed. | `CleanupFailureLog.SampleMaxChars` (200); `StorageMaintenance`'s pass with `StorageRetentionPolicy.CleanupFailureRetentionDays = 7`. |
 | AI usage insight sends aggregate totals and dictionary-covered term labels, never transcripts, audio, focused application names, or timestamps. | `UsageInsight.BuildSummary` and its `Covered` check. |
 | AI dictionary suggestions send a bounded sample of recent transcript history. | `AiDictionarySuggester.BuildHistorySample`, bounded by `DefaultMaxSampleChars` (6000). |
 | Telemetry is sent only when the user sets `OTEL_EXPORTER_OTLP_ENDPOINT`. | `src/Scribe.App/Infrastructure/TelemetryRegistration.cs`. |
@@ -188,8 +188,9 @@ must move in the same PR.
 - Do not remove the `SQLitePCLRaw.bundle_e_sqlite3` pin (CVE-2025-6965), and bump
   `ScribeDatabase.ExpectedSqliteVersion` deliberately when the package moves.
 - Do not take hardware selection back from the Foundry Local SDK.
-- Do not remove the `virtualization:ExcludedDirectory` in `build/pack-msix.ps1`, the
-  `unvirtualizedResources` capability, or the `AppPaths` `VirtualizedRootDir` migration.
+- Do not re-add a `virtualization:ExcludedDirectory` or the `unvirtualizedResources` capability to
+  `build/pack-msix.ps1` (the Store denied it, and 0.3.13 removed it), and do not remove the `AppPaths`
+  probe behind `EffectiveRootDir` or the `VirtualizedRootDir` migration.
 - `store.yml` is handed off by `gh workflow run` at the end of `release.yml`, deliberately not by an
   `on: release` trigger, because events raised by `GITHUB_TOKEN` do not start new workflow runs.
 
@@ -213,7 +214,8 @@ change too:
 - **Releases & Velopack.** One Velopack channel per architecture (`win-x64` and `win-arm64`) so an
   install only ever receives updates built for its own silicon; version derived from
   `Directory.Build.props`; branding read from the project file rather than hardcoded in the pack
-  arguments.
+  arguments; the Velopack CLI (`vpk`) kept at the `Velopack` package version by
+  `scripts/Velopack-Cli.ps1`.
 - **Microsoft Store.** The identity values, which must match Partner Center exactly and live in
   `Directory.Build.props` (`StoreIdentityName`, `StoreProductDisplayName`, `StorePublisherDisplayName`);
   four-part MSIX versions with the revision reserved; the five repository secrets `store.yml` needs.
@@ -221,10 +223,11 @@ change too:
   pinning `PlatformTarget`; exactly one sherpa-onnx native package selected by `ScribeNativeRid`;
   the overlay built with a matching `-p:Platform=`; `scripts/Payload-Architecture.ps1` asserting
   payload purity at pack time.
-- **Tech stack versions.** The prose names `Microsoft.WindowsAppSDK` 2.2.0, sherpa-onnx 1.13.4, and
-  the deliberate `OpenAI` 2.12.0 hold, all of which are real values in `Directory.Packages.props`
-  today. A version move in that file that leaves the prose behind is a finding at 🟡, and it is also
-  an `Ask first` crossing that `merit` owns separately.
+- **Tech stack versions.** The prose names the Windows App SDK component packages at the 2.5.1
+  servicing level, sherpa-onnx 1.13.8, the .NET 10.0.12 libraries, and the deliberate `OpenAI` 2.12.0
+  hold, all of which are real values in `Directory.Packages.props` today. A version move in that file
+  that leaves the prose behind is a finding at 🟡, and it is also an `Ask first` crossing that `merit`
+  owns separately.
 
 **The `Ask first` list has a documentation half that is yours.** `merit` owns whether the crossing
 was flagged. You own whether the document that describes it moved:
@@ -358,7 +361,7 @@ This is the docs-only path, and it is where a review is most likely to wave a ch
 **Never** write a finding whose whole content is that a document is old, that a version number in
 prose is behind, or that a section "could be clearer". `AGENTS.md` closes the version case itself:
 *"Read `<VersionPrefix>` from that file rather than trusting a number quoted here; a version pinned
-in prose is stale the next time anyone ships."* The same reasoning covers its own "878 as of 0.3.8"
+in prose is stale the next time anyone ships."* The same reasoning covers its own "2695 as of 0.4.3"
 test-count line, which is an as-of stamp and not a claim of currency.
 
 **Never** assert that a build or a test will catch a doc-code disagreement. Nothing in this
@@ -426,8 +429,8 @@ Do not raise any of the following.
   behavior that a code change can falsify. Whether the UI honors it is `ui-shell-quality`'s question.
   Fire on `PRODUCT.md` only when the diff edits it and the edit contradicts `AGENTS.md` or
   `PRIVACY.md`.
-- **A missing release-notes file.** `docs/release-notes-*.md` exists for five versions only, nothing
-  reads them, and no workflow or script references them. A version bump does not owe one.
+- **A missing release-notes file.** `docs/release-notes-*.md` exists for a handful of versions only,
+  and no workflow or script references them. A version bump does not owe one.
 - **`Scribe-0.2.x-Teams-Update.md`.** A one-off announcement covering 0.2.1 to 0.2.15. It is a
   historical artifact and is not maintained.
 - **A version number quoted in prose.** `AGENTS.md` explicitly disclaims its own. `Directory.Build.props`

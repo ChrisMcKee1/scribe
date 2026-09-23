@@ -15,6 +15,7 @@ using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using FoundryConfiguration = Microsoft.AI.Foundry.Local.Configuration;
 using FoundryLogLevel = Microsoft.AI.Foundry.Local.LogLevel;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Scribe.Core.Cleanup;
 
@@ -42,7 +43,7 @@ namespace Scribe.Core.Cleanup;
 /// toggling the feature is safe at any time.
 /// </para>
 /// </summary>
-internal sealed class TextCleanupService : ITextCleanupService
+internal sealed partial class TextCleanupService : ITextCleanupService
 {
     // Cleanup is a quick rewrite of short text; cap latency and input size so a long paragraph or a
     // slow model can never stall the inject path. On any timeout we return the raw text. Azure gets a
@@ -177,21 +178,32 @@ internal sealed class TextCleanupService : ITextCleanupService
     internal const string TranscriptOpenTag = "<transcript>";
     internal const string TranscriptCloseTag = "</transcript>";
 
-    private static readonly Regex ThinkBlock =
-        new("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    /*
+     * Source-generated rather than RegexOptions.Compiled: a compiled regex is emitted and jitted the
+     * first time its class loads, which put tens of milliseconds on the first AI-cleaned dictation.
+     * The patterns and options are unchanged. One difference is deliberate: a generated regex matches
+     * case-insensitively with the invariant culture, where the fields it replaced took whatever
+     * culture was current when the class loaded. Under a Turkish or Azeri user culture that meant an
+     * ASCII "I" never matched the "i" in these English phrases, so "I'm sorry" and "Is it" went
+     * unrecognized; elsewhere the only difference is that U+0130 no longer counts as an "i".
+     */
+    [GeneratedRegex("<think>.*?</think>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex ThinkBlock { get; }
 
     // A model sometimes declines the rewrite and answers with a canned safety refusal ("I'm sorry, but
     // I cannot assist with that request.") instead of the cleaned text. Two intent families detect it:
     // an apology / AI-identity preamble at the very start, or an inability verb paired with a help
     // object anywhere. See LooksLikeRefusal / TrySanitize; a match is only acted on when the raw input
     // isn't phrased the same way, so genuine dictation of these words is preserved.
-    private static readonly Regex RefusalPreamble =
-        new(@"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|as a language model\b)",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"^\s*(?:i(?:'m| am)\s+(?:sorry|afraid)\b|i apologi[sz]e\b|my apologies\b|as an ai\b|as a language model\b)",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex RefusalPreamble { get; }
 
-    private static readonly Regex RefusalInability =
-        new(@"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"\b(?:can'?t|cannot|could\s*n'?t|unable to|not able to|won'?t|will not)\s+(?:assist|help|comply|fulfil|fulfill|provide|process|complete|continue)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex RefusalInability { get; }
 
     // Reply/answer guards (siblings of the refusal guards). A weaker model, a small Foundry Local
     // model especially, sometimes REPLIES to the transcript (answers a dictated question, acknowledges
@@ -201,51 +213,116 @@ internal sealed class TextCleanupService : ITextCleanupService
     // obeys the prompt and never trips these; the guard is the deterministic backstop for weaker ones.
     // See LooksLikeInventedReply. Each pattern is only acted on when the raw input isn't itself phrased
     // that way, so genuinely dictated affirmations, offers and questions are preserved.
-    private static readonly Regex ReplyOpener =
-        new(@"^\s*[""']?\s*(?:yes|yeah|yep|yup|sure\s+thing|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet|my\s+pleasure)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"^\s*[""']?\s*(?:yes|yeah|yep|yup|sure\s+thing|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet|my\s+pleasure)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ReplyOpener { get; }
 
     // The same affirmation/acknowledgement words anywhere in a message. Used as the valve for signal (2):
     // an opener in the model's output that appears nowhere in the raw input was invented by the model.
-    private static readonly Regex AffirmationAnywhere =
-        new(@"\b(?:yes|yeah|yep|yup|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"\b(?:yes|yeah|yep|yup|sure|absolutely|definitely|certainly|of\s+course|no\s+problem|nope|nah|no|okay|ok|alright|all\s+right|indeed|agreed|understood|got\s+it|sounds\s+good|will\s+do|affirmative|you\s+bet)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex AffirmationAnywhere { get; }
 
-    private static readonly Regex ReplyOffer =
-        new(@"\b(?:i\s+can\s+(?:help|assist)|i(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to|(?:happy|glad)\s+to\s+(?:help|assist)|how\s+(?:can|may)\s+i\s+(?:help|assist)|let\s+me\s+(?:help|assist)|i(?:'m|\s+am)\s+here\s+to\s+(?:help|assist)|is\s+there\s+anything\s+else\s+i)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"\b(?:i\s+can\s+(?:help|assist)|i(?:'d|\s+would)\s+be\s+(?:happy|glad)\s+to|(?:happy|glad)\s+to\s+(?:help|assist)|how\s+(?:can|may)\s+i\s+(?:help|assist)|let\s+me\s+(?:help|assist)|i(?:'m|\s+am)\s+here\s+to\s+(?:help|assist)|is\s+there\s+anything\s+else\s+i)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex ReplyOffer { get; }
 
     // Loose interrogative test: a trailing "?" or a leading question word/auxiliary. Only gates the
     // affirmation/terse signals below, which also require the output not to be a question, so occasional
     // imprecision here can never reject an ordinary cleaned sentence.
-    private static readonly Regex QuestionOpener =
-        new(@"^\s*(?:who|what|what'?s|when|where|why|how|how'?s|which|whose|whom|do|does|did|is|are|am|was|were|can|could|will|would|should|shall|may|might|have|has|had|must)\b",
-            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    [GeneratedRegex(
+        @"^\s*(?:who|what|what'?s|when|where|why|how|how'?s|which|whose|whom|do|does|did|is|are|am|was|were|can|could|will|would|should|shall|may|might|have|has|had|must)\b",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex QuestionOpener { get; }
 
     // Word tokens (letters/digits, inner apostrophes kept) for the terse-answer overlap check.
-    private static readonly Regex WordToken =
-        new(@"[\p{L}\p{Nd}]+(?:'[\p{L}\p{Nd}]+)*", RegexOptions.Compiled);
+    [GeneratedRegex(@"[\p{L}\p{Nd}]+(?:'[\p{L}\p{Nd}]+)*")]
+    private static partial Regex WordToken { get; }
 
     // Collapses an endpoint's multi-line error text into the single line a status pill can show.
-    private static readonly Regex WhitespaceRun = new(@"\s+", RegexOptions.Compiled);
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRun { get; }
 
     private readonly ILogger<TextCleanupService> _log;
+
+    // What the Foundry Local SDK logs through: _log, with the user profile folded out of the SDK's
+    // own raw exception text. See FoundrySdkLogger.
+    private readonly FoundrySdkLogger _foundrySdkLog;
     private readonly string _foundryDemotionsPath;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _initLock = new(1, 1);
 
+    // The one-time Foundry Local runtime creation (manager, execution providers, catalog). A gate of
+    // its own rather than _initLock, so a catalog read from the settings window never queues behind
+    // a model download that holds _initLock for minutes, while two first-time callers still cannot
+    // both register execution providers or publish a half-built runtime.
+    private readonly SemaphoreSlim _foundryRuntimeGate = new(1, 1);
+
+    // Cancelled when disposal starts. Every admitted operation links its own token to this one.
+    private readonly CancellationTokenSource _lifetime = new();
+
+    // Everything that may still be using a shared resource holds a lease from here, and disposal
+    // releases nothing until the last lease is returned. See DisposeAsync.
+    private readonly CleanupOperationTracker _operations = new();
+
+    private readonly IFoundryLocalHost _foundryHost;
+
+    // Null disarms storage reclaim entirely. Only the app's own instance (constructed with its real
+    // AppPaths) arms it; harnesses and tests that construct the service directly never delete files.
+    private readonly FoundryLocalStorage? _foundryStorage;
+
+    // The SDK's application data directory, from FoundryLocalStorage.ResolveAppDataDir. Configured on
+    // the first (and, the manager being a process-wide singleton, only) manager this process creates.
+    private readonly string? _foundryAppDataDir;
+
+    // Serializes the pending model-switch marker's file operations, so a clear that belongs to an
+    // earlier switch can never delete the marker a newer switch has just written. Narrow on purpose:
+    // it guards one small file and only ever nests _gate for a field read, never the reverse.
+    private readonly object _markerSync = new();
+
     private CleanupOptions _options = CleanupOptions.Disabled;
 
-    private CleanupStatus _status = CleanupStatus.Disabled;
-    private string? _statusDetail;
+    // What the most recent user-applied configuration selected, before any GPU demotion. The storage
+    // policy decides from the move between two of these. Guarded by _gate.
+    private FoundrySelection? _appliedSelection;
 
-    // Foundry Local runtime (shared across model switches once initialized).
-    private FoundryLocalManager? _manager;
+    // Bumped by every explicit Load or List of Foundry Local models. Deferred storage work records the
+    // value it was scheduled under and is dropped once it changes, so nothing queued before the user
+    // asked for a model can delete or unload what that request produced. Guarded by _gate.
+    private long _explicitUseEpoch;
+
+    // "Keep only the selected model", armed for this session because Foundry Local was the saved
+    // provider at startup. The persisted marker covers switches; this covers leftovers. Guarded by
+    // _markerSync, like the marker.
+    private bool _keepOnlySelectedArmed;
+
+    private CleanupStatus _status = CleanupStatus.Disabled;
+
+    // Two forms of the same status text. _statusDetail is for the settings window and may name the
+    // endpoint host or quote an endpoint's error; _statusReason is the diagnostics-safe form that
+    // may reach the log. See CleanupReason.
+    private string? _statusDetail;
+    private string? _statusReason;
+
+    // Foundry Local runtime (shared across model switches once initialized). The runtime and catalog
+    // are published once, under _gate, by EnsureFoundryRuntimeCoreAsync and EnsureFoundryCatalogAsync
+    // and read with Volatile.Read. The SDK keeps one manager per process and never lets it be
+    // created again, so switching away from Foundry Local unloads and stops it rather than disposing it.
+    private IFoundryLocalRuntime? _foundryRuntime;
     private ICatalog? _catalog;
+    private string[] _availableExecutionProviders = ["CPUExecutionProvider"];
+
+    // Web-service state, only touched under _initLock.
     private OpenAIClient? _openAiClient;
     private bool _managerReady;
-    private bool _epsRegistered;
-    private string[] _availableExecutionProviders = ["CPUExecutionProvider"];
+    private bool _webServiceStarted;
+
+    // The Foundry Local model the ready agent addresses, for the "keep only the selected model" pass.
+    private FoundryModelIdentity? _pendingFoundryInUse; // handoff from InitFoundryAsync (serialized by _initLock)
+    private FoundryModelIdentity? _foundryInUse;        // guarded by _gate
 
     // The active cleanup agent (Agent Framework). Rebuilt whenever the provider/model/endpoint
     // changes; null until initialization completes or after the feature is disabled.
@@ -266,12 +343,54 @@ internal sealed class TextCleanupService : ITextCleanupService
      * Microsoft.Agents.AI.GitHub.Copilot on every launch and undo the lazy loading that keeping the
      * references inside InitGitHubCopilotAsync exists to buy.
      */
-    private object? _copilotClientHandle;
+    private object? _copilotClientHandle; // guarded by _gate
     private readonly Dictionary<string, AIAgent> _styleAgents = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _configureCts;
+
+    /*
+     * Who owns the status, and the invariant that keeps it from ever getting stuck. Guarded by _gate.
+     *
+     * Initializing or Downloading on its own says nothing about whether anything will finish it. An
+     * initialization that a manual model load cancels stops without publishing anything, by design,
+     * and the status stays where it was. Every way this went wrong was a write landing after its writer
+     * had lost ownership: identical saves coalesced onto a run that no longer existed; a reserved
+     * initialization's first status was published after a load had cancelled it and written the
+     * terminal one; a superseded run's late failure made its successor's "in progress" look finished,
+     * so the load that interrupted the successor never restarted it. Each time, every later dictation
+     * skipped cleanup and nothing ever finished the status. The rules:
+     *
+     *  1. The generation names the status's owner. WriteStatusLocked, the only place the status is
+     *     written, accepts a write only on behalf of the current generation, so a writer that has lost
+     *     ownership cannot land anything, however late it runs.
+     *  2. Ownership changes only inside one _gate critical section that moves the generation and writes
+     *     the new owner's status in the same step: ReserveInitializationLocked for a path that starts an
+     *     initialization (a save, a restart, a rebuild), which also takes the lease and the token that
+     *     initialization will run on and observe; or a disable, a configuration that cannot run, or a
+     *     model eviction, each of which ends the generation with a terminal status. Only StatusChanged
+     *     is raised later, outside _gate and after the locks the decision was made under are released,
+     *     and it carries nothing.
+     *  3. Within a generation, the other writer is its initialization, identified by _initWriter while
+     *     it holds _initLock, so no manual load or unload decides anything underneath it. It raises its
+     *     own progress, outcome and Ready notifications outside _gate but before it releases _initLock.
+     *     An outside writer (a dictation whose evicted model would not reload) writes on behalf of the
+     *     generation it observed before acting.
+     *  4. A path that cancels a live initialization's token without taking ownership
+     *     (CancelPendingConfigure) takes over its outcome: it restarts it, or replaces it with what its
+     *     own load means (a rebuild, or a terminal status for an evicted model), unless something newer
+     *     has taken ownership first.
+     *
+     * So an "in progress" status is only ever written for a live generation, by the owner whose
+     * initialization holds the lease and observes the token, and every cancellation hands the terminal
+     * status to whoever cancelled.
+     */
+    private long _initGeneration;
+    private InitPhase _initPhase;
+
+    // The generation whose initialization holds _initLock, or 0 when none does. Guarded by _gate.
+    private long _initWriter;
+
     private int _lastReportedPct = -1;
-    private bool _disposed;
 
     // Benchmark-only escape hatch (Scribe.Evals, via InternalsVisibleTo): when set, replaces the
     // per-provider per-call cleanup timeout so the eval harness can measure a model's *true* rewrite
@@ -290,10 +409,78 @@ internal sealed class TextCleanupService : ITextCleanupService
     internal bool DisableRetries { get; set; }
     internal Action<UsageDetails>? UsageObserver { get; set; }
 
-    public TextCleanupService(ILogger<TextCleanupService> log, AppPaths? paths = null)
+    // Test-only: lets a test put a fake transport under every OpenAI client this service builds (the
+    // custom endpoint and Foundry Local's loopback client), so the privacy, lifetime and storage paths
+    // run against the real OpenAI client and agent without any network.
+    internal Action<OpenAIClientOptions>? OpenAIClientOptionsOverride { get; set; }
+
+    // Test-only: stands in for the provider-specific half of initialization (the Copilot CLI handshake,
+    // the Azure client construction) and returns the agent factory it would have built. Everything
+    // provider-agnostic around it (the readiness probe, publication, the prompt-only rebuild) still
+    // runs for real, so those paths are testable for every provider without the CLI or the network.
+    internal Func<CleanupOptions, CancellationToken, Task<Func<string, AIAgent>>>? ProviderFactoryForTesting { get; set; }
+
+    // Test-only: the most recently scheduled background storage work, so a test can wait for it
+    // deterministically instead of sleeping.
+    internal Task LastStorageWork { get; private set; } = Task.CompletedTask;
+
+    // Test-only: when set, deferred storage work waits for it before doing anything, so a test can
+    // queue work and then act before it runs.
+    internal Task? StorageWorkGateForTesting { get; set; }
+
+    // Test-only: runs once a manual load or unload has decided what its change of resident model means
+    // and released the init lock, before that decision is carried out, so a test can land a newer
+    // configuration in exactly that gap.
+    internal Action? ResidentChangeDecidedForTesting { get; set; }
+
+    // Test-only: stands in for the Copilot CLI session, so disposal's release of it is testable
+    // without the CLI. Anything IAsyncDisposable is released exactly like the real client.
+    internal object? CopilotSessionForTesting
     {
+        set
+        {
+            lock (_gate)
+            {
+                _copilotClientHandle = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// How long disposal waits for admitted operations before giving up on releasing the shared
+    /// resources they may still be using. Short, because the app waits on it while exiting; a
+    /// cooperative operation stops well inside it, and one that does not is left to process exit
+    /// rather than having its client, runtime or semaphore disposed underneath it.
+    /// </summary>
+    internal TimeSpan DisposalDrainTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>What the last disposal did. Test-only observability for the release-or-leak decision.</summary>
+    internal CleanupDisposalOutcome DisposalOutcome { get; private set; }
+
+    public TextCleanupService(ILogger<TextCleanupService> log, AppPaths? paths = null)
+        : this(
+            log,
+            paths,
+            new FoundryLocalSdkHost(),
+            paths is null ? null : FoundryLocalStorage.For(paths))
+    {
+    }
+
+    internal TextCleanupService(
+        ILogger<TextCleanupService> log,
+        AppPaths? paths,
+        IFoundryLocalHost foundryHost,
+        FoundryLocalStorage? foundryStorage)
+    {
+        var resolvedPaths = paths ?? new AppPaths();
         _log = log;
-        _foundryDemotionsPath = Path.Combine((paths ?? new AppPaths()).RootDir, "foundry-local-demotions.json");
+        _foundrySdkLog = new FoundrySdkLogger(log, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        _foundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, "foundry-local-demotions.json");
+        _foundryHost = foundryHost;
+        _foundryStorage = foundryStorage;
+
+        // The directory reclaim may delete under is, by construction, the one the SDK is told to use.
+        _foundryAppDataDir = foundryStorage?.AppDataDir ?? FoundryLocalStorage.ResolveAppDataDir(resolvedPaths);
     }
 
     public CleanupStatus Status
@@ -306,38 +493,106 @@ internal sealed class TextCleanupService : ITextCleanupService
         get { lock (_gate) { return _statusDetail; } }
     }
 
+    /// <summary>The diagnostics-safe form of <see cref="StatusDetail"/>.</summary>
+    internal string? StatusReason
+    {
+        get { lock (_gate) { return _statusReason; } }
+    }
+
     public event Action? StatusChanged;
+
+    public event Action<FoundryStorageReclaim>? FoundryStorageReclaimed;
 
     public void Configure(CleanupOptions options)
     {
-        if (_disposed)
+        ConfigureCore(options);
+    }
+
+    /// <summary>
+    /// Applies a configuration the user saved. Recovering an interrupted initialization does not
+    /// come through here (see <see cref="RestartCancelledConfigure"/>): the live options it re-runs
+    /// carry the demoted alias rather than the one the user saved, so they must never be read as the
+    /// user switching models.
+    /// </summary>
+    private void ConfigureCore(CleanupOptions? options)
+    {
+        if (_operations.IsClosed)
         {
             return;
         }
 
-        var effective = ApplyPersistedFoundryDemotion(Normalize(options ?? CleanupOptions.Disabled));
+        var requested = Normalize(options ?? CleanupOptions.Disabled);
+        var effective = ApplyPersistedFoundryDemotion(requested);
 
-        bool startInit = false;
+        // Read before _gate: the first read loads the Foundry Local assembly, and that is not work to
+        // do under the state lock. The flag only ever turns true, and a runtime this service created
+        // is seen through its own field inside the lock anyway.
+        var managerCreated = _foundryStorage is not null && _foundryHost.IsManagerCreated;
+
         bool nowDisabled = false;
         bool notActionable = false;
-        CancellationToken initToken = default;
+        bool promptRebuilt = false;
+        bool statusChanged = false;
+        Exception? rebuildFailure = null;
+        InitReservation? reservation = null;
+        CancellationTokenSource? superseded = null;
+        CleanupOperationTracker.Lease? storageLease = null;
+        var storagePlan = FoundryStoragePlan.Nothing;
+        long storageEpoch = 0;
 
         lock (_gate)
         {
+            if (_operations.IsClosed)
+            {
+                return;
+            }
+
             var sameConfig = _options == effective;
+            var promptOnly = !sameConfig && _options.MatchesIgnoringPrompt(effective);
             _options = effective;
 
             if (!effective.Enabled)
             {
-                _configureCts?.Cancel();
+                superseded = _configureCts;
+                var owner = NextGenerationLocked(InitPhase.Idle);
                 DropAgents();
+                statusChanged = WriteStatusLocked(owner, CleanupStatus.Disabled, null);
                 nowDisabled = true;
             }
             else if (!effective.IsActionable)
             {
-                _configureCts?.Cancel();
+                superseded = _configureCts;
+                var owner = NextGenerationLocked(InitPhase.Idle);
                 DropAgents();
+                statusChanged = WriteStatusLocked(owner, CleanupStatus.Unavailable, CleanupReason.Same(effective.Provider switch
+                {
+                    CleanupProvider.AzureFoundry => "Choose an Azure deployment to enable cleanup.",
+                    CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to enable cleanup.",
+                    _ => "Select a model to enable cleanup.",
+                }));
                 notActionable = true;
+            }
+            /*
+             * A change to what the prompt says, and nothing else, rebuilds the agent in place.
+             *
+             * Adding a dictionary term, enabling a library, or editing the writing style or a
+             * guardrail prompt all change the options, and each used to drop the agents and
+             * re-initialize the provider from scratch. For GitHub Copilot that is another twenty
+             * second CLI handshake with every dictation in it inserted raw; for Azure and custom
+             * endpoints a fresh readiness probe carrying the whole glossary. Nothing it talks to
+             * changed, so the factory the running initialization left behind builds the new default
+             * agent with no I/O, the same way CleanAsync builds a per-app writing style agent, and
+             * cleanup stays Ready throughout. Per-style agents are dropped because they carry the old
+             * prompt too. A prompt too long for a small local model now surfaces on the next cleanup
+             * as an ordinary failure with the raw-text fallback, instead of at a probe.
+             *
+             * Only while serving. During an initialization the options it will publish are the
+             * ones it started with, so a prompt change then still restarts it, as before, and a
+             * factory that throws falls back to the full restart.
+             */
+            else if (promptOnly && IsServingLocked() && TryRebuildAgentsLocked(effective, out rebuildFailure))
+            {
+                promptRebuilt = true;
             }
             /*
              * An identical save while initialization is already running is left alone.
@@ -348,51 +603,253 @@ internal sealed class TextCleanupService : ITextCleanupService
              * seconds apart, threw away the first attempt and started the clock again, and every
              * dictation in that window was skipped with "enabled but still starting".
              *
-             * Only the in-flight states are covered. A configuration that ended at Unavailable still
-             * re-initializes on an identical save, because there the repeat IS the retry, and a stuck
-             * init reaches Unavailable on its own probe timeout rather than blocking retries forever.
+             * Only a configuration that is serving, or whose initialization is actually live, is
+             * covered. A configuration that ended at Unavailable still re-initializes on an identical
+             * save, because there the repeat IS the retry. So does one left Initializing by a run that
+             * no longer exists (a manual model load cancelled it): coalescing on the status alone made
+             * that permanent, since nothing would ever finish it and no save could restart it.
              */
-            else if (!(sameConfig && _status is CleanupStatus.Ready
-                or CleanupStatus.Initializing or CleanupStatus.Downloading))
+            else if (!(sameConfig && (IsServingLocked() || IsInitializationLiveLocked())))
             {
-                _configureCts?.Cancel();
-                _configureCts = new CancellationTokenSource();
-                initToken = _configureCts.Token;
+                // Admitted here, under the same lock that closes admission, so the initialization
+                // is either tracked by disposal or never started at all.
+                if (ReserveInitializationLocked("Applying new settings…") is not { } reserved)
+                {
+                    return;
+                }
+
+                reservation = reserved;
+                superseded = reserved.Superseded;
+                statusChanged = reserved.StatusChanged;
                 // Drop the stale agents immediately so a dictation fired right after a save can never
                 // run against the previous provider/model/prompt; CleanAsync passes through raw text
                 // until the rebuilt agent is published, then the next call reflects the new settings.
                 DropAgents();
-                startInit = true;
             }
+
+            var previous = _appliedSelection;
+            var next = FoundrySelection.From(requested);
+            _appliedSelection = next;
+
+            if (_foundryStorage is not null)
+            {
+                storagePlan = FoundryStoragePolicy.OnSettingsApplied(
+                    previous, next, CurrentRuntimePresence(managerCreated));
+                if (storagePlan.Intent != FoundryStorageIntent.None)
+                {
+                    storageLease = _operations.TryEnter();
+                    storageEpoch = _explicitUseEpoch;
+                }
+            }
+        }
+
+        // Outside _gate: cancellation runs the token's callbacks synchronously on this thread, and a
+        // superseded initialization's continuations must never run inside this lock.
+        TryCancel(superseded);
+
+        if (storagePlan.KeepOnlySelected == FoundryKeepOnlySelected.Set)
+        {
+            // Recorded now rather than when the new model is in use, so a restart before then still
+            // deletes the model the user switched away from.
+            lock (_markerSync)
+            {
+                _foundryStorage!.WriteKeepOnlySelected(true);
+            }
+        }
+        else if (storagePlan.KeepOnlySelected == FoundryKeepOnlySelected.ArmThisSession)
+        {
+            // Before the initialization below starts, so its first Ready already sees it.
+            lock (_markerSync)
+            {
+                _keepOnlySelectedArmed = true;
+            }
+        }
+
+        if (storageLease is not null)
+        {
+            var plan = storagePlan;
+            var epoch = storageEpoch;
+            LastStorageWork = Task.Run(() => RunStorageIntentAsync(plan.Intent, epoch, storageLease));
+        }
+
+        if (statusChanged)
+        {
+            RaiseStatusChanged();
         }
 
         if (nowDisabled)
         {
-            SetStatus(CleanupStatus.Disabled, null);
             _log.LogInformation("AI cleanup disabled.");
             return;
         }
 
         if (notActionable)
         {
-            var detail = effective.Provider switch
-            {
-                CleanupProvider.AzureFoundry => "Choose an Azure deployment to enable cleanup.",
-                CleanupProvider.OpenAiCompatible => "Enter the endpoint URL and model name to enable cleanup.",
-                _ => "Select a model to enable cleanup.",
-            };
-            SetStatus(CleanupStatus.Unavailable, detail);
             return;
         }
 
-        if (startInit)
+        if (rebuildFailure is not null)
         {
-            // Reflect the reboot in the status pill and stop CleanAsync from serving the old agent
-            // (it gates on Ready) while the new provider/model spins up in the background.
-            SetStatus(CleanupStatus.Initializing, "Applying new settings…");
-            _log.LogInformation("AI cleanup enabled; preparing {Provider} in the background.", effective.Provider);
-            _ = Task.Run(() => InitializeAsync(effective, initToken));
+            LogProviderFailure(LogLevel.Warning, effective.Provider, rebuildFailure,
+                "Rebuilding the cleanup agent for a new prompt failed; re-initializing instead.");
         }
+
+        if (promptRebuilt)
+        {
+            _log.LogInformation(
+                "AI cleanup prompt changed; rebuilt the {Provider} agent in place without reconnecting.", effective.Provider);
+            return;
+        }
+
+        if (reservation is { } started)
+        {
+            // The status already reads "Applying new settings…", written when the initialization was
+            // reserved, so CleanAsync stops serving the old agent (it gates on Ready) while the new
+            // provider/model spins up in the background.
+            _log.LogInformation("AI cleanup enabled; preparing {Provider} in the background.", effective.Provider);
+            StartInitialization(effective, started);
+        }
+    }
+
+    // Must be called under _gate, while serving. Builds the default agent for a new prompt from the
+    // factory the running initialization left behind: pure object construction against the client it
+    // already connected, exactly what CleanAsync does for a per-app writing style. The agents it
+    // replaces are dropped, not disposed, as everywhere else: they share that client, and a dictation
+    // already holding one finishes on it.
+    private bool TryRebuildAgentsLocked(CleanupOptions options, out Exception? failure)
+    {
+        failure = null;
+        if (_agentFactory is not { } factory)
+        {
+            return false;
+        }
+
+        try
+        {
+            _agent = factory(BuildSystemPrompt(options));
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+            return false;
+        }
+
+        _styleAgents.Clear();
+        return true;
+    }
+
+    // Must be called under _gate. Moves ownership of the status to a new generation; see the invariant
+    // on _initGeneration.
+    private long NextGenerationLocked(InitPhase phase)
+    {
+        _initPhase = phase;
+        return ++_initGeneration;
+    }
+
+    // One initialization reserved by ReserveInitializationLocked, started after the caller releases _gate.
+    private readonly record struct InitReservation(
+        long Generation,
+        CancellationToken Token,
+        CleanupOperationTracker.Lease Lease,
+        CancellationTokenSource? Superseded,
+        bool StatusChanged);
+
+    /// <summary>
+    /// Reserves a new generation for an initialization and writes its first status, in one step under
+    /// <c>_gate</c>. Must be called under that lock, after the caller checked disposal has not begun.
+    /// <para>
+    /// This is the only way a path starts an initialization (see the invariant on
+    /// <c>_initGeneration</c>). The lease is admitted, the token created and the status written here,
+    /// so there is no moment in which the generation exists but its status still belongs to someone
+    /// else: a load that cancels it from here on finds its "in progress" status already in place and
+    /// takes over from that. Starting the initialization, cancelling the superseded token and raising
+    /// StatusChanged all wait until the caller has released <c>_gate</c> and any lock it decided under.
+    /// An initialization started after it was cancelled simply observes its token and returns its lease.
+    /// </para>
+    /// </summary>
+    private InitReservation? ReserveInitializationLocked(string firstStatus)
+    {
+        if (_operations.TryEnter() is not { } lease)
+        {
+            return null;
+        }
+
+        var superseded = _configureCts;
+        _configureCts = new CancellationTokenSource();
+        var generation = NextGenerationLocked(InitPhase.Live);
+        var statusChanged = WriteStatusLocked(generation, CleanupStatus.Initializing, CleanupReason.Same(firstStatus));
+        return new InitReservation(generation, _configureCts.Token, lease, superseded, statusChanged);
+    }
+
+    // Must be called under _gate. The configuration is up and serving dictations.
+    private bool IsServingLocked() => _status == CleanupStatus.Ready && _agent is not null;
+
+    // Must be called under _gate. An initialization is running for the current generation and will
+    // publish a terminal status itself. Initializing or Downloading alone does not mean that, and a
+    // run that has already published Unavailable but not yet returned does not count either, so an
+    // identical save straight after a failure is still the retry.
+    private bool IsInitializationLiveLocked() =>
+        _initPhase == InitPhase.Live && _status is CleanupStatus.Initializing or CleanupStatus.Downloading;
+
+    // Launches a reserved initialization. Its lease was admitted under _gate by the reservation and is
+    // returned by InitializeAsync when it finishes, however it finishes.
+    private void StartInitialization(CleanupOptions options, InitReservation reservation)
+    {
+        try
+        {
+            _ = Task.Run(() => InitializeAsync(options, reservation.Generation, reservation.Token, reservation.Lease));
+        }
+        catch (Exception)
+        {
+            reservation.Lease.Dispose();
+            throw;
+        }
+    }
+
+    private enum InitPhase
+    {
+        /// <summary>No initialization will publish a status: it is terminal, or nothing was started.</summary>
+        Idle,
+
+        /// <summary>The current generation's initialization is running and will publish a status.</summary>
+        Live,
+
+        /// <summary>
+        /// A manual model load cancelled the current generation before it published anything. That
+        /// load restarts it unless something newer takes over first.
+        /// </summary>
+        Interrupted,
+    }
+
+    private static void TryCancel(CancellationTokenSource? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        try
+        {
+            source.Cancel();
+        }
+        catch (Exception)
+        {
+            // Already disposed, or a registered callback threw. Neither may stop reconfiguration.
+        }
+    }
+
+    // How much of the Foundry Local runtime exists here. Reads only fields; managerCreated is the
+    // host's process-wide flag, read by the caller outside any lock.
+    private FoundryRuntimePresence CurrentRuntimePresence(bool managerCreated)
+    {
+        if (Volatile.Read(ref _catalog) is not null)
+        {
+            return FoundryRuntimePresence.CatalogLive;
+        }
+
+        return Volatile.Read(ref _foundryRuntime) is not null || managerCreated
+            ? FoundryRuntimePresence.ManagerOnly
+            : FoundryRuntimePresence.None;
     }
 
     // Must be called under _gate.
@@ -411,6 +868,14 @@ internal sealed class TextCleanupService : ITextCleanupService
             return CleanupResult.Skip(text);
         }
 
+        // Admission first: after disposal starts nothing may read the agent, and while this lease is
+        // held disposal will not release the client the agent talks through.
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return CleanupResult.Skip(text);
+        }
+
         AIAgent? agent;
         CleanupOptions options;
         lock (_gate)
@@ -421,15 +886,25 @@ internal sealed class TextCleanupService : ITextCleanupService
                 // Otherwise every later dictation silently skips a deployment that never became ready.
                 if (_options.Enabled && _status == CleanupStatus.Unavailable)
                 {
-                    return new CleanupResult(text, CleanupOutcome.Failed,
-                        _statusDetail ?? "AI cleanup is unavailable. Check AI cleanup settings and try again.");
+                    const string fallback = "AI cleanup is unavailable. Check AI cleanup settings and try again.";
+                    return new CleanupResult(text, CleanupOutcome.Failed, _statusReason ?? fallback)
+                    {
+                        DisplayDetail = _statusDetail ?? fallback,
+                    };
                 }
 
                 // Loading is not a failure, but the log should still explain why cleanup was skipped.
-                var reason = !_options.Enabled
-                    ? null
-                    : $"AI cleanup is enabled but {_status} ({StatusDetail}).";
-                return CleanupResult.Skip(text, reason);
+                // The pipeline logs and tags SkipReason, so it is built from the diagnostics-safe
+                // status: while connecting, the settings text names the endpoint host.
+                if (!_options.Enabled)
+                {
+                    return CleanupResult.Skip(text);
+                }
+
+                return CleanupResult.Skip(text, $"AI cleanup is enabled but {_status} ({_statusReason}).") with
+                {
+                    DisplayDetail = $"AI cleanup is enabled but {_status} ({_statusDetail}).",
+                };
             }
 
             agent = _agent;
@@ -468,10 +943,12 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         var builder = new StringBuilder(text.Length + 16);
         var failures = 0;
-        string? firstFailure = null;
+        CleanupReason? firstFailure = null;
         var reloadBudget = new ReloadBudget();
 
-        using var totalCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // The service lifetime is linked in so disposal stops an in-flight model call cooperatively
+        // instead of waiting out its full budget.
+        using var totalCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         var totalTimeout = CleanupTotalTimeoutOverride ??
             (CleanupTimeoutOverride is null ? TotalBudgetFor(options.Provider) : Timeout.InfiniteTimeSpan);
         if (totalTimeout != Timeout.InfiniteTimeSpan)
@@ -482,7 +959,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         for (var i = 0; i < chunks.Count; i++)
         {
             string cleanedChunk;
-            string? error;
+            CleanupReason? error;
             try
             {
                 (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token)
@@ -490,7 +967,14 @@ internal sealed class TextCleanupService : ITextCleanupService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                firstFailure ??= "AI cleanup exceeded the total time limit.";
+                // Shutting down is neither a failure nor a time-limit miss; the raw text is kept and
+                // nothing is flagged red for a dictation the app is abandoning anyway.
+                if (_lifetime.IsCancellationRequested)
+                {
+                    return CleanupResult.Skip(text, "AI cleanup stopped because Scribe is shutting down.");
+                }
+
+                firstFailure ??= CleanupReason.Same("AI cleanup exceeded the total time limit.");
                 failures += chunks.Count - i;
                 for (var remaining = i; remaining < chunks.Count; remaining++)
                 {
@@ -526,7 +1010,11 @@ internal sealed class TextCleanupService : ITextCleanupService
         // reported as a successful partial clean (no red flash, and a log entry claiming success).
         if (failures == chunks.Count)
         {
-            return new CleanupResult(text, CleanupOutcome.Failed, firstFailure ?? "AI cleanup failed.");
+            var failure = firstFailure ?? CleanupReason.Same("AI cleanup failed.");
+            return new CleanupResult(text, CleanupOutcome.Failed, failure.Diagnostic)
+            {
+                DisplayDetail = failure.Display,
+            };
         }
 
         if (overflowTail is not null)
@@ -547,30 +1035,43 @@ internal sealed class TextCleanupService : ITextCleanupService
         // usable, so record the partial degradation for the Settings log without flashing the hard-
         // failure overlay. Report every condition that applies so the log never implies the retained
         // segments all cleaned successfully when some of them actually failed.
-        string? partial = null;
         if (failures > 0 || overflowTail is not null)
         {
-            var parts = new List<string>(2);
-            if (failures > 0)
+            string Describe(string? firstFailureText)
             {
-                parts.Add($"{failures} of {chunks.Count} segments failed ({firstFailure})");
+                var parts = new List<string>(2);
+                if (failures > 0)
+                {
+                    parts.Add($"{failures} of {chunks.Count} segments failed ({firstFailureText})");
+                }
+
+                if (overflowTail is not null)
+                {
+                    parts.Add($"the remainder beyond the first {chunks.Count} segments was left raw");
+                }
+
+                return "Partial cleanup: " + string.Join("; ", parts) + ".";
             }
 
-            if (overflowTail is not null)
+            return new CleanupResult(combined, outcome, Describe(firstFailure?.Diagnostic))
             {
-                parts.Add($"the remainder beyond the first {chunks.Count} segments was left raw");
-            }
-
-            partial = "Partial cleanup: " + string.Join("; ", parts) + ".";
+                DisplayDetail = Describe(firstFailure?.Display),
+            };
         }
 
-        return new CleanupResult(combined, outcome, partial);
+        return new CleanupResult(combined, outcome);
     }
 
     public async Task<string?> CompleteAsync(
         string systemPrompt, string userMessage, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(systemPrompt) || string.IsNullOrWhiteSpace(userMessage))
+        {
+            return null;
+        }
+
+        using var lease = _operations.TryEnter();
+        if (lease is null)
         {
             return null;
         }
@@ -593,7 +1094,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         try
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
             cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
 
             var chatOptions = new ChatOptions { MaxOutputTokens = AuxiliaryCompletionMaxTokens };
@@ -618,15 +1119,93 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Auxiliary AI completion failed; returning null.");
+            LogProviderFailure(LogLevel.Warning, options.Provider, ex, "Auxiliary AI completion failed; returning null.");
             return null;
         }
+    }
+
+    /*
+     * Logs a failure that came back from a model provider.
+     *
+     * The file log writes an exception's ToString(), and provider exceptions embed the endpoint:
+     * HttpRequestException and SocketException append "(host:port)", and ClientResultException
+     * carries the server's error body verbatim. So every provider, Foundry Local included, is logged
+     * by its shape (see CleanupFailureShape) and never by the exception, which keeps Scribe's own
+     * lines to one rule. What Foundry Local's GPU to CPU demotion is diagnosed from survives in the
+     * shape as the classification and the execution-provider identifiers (DescribeFailureShape).
+     *
+     * The SDK's own log lines are a different stream: it logs its failures, raw exception text
+     * included, through the logger it is given. That is FoundrySdkLogger, which folds only the user
+     * profile. Microsoft's download hosts and the loopback port stay, because they are not user data
+     * and they are what makes an SDK download or startup failure diagnosable.
+     */
+    private void LogProviderFailure(LogLevel level, CleanupProvider provider, Exception exception, string message)
+    {
+        try
+        {
+            _log.Log(level, "{Message} ({Provider}; {Failure})", message, provider, DescribeFailureShape(exception));
+        }
+        catch (Exception)
+        {
+            // Logging must never turn a handled provider failure into an unhandled one.
+        }
+    }
+
+    /// <summary>
+    /// The diagnostics-safe shape of a provider failure, with this service's own classification of
+    /// what went wrong where it has one, and the execution providers a Foundry Local failure names.
+    /// Never throws.
+    /// </summary>
+    internal static string DescribeFailureShape(Exception? exception)
+    {
+        if (exception is null)
+        {
+            return CleanupFailureShape.Describe(null);
+        }
+
+        string? kind = null;
+        var executionProviders = string.Empty;
+        try
+        {
+            kind = exception switch
+            {
+                OperationCanceledException or TimeoutException => "timeout",
+                _ when IsModelNotLoaded(exception) => "model-not-loaded",
+                _ when IsGpuShaderIncompatibility(exception) => "gpu-shader",
+                _ when IsExecutionProviderUnavailable(exception) => "execution-provider-unavailable",
+                _ when IsConnectivityFailure(exception) => "connectivity",
+                _ => null,
+            };
+
+            // Identifiers only (CleanupFailureShape.SanitizeCode), never the text around them: these
+            // are what tell a missing CUDA provider apart from a broken WebGPU shader.
+            if (CleanupFailureShape.SanitizeCode(TryParseRequiredExecutionProvider(exception)) is { } required)
+            {
+                executionProviders += " requires=" + required;
+            }
+
+            var available = TryParseAvailableExecutionProviders(exception)
+                .Select(CleanupFailureShape.SanitizeCode)
+                .OfType<string>()
+                .Take(8)
+                .ToList();
+            if (available.Count > 0)
+            {
+                executionProviders += " available=" + string.Join(",", available);
+            }
+        }
+        catch (Exception)
+        {
+            // Classification is a bonus; the shape below is the part that must always be produced.
+        }
+
+        return CleanupFailureShape.Describe(exception, kind) + executionProviders;
     }
 
     // Cleans a single chunk. Returns the cleaned text and a null error on success, or the raw chunk and
     // a human-readable error when the model call throws, times out, or returns nothing usable. Never
     // throws; a failed segment falls back to its raw text so dictation is never lost.
-    private async Task<(string Text, string? Error)> CleanChunkAsync(
+    private async Task<(string Text, CleanupReason? Error)> CleanChunkAsync(
         AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
@@ -687,8 +1266,17 @@ internal sealed class TextCleanupService : ITextCleanupService
                 case ReloadOutcome.StillLoading:
                     attempt = attempt with
                     {
-                        Error = "The on-device cleanup model had been unloaded and is loading again. " +
-                                "This dictation used raw text; give it a moment and try again.",
+                        Error = CleanupReason.Same(
+                            "The on-device cleanup model had been unloaded and is loading again. " +
+                            "This dictation used raw text; give it a moment and try again."),
+                    };
+                    break;
+
+                case ReloadOutcome.Superseded:
+                    attempt = attempt with
+                    {
+                        Error = CleanupReason.Same(
+                            "AI cleanup settings changed during this dictation, so it used raw text."),
                     };
                     break;
             }
@@ -732,11 +1320,25 @@ internal sealed class TextCleanupService : ITextCleanupService
     // has to be rebuilt.
     private async Task<ReloadOutcome> TryReloadEvictedModelAsync(CleanupOptions options, CancellationToken ct)
     {
+        // A dictation that started before cleanup was switched off, or before the provider or model
+        // changed, must not load its old model back in. Unloading on "cleanup off" is exactly what
+        // evicts it, and reloading here would silently undo that.
+        long observed;
+        lock (_gate)
+        {
+            if (!_options.Enabled || _options != options)
+            {
+                return ReloadOutcome.Superseded;
+            }
+
+            observed = _initGeneration;
+        }
+
         _log.LogWarning(
             "Foundry Local evicted the cleanup model {Alias}; reloading it before falling back to raw text.",
             options.FoundryModelAlias);
 
-        var reloaded = await LoadFoundryModelAsync(options.FoundryModelAlias, progress: null, ct)
+        var reloaded = await LoadFoundryModelCoreAsync(options.FoundryModelAlias, progress: null, ct)
             .ConfigureAwait(false);
         if (reloaded)
         {
@@ -755,10 +1357,13 @@ internal sealed class TextCleanupService : ITextCleanupService
             return ReloadOutcome.StillLoading;
         }
 
-        // A genuine failure: drop the stale Ready status so Settings stops claiming cleanup works.
-        SetStatus(
+        // A genuine failure: drop the stale Ready status so Settings stops claiming cleanup works. On
+        // behalf of the generation this dictation checked before reloading: a save, a restart or a
+        // decision made since owns the status, and this failure says nothing about any of them.
+        PublishStatus(
+            observed,
             CleanupStatus.Unavailable,
-            $"The on-device model '{options.FoundryModelAlias}' was unloaded and could not be reloaded.");
+            CleanupReason.Same($"The on-device model '{options.FoundryModelAlias}' was unloaded and could not be reloaded."));
         return ReloadOutcome.Failed;
     }
 
@@ -770,6 +1375,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         StillLoading,
 
         Failed,
+
+        /// <summary>The configuration changed during the dictation, so its model is no longer wanted.</summary>
+        Superseded,
     }
 
     // One model call. Stalled is true only when this attempt's own budget expired, which is the
@@ -801,7 +1409,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
             if (string.IsNullOrWhiteSpace(result.Text))
             {
-                return new ChunkAttempt(chunk, "AI cleanup returned no text.", false, false);
+                return new ChunkAttempt(chunk, CleanupReason.Same("AI cleanup returned no text."), false, false);
             }
 
             // A non-empty answer can still be unusable (only a think-block, an empty fence, or an
@@ -813,7 +1421,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                 var reason = LooksLikeRefusal(result.Text)
                     ? "AI cleanup was declined by the model; used raw text."
                     : "AI cleanup returned unusable output.";
-                return new ChunkAttempt(chunk, reason, false, false);
+                return new ChunkAttempt(chunk, CleanupReason.Same(reason), false, false);
             }
 
             return new ChunkAttempt(cleaned, null, false, false);
@@ -826,17 +1434,17 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (OperationCanceledException ex)
         {
-            _log.LogDebug(ex, "AI cleanup timed out for a segment.");
-            return new ChunkAttempt(chunk, DescribeFailure(ex, options.Provider), true, false);
+            LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup timed out for a segment.");
+            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options.Provider), true, false);
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "AI cleanup failed for a segment; using raw text.");
-            return new ChunkAttempt(chunk, DescribeFailure(ex, options.Provider), false, IsModelNotLoaded(ex));
+            LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup failed for a segment; using raw text.");
+            return new ChunkAttempt(chunk, DescribeFailureReason(ex, options.Provider), false, IsModelNotLoaded(ex));
         }
     }
 
-    private readonly record struct ChunkAttempt(string Text, string? Error, bool Stalled, bool Evicted);
+    private readonly record struct ChunkAttempt(string Text, CleanupReason? Error, bool Stalled, bool Evicted);
 
     // Splits text into chunks no longer than <paramref name="targetChars"/>, breaking on the last
     // sentence-ending punctuation in the back of each window when possible, else the last whitespace,
@@ -919,79 +1527,94 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// Store build spent a week on "AI cleanup error: ClientResultException", which is the exception
     /// type and nothing else: no status, and none of the server's own explanation. The HTTP status and
     /// the endpoint's message are the highest-signal things we have, so they drive the text.
+    /// This is the settings-window form; see <see cref="DescribeFailureReason"/> for why there are two.
     /// </summary>
-    internal static string DescribeFailure(Exception ex, CleanupProvider provider)
+    internal static string DescribeFailure(Exception ex, CleanupProvider provider) =>
+        DescribeFailureReason(ex, provider).Display;
+
+    /// <summary>
+    /// The failure in both forms. The diagnostic form is the same fixed sentence without the
+    /// endpoint's own text: that text is whatever the server chose to send back, and servers
+    /// routinely quote the request URL, the host, a deployment name, or even part of the request, so
+    /// it is only ever shown, never logged or tagged.
+    /// </summary>
+    internal static CleanupReason DescribeFailureReason(Exception ex, CleanupProvider provider)
     {
         if (ex is OperationCanceledException or TimeoutException)
         {
-            return "AI cleanup timed out.";
+            return CleanupReason.Same("AI cleanup timed out.");
         }
 
         var status = ExtractHttpStatus(ex);
         var detail = DescribeServerMessage(ex);
 
+        // The endpoint's own message is appended where it adds something; it is empty often enough
+        // (a transport failure has no response body) that every branch has to survive without it.
+        CleanupReason WithDetail(string sentence) =>
+            new(sentence, string.IsNullOrEmpty(detail) ? sentence : sentence + " " + detail);
+
         if (IsModelNotLoaded(ex))
         {
             return provider == CleanupProvider.FoundryLocal
-                ? "The on-device cleanup model is no longer loaded in Foundry Local, and reloading it " +
-                  "failed. Something else likely evicted it (another app, or a model loaded from the " +
-                  "foundry CLI). Reopen Settings and load the model again."
-                : $"The endpoint reports that model is not loaded ({status}). {detail}".TrimEnd();
+                ? CleanupReason.Same(
+                    "The on-device cleanup model is no longer loaded in Foundry Local, and reloading it " +
+                    "failed. Something else likely evicted it (another app, or a model loaded from the " +
+                    "foundry CLI). Reopen Settings and load the model again.")
+                : WithDetail($"The endpoint reports that model is not loaded ({status}).");
         }
 
         if (IsGpuShaderIncompatibility(ex))
         {
             return provider == CleanupProvider.FoundryLocal
-                ? $"This model variant cannot run on this GPU. In Foundry Local, pick a CPU variant " +
-                  $"of the model and try again. {detail}".TrimEnd()
-                : $"This model variant cannot run on the endpoint GPU. Pick a CPU variant or use " +
-                  $"a different model variant. {detail}".TrimEnd();
+                ? WithDetail("This model variant cannot run on this GPU. In Foundry Local, pick a CPU variant " +
+                             "of the model and try again.")
+                : WithDetail("This model variant cannot run on the endpoint GPU. Pick a CPU variant or use " +
+                             "a different model variant.");
         }
 
         if (IsExecutionProviderUnavailable(ex))
         {
             return provider == CleanupProvider.FoundryLocal
-                ? $"This model variant requires an execution provider that is not available on this PC. " +
-                  $"Pick a different model in Settings. {detail}".TrimEnd()
-                : $"This model variant requires an execution provider that is not available on the endpoint. " +
-                  $"Pick a different model variant. {detail}".TrimEnd();
+                ? WithDetail("This model variant requires an execution provider that is not available on this PC. " +
+                             "Pick a different model in Settings.")
+                : WithDetail("This model variant requires an execution provider that is not available on the endpoint. " +
+                             "Pick a different model variant.");
         }
 
-        // The endpoint's own message is appended where it adds something; it is empty often enough
-        // (a transport failure has no response body) that every branch has to survive without it.
-        var described = status switch
+        return status switch
         {
-            400 => $"The AI endpoint rejected the request (400). {detail}",
+            400 => WithDetail("The AI endpoint rejected the request (400)."),
 
             401 or 403 => provider switch
             {
-                CleanupProvider.FoundryLocal => $"Foundry Local refused the request ({status}). {detail}",
-                CleanupProvider.AzureFoundry =>
+                CleanupProvider.FoundryLocal => WithDetail($"Foundry Local refused the request ({status})."),
+                CleanupProvider.AzureFoundry => WithDetail(
                     $"The AI endpoint rejected the Azure access ({status}). Check the sign-in and role " +
-                    $"assignment, then try again. {detail}",
-                _ => $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again.",
+                    "assignment, then try again."),
+                _ => CleanupReason.Same(
+                    $"The AI endpoint rejected the credentials ({status}). Check the API key, then try again."),
             },
 
             404 => provider == CleanupProvider.FoundryLocal
-                ? "Foundry Local no longer recognises the cleanup model (404). Reopen Settings and " +
-                  "pick the model again."
-                : $"The AI endpoint could not find that model (404). Check the model name. {detail}",
+                ? CleanupReason.Same(
+                    "Foundry Local no longer recognises the cleanup model (404). Reopen Settings and " +
+                    "pick the model again.")
+                : WithDetail("The AI endpoint could not find that model (404). Check the model name."),
 
-            429 => "The AI endpoint is throttling requests (429). Wait a moment and try again.",
+            429 => CleanupReason.Same("The AI endpoint is throttling requests (429). Wait a moment and try again."),
 
-            >= 500 => $"The AI endpoint returned a server error ({status}). This is usually transient. {detail}",
+            >= 500 => WithDetail($"The AI endpoint returned a server error ({status}). This is usually transient."),
 
             _ when IsConnectivityFailure(ex) => provider == CleanupProvider.FoundryLocal
-                ? "Couldn't reach Foundry Local. Make sure it is installed and running."
-                : "Couldn't reach the AI endpoint. Check the endpoint URL and your network.",
+                ? CleanupReason.Same("Couldn't reach Foundry Local. Make sure it is installed and running.")
+                : CleanupReason.Same("Couldn't reach the AI endpoint. Check the endpoint URL and your network."),
 
-            _ when status > 0 => $"The AI endpoint returned {status}. {detail}",
+            _ when status > 0 => WithDetail($"The AI endpoint returned {status}."),
 
             // Last resort. Still better than the bare type name: the message usually names the fault.
-            _ => $"AI cleanup error: {ex.GetType().Name}. {detail}",
+            // The type name alone is what the diagnostic form keeps; the message may embed a host.
+            _ => WithDetail($"AI cleanup error: {ex.GetType().Name}."),
         };
-
-        return described.TrimEnd();
     }
 
     /// <summary>
@@ -1001,24 +1624,10 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// response body is checked as well as the message: the message shape is a client-library detail,
     /// and losing this signal costs the reload that makes cleanup self-heal.
     /// </summary>
-    internal static bool IsModelNotLoaded(Exception? ex)
-    {
-        for (var current = ex; current is not null; current = current.InnerException)
-        {
-            if (MentionsUnloadedModel(current.Message) || MentionsUnloadedModel(ReadResponseBody(current)))
-            {
-                return true;
-            }
-
-            if (current is AggregateException aggregate &&
-                aggregate.InnerExceptions.Any(inner => IsModelNotLoaded(inner)))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    internal static bool IsModelNotLoaded(Exception? ex) =>
+        CleanupFailureShape.Walk(ex).Any(current =>
+            MentionsUnloadedModel(CleanupFailureShape.MessageOf(current)) ||
+            MentionsUnloadedModel(ReadResponseBody(current)));
 
     private static bool MentionsUnloadedModel(string? text) =>
         text?.Contains("is not loaded", StringComparison.OrdinalIgnoreCase) == true;
@@ -1046,51 +1655,23 @@ internal sealed class TextCleanupService : ITextCleanupService
                text.Contains("execution provider, which is not available", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsGpuShaderIncompatibility(Exception? ex)
-    {
-        for (var current = ex; current is not null; current = current.InnerException)
-        {
-            if (MentionsGpuShaderIncompatibility(current.Message) ||
-                MentionsGpuShaderIncompatibility(ReadResponseBody(current)))
-            {
-                return true;
-            }
+    // The same bounded walk as CleanupFailureShape: recursing into each aggregate's list and then
+    // carrying on down the same chain made the work exponential in the depth of a nested failure.
+    private static bool IsGpuShaderIncompatibility(Exception? ex) =>
+        CleanupFailureShape.Walk(ex).Any(current =>
+            MentionsGpuShaderIncompatibility(CleanupFailureShape.MessageOf(current)) ||
+            MentionsGpuShaderIncompatibility(ReadResponseBody(current)));
 
-            if (current is AggregateException aggregate &&
-                aggregate.InnerExceptions.Any(inner => IsGpuShaderIncompatibility(inner)))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsExecutionProviderUnavailable(Exception? ex)
-    {
-        for (var current = ex; current is not null; current = current.InnerException)
-        {
-            if (MentionsExecutionProviderUnavailable(current.Message) ||
-                MentionsExecutionProviderUnavailable(ReadResponseBody(current)))
-            {
-                return true;
-            }
-
-            if (current is AggregateException aggregate &&
-                aggregate.InnerExceptions.Any(inner => IsExecutionProviderUnavailable(inner)))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool IsExecutionProviderUnavailable(Exception? ex) =>
+        CleanupFailureShape.Walk(ex).Any(current =>
+            MentionsExecutionProviderUnavailable(CleanupFailureShape.MessageOf(current)) ||
+            MentionsExecutionProviderUnavailable(ReadResponseBody(current)));
 
     private static string? TryParseRequiredExecutionProvider(Exception? ex)
     {
-        for (var current = ex; current is not null; current = current.InnerException)
+        foreach (var current in CleanupFailureShape.Walk(ex))
         {
-            if (TryParseRequiredExecutionProvider(current.Message) is { } parsed)
+            if (TryParseRequiredExecutionProvider(CleanupFailureShape.MessageOf(current)) is { } parsed)
             {
                 return parsed;
             }
@@ -1131,9 +1712,9 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     private static string[] TryParseAvailableExecutionProviders(Exception? ex)
     {
-        for (var current = ex; current is not null; current = current.InnerException)
+        foreach (var current in CleanupFailureShape.Walk(ex))
         {
-            if (TryParseAvailableExecutionProviders(current.Message) is { Length: > 0 } parsed)
+            if (TryParseAvailableExecutionProviders(CleanupFailureShape.MessageOf(current)) is { Length: > 0 } parsed)
             {
                 return parsed;
             }
@@ -1263,82 +1844,46 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     public async Task<bool> ProbeAsync(CancellationToken cancellationToken = default)
     {
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return false;
+        }
+
         try
         {
-            if (!FoundryLocalManager.IsInitialized)
-            {
-                try
-                {
-                    await FoundryLocalManager.CreateAsync(CreateFoundryConfiguration(), _log, cancellationToken).ConfigureAwait(false);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Raced with another initializer; the singleton is already created.
-                }
-            }
-
-            _manager ??= FoundryLocalManager.Instance;
-            return _manager is not null;
+            // Creates the manager only. Execution providers are registered with the first catalog
+            // read, which this deliberately does not do, so a probe never downloads anything.
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            return await EnsureFoundryRuntimeAsync(linked.Token).ConfigureAwait(false) is not null;
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Foundry Local availability probe failed.");
+            _log.LogDebug("Foundry Local availability probe failed ({Failure}).", DescribeFailureShape(ex));
             return false;
         }
     }
 
     public async Task<IReadOnlyList<FoundryModelOption>> ListFoundryModelsAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed)
+        using var lease = _operations.TryEnter();
+        if (lease is null)
         {
             return Array.Empty<FoundryModelOption>();
         }
+
+        // Listing is the user setting Foundry Local up, and it downloads the hardware runtime.
+        NoteExplicitFoundryUse();
 
         try
         {
             // Listing only reads the catalog, so it deliberately does not take the init lock; that
             // way the picker stays responsive even while a model is downloading under InitializeAsync.
-            await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
-            if (_catalog is null)
-            {
-                return Array.Empty<FoundryModelOption>();
-            }
-
-            var all = await _catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-            var cached = await _catalog.GetCachedModelsAsync(cancellationToken).ConfigureAwait(false);
-            var loaded = await _catalog.GetLoadedModelsAsync(cancellationToken).ConfigureAwait(false);
-
-            var cachedAliases = new HashSet<string>(cached.Select(m => m.Alias), StringComparer.OrdinalIgnoreCase);
-            var loadedAliases = new HashSet<string>(loaded.Select(m => m.Alias), StringComparer.OrdinalIgnoreCase);
-
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var options = new List<FoundryModelOption>();
-            foreach (var model in all)
-            {
-                if (string.IsNullOrWhiteSpace(model.Alias) || !seen.Add(model.Alias))
-                {
-                    continue;
-                }
-
-                // Both the device type and the provider name come from the SDK. Deriving the device
-                // from the provider string would be a hand-maintained mirror of SDK state, and under
-                // WinML the provider set is extended by Windows Update, so a name we have never seen
-                // is an ordinary runtime condition rather than a theoretical one.
-                var runtime = model.Info?.Runtime;
-                options.Add(new FoundryModelOption(
-                    model.Alias,
-                    cachedAliases.Contains(model.Alias),
-                    loadedAliases.Contains(model.Alias),
-                    runtime?.ExecutionProvider,
-                    runtime?.DeviceType.ToString()));
-            }
-
-            // Loaded first, then downloaded, then the rest; alphabetical within each tier.
-            return options
-                .OrderByDescending(o => o.Loaded)
-                .ThenByDescending(o => o.Cached)
-                .ThenBy(o => o.Alias, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            var catalog = await EnsureFoundryCatalogAsync(linked.Token).ConfigureAwait(false);
+            return catalog is null
+                ? Array.Empty<FoundryModelOption>()
+                : await ReadFoundryModelOptionsAsync(catalog, linked.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1346,80 +1891,190 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Listing Foundry Local models failed.");
+            _log.LogDebug("Listing Foundry Local models failed ({Failure}).", DescribeFailureShape(ex));
             return Array.Empty<FoundryModelOption>();
         }
     }
 
+    public async Task<IReadOnlyList<FoundryModelOption>> ListFoundryModelsIfInitializedAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return Array.Empty<FoundryModelOption>();
+        }
+
+        // Only a catalog something else already initialized. Showing the settings page must never be
+        // the thing that downloads several gigabytes of execution providers.
+        if (Volatile.Read(ref _catalog) is not { } catalog)
+        {
+            return Array.Empty<FoundryModelOption>();
+        }
+
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            return await ReadFoundryModelOptionsAsync(catalog, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<FoundryModelOption>();
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("Listing Foundry Local models failed ({Failure}).", DescribeFailureShape(ex));
+            return Array.Empty<FoundryModelOption>();
+        }
+    }
+
+    private static async Task<IReadOnlyList<FoundryModelOption>> ReadFoundryModelOptionsAsync(
+        ICatalog catalog, CancellationToken cancellationToken)
+    {
+        var all = await catalog.ListModelsAsync(cancellationToken).ConfigureAwait(false);
+        var cached = await catalog.GetCachedModelsAsync(cancellationToken).ConfigureAwait(false);
+        var loaded = await catalog.GetLoadedModelsAsync(cancellationToken).ConfigureAwait(false);
+
+        var cachedAliases = new HashSet<string>(cached.Select(m => m.Alias), StringComparer.OrdinalIgnoreCase);
+        var loadedAliases = new HashSet<string>(loaded.Select(m => m.Alias), StringComparer.OrdinalIgnoreCase);
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var options = new List<FoundryModelOption>();
+        foreach (var model in all)
+        {
+            if (string.IsNullOrWhiteSpace(model.Alias) || !seen.Add(model.Alias))
+            {
+                continue;
+            }
+
+            // Both the device type and the provider name come from the SDK. Deriving the device
+            // from the provider string would be a hand-maintained mirror of SDK state, and under
+            // WinML the provider set is extended by Windows Update, so a name we have never seen
+            // is an ordinary runtime condition rather than a theoretical one.
+            var runtime = model.Info?.Runtime;
+            options.Add(new FoundryModelOption(
+                model.Alias,
+                cachedAliases.Contains(model.Alias),
+                loadedAliases.Contains(model.Alias),
+                runtime?.ExecutionProvider,
+                runtime?.DeviceType.ToString()));
+        }
+
+        // Loaded first, then downloaded, then the rest; alphabetical within each tier.
+        return options
+            .OrderByDescending(o => o.Loaded)
+            .ThenByDescending(o => o.Cached)
+            .ThenBy(o => o.Alias, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task<string?> GetLoadedFoundryModelAsync(CancellationToken cancellationToken = default)
     {
-        if (_disposed)
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return null;
+        }
+
+        // The runtime is in-process, so if this process never initialized it, nothing is loaded.
+        // Initializing it just to answer would download execution providers to report "none".
+        if (Volatile.Read(ref _catalog) is not { } catalog)
         {
             return null;
         }
 
         try
         {
-            await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
-            if (_catalog is null)
-            {
-                return null;
-            }
-
-            var loaded = await _catalog.GetLoadedModelsAsync(cancellationToken).ConfigureAwait(false);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+            var loaded = await catalog.GetLoadedModelsAsync(linked.Token).ConfigureAwait(false);
             return loaded.Count > 0 ? loaded[0].Alias : null;
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Reading the loaded Foundry Local model failed.");
+            _log.LogDebug("Reading the loaded Foundry Local model failed ({Failure}).", DescribeFailureShape(ex));
             return null;
         }
     }
 
-    public async Task<bool> LoadFoundryModelAsync(
+    public Task<bool> LoadFoundryModelAsync(
         string alias, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
-        if (_disposed || string.IsNullOrWhiteSpace(alias))
+        if (string.IsNullOrWhiteSpace(alias))
+        {
+            return Task.FromResult(false);
+        }
+
+        // Before anything else, so storage work already queued can no longer undo this load.
+        NoteExplicitFoundryUse();
+        return LoadFoundryModelCoreAsync(alias, progress, cancellationToken);
+    }
+
+    // An explicit Load or List. See _explicitUseEpoch.
+    private void NoteExplicitFoundryUse()
+    {
+        lock (_gate)
+        {
+            _explicitUseEpoch++;
+        }
+    }
+
+    // The load itself. The eviction reload calls this directly: reloading the configured model is not
+    // a user asking for one, so it must not cancel storage work the user's settings call for.
+    private async Task<bool> LoadFoundryModelCoreAsync(
+        string alias, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(alias))
         {
             return false;
         }
 
+        using var lease = _operations.TryEnter();
+        if (lease is null)
+        {
+            return false;
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        var ct = linked.Token;
+
         alias = alias.Trim();
         var acquired = false;
         var reconcile = false;
-        var cancelledConfigure = false;
+        long? cancelledGeneration = null;
+        long? interruptedGeneration = null;
         string[]? loadedIdentifiers = null;
         try
         {
             // An explicit Load must not queue behind a background readiness probe, which can hold
             // the lock for minutes on a large on-device model. Cancelling the in-flight
-            // initialization releases it promptly; the reconcile at the end of this method rebuilds
-            // the agent once the requested model is resident, so nothing is lost.
-            cancelledConfigure = CancelPendingConfigure();
+            // initialization releases it promptly; the resident-change decision at the end of this
+            // method rebuilds the agent once the requested model is resident, and otherwise the
+            // interrupted initialization is restarted, so nothing is lost.
+            (cancelledGeneration, interruptedGeneration) = CancelPendingConfigure();
 
             // Serialize with InitializeAsync and other load/unload calls so the runtime is never asked
             // to hold two models at once.
             progress?.Report("Starting Foundry Local…");
-            await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await _initLock.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
 
-            await EnsureManagerAsync(cancellationToken).ConfigureAwait(false);
-            if (_catalog is null)
+            await EnsureManagerAsync(ct).ConfigureAwait(false);
+            if (Volatile.Read(ref _catalog) is null)
             {
                 progress?.Report("Foundry Local could not be initialized.");
                 return false;
             }
 
-            var model = await ResolveFoundryModelAsync(alias, cancellationToken).ConfigureAwait(false);
+            var model = await ResolveFoundryModelAsync(alias, ct).ConfigureAwait(false);
             if (model is null)
             {
                 progress?.Report($"Model '{alias}' was not found in the Foundry catalog.");
                 return false;
             }
 
-            await UnloadOtherFoundryModelsAsync(model.Id, model.Alias, cancellationToken).ConfigureAwait(false);
+            await UnloadOtherFoundryModelsAsync(model.Id, model.Alias, ct).ConfigureAwait(false);
 
-            if (!await model.IsCachedAsync(cancellationToken).ConfigureAwait(false))
+            if (!await model.IsCachedAsync(ct).ConfigureAwait(false))
             {
                 _lastReportedPct = -1;
                 await model.DownloadAsync(p =>
@@ -1430,11 +2085,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                         _lastReportedPct = pct;
                         progress?.Report($"Downloading {alias}… {pct}%");
                     }
-                }, cancellationToken).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
             }
 
             progress?.Report($"Loading {alias}…");
-            await model.LoadAsync(cancellationToken).ConfigureAwait(false);
+            await model.LoadAsync(ct).ConfigureAwait(false);
             progress?.Report($"{alias} is loaded and ready.");
             loadedIdentifiers = [model.Id, model.Alias];
             reconcile = true;
@@ -1449,7 +2104,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Loading Foundry Local model {Alias} failed.", alias);
+            _log.LogWarning("Loading Foundry Local model {Alias} failed ({Failure}).", alias, DescribeFailureShape(ex));
 
             // "Make sure Foundry Local is installed" was reported for every failure, including the
             // common one where Foundry Local is plainly installed and running but selected a variant
@@ -1462,58 +2117,78 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         finally
         {
-            if (acquired)
+            // Decided before the init lock is released: until then no initialization, load or unload
+            // can change which model is resident, so the decision is made on the picture this load
+            // produced. Decided after, an initialization for a configuration saved meanwhile could
+            // load its own model and publish Ready first, and this load's stale "a different model
+            // was loaded" would then take down a configuration that was working.
+            ResidentChange change = default;
+            try
             {
-                _initLock.Release();
+                if (reconcile)
+                {
+                    change = DecideResidentChange(
+                        loadedAlias: alias,
+                        unloadedAlias: null,
+                        unloadedAll: false,
+                        loadedIdentifiers: loadedIdentifiers,
+                        cancelledGeneration: cancelledGeneration);
+                }
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    _initLock.Release();
+                }
             }
 
-            // Reconcile outside the init lock: loading a different model evicts the one cleanup was
-            // using, and reloading the configured model should turn cleanup back on.
-            var recovered = false;
             if (reconcile)
             {
-                recovered = ReconcileCleanupAfterResidentChange(
-                    loadedAlias: alias,
-                    unloadedAlias: null,
-                    unloadedAll: false,
-                    loadedIdentifiers: loadedIdentifiers,
-                    afterCancelledInit: cancelledConfigure);
+                ResidentChangeDecidedForTesting?.Invoke();
             }
 
+            var recovered = ApplyResidentChange(change);
+
             // Recovery keys off whether anything published a terminal status, not off whether the
-            // load succeeded. A load while cleanup points at a cloud provider returns from reconcile
-            // immediately, and a failed load never reconciles at all; both would otherwise leave
-            // cleanup stuck on "Applying new settings…" and silently emitting raw text.
-            if (cancelledConfigure && !recovered)
+            // load succeeded. A load while cleanup points at a cloud provider decides nothing, and a
+            // failed load never reconciles at all; both would otherwise leave cleanup stuck on
+            // "Applying new settings…" and silently emitting raw text. Only an initialization this
+            // load interrupted is restarted, and only while nothing newer owns the status.
+            if (interruptedGeneration is { } generation && !recovered)
             {
-                RestartCancelledConfigure();
+                RestartCancelledConfigure(generation);
             }
         }
     }
 
     public async Task<bool> UnloadFoundryModelAsync(string? alias, CancellationToken cancellationToken = default)
     {
-        if (_disposed)
+        using var lease = _operations.TryEnter();
+        if (lease is null)
         {
             return false;
         }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        var ct = linked.Token;
 
         var acquired = false;
         var reconcile = false;
         string? trimmed = null;
         try
         {
-            await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await _initLock.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
 
-            await EnsureCatalogAsync(cancellationToken).ConfigureAwait(false);
-            if (_catalog is null)
+            // Never initializes: a runtime this process never started has nothing loaded in it.
+            if (Volatile.Read(ref _catalog) is not { } catalog)
             {
                 return false;
             }
 
             trimmed = alias?.Trim();
-            var loaded = await _catalog.GetLoadedModelsAsync(cancellationToken).ConfigureAwait(false);
+            var loaded = await catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false);
             var unloadedAny = false;
             foreach (var model in loaded)
             {
@@ -1524,7 +2199,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     continue;
                 }
 
-                await model.UnloadAsync(cancellationToken).ConfigureAwait(false);
+                await model.UnloadAsync(ct).ConfigureAwait(false);
                 unloadedAny = true;
             }
 
@@ -1537,21 +2212,35 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Unloading Foundry Local model {Alias} failed.", alias);
+            _log.LogWarning("Unloading Foundry Local model {Alias} failed ({Failure}).", alias, DescribeFailureShape(ex));
             return false;
         }
         finally
         {
-            if (acquired)
+            // Decided under the init lock for the same reason as a load's: see LoadFoundryModelCoreAsync.
+            ResidentChange change = default;
+            try
             {
-                _initLock.Release();
+                if (reconcile)
+                {
+                    change = DecideResidentChange(
+                        loadedAlias: null, unloadedAlias: trimmed, unloadedAll: string.IsNullOrWhiteSpace(trimmed));
+                }
+            }
+            finally
+            {
+                if (acquired)
+                {
+                    _initLock.Release();
+                }
             }
 
             if (reconcile)
             {
-                ReconcileCleanupAfterResidentChange(
-                    loadedAlias: null, unloadedAlias: trimmed, unloadedAll: string.IsNullOrWhiteSpace(trimmed));
+                ResidentChangeDecidedForTesting?.Invoke();
             }
+
+            ApplyResidentChange(change);
         }
     }
 
@@ -1559,14 +2248,14 @@ internal sealed class TextCleanupService : ITextCleanupService
     // Best-effort: a failure to unload one model never blocks loading the requested one.
     private async Task UnloadOtherFoundryModelsAsync(string keepId, string keepAlias, CancellationToken ct)
     {
-        if (_catalog is null)
+        if (Volatile.Read(ref _catalog) is not { } catalog)
         {
             return;
         }
 
         try
         {
-            var loaded = await _catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false);
+            var loaded = await catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false);
             foreach (var other in loaded)
             {
                 if (string.Equals(other.Id, keepId, StringComparison.OrdinalIgnoreCase) ||
@@ -1582,89 +2271,168 @@ internal sealed class TextCleanupService : ITextCleanupService
                 }
                 catch (Exception ex)
                 {
-                    _log.LogDebug(ex, "Could not unload Foundry model {Alias}.", other.Alias);
+                    _log.LogDebug("Could not unload Foundry model {Alias} ({Failure}).", other.Alias, DescribeFailureShape(ex));
                 }
             }
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not enumerate loaded Foundry models.");
+            _log.LogDebug("Could not enumerate loaded Foundry models ({Failure}).", DescribeFailureShape(ex));
         }
     }
 
-    // After a manual load/unload changes which Foundry Local model is resident, keep the cleanup agent
-    // honest: drop it (and surface a clear status) when its configured model was just evicted so
-    // CleanAsync can't call an unloaded model, and rebuild it when the configured model is loaded back
-    // in, all without forcing a settings save. No-op for Azure or disabled cleanup. Must be called
-    // WITHOUT holding _initLock, because a rebuild starts a background InitializeAsync that takes it.
     /// <summary>
-    /// Cancels an initialization already in flight and reports whether it did. Used when an
-    /// explicit user action must take the init lock without waiting out a probe.
+    /// Cancels an initialization already in flight. Used when an explicit user action must take the
+    /// init lock without waiting out a probe.
     /// <para>
-    /// The caller must pass the result to <see cref="ReconcileCleanupAfterResidentChange"/> as
-    /// <c>forceRebuild</c>. <see cref="InitializeAsync"/> swallows cancellation on the assumption
-    /// that a newer Configure owns the status from then on, which is true when Configure cancels
-    /// but not here: nothing else would move the status off Initializing, and the reconcile refuses
-    /// to rebuild while it reads Initializing, so cleanup would sit there forever.
+    /// <c>Cancelled</c> is the generation that was current when this call cancelled a configuration
+    /// token, which may belong to a run that had already finished; the resident-change decision
+    /// treats the status as stale only while that generation is still the current one.
+    /// <c>Interrupted</c> is the generation whose live initialization this call stopped before it
+    /// could publish anything. <see cref="InitializeAsync"/> treats cancellation as someone else
+    /// taking over the status, which is true when Configure or disposal cancels but not here, so
+    /// the caller must pass that generation to <see cref="RestartCancelledConfigure"/> unless its
+    /// own resident-change decision published a status instead.
     /// </para>
     /// </summary>
-    private bool CancelPendingConfigure()
+    private (long? Cancelled, long? Interrupted) CancelPendingConfigure()
     {
+        CancellationTokenSource? pending;
+        long? cancelled = null;
+        long? interrupted = null;
         lock (_gate)
         {
             if (_configureCts is { IsCancellationRequested: false } cts)
             {
-                cts.Cancel();
-                return true;
+                pending = cts;
+                cancelled = _initGeneration;
+            }
+            else
+            {
+                pending = null;
             }
 
-            return false;
+            // Marked under the lock, before the token is cancelled, so an identical save that lands
+            // from here on starts again rather than coalescing onto a run that is about to stop.
+            if (_initPhase == InitPhase.Live)
+            {
+                _initPhase = InitPhase.Interrupted;
+                interrupted = _initGeneration;
+            }
         }
+
+        // Outside _gate: the cancelled initialization's continuations can run inline on this thread.
+        TryCancel(pending);
+        return (cancelled, interrupted);
     }
 
     /// <summary>
-    /// Re-runs the configuration that <see cref="CancelPendingConfigure"/> interrupted. Configure
-    /// restarts initialization whenever the current status is anything but Ready, so passing the
-    /// live options back through it recovers an interrupted run; when the status is already Ready
-    /// (the cancelled token belonged to a run that had finished) it correctly does nothing.
+    /// Restarts the initialization that <see cref="CancelPendingConfigure"/> interrupted, from the
+    /// live options, unless something newer owns the status by now.
+    /// <para>
+    /// Decided in one step under the lock, so it can never supersede a newer configuration: a save,
+    /// a reconcile or another restart has moved the generation on, disposal has closed admission,
+    /// or the interrupted run published a terminal status of its own before it stopped. Anything
+    /// read outside the lock could be overtaken before it was acted on, which is how a recovery
+    /// would put back a configuration the user had just replaced or turned off.
+    /// </para>
     /// </summary>
-    private void RestartCancelledConfigure()
+    private void RestartCancelledConfigure(long interruptedGeneration)
     {
         CleanupOptions options;
+        InitReservation reservation;
+
         lock (_gate)
         {
+            if (_operations.IsClosed ||
+                _initGeneration != interruptedGeneration ||
+                _initPhase != InitPhase.Interrupted)
+            {
+                return;
+            }
+
+            // Reliable because every reservation writes its first status in the same step: an
+            // interrupted generation reads "in progress" unless its initialization published an
+            // outcome of its own before it stopped.
             options = _options;
+            if (_status is not (CleanupStatus.Initializing or CleanupStatus.Downloading) ||
+                !options.Enabled || !options.IsActionable)
+            {
+                // Terminal already: nothing is left in progress for a restart to finish.
+                _initPhase = InitPhase.Idle;
+                return;
+            }
+
+            // Same admission rule as Configure: tracked by disposal, or never started.
+            if (ReserveInitializationLocked("Resuming AI cleanup setup…") is not { } reserved)
+            {
+                return;
+            }
+
+            reservation = reserved;
+            DropAgents();
         }
 
-        if (options.Enabled && options.IsActionable)
+        TryCancel(reservation.Superseded);
+        if (reservation.StatusChanged)
         {
-            Configure(options);
+            RaiseStatusChanged();
         }
+
+        _log.LogInformation(
+            "Restarting the {Provider} cleanup initialization that a manual model load interrupted.", options.Provider);
+        StartInitialization(options, reservation);
     }
 
-    private bool ReconcileCleanupAfterResidentChange(
+    // What a manual load or unload means for the cleanup agent: drop it (with a clear status) when its
+    // configured model was just evicted, so CleanAsync cannot call an unloaded model, or rebuild it when
+    // the configured model is loaded back in, all without a settings save. Decided by
+    // DecideResidentChange and carried out by ApplyResidentChange.
+    private enum ResidentChangeKind
+    {
+        None,
+        Invalidate,
+        Rebuild,
+    }
+
+    // A decided resident change. Its status was written when it was decided, in the same step; what is
+    // left is the notification and, for a rebuild, starting the initialization it reserved.
+    private readonly record struct ResidentChange(
+        ResidentChangeKind Kind,
+        bool StatusChanged,
+        CleanupOptions? Options = null,
+        InitReservation? Reservation = null);
+
+    /// <summary>
+    /// Decides what a manual load or unload means for the cleanup agent. No-op for other providers
+    /// and for disabled cleanup.
+    /// <para>
+    /// Must be called holding <see cref="_initLock"/>, before the caller releases it: every change of
+    /// which model is resident happens under that lock, so only then does the picture the caller
+    /// produced still describe the runtime. The decision takes ownership of the status and writes it
+    /// in the same step (see the invariant on <c>_initGeneration</c>). Cancelling a superseded token,
+    /// raising StatusChanged and starting a rebuild's initialization wait for
+    /// <see cref="ApplyResidentChange"/>, once <c>_gate</c> and the init lock are released.
+    /// </para>
+    /// </summary>
+    private ResidentChange DecideResidentChange(
         string? loadedAlias,
         string? unloadedAlias,
         bool unloadedAll,
         IReadOnlyCollection<string>? loadedIdentifiers = null,
-        bool afterCancelledInit = false)
+        long? cancelledGeneration = null)
     {
-        if (_disposed)
-        {
-            return false;
-        }
-
-        var invalidate = false;
-        var rebuild = false;
-        var options = CleanupOptions.Disabled;
-        CancellationToken initToken = default;
-
         lock (_gate)
         {
-            options = _options;
+            if (_operations.IsClosed)
+            {
+                return default;
+            }
+
+            var options = _options;
             if (options.Provider != CleanupProvider.FoundryLocal || !options.Enabled || !options.IsActionable)
             {
-                return false;
+                return default;
             }
 
             var active = options.FoundryModelAlias;
@@ -1684,51 +2452,94 @@ internal sealed class TextCleanupService : ITextCleanupService
             var evicted = unloadedAll || Matches(unloadedAlias) || (loadedAlias is not null && !MatchesLoaded());
             var nowResident = MatchesLoaded();
 
-            // Normally an agent-less state means some other path already owns the status. That is
-            // not true after this caller cancelled an initialization: the agent was dropped and the
-            // status left on Initializing by a run that no longer exists, so both branches have to
-            // treat that as stale rather than as somebody else's business.
+            // Normally an agent-less state means some other path already owns the status. That is not
+            // true after this caller cancelled the current configuration's token: the agent was dropped
+            // and the status left on Initializing by a run that no longer exists, so the eviction has to
+            // treat that as stale rather than as somebody else's business. Only while that generation is
+            // still the current one, though: a configuration saved since owns the status, and its own
+            // initialization, queued behind this caller, decides what ends up resident. A rebuild asks
+            // the direct question instead: is a live initialization going to publish an agent? Anything
+            // else (an interrupted run, a terminal status, a status nothing is finishing) is stale.
+            var afterCancelledInit = cancelledGeneration == _initGeneration;
             if (evicted && (_agent is not null || afterCancelledInit))
             {
+                // Ends the current generation with a terminal status, so a restart still pending on it
+                // (another load that interrupted it) finds it taken over.
+                var owner = NextGenerationLocked(InitPhase.Idle);
                 DropAgents();
-                invalidate = true;
+                return new ResidentChange(
+                    ResidentChangeKind.Invalidate,
+                    WriteStatusLocked(owner, CleanupStatus.Unavailable, CleanupReason.Same(
+                        "The on-device cleanup model was unloaded. Reload it to turn cleanup back on.")));
             }
-            else if (nowResident && _agent is null &&
-                     (afterCancelledInit ||
-                      _status is not (CleanupStatus.Ready or CleanupStatus.Initializing or CleanupStatus.Downloading)))
+
+            if (nowResident && _agent is null && _initPhase != InitPhase.Live &&
+                ReserveInitializationLocked("Re-enabling cleanup with the reloaded model…") is { } reserved)
             {
-                _configureCts?.Cancel();
-                _configureCts = new CancellationTokenSource();
-                initToken = _configureCts.Token;
-                rebuild = true;
+                return new ResidentChange(ResidentChangeKind.Rebuild, reserved.StatusChanged, options, reserved);
             }
-        }
 
-        if (invalidate)
-        {
-            SetStatus(CleanupStatus.Unavailable,
-                "The on-device cleanup model was unloaded. Reload it to turn cleanup back on.");
-            _log.LogInformation("Cleanup paused: its Foundry Local model is no longer resident.");
+            return default;
         }
-        else if (rebuild)
-        {
-            SetStatus(CleanupStatus.Initializing, "Re-enabling cleanup with the reloaded model…");
-            _log.LogInformation("Rebuilding cleanup agent after its Foundry Local model was reloaded.");
-            _ = Task.Run(() => InitializeAsync(options, initToken));
-        }
-
-        // Whether this call published a terminal status. The caller uses it to decide if cleanup
-        // still needs recovering after an initialization it cancelled.
-        return invalidate || rebuild;
     }
 
-    private async Task InitializeAsync(CleanupOptions options, CancellationToken ct)
+    /// <summary>
+    /// Carries out a decided resident change, after the caller released <c>_gate</c> and the init lock
+    /// it decided under: the notification for the status the decision wrote and, for a rebuild, the
+    /// initialization it reserved. Returns whether a change was decided at all: the caller then has no
+    /// interrupted initialization left to restart.
+    /// </summary>
+    private bool ApplyResidentChange(ResidentChange change)
     {
+        switch (change.Kind)
+        {
+            case ResidentChangeKind.Invalidate:
+                if (change.StatusChanged)
+                {
+                    RaiseStatusChanged();
+                }
+
+                _log.LogInformation("Cleanup paused: its Foundry Local model is no longer resident.");
+                return true;
+
+            case ResidentChangeKind.Rebuild when change.Reservation is { } reservation:
+                TryCancel(reservation.Superseded);
+                if (change.StatusChanged)
+                {
+                    RaiseStatusChanged();
+                }
+
+                // Started even when a load has cancelled it since the decision: it observes its token and
+                // returns its lease, and the load that cancelled it owns what happens next.
+                _log.LogInformation("Rebuilding cleanup agent after its Foundry Local model was reloaded.");
+                StartInitialization(change.Options!, reservation);
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private async Task InitializeAsync(
+        CleanupOptions options, long generation, CancellationToken configureToken, CleanupOperationTracker.Lease lease)
+    {
+        using var ownership = lease;
         var acquired = false;
+        FoundryModelIdentity? inUse = null;
         try
         {
+            // Superseded runs are tracked too: the lease keeps disposal waiting for this one even
+            // after a newer Configure cancelled it, until it has actually stopped using anything.
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(configureToken, _lifetime.Token);
+            var ct = linked.Token;
+
             await _initLock.WaitAsync(ct).ConfigureAwait(false);
             acquired = true;
+            lock (_gate)
+            {
+                _initWriter = generation;
+            }
+
             ct.ThrowIfCancellationRequested();
 
             /*
@@ -1744,16 +2555,19 @@ internal sealed class TextCleanupService : ITextCleanupService
                 await ReleaseCopilotSessionAsync().ConfigureAwait(false);
             }
 
+            _pendingFoundryInUse = null;
             AIAgent? agent;
             try
             {
-                agent = options.Provider switch
-                {
-                    CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
-                    CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
-                    CleanupProvider.GitHubCopilot => await InitGitHubCopilotAsync(options, ct).ConfigureAwait(false),
-                    _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
-                };
+                agent = ProviderFactoryForTesting is { } testFactory
+                    ? await InitFromTestFactoryAsync(testFactory, options, ct).ConfigureAwait(false)
+                    : options.Provider switch
+                    {
+                        CleanupProvider.AzureFoundry => await InitAzureAsync(options, ct).ConfigureAwait(false),
+                        CleanupProvider.OpenAiCompatible => await InitOpenAiCompatibleAsync(options, ct).ConfigureAwait(false),
+                        CleanupProvider.GitHubCopilot => await InitGitHubCopilotAsync(options, ct).ConfigureAwait(false),
+                        _ => await InitFoundryAsync(options, ct).ConfigureAwait(false),
+                    };
             }
             catch (Exception ex) when (options.Provider == CleanupProvider.FoundryLocal &&
                                        IsExecutionProviderUnavailable(ex))
@@ -1767,9 +2581,11 @@ internal sealed class TextCleanupService : ITextCleanupService
                 {
                     var message = await DescribeFoundryExecutionProviderFailureAsync(options.FoundryModelAlias, ex, ct)
                         .ConfigureAwait(false);
-                    _log.LogWarning(ex, "Foundry Local model {Alias} could not load because an execution provider is unavailable.",
-                        options.FoundryModelAlias);
-                    SetStatus(CleanupStatus.Unavailable, message);
+                    _log.LogWarning(
+                        "Foundry Local model {Alias} could not load because an execution provider is unavailable ({Failure}).",
+                        options.FoundryModelAlias,
+                        DescribeFailureShape(ex));
+                    SetInitStatus(CleanupStatus.Unavailable, message);
                     return;
                 }
             }
@@ -1796,7 +2612,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                 {
                     lock (_gate)
                     {
-                        if (!_options.Enabled || _options != options)
+                        if (_operations.IsClosed || !_options.Enabled || _options != options)
                         {
                             return;
                         }
@@ -1807,23 +2623,24 @@ internal sealed class TextCleanupService : ITextCleanupService
 
                     if (probeFailure.Exception is { } ex)
                     {
-                        _log.LogWarning(ex, "AI cleanup initialization probe failed ({Provider}).", options.Provider);
+                        LogProviderFailure(LogLevel.Warning, options.Provider, ex, "AI cleanup initialization probe failed.");
                     }
                     else
                     {
-                        _log.LogWarning("AI cleanup initialization probe failed ({Provider}): {Message}",
-                            options.Provider, probeFailure.Message);
+                        _log.LogWarning("AI cleanup initialization probe failed ({Provider}): {Reason}",
+                            options.Provider, probeFailure.Reason.Diagnostic);
                     }
 
-                    SetStatus(CleanupStatus.Unavailable, probeFailure.Message);
+                    SetInitStatus(CleanupStatus.Unavailable, probeFailure.Reason);
                     return;
                 }
             }
 
             lock (_gate)
             {
-                // A newer Configure (different provider/model, or disabled) may have superseded this run.
-                if (!_options.Enabled || _options != options)
+                // A newer Configure (different provider/model, or disabled) may have superseded this
+                // run, and disposal may have started: neither may be handed a freshly built agent.
+                if (_operations.IsClosed || !_options.Enabled || _options != options)
                 {
                     return;
                 }
@@ -1832,22 +2649,69 @@ internal sealed class TextCleanupService : ITextCleanupService
                 _agent = agent;
                 _agentFactory = _pendingFactory;
                 _styleAgents.Clear();
+                _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
+                inUse = _foundryInUse;
             }
 
-            SetStatus(CleanupStatus.Ready, ReadyDetail(options));
+            // The selected model is in use, so a pending model switch can now delete the model it
+            // replaced. Scheduled before Ready is published, so anything that observes Ready also
+            // sees the pass; the pass itself waits for the init lock this run still holds.
+            if (inUse is { } model)
+            {
+                ScheduleKeepOnlySelected(options, model);
+            }
+
+            SetInitStatus(CleanupStatus.Ready, ReadyReason(options));
             _log.LogInformation("AI cleanup ready ({Provider}).", options.Provider);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (configureToken.IsCancellationRequested || _lifetime.IsCancellationRequested)
         {
-            // Superseded by a newer Configure or the feature was disabled; the newer call owns status.
+            // Cancelled, so whoever cancelled owns the status from here: a newer Configure (or the
+            // feature being switched off), disposal, or a manual model load whose restart of this
+            // generation is pending. Nothing is published, whatever shape the cancellation surfaced
+            // as: Foundry Local runs a native load to completion once it has started, whatever the
+            // token says, and reports that load's own error as a FoundryLocalException.
+            if (ex is not OperationCanceledException)
+            {
+                LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup initialization stopped after it was cancelled.");
+            }
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "AI cleanup initialization failed ({Provider}).", options.Provider);
-            SetStatus(CleanupStatus.Unavailable, "AI cleanup could not start. Dictation continues with raw text.");
+            // Includes an OperationCanceledException neither token caused, such as a client's own
+            // timeout. That used to be read as "superseded" and left the status on Initializing or
+            // Downloading with nothing left to finish it, so every dictation skipped cleanup without
+            // saying why. Nothing newer owns the status here, so this is the only way it ends. Written
+            // for this run's own generation rather than through SetInitStatus, because it may have
+            // failed before it ever held the lock; a save that took over just before cancelling this
+            // run refuses it.
+            LogProviderFailure(LogLevel.Warning, options.Provider, ex, "AI cleanup initialization failed.");
+            PublishStatus(
+                generation,
+                CleanupStatus.Unavailable,
+                CleanupReason.Same("AI cleanup could not start. Dictation continues with raw text."));
         }
         finally
         {
+            lock (_gate)
+            {
+                // Finished, however it finished. An interrupted run stays marked for the restart that
+                // is pending on it, and a superseded one no longer owns anything to clear. Cleared
+                // before the init lock is released, so an explicit load that takes the lock next
+                // never mistakes this run for one still going to publish.
+                if (_initGeneration == generation && _initPhase == InitPhase.Live)
+                {
+                    _initPhase = InitPhase.Idle;
+                }
+
+                // Only a run that took the lock was the writer; one that never got it must not clear
+                // the run that did.
+                if (acquired)
+                {
+                    _initWriter = 0;
+                }
+            }
+
             if (acquired)
             {
                 _initLock.Release();
@@ -1855,7 +2719,15 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
     }
 
-    private sealed record AgentProbeFailure(string Message, Exception? Exception);
+    private sealed record AgentProbeFailure(CleanupReason Reason, Exception? Exception);
+
+    // See ProviderFactoryForTesting. Hands over a factory exactly the way the real initializers do.
+    private async Task<AIAgent?> InitFromTestFactoryAsync(
+        Func<CleanupOptions, CancellationToken, Task<Func<string, AIAgent>>> build, CleanupOptions options, CancellationToken ct)
+    {
+        _pendingFactory = await build(options, ct).ConfigureAwait(false);
+        return _pendingFactory(BuildSystemPrompt(options));
+    }
 
     /*
      * Second surface: Chat Completions, for a deployment the Responses API will not serve.
@@ -1918,31 +2790,28 @@ internal sealed class TextCleanupService : ITextCleanupService
                         options.AzureClientSecret)));
 
             var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
-            // Same stored-output assertion the Responses path makes. This is outbound cloud
-            // egress, so it carries the same control; WithStoredOutputDisabled has a
-            // ChatCompletionOptions arm precisely so this path is covered rather than fail-closed
-            // into the wrong option type.
-            _pendingFactory = i => deployment.AsAIAgent(
-                instructions: i, name: AgentName, clientFactory: DisableStoredOutput);
+            // Carries the same wrapper as the Responses path; on this surface it keeps "store" unset,
+            // never true (WithStoredOutputDisabled explains why the field is not sent here).
+            _pendingFactory = i => CreateAzureChatCompletionsAgent(deployment, i);
             var agent = _pendingFactory(BuildSystemPrompt(options));
 
             if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } stillFailing)
             {
+                // Deployment names are the user's resource names; the log gets the failure's shape.
                 _log.LogDebug(
-                    "Chat Completions fallback also failed for {Deployment}: {Message}",
-                    options.AzureDeployment, stillFailing.Message);
+                    "Chat Completions fallback also failed: {Failure}",
+                    stillFailing.Exception is { } fallbackEx
+                        ? DescribeFailureShape(fallbackEx)
+                        : stillFailing.Reason.Diagnostic);
                 return null;
             }
 
-            _log.LogInformation(
-                "Azure deployment {Deployment} does not serve the Responses API; using Chat Completions.",
-                options.AzureDeployment);
+            _log.LogInformation("The Azure deployment does not serve the Responses API; using Chat Completions.");
             return agent;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogDebug(ex, "Could not build a Chat Completions agent for {Deployment}.",
-                options.AzureDeployment);
+            _log.LogDebug("Could not build a Chat Completions agent ({Failure}).", DescribeFailureShape(ex));
             return null;
         }
     }
@@ -1987,6 +2856,23 @@ internal sealed class TextCleanupService : ITextCleanupService
     private static IChatClient DisableStoredOutput(IChatClient client) =>
         new StoredOutputDisabledChatClient(client);
 
+    /// <summary>
+    /// The Azure Chat Completions fallback's agent, exactly as <see cref="TryAzureChatCompletionsAsync"/>
+    /// builds it: every call goes through the stored-output wrapper, which on this surface keeps
+    /// "store" unset and never true.
+    /// </summary>
+    internal static AIAgent CreateAzureChatCompletionsAgent(OpenAI.Chat.ChatClient deployment, string instructions) =>
+        deployment.AsAIAgent(instructions: instructions, name: AgentName, clientFactory: DisableStoredOutput);
+
+#pragma warning disable OPENAI001
+    /// <summary>
+    /// The Azure Responses agent, exactly as <see cref="InitAzureAsync"/> builds it: every call carries
+    /// the stored-output control.
+    /// </summary>
+    internal static AIAgent CreateAzureResponsesAgent(ResponsesClient responses, string deployment, string instructions) =>
+        responses.AsAIAgent(model: deployment, instructions: instructions, name: AgentName, clientFactory: DisableStoredOutput);
+#pragma warning restore OPENAI001
+
     internal static ChatOptions WithStoredOutputDisabled(ChatOptions? options)
     {
         var clone = options?.Clone() ?? new ChatOptions();
@@ -1995,37 +2881,75 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             var raw = innerFactory?.Invoke(client);
 #pragma warning disable OPENAI001
+            /*
+             * Chosen by the client that asks, not by what the factory happened to return.
+             *
+             * Each surface honours exactly one options type and silently replaces anything else with
+             * a fresh instance (Microsoft.Extensions.AI.OpenAI 10.9.0: OpenAIChatClient keeps only a
+             * ChatCompletionOptions, OpenAIResponsesChatClient only a CreateResponseOptions).
+             *
+             * Chat Completions never sets "store", and never lets it be true. Azure stores a chat
+             * completion only when store is true ("set the store parameter to True",
+             * learn.microsoft.com/azure/foundry-classic/openai/how-to/stored-completions), so omitting it
+             * is already the non-storing default. That fallback exists for deployments such as
+             * MAI-Thinking-1, measured working without the field, and some non-OpenAI deployments
+             * reject parameters they do not know, so sending store=false there would risk breaking
+             * cleanup for no privacy gain. This keeps the wire shape Scribe has always sent, but on
+             * purpose rather than because the wrong options type happened to be discarded.
+             */
+            if (Exposes(client, typeof(OpenAI.Chat.ChatClient)))
+            {
+                var chatOptions = raw as OpenAI.Chat.ChatCompletionOptions ?? new OpenAI.Chat.ChatCompletionOptions();
+                chatOptions.StoredOutputEnabled = null;
+                return chatOptions;
+            }
+
+            // Responses defaults to store=true on Azure, so this surface is always told false.
+            if (Exposes(client, typeof(ResponsesClient)))
+            {
+                var responses = raw as CreateResponseOptions ?? new CreateResponseOptions();
+                responses.StoredOutputEnabled = false;
+                return responses;
+            }
+
+            // A client that names neither surface: keep the flag on whichever options type it was
+            // given.
             if (raw is CreateResponseOptions responseOptions)
             {
                 responseOptions.StoredOutputEnabled = false;
                 return responseOptions;
             }
 
-            /*
-             * The same control on the Chat Completions surface.
-             *
-             * TryAzureChatCompletionsAsync can make Chat Completions the live path for a deployment
-             * that will not serve Responses, and that path's raw representation is a
-             * ChatCompletionOptions, not a CreateResponseOptions. Without this arm it fell through to
-             * the fail-closed branch below and got handed a CreateResponseOptions, which is simply
-             * the wrong type for that client: the assertion would not have been applied and the
-             * control would have lapsed on exactly the path it was needed for.
-             */
-            if (raw is OpenAI.Chat.ChatCompletionOptions chatOptions)
+            if (raw is OpenAI.Chat.ChatCompletionOptions otherChatOptions)
             {
-                chatOptions.StoredOutputEnabled = false;
-                return chatOptions;
+                otherChatOptions.StoredOutputEnabled = false;
+                return otherChatOptions;
             }
 
             // Fail CLOSED. Passing an unrecognised object through would let Azure fall back to its
             // store=true default and silently retain dictated text, which is the exact outcome this
             // exists to prevent. Nothing in Scribe sets a factory today, so this only triggers if a
             // future package version starts supplying one, and a privacy control must not lapse on a
-            // dependency bump.
+            // dependency bump. The same holds above: an unrecognised object on a known surface is
+            // replaced by that surface's own options with the flag off.
             return new CreateResponseOptions { StoredOutputEnabled = false };
 #pragma warning restore OPENAI001
         };
         return clone;
+    }
+
+    // Whether the calling client is backed by the given OpenAI client type, which is how the
+    // Microsoft.Extensions.AI adapters expose their surface (IChatClient.GetService). Never throws.
+    private static bool Exposes(IChatClient client, Type serviceType)
+    {
+        try
+        {
+            return client.GetService(serviceType) is not null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private sealed class StoredOutputDisabledChatClient(IChatClient inner) : IChatClient
@@ -2117,11 +3041,11 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (OperationCanceledException ex)
         {
-            return new AgentProbeFailure("AI cleanup validation timed out.", ex);
+            return new AgentProbeFailure(CleanupReason.Same("AI cleanup validation timed out."), ex);
         }
         catch (Exception ex)
         {
-            return new AgentProbeFailure(DescribeFailure(ex, options.Provider), ex);
+            return new AgentProbeFailure(DescribeFailureReason(ex, options.Provider), ex);
         }
     }
 
@@ -2163,7 +3087,10 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             // The catalog read is a lookup for a better alias, never a reason to abandon a demotion
             // that could still succeed from the configured name.
-            _log.LogDebug(ex, "Could not resolve the Foundry Local variant id for {Alias}.", options.FoundryModelAlias);
+            _log.LogDebug(
+                "Could not resolve the Foundry Local variant id for {Alias} ({Failure}).",
+                options.FoundryModelAlias,
+                DescribeFailureShape(ex));
         }
 
         if (FoundryModelVariant.IsGpuAlias(resolvedId))
@@ -2197,17 +3124,17 @@ internal sealed class TextCleanupService : ITextCleanupService
         if (cpuAlias is null)
         {
             _log.LogWarning(
-                loadFailure,
-                "Foundry Local GPU model {GpuAlias} could not load, but no CPU counterpart was found in the catalog.",
-                sourceAlias);
+                "Foundry Local GPU model {GpuAlias} could not load, but no CPU counterpart was found in the catalog ({Failure}).",
+                sourceAlias,
+                DescribeFailureShape(loadFailure));
             return null;
         }
 
         var demotedOptions = options with { FoundryModelAlias = cpuAlias };
         _log.LogWarning(
-            loadFailure,
-            "Foundry Local GPU model {GpuAlias} could not load because an execution provider is unavailable. Retrying once with CPU model {CpuAlias}.",
+            "Foundry Local GPU model {GpuAlias} could not load because an execution provider is unavailable ({Failure}). Retrying once with CPU model {CpuAlias}.",
             sourceAlias,
+            DescribeFailureShape(loadFailure),
             cpuAlias);
 
         AIAgent? agent;
@@ -2217,7 +3144,8 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Foundry Local CPU demotion load failed for {CpuAlias}.", cpuAlias);
+            _log.LogWarning(
+                "Foundry Local CPU demotion load failed for {CpuAlias} ({Failure}).", cpuAlias, DescribeFailureShape(ex));
             return null;
         }
 
@@ -2273,9 +3201,9 @@ internal sealed class TextCleanupService : ITextCleanupService
 
         var demotedOptions = options with { FoundryModelAlias = cpuAlias };
         _log.LogWarning(
-            probeFailure.Exception,
-            "Foundry Local GPU model {GpuAlias} failed the shader probe. Retrying once with CPU model {CpuAlias}.",
+            "Foundry Local GPU model {GpuAlias} failed the shader probe ({Failure}). Retrying once with CPU model {CpuAlias}.",
             sourceAlias,
+            DescribeFailureShape(probeFailure.Exception),
             cpuAlias);
 
         var agent = await InitFoundryAsync(demotedOptions, ct).ConfigureAwait(false);
@@ -2291,19 +3219,21 @@ internal sealed class TextCleanupService : ITextCleanupService
             // failed in front of them.
             if (cpuFailure.Exception is { } ex)
             {
-                _log.LogWarning(ex,
-                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe.",
-                    cpuAlias, sourceAlias);
+                _log.LogWarning(
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe ({Failure}).",
+                    cpuAlias, sourceAlias, DescribeFailureShape(ex));
             }
             else
             {
                 _log.LogWarning(
-                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe: {Message}",
-                    cpuAlias, sourceAlias, cpuFailure.Message);
+                    "Foundry Local CPU demotion probe failed for {CpuAlias} after {GpuAlias} failed the shader probe: {Reason}",
+                    cpuAlias, sourceAlias, cpuFailure.Reason.Diagnostic);
             }
 
-            SetStatus(CleanupStatus.Unavailable,
-                $"Neither the GPU nor the CPU build of this model would run. Pick a different model in Settings. {cpuFailure.Message}".TrimEnd());
+            const string neither = "Neither the GPU nor the CPU build of this model would run. Pick a different model in Settings.";
+            SetInitStatus(CleanupStatus.Unavailable, new CleanupReason(
+                $"{neither} {cpuFailure.Reason.Diagnostic}".TrimEnd(),
+                $"{neither} {cpuFailure.Reason.Display}".TrimEnd()));
             return null;
         }
 
@@ -2367,14 +3297,19 @@ internal sealed class TextCleanupService : ITextCleanupService
             }
             catch (Exception lookupEx)
             {
-                _log.LogDebug(lookupEx, "Could not read Foundry model runtime metadata for {Alias}.", alias);
+                _log.LogDebug("Could not read Foundry model runtime metadata for {Alias} ({Failure}).", alias, DescribeFailureShape(lookupEx));
             }
         }
 
-        required ??= TryParseRequiredExecutionProvider(ex);
+        // Identifiers only: this becomes the status reason, which the dictation pipeline logs, so a
+        // name parsed out of an error message must not carry any of the message with it.
+        required = CleanupFailureShape.SanitizeCode(required) ?? CleanupFailureShape.SanitizeCode(TryParseRequiredExecutionProvider(ex));
         var available = _availableExecutionProviders.Length > 0
             ? _availableExecutionProviders
-            : TryParseAvailableExecutionProviders(ex);
+            : TryParseAvailableExecutionProviders(ex)
+                .Select(CleanupFailureShape.SanitizeCode)
+                .OfType<string>()
+                .ToArray();
 
         return new FoundryExecutionProviderFailure(required, available);
     }
@@ -2382,12 +3317,12 @@ internal sealed class TextCleanupService : ITextCleanupService
     private async Task<AIAgent?> InitFoundryAsync(CleanupOptions options, CancellationToken ct)
     {
         var alias = options.FoundryModelAlias;
-        SetStatus(CleanupStatus.Initializing, "Starting Foundry Local…");
+        SetInitStatus(CleanupStatus.Initializing, "Starting Foundry Local…");
         await EnsureManagerAsync(ct).ConfigureAwait(false);
 
         if (_catalog is null || _openAiClient is null)
         {
-            SetStatus(CleanupStatus.Unavailable, "Foundry Local could not be initialized.");
+            SetInitStatus(CleanupStatus.Unavailable, "Foundry Local could not be initialized.");
             return null;
         }
 
@@ -2410,7 +3345,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     .ConfigureAwait(false);
             }
 
-            SetStatus(CleanupStatus.Unavailable, $"Model '{alias}' was not found in the Foundry catalog.");
+            SetInitStatus(CleanupStatus.Unavailable, $"Model '{alias}' was not found in the Foundry catalog.");
             return null;
         }
         _log.LogInformation("Foundry Local cleanup model resolved to {ModelId}.", model.Id);
@@ -2419,20 +3354,21 @@ internal sealed class TextCleanupService : ITextCleanupService
         if (!cached)
         {
             _lastReportedPct = -1;
-            SetStatus(CleanupStatus.Downloading, $"Downloading {alias}…");
+            SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}…");
             await model.DownloadAsync(progress => OnDownloadProgress(alias, progress), ct).ConfigureAwait(false);
         }
 
         // Keep only one model resident: unload any previously-loaded model before loading this one.
         await UnloadOtherFoundryModelsAsync(model.Id, model.Alias, ct).ConfigureAwait(false);
 
-        SetStatus(CleanupStatus.Downloading, $"Loading {alias}…");
+        SetInitStatus(CleanupStatus.Downloading, $"Loading {alias}…");
         await model.LoadAsync(ct).ConfigureAwait(false);
 
         // Present the on-device OpenAI-compatible chat client as an Agent Framework agent so the
         // cleanup call site is identical to the Azure path.
         var chatClient = _openAiClient.GetChatClient(model.Id);
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
+        _pendingFoundryInUse = new FoundryModelIdentity(model.Id, model.Alias);
         return _pendingFactory(BuildSystemPrompt(options));
     }
 
@@ -2529,7 +3465,10 @@ internal sealed class TextCleanupService : ITextCleanupService
             // Variant inspection is an optimization over the SDK's own choice. If it throws, the
             // original selection is still there to attempt, and a real load failure reports a far
             // better diagnostic than an exception thrown while trying to avoid one.
-            _log.LogDebug(ex, "Could not check Foundry Local variant compatibility for {Alias}.", requestedAlias);
+            _log.LogDebug(
+                "Could not check Foundry Local variant compatibility for {Alias} ({Failure}).",
+                requestedAlias,
+                DescribeFailureShape(ex));
         }
     }
 
@@ -2545,7 +3484,8 @@ internal sealed class TextCleanupService : ITextCleanupService
      *
      * ## Why the types only appear inside this method
      *
-     * Every reference to CopilotClient is local to this body, and that is load-bearing rather than
+     * Every reference to CopilotClient is local to this body, or to GitHubCopilotAgentFactory, which
+     * only this body calls, and that is load-bearing rather than
      * tidiness. The CLR resolves an assembly the first time a method that references it is JIT
      * compiled, so a user who never selects this provider never loads
      * Microsoft.Agents.AI.GitHub.Copilot at all: no startup cost, no memory cost, and no Copilot
@@ -2564,37 +3504,35 @@ internal sealed class TextCleanupService : ITextCleanupService
      * The Copilot backend is a coding agent: shell execution, file access and URL fetching are all
      * in its runtime. They are off unless a SessionConfig supplies an OnPermissionRequest handler,
      * and none is supplied here and none should be. Scribe is asking it to punctuate a sentence.
+     *
+     * ## How the model is chosen
+     *
+     * Through SessionConfig.Model, the typed SDK surface, which the pinned SDK forwards into every
+     * create-session request (GitHubCopilotAgentFactory). The previous approach published the choice
+     * in a process-wide environment variable around client startup and restored it afterwards; a
+     * cancelled startup skipped the restore, and anything else in the process could read it in the
+     * meantime. The runtime's child environment is now built explicitly instead (see
+     * GitHubCopilotCli.BuildRuntimeEnvironment), so the CLI sees exactly what it saw before, a blank
+     * model still means "not set" rather than an inherited ambient value, and this process's own
+     * environment is never touched.
      */
-    private Task<AIAgent?> InitGitHubCopilotAsync(CleanupOptions options, CancellationToken ct)
+    private async Task<AIAgent?> InitGitHubCopilotAsync(CleanupOptions options, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
-        var cli = GitHubCopilotCli.Detect();
+        // Cancellation reaches the version probe, which kills the child it started rather than
+        // leaving it for the probe's own deadline.
+        var cli = await GitHubCopilotCli.DetectAsync(ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
         if (!cli.Found)
         {
-            SetStatus(
+            SetInitStatus(
                 CleanupStatus.Unavailable,
                 "The GitHub Copilot CLI is not installed. Install it from Settings, then turn AI cleanup back on.");
-            return Task.FromResult<AIAgent?>(null);
+            return null;
         }
 
-        /*
-         * The SDK takes the model through its own environment variable rather than an API, so a
-         * chosen model is published for the client to read. Blank means the account default, which is
-         * why this clears rather than writes an empty string: an empty value is not the same question
-         * as an unset one.
-         *
-         * Set immediately before the client is constructed and cleared straight after, rather than
-         * left standing. It is process scope, so this is stale state rather than the machine-wide
-         * hazard AGENTS.md describes for persistent AZURE_CLIENT_* variables, but it is still shared:
-         * GitHubCopilotModels.ListAsync builds its own client from the settings window and can run
-         * while a reconfiguration is in flight, and a value left over from a provider the user has
-         * since switched away from would silently steer it.
-         */
-        var previousModelVariable = Environment.GetEnvironmentVariable(GitHubCopilotCli.ModelVariable);
-        Environment.SetEnvironmentVariable(
-            GitHubCopilotCli.ModelVariable,
-            string.IsNullOrWhiteSpace(options.CopilotModel) ? null : options.CopilotModel!.Trim());
+        var model = string.IsNullOrWhiteSpace(options.CopilotModel) ? null : options.CopilotModel.Trim();
 
         /*
          * Initializing, not Downloading. Nothing is being downloaded: the CLI is already installed
@@ -2605,7 +3543,7 @@ internal sealed class TextCleanupService : ITextCleanupService
          * Copilot session…)" on any dictation taken during startup, which is both wrong and alarming.
          * The startup is around 20 seconds, so the window this is visible in is not small.
          */
-        SetStatus(CleanupStatus.Initializing, "Connecting to the GitHub Copilot CLI…");
+        SetInitStatus(CleanupStatus.Initializing, "Connecting to the GitHub Copilot CLI…");
 
         /*
          * Point the SDK at the CLI we found, rather than the one it expects to have bundled.
@@ -2620,46 +3558,62 @@ internal sealed class TextCleanupService : ITextCleanupService
          * model" rather than a second, unauthenticated Copilot inside Scribe. UseLoggedInUser is left
          * at its default of true so the runtime picks up the stored OAuth token or `gh` auth.
          */
-        // Restored once the client has read it, so the variable does not outlive the construction
-        // it exists for. In a finally so an exception on StartAsync cannot leave it set either.
         var client = new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions
         {
             Connection = GitHub.Copilot.RuntimeConnection.ForStdio(cli.Path!),
+            Environment = GitHubCopilotCli.BuildRuntimeEnvironment(model),
         });
         try
         {
-            client.StartAsync(ct).GetAwaiter().GetResult();
+            await client.StartAsync(ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            client.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            Environment.SetEnvironmentVariable(GitHubCopilotCli.ModelVariable, previousModelVariable);
-            SetStatus(
+            try
+            {
+                await client.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception disposeEx)
+            {
+                LogProviderFailure(LogLevel.Debug, CleanupProvider.GitHubCopilot, disposeEx,
+                    "Could not dispose a GitHub Copilot client that failed to start.");
+            }
+
+            SetInitStatus(
                 CleanupStatus.Unavailable,
                 "Could not start GitHub Copilot. Check that you are signed in: run `copilot` once in a terminal.");
-            _log.LogWarning(ex, "GitHub Copilot session could not be started.");
-            return Task.FromResult<AIAgent?>(null);
+            LogProviderFailure(LogLevel.Warning, CleanupProvider.GitHubCopilot, ex, "GitHub Copilot session could not be started.");
+            return null;
         }
-
-        Environment.SetEnvironmentVariable(GitHubCopilotCli.ModelVariable, previousModelVariable);
 
         // Held so the session is torn down with the service (DisposeAsync) rather than leaked per
         // reconfiguration, and replaced here so switching model does not strand the old child process.
-        var previous = Interlocked.Exchange(ref _copilotClientHandle, client);
-        if (previous is IAsyncDisposable staleSession)
+        // Published under _gate so a client started after disposal began is never adopted.
+        object? previous = null;
+        var adopted = false;
+        lock (_gate)
         {
-            try { staleSession.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
-            catch (Exception ex) { _log.LogDebug(ex, "Could not dispose the previous Copilot session."); }
+            if (!_operations.IsClosed)
+            {
+                previous = _copilotClientHandle;
+                _copilotClientHandle = client;
+                adopted = true;
+            }
         }
 
-        // Fully qualified rather than a file-scoped `using GitHub.Copilot`, so every name from this
-        // package stays inside this one method body and the lazy-load argument above holds by
-        // construction rather than by convention. ownsClient stays false: the session is disposed
-        // through _copilotClientHandle, and letting the agent own it too would double-dispose it
-        // every time the user changes a setting.
-        _pendingFactory = instructions => GitHub.Copilot.CopilotClientExtensions.AsAIAgent(
-            client, name: AgentName, instructions: instructions);
-        return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
+        if (!adopted)
+        {
+            await DisposeCopilotSessionAsync(client).ConfigureAwait(false);
+            throw new OperationCanceledException(ct);
+        }
+
+        await DisposeCopilotSessionAsync(previous).ConfigureAwait(false);
+
+        // ownsClient stays false: the session is disposed through _copilotClientHandle, and letting
+        // the agent own it too would double-dispose it every time the user changes a setting. Each
+        // call builds a fresh SessionConfig, so no two per-style agents share a mutable instance.
+        _pendingFactory = instructions => GitHubCopilotAgentFactory.Create(client, instructions, model, AgentName);
+        return _pendingFactory(BuildSystemPrompt(options));
     }
 
     /// <summary>
@@ -2671,22 +3625,25 @@ internal sealed class TextCleanupService : ITextCleanupService
     {
         if (string.IsNullOrWhiteSpace(options.CustomEndpoint) || string.IsNullOrWhiteSpace(options.CustomModel))
         {
-            SetStatus(CleanupStatus.Unavailable, "Enter the endpoint URL and model name to enable cleanup.");
+            SetInitStatus(CleanupStatus.Unavailable, "Enter the endpoint URL and model name to enable cleanup.");
             return Task.FromResult<AIAgent?>(null);
         }
 
         if (!TryValidateCustomEndpoint(options.CustomEndpoint, out var endpointUri, out var endpointError))
         {
-            SetStatus(CleanupStatus.Unavailable, endpointError);
+            SetInitStatus(CleanupStatus.Unavailable, endpointError);
             return Task.FromResult<AIAgent?>(null);
         }
 
-        SetStatus(CleanupStatus.Initializing, $"Connecting to {endpointUri.Host}…");
+        // The host is what makes this line useful in Settings, and it is exactly what must not reach
+        // the log: a dictation skipped while connecting reports this status as its skip reason.
+        SetInitStatus(CleanupStatus.Initializing, new CleanupReason(
+            "Connecting to the custom endpoint…", $"Connecting to {endpointUri.Host}…"));
 
         var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
-        var client = new OpenAIClient(
-            new ApiKeyCredential(key),
-            new OpenAIClientOptions { Endpoint = endpointUri });
+        var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
+        OpenAIClientOptionsOverride?.Invoke(clientOptions);
+        var client = new OpenAIClient(new ApiKeyCredential(key), clientOptions);
         var chatClient = client.GetChatClient(options.CustomModel!.Trim());
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
         return Task.FromResult<AIAgent?>(_pendingFactory(BuildSystemPrompt(options)));
@@ -2697,17 +3654,18 @@ internal sealed class TextCleanupService : ITextCleanupService
         ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
         {
-            SetStatus(CleanupStatus.Unavailable, "Choose an Azure deployment to enable cleanup.");
+            SetInitStatus(CleanupStatus.Unavailable, "Choose an Azure deployment to enable cleanup.");
             return Task.FromResult<AIAgent?>(null);
         }
 
         if (!Uri.TryCreate(options.AzureEndpoint, UriKind.Absolute, out var endpointUri))
         {
-            SetStatus(CleanupStatus.Unavailable, "The Azure endpoint is not a valid URL.");
+            SetInitStatus(CleanupStatus.Unavailable, "The Azure endpoint is not a valid URL.");
             return Task.FromResult<AIAgent?>(null);
         }
 
-        SetStatus(CleanupStatus.Initializing, $"Connecting to Azure deployment '{options.AzureDeployment}'…");
+        SetInitStatus(CleanupStatus.Initializing, new CleanupReason(
+            "Connecting to the Azure deployment…", $"Connecting to Azure deployment '{options.AzureDeployment}'…"));
 
         var instructions = BuildSystemPrompt(options);
         var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
@@ -2736,11 +3694,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                     options.AzureClientSecret)),
                 networkTimeout,
                 DisableRetries);
-        _pendingFactory = i => responses.AsAIAgent(
-            model: options.AzureDeployment!,
-            instructions: i,
-            name: AgentName,
-            clientFactory: DisableStoredOutput);
+        _pendingFactory = i => CreateAzureResponsesAgent(responses, options.AzureDeployment!, i);
 #pragma warning restore OPENAI001
         var agent = _pendingFactory(instructions);
 
@@ -2804,139 +3758,176 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// <summary>
     /// Digs the HTTP status out of the two exception shapes the Azure and OpenAI clients throw, including
     /// when either is wrapped by the Agent Framework. Returns 0 when the failure was not an HTTP response.
+    /// Depth-bounded (see <see cref="CleanupFailureShape.ExtractHttpStatus"/>), because a
+    /// StackOverflowException on the failure path cannot be caught.
     /// </summary>
-    internal static int ExtractHttpStatus(Exception? ex) => ExtractHttpStatus(ex, depth: 0);
+    internal static int ExtractHttpStatus(Exception? ex) => CleanupFailureShape.ExtractHttpStatus(ex);
 
-    // Depth-bounded because this runs on the failure path: an AggregateException whose inner list
-    // reaches back to an ancestor would recurse until the stack overflows, and a StackOverflowException
-    // cannot be caught, so a diagnostics helper would take the process down while reporting an error
-    // the user could otherwise have acted on. Real Azure exception chains are a handful deep.
-    private const int MaxStatusSearchDepth = 16;
-
-    private static int ExtractHttpStatus(Exception? ex, int depth)
-    {
-        if (depth >= MaxStatusSearchDepth)
-        {
-            return 0;
-        }
-
-        for (var current = ex; current is not null; current = current.InnerException)
-        {
-            switch (current)
-            {
-                case System.ClientModel.ClientResultException client:
-                    return client.Status;
-                case Azure.RequestFailedException request:
-                    return request.Status;
-                case AggregateException aggregate:
-                {
-                    foreach (var inner in aggregate.InnerExceptions)
-                    {
-                        var nested = ExtractHttpStatus(inner, depth + 1);
-                        if (nested != 0)
-                        {
-                            return nested;
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
-
-        return 0;
-    }
-
-    // Ensures the Foundry Local manager + catalog exist, without starting the web service or
-    // downloading execution providers. This is enough to list, load and unload models, and is the
     // Builds the process-wide Foundry Local configuration. The SDK requires an explicit web-service
     // configuration; when it is omitted, StartWebServiceAsync throws "Web service configuration was
     // not provided" and never populates manager.Urls. We bind the local OpenAI-compatible service to
     // a loopback address on an OS-assigned port (":0") so it never collides with a foundry CLI service
     // or a second Scribe process; manager.Urls then reports the port it actually bound.
-    private static FoundryConfiguration CreateFoundryConfiguration() => new()
+    //
+    // AppDataDir is the same resolved directory storage reclaim is confined to (see
+    // FoundryLocalStorage.ResolveAppDataDir): the SDK default for the normal profile, and a folder
+    // inside the data root for an isolated one. It has to be in this, the first configuration, because
+    // the manager is a process-wide singleton the SDK never lets be created again. Null (no resolvable
+    // profile folder) leaves the SDK's own default in place.
+    internal FoundryConfiguration CreateFoundryConfiguration() => new()
     {
-        AppName = "Scribe",
+        AppName = FoundryLocalStorage.AppName,
+        AppDataDir = _foundryAppDataDir,
         LogLevel = FoundryLogLevel.Warning,
         Web = new FoundryConfiguration.WebService { Urls = "http://127.0.0.1:0" },
     };
 
-    // Shared first step of the heavier EnsureManagerAsync. Safe to call concurrently: manager
-    // creation is idempotent (the SDK exposes a process-wide singleton) and the catalog read is
-    // cached. Execution providers are registered here, BEFORE the first catalog read, because the
-    // SDK populates the catalog from the currently-registered EPs and caches it on first use --
-    // fetching it earlier would silently lock every consumer (the model picker and inference) into
-    // a CPU-only catalog even on a CUDA / TensorRT-RTX machine.
-    private async Task EnsureCatalogAsync(CancellationToken ct)
+    // The manager only: no execution providers, no catalog, so nothing is downloaded. Serialized on
+    // the runtime gate with the full creation below, so there is only ever one creator.
+    private async Task<IFoundryLocalRuntime?> EnsureFoundryRuntimeAsync(CancellationToken ct)
     {
-        if (_manager is not null && _catalog is not null)
+        if (Volatile.Read(ref _foundryRuntime) is { } ready)
         {
-            return;
+            return ready;
         }
 
-        if (_manager is null)
-        {
-            if (!FoundryLocalManager.IsInitialized)
-            {
-                try
-                {
-                    await FoundryLocalManager.CreateAsync(CreateFoundryConfiguration(), _log, ct).ConfigureAwait(false);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Already created in this process; reuse the singleton below.
-                }
-            }
-
-            _manager = FoundryLocalManager.Instance;
-        }
-
-        await EnsureExecutionProvidersAsync(ct).ConfigureAwait(false);
-
-        _catalog ??= await _manager.GetCatalogAsync(ct).ConfigureAwait(false);
-    }
-
-    // Registers the best available hardware execution providers (e.g. CUDA / TensorRT-RTX) once per
-    // manager instance. Best-effort: if EP setup fails the model still runs on CPU, so we log and
-    // continue. Must run before GetCatalogAsync so hardware-accelerated model variants are listed.
-    private async Task EnsureExecutionProvidersAsync(CancellationToken ct)
-    {
-        if (_epsRegistered)
-        {
-            return;
-        }
-
+        await _foundryRuntimeGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var discovered = _manager!.DiscoverEps();
-            var result = await _manager.DownloadAndRegisterEpsAsync(ct).ConfigureAwait(false);
-            _availableExecutionProviders = MergeAvailableExecutionProviders(
+            return await EnsureFoundryRuntimeCoreAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _foundryRuntimeGate.Release();
+        }
+    }
+
+    // Must be called holding _foundryRuntimeGate.
+    private async Task<IFoundryLocalRuntime?> EnsureFoundryRuntimeCoreAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _foundryRuntime) is { } existing)
+        {
+            return existing;
+        }
+
+        var runtime = await _foundryHost.CreateOrAttachAsync(CreateFoundryConfiguration(), _foundrySdkLog, ct)
+            .ConfigureAwait(false);
+
+        var adopted = false;
+        lock (_gate)
+        {
+            // Never published once disposal started: disposal releases what it can see, so a runtime
+            // published behind its back would be one nothing ever stops.
+            if (!_operations.IsClosed)
+            {
+                Volatile.Write(ref _foundryRuntime, runtime);
+                adopted = true;
+            }
+        }
+
+        if (!adopted)
+        {
+            try
+            {
+                runtime.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _log.LogDebug("Could not dispose a Foundry Local manager created during shutdown ({Failure}).", DescribeFailureShape(ex));
+            }
+
+            return null;
+        }
+
+        return runtime;
+    }
+
+    // The manager, its execution providers and its catalog, created once and published together.
+    // Execution providers are registered BEFORE the first catalog read, because the SDK populates the
+    // catalog from the currently-registered EPs and caches it on first use; fetching it earlier would
+    // lock every consumer (the model picker and inference) into a CPU-only catalog even on a CUDA or
+    // TensorRT-RTX machine. This is also the one call that can download several gigabytes of
+    // execution providers, which is why only explicit requests and a saved Foundry Local
+    // configuration reach it.
+    private async Task<ICatalog?> EnsureFoundryCatalogAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _catalog) is { } ready)
+        {
+            return ready;
+        }
+
+        await _foundryRuntimeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // A caller that queued behind the first one finds the published catalog here, and so
+            // never registers execution providers a second time.
+            if (Volatile.Read(ref _catalog) is { } raced)
+            {
+                return raced;
+            }
+
+            var runtime = await EnsureFoundryRuntimeCoreAsync(ct).ConfigureAwait(false);
+            if (runtime is null)
+            {
+                return null;
+            }
+
+            var providers = await RegisterExecutionProvidersAsync(runtime, ct).ConfigureAwait(false);
+            var catalog = await runtime.GetCatalogAsync(ct).ConfigureAwait(false);
+
+            lock (_gate)
+            {
+                if (_operations.IsClosed)
+                {
+                    return null;
+                }
+
+                _availableExecutionProviders = providers;
+                Volatile.Write(ref _catalog, catalog);
+            }
+
+            return catalog;
+        }
+        finally
+        {
+            _foundryRuntimeGate.Release();
+        }
+    }
+
+    // Registers the best available hardware execution providers (e.g. CUDA / TensorRT-RTX) for the
+    // catalog about to be read. Best-effort: if EP setup fails the model still runs on CPU, so we log
+    // and continue. A cancelled registration publishes nothing, so the next caller tries again.
+    private async Task<string[]> RegisterExecutionProvidersAsync(IFoundryLocalRuntime runtime, CancellationToken ct)
+    {
+        try
+        {
+            var discovered = runtime.DiscoverEps();
+            var result = await runtime.DownloadAndRegisterEpsAsync(ct).ConfigureAwait(false);
+            return MergeAvailableExecutionProviders(
                 discovered,
                 result.RegisteredEps,
-                _manager.DiscoverEps());
-
-            // Latch only on success. Under the WinML package these plugins come from the OS and
-            // Windows Update, so a first-run network hiccup is an ordinary transient failure. Setting
-            // this unconditionally would turn that into a permanent CPU-only session, because the
-            // catalog is populated from the registered providers and cached on first read.
-            _epsRegistered = true;
+                runtime.DiscoverEps());
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // A newer Configure superseded this run. Callers already handle cancellation, and the
-            // next initialization must be free to try registration again.
+            // A newer Configure superseded this run, or the service is shutting down. Callers
+            // already handle cancellation, and the next initialization must be free to try again.
             throw;
         }
         catch (Exception ex)
         {
-            _log.LogInformation(ex, "Foundry execution-provider setup was skipped; continuing on available providers.");
+            // By shape: an execution-provider download failure quotes the download location.
+            _log.LogInformation(
+                "Foundry execution-provider setup was skipped; continuing on available providers ({Failure}).",
+                DescribeFailureShape(ex));
             try
             {
-                _availableExecutionProviders = MergeAvailableExecutionProviders(_manager!.DiscoverEps());
+                return MergeAvailableExecutionProviders(runtime.DiscoverEps());
             }
             catch (Exception discoverEx)
             {
-                _log.LogDebug(discoverEx, "Could not enumerate Foundry execution providers.");
+                _log.LogDebug("Could not enumerate Foundry execution providers ({Failure}).", DescribeFailureShape(discoverEx));
+                return MergeAvailableExecutionProviders(discovered: null);
             }
         }
     }
@@ -2992,34 +3983,51 @@ internal sealed class TextCleanupService : ITextCleanupService
         return providers.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    // Must be called holding _initLock: the web-service fields are only touched under it.
     private async Task EnsureManagerAsync(CancellationToken ct)
     {
-        if (_managerReady && _manager is not null && _catalog is not null && _openAiClient is not null)
+        if (_managerReady && Volatile.Read(ref _catalog) is not null && _openAiClient is not null)
         {
             return;
         }
 
-        await EnsureCatalogAsync(ct).ConfigureAwait(false);
-        var manager = _manager!;
+        // A null catalog means disposal began while it was being built; there is then nothing to
+        // start a web service for.
+        if (await EnsureFoundryCatalogAsync(ct).ConfigureAwait(false) is null ||
+            Volatile.Read(ref _foundryRuntime) is not { } runtime)
+        {
+            return;
+        }
 
-        // Execution providers were registered inside EnsureCatalogAsync, before the catalog read.
-        // Start (or attach to) the local OpenAI-compatible web service, then read the endpoint it
-        // actually bound to rather than assuming a port.
+        // Execution providers were registered inside EnsureFoundryCatalogAsync, before the catalog
+        // read. Start (or attach to) the local OpenAI-compatible web service, then read the endpoint
+        // it actually bound to rather than assuming a port.
         try
         {
-            await manager.StartWebServiceAsync(ct).ConfigureAwait(false);
+            await runtime.StartWebServiceAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            _log.LogInformation(ex, "StartWebServiceAsync reported an issue; using the existing endpoint if available.");
+            // By shape: a web-service failure quotes the address it tried to bind.
+            _log.LogInformation(
+                "StartWebServiceAsync reported an issue; using the existing endpoint if available ({Failure}).",
+                DescribeFailureShape(ex));
         }
 
-        var urls = manager.Urls;
+        var urls = runtime.Urls;
         var baseUrl = urls is { Length: > 0 } ? urls[0] : null;
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
             throw new InvalidOperationException("Foundry Local did not expose a web-service endpoint.");
         }
+
+        // Only a manager this process created can have a web service running in it, so a bound URL
+        // here means Scribe started it and switching away from Foundry Local may stop it.
+        _webServiceStarted = true;
 
         var endpoint = baseUrl.TrimEnd('/');
         if (!endpoint.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
@@ -3028,9 +4036,9 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         // Foundry Local does not require a real API key; the credential is a placeholder.
-        _openAiClient = new OpenAIClient(
-            new ApiKeyCredential("foundry-local"),
-            new OpenAIClientOptions { Endpoint = new Uri(endpoint) });
+        var clientOptions = new OpenAIClientOptions { Endpoint = new Uri(endpoint) };
+        OpenAIClientOptionsOverride?.Invoke(clientOptions);
+        _openAiClient = new OpenAIClient(new ApiKeyCredential("foundry-local"), clientOptions);
         _managerReady = true;
     }
 
@@ -3043,7 +4051,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
 
         _lastReportedPct = pct;
-        SetStatus(CleanupStatus.Downloading, $"Downloading {alias}… {Math.Clamp(pct, 0, 100)}%");
+        SetInitStatus(CleanupStatus.Downloading, $"Downloading {alias}… {Math.Clamp(pct, 0, 100)}%");
     }
 
     internal static string BuildSystemPrompt(CleanupOptions options)
@@ -3114,12 +4122,15 @@ internal sealed class TextCleanupService : ITextCleanupService
     internal static string BuildUserMessage(string chunk) =>
         $"{TranscriptOpenTag}\n{chunk}\n{TranscriptCloseTag}";
 
-    private static string ReadyDetail(CleanupOptions options) => options.Provider switch
+    private static CleanupReason ReadyReason(CleanupOptions options) => options.Provider switch
     {
-        CleanupProvider.AzureFoundry => $"Azure deployment '{options.AzureDeployment}' ready.",
-        CleanupProvider.OpenAiCompatible =>
-            $"'{options.CustomModel}' at {(Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var u) ? u.Host : "custom endpoint")} ready.",
-        _ => $"{CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName} ready.",
+        CleanupProvider.AzureFoundry => new CleanupReason(
+            "Azure deployment ready.",
+            $"Azure deployment '{options.AzureDeployment}' ready."),
+        CleanupProvider.OpenAiCompatible => new CleanupReason(
+            $"'{options.CustomModel}' at the custom endpoint ready.",
+            $"'{options.CustomModel}' at {(Uri.TryCreate(options.CustomEndpoint, UriKind.Absolute, out var u) ? u.Host : "custom endpoint")} ready."),
+        _ => CleanupReason.Same($"{CleanupModelCatalog.Resolve(options.FoundryModelAlias).DisplayName} ready."),
     };
 
     // Per-call generation options. The system prompt lives on the agent, so this only carries the
@@ -3465,7 +4476,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not clear the stale Foundry Local demotion marker.");
+            _log.LogDebug("Could not clear the stale Foundry Local demotion marker ({Failure}).", CleanupFailureShape.Describe(ex));
             return null;
         }
     }
@@ -3485,7 +4496,7 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not persist the Foundry Local model demotion marker.");
+            _log.LogDebug("Could not persist the Foundry Local model demotion marker ({Failure}).", CleanupFailureShape.Describe(ex));
         }
     }
 
@@ -3536,33 +4547,90 @@ internal sealed class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not read the Foundry Local model demotion marker.");
+            _log.LogDebug("Could not read the Foundry Local model demotion marker ({Failure}).", CleanupFailureShape.Describe(ex));
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
     }
 
-    private void SetStatus(CleanupStatus status, string? detail)
+    private void SetInitStatus(CleanupStatus status, string? detail) =>
+        SetInitStatus(status, detail is null ? null : CleanupReason.Same(detail));
+
+    // An initialization's own progress and outcome, from anywhere in its run: written on behalf of the
+    // generation whose initialization holds _initLock, so a run that has been superseded writes nothing.
+    private void SetInitStatus(CleanupStatus status, CleanupReason? reason) => PublishStatus(owner: null, status, reason);
+
+    // Writes the status on behalf of a generation (null: the initialization holding _initLock), then
+    // raises StatusChanged after releasing _gate. An initialization calls this while it still holds
+    // _initLock, so its progress, outcome and Ready notifications are raised under that lock.
+    private void PublishStatus(long? owner, CleanupStatus status, CleanupReason? reason)
     {
         bool changed;
         lock (_gate)
         {
-            changed = _status != status || !string.Equals(_statusDetail, detail, StringComparison.Ordinal);
-            _status = status;
-            _statusDetail = detail;
+            changed = WriteStatusLocked(owner ?? _initWriter, status, reason);
         }
 
-        if (!changed)
+        if (changed)
+        {
+            RaiseStatusChanged();
+        }
+    }
+
+    // Must be called under _gate. The only place the status is written, which is what makes the
+    // invariant on _initGeneration hold for every writer rather than only for the ones that remember
+    // it: a write lands only on behalf of the generation that owns the status, and never once disposal
+    // has begun (the settings window may itself be closing). Returns whether the status changed; the
+    // caller raises StatusChanged after releasing _gate.
+    private bool WriteStatusLocked(long owner, CleanupStatus status, CleanupReason? reason)
+    {
+        if (_operations.IsClosed || owner == 0 || owner != _initGeneration)
+        {
+            return false;
+        }
+
+        var detail = reason?.Display;
+        var diagnostic = reason?.Diagnostic;
+        var changed = _status != status ||
+            !string.Equals(_statusDetail, detail, StringComparison.Ordinal) ||
+            !string.Equals(_statusReason, diagnostic, StringComparison.Ordinal);
+        _status = status;
+        _statusDetail = detail;
+        _statusReason = diagnostic;
+        return changed;
+    }
+
+    // Never called holding _gate. An initialization raises its progress, outcome and Ready while it still
+    // holds _initLock, so a subscriber reached from those notifications runs under that lock too; the
+    // other paths raise it after releasing the locks they decided under. The event carries nothing, so a
+    // notification that arrives after a newer write is harmless: every subscriber reads the current status.
+    private void RaiseStatusChanged()
+    {
+        if (StatusChanged is not { } handlers)
         {
             return;
         }
 
-        try
+        // Each subscriber on its own: .NET stops walking an invocation list at the first throw, and a
+        // closing settings window must not stop the dictation controller hearing about Ready. This is
+        // ResilientEvent.InvokeAll's shape; that helper only takes Action<T>, and this event has no
+        // argument.
+        foreach (var handler in handlers.GetInvocationList())
         {
-            StatusChanged?.Invoke();
-        }
-        catch (Exception ex)
-        {
-            _log.LogDebug(ex, "A cleanup StatusChanged handler threw.");
+            try
+            {
+                ((Action)handler)();
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    _log.LogDebug("A cleanup StatusChanged handler threw ({Failure}).", CleanupFailureShape.Describe(ex));
+                }
+                catch (Exception)
+                {
+                    // A logger that throws must not stop the fan-out it was only meant to describe.
+                }
+            }
         }
     }
 
@@ -3578,50 +4646,724 @@ internal sealed class TextCleanupService : ITextCleanupService
     /// </remarks>
     private async Task ReleaseCopilotSessionAsync()
     {
-        if (Interlocked.Exchange(ref _copilotClientHandle, null) is IAsyncDisposable session)
+        object? session;
+        lock (_gate)
         {
-            try
-            {
-                await session.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _log.LogDebug(ex, "Could not dispose the GitHub Copilot session.");
-            }
+            session = _copilotClientHandle;
+            _copilotClientHandle = null;
         }
+
+        await DisposeCopilotSessionAsync(session).ConfigureAwait(false);
     }
 
-    public async ValueTask DisposeAsync()
+    private async Task DisposeCopilotSessionAsync(object? session)
     {
-        if (_disposed)
+        if (session is not IAsyncDisposable disposable)
         {
             return;
         }
 
-        _disposed = true;
+        try
+        {
+            await disposable.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogProviderFailure(LogLevel.Debug, CleanupProvider.GitHubCopilot, ex, "Could not dispose the GitHub Copilot session.");
+        }
+    }
 
-        CancellationTokenSource? cts;
+    // --- Foundry Local storage reclaim ----------------------------------------------------------
+
+    // Runs deferred storage work for a settings change. Admitted by the caller under _gate, and
+    // re-checked against the configuration applied by the time it runs: a reclaim scheduled for a
+    // switch away must not run after the user has switched back, and nothing runs once the user has
+    // explicitly loaded or listed models since it was scheduled (epoch).
+    private async Task RunStorageIntentAsync(FoundryStorageIntent intent, long epoch, CleanupOperationTracker.Lease lease)
+    {
+        using var ownership = lease;
+        try
+        {
+            if (StorageWorkGateForTesting is { } gate)
+            {
+                await gate.WaitAsync(_lifetime.Token).ConfigureAwait(false);
+            }
+
+            switch (intent)
+            {
+                case FoundryStorageIntent.ReclaimEverything:
+                    // Raised here, after the reclaim released its gates, so a notice handler can
+                    // never be what holds up the next initialization.
+                    RaiseStorageReclaimed(await ReclaimEverythingAsync(epoch, _lifetime.Token).ConfigureAwait(false));
+                    break;
+
+                case FoundryStorageIntent.UnloadOnly:
+                    await UnloadForDisabledCleanupAsync(epoch, _lifetime.Token).ConfigureAwait(false);
+                    break;
+
+                case FoundryStorageIntent.ReviewUnusedRuntime:
+                    RaiseStorageReclaimed(await ReviewUnusedRuntimeAsync(epoch, _lifetime.Token).ConfigureAwait(false));
+                    break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down. Anything not reclaimed now is reclaimed at the next startup.
+        }
+        catch (Exception ex)
+        {
+            // By shape: file-system and SDK failures here quote paths under the user profile.
+            TryLogFailureShape(ex, "Reclaiming Foundry Local storage failed; it is retried at the next start.");
+        }
+    }
+
+    private bool StorageIntentStillApplies(FoundryStorageIntent intent, long epoch)
+    {
         lock (_gate)
         {
-            cts = _configureCts;
-            _configureCts = null;
-            DropAgents();
+            return !_operations.IsClosed &&
+                FoundryStoragePolicy.StillApplies(intent, _appliedSelection, explicitUseSinceScheduled: _explicitUseEpoch != epoch);
+        }
+    }
+
+    // Called holding the runtime gate, so this service cannot create a runtime underneath it.
+    private FoundryRuntimePresence ReadRuntimePresence() => CurrentRuntimePresence(_foundryHost.IsManagerCreated);
+
+    // The saved provider is not Foundry Local: unload, stop the web service Scribe started, remove
+    // the models, and delete the execution-provider downloads, each by the only means that is safe
+    // for how much of the runtime this process holds. Returns what was given back, if anything.
+    private async Task<FoundryStorageReclaim?> ReclaimEverythingAsync(long epoch, CancellationToken ct)
+    {
+        var storage = _foundryStorage!;
+        bool StillApplies() => StorageIntentStillApplies(FoundryStorageIntent.ReclaimEverything, epoch);
+
+        // _initLock first, then the runtime gate, the same order initialization takes them, so this
+        // can neither deadlock with it nor race a first-time runtime creation while it deletes files.
+        await _initLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _foundryRuntimeGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (!StillApplies())
+                {
+                    return null;
+                }
+
+                var plan = FoundryStoragePolicy.ForIntent(FoundryStorageIntent.ReclaimEverything, ReadRuntimePresence());
+                var unloaded = 0;
+                var removed = 0;
+                var removalFailures = 0;
+                long removedBytes = 0;
+
+                if (Volatile.Read(ref _catalog) is { } catalog && (plan.UnloadAllModels || plan.RemoveAllCachedModels))
+                {
+                    if (plan.UnloadAllModels)
+                    {
+                        unloaded = await UnloadAllFoundryModelsAsync(catalog, ct).ConfigureAwait(false);
+                    }
+
+                    if (plan.RemoveAllCachedModels)
+                    {
+                        var cached = await catalog.GetCachedModelsAsync(ct).ConfigureAwait(false);
+                        (removed, removalFailures, removedBytes) = await RemoveCachedModelsAsync(
+                                cached,
+                                storage,
+                                StillApplies,
+                                ct)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                // The user may have switched back, or asked for a model, while the SDK calls above
+                // ran; the rest would only be undone again by the work waiting behind this.
+                if (!StillApplies())
+                {
+                    return ReportReclaim(
+                        storage, plan, FoundryStorageReclaimReason.ProviderIsNotFoundryLocal, unloaded, removed, removalFailures, removedBytes, default);
+                }
+
+                if (plan.StopWebService)
+                {
+                    await StopFoundryWebServiceAsync(ct).ConfigureAwait(false);
+                }
+
+                if (plan.ReleaseRuntimeReferences)
+                {
+                    // The manager itself stays: the SDK never lets it be created again in this
+                    // process, so disposing it would break a later switch back to Foundry Local.
+                    _openAiClient = null;
+                    _managerReady = false;
+                    lock (_gate)
+                    {
+                        _foundryInUse = null;
+                    }
+                }
+
+                // Each directory goes as a unit: a file in use leaves all of it for a later pass rather
+                // than half a runtime or half a model on disk.
+                var files = default(FoundryStorageReclaimResult);
+                if (plan.DeleteModelFiles)
+                {
+                    files = files.Add(storage.Janitor.ReclaimDirectory(storage.AppDataDir, storage.ModelCacheDir, ct));
+                }
+
+                if (plan.RuntimeFiles == FoundryRuntimeFiles.DeleteNow)
+                {
+                    files = files.Add(storage.Janitor.ReclaimDirectory(storage.AppDataDir, storage.ExecutionProviderDir, ct));
+                }
+
+                // Every model is gone, so a pending "keep only the selected model" has nothing left to
+                // narrow down. Kept when a removal failed so it can be retried, and never cleared once
+                // the user has moved on: the marker may by then belong to a newer model switch.
+                if (plan.KeepOnlySelected == FoundryKeepOnlySelected.Clear && removalFailures == 0 &&
+                    files.FilesDeferred == 0 && !files.Refused)
+                {
+                    lock (_markerSync)
+                    {
+                        if (StillApplies())
+                        {
+                            storage.WriteKeepOnlySelected(false);
+                        }
+                    }
+                }
+
+                return ReportReclaim(
+                    storage, plan, FoundryStorageReclaimReason.ProviderIsNotFoundryLocal, unloaded, removed, removalFailures, removedBytes, files);
+            }
+            finally
+            {
+                _foundryRuntimeGate.Release();
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    // AI cleanup was switched off while Foundry Local stays selected: free the memory, keep the files
+    // so switching it back on is quick.
+    private async Task UnloadForDisabledCleanupAsync(long epoch, CancellationToken ct)
+    {
+        await _initLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!StorageIntentStillApplies(FoundryStorageIntent.UnloadOnly, epoch) ||
+                Volatile.Read(ref _catalog) is not { } catalog)
+            {
+                return;
+            }
+
+            var unloaded = await UnloadAllFoundryModelsAsync(catalog, ct).ConfigureAwait(false);
+            if (unloaded > 0)
+            {
+                _log.LogInformation(
+                    "AI cleanup is off: unloaded {Count} Foundry Local model(s) to free memory; the downloaded files stay.",
+                    unloaded);
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    // Startup with Foundry Local saved and cleanup off. When no model is cached, the hardware runtime
+    // downloads came from browsing the model list rather than from choosing to load a model, so they
+    // go; setting Foundry Local up again downloads them. Returns what was given back, if anything.
+    private async Task<FoundryStorageReclaim?> ReviewUnusedRuntimeAsync(long epoch, CancellationToken ct)
+    {
+        var storage = _foundryStorage!;
+
+        // Same order as initialization, and held throughout, so no runtime can be created while the
+        // cache is read and the runtime deleted.
+        await _initLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _foundryRuntimeGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (!StorageIntentStillApplies(FoundryStorageIntent.ReviewUnusedRuntime, epoch))
+                {
+                    return null;
+                }
+
+                var modelCache = storage.Janitor.InspectModelCache(storage.AppDataDir, storage.ModelCacheDir);
+                var plan = FoundryStoragePolicy.ForIntent(FoundryStorageIntent.ReviewUnusedRuntime, ReadRuntimePresence(), modelCache);
+                if (plan.RuntimeFiles != FoundryRuntimeFiles.DeleteNow)
+                {
+                    return null;
+                }
+
+                var files = storage.Janitor.ReclaimDirectory(storage.AppDataDir, storage.ExecutionProviderDir, ct);
+                if (plan.KeepOnlySelected == FoundryKeepOnlySelected.Clear && files.FilesDeferred == 0 && !files.Refused)
+                {
+                    lock (_markerSync)
+                    {
+                        if (StorageIntentStillApplies(FoundryStorageIntent.ReviewUnusedRuntime, epoch))
+                        {
+                            storage.WriteKeepOnlySelected(false);
+                        }
+                    }
+                }
+
+                if (files.FilesDeleted > 0)
+                {
+                    _log.LogInformation(
+                        "Foundry Local is selected but no model is downloaded and AI cleanup is off: deleted the hardware runtime downloads; setting up Foundry Local fetches them again.");
+                }
+
+                return ReportReclaim(storage, plan, FoundryStorageReclaimReason.RuntimeWithoutModel, 0, 0, 0, 0, files);
+            }
+            finally
+            {
+                _foundryRuntimeGate.Release();
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    // Once the selected Foundry Local model is in use, removes every other cached model, keeping only
+    // the selected one: after a model switch (the persisted marker), and once per session when
+    // Foundry Local was saved at startup (leftovers, including switches made before this rule).
+    private void ScheduleKeepOnlySelected(CleanupOptions options, FoundryModelIdentity inUse)
+    {
+        if (_foundryStorage is not { } storage)
+        {
+            return;
         }
 
-        try { cts?.Cancel(); } catch { /* best effort */ }
-        cts?.Dispose();
+        bool pending;
+        lock (_markerSync)
+        {
+            pending = _keepOnlySelectedArmed || storage.ReadKeepOnlySelected();
+        }
+
+        if (!pending)
+        {
+            return;
+        }
+
+        FoundrySelection? scheduledFor;
+        CleanupOperationTracker.Lease? lease;
+        long epoch;
+        lock (_gate)
+        {
+            scheduledFor = _appliedSelection;
+            epoch = _explicitUseEpoch;
+            lease = _operations.TryEnter();
+        }
+
+        if (lease is null || scheduledFor is not { IsFoundry: true } selection)
+        {
+            lease?.Dispose();
+            return;
+        }
+
+        LastStorageWork = Task.Run(() => KeepOnlySelectedAsync(selection, options.FoundryModelAlias, inUse, epoch, lease));
+    }
+
+    // Whether the model a keep-only-selected pass was scheduled for is still the selected one in use,
+    // and the user has not explicitly loaded or listed models since.
+    private bool KeepOnlySelectedStillCurrent(FoundrySelection scheduledFor, FoundryModelIdentity inUse, long epoch)
+    {
+        lock (_gate)
+        {
+            return !_operations.IsClosed && _appliedSelection == scheduledFor && _explicitUseEpoch == epoch &&
+                _status == CleanupStatus.Ready && _foundryInUse == inUse;
+        }
+    }
+
+    private async Task KeepOnlySelectedAsync(
+        FoundrySelection scheduledFor, string effectiveAlias, FoundryModelIdentity inUse, long epoch, CleanupOperationTracker.Lease lease)
+    {
+        using var ownership = lease;
+        var storage = _foundryStorage!;
+        var ct = _lifetime.Token;
+        bool StillCurrent() => KeepOnlySelectedStillCurrent(scheduledFor, inUse, epoch);
+        FoundryStorageReclaim? reclaimed = null;
+        try
+        {
+            await _initLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                if (!StillCurrent() || Volatile.Read(ref _catalog) is not { } catalog)
+                {
+                    return;
+                }
+
+                var cached = await catalog.GetCachedModelsAsync(ct).ConfigureAwait(false);
+                var loaded = await catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false);
+                var removeIds = FoundryStoragePolicy.SelectModelsToRemove(
+                    [scheduledFor.Alias, effectiveAlias, inUse.Id, inUse.Alias],
+                    cached.Select(ToIdentity),
+                    loaded.Select(ToIdentity));
+
+                // Re-checked before every removal: a newer switch made while this runs may select one
+                // of the models this pass would otherwise delete.
+                var remove = new HashSet<string>(removeIds, StringComparer.OrdinalIgnoreCase);
+                var (removed, failures, bytes) = await RemoveCachedModelsAsync(
+                        cached.Where(model => remove.Contains(model.Id)).ToList(),
+                        storage,
+                        StillCurrent,
+                        ct)
+                    .ConfigureAwait(false);
+
+                if (failures == 0)
+                {
+                    lock (_markerSync)
+                    {
+                        if (StillCurrent())
+                        {
+                            storage.WriteKeepOnlySelected(false);
+                            _keepOnlySelectedArmed = false;
+                        }
+                    }
+                }
+
+                if (removed > 0 || failures > 0)
+                {
+                    _log.LogInformation(
+                        "Kept only the selected Foundry Local model: removed {Removed} other cached model(s), {Megabytes:F0} MB, {Failed} left for a later attempt.",
+                        removed, bytes / (1024.0 * 1024.0), failures);
+                }
+
+                if (removed > 0)
+                {
+                    reclaimed = new FoundryStorageReclaim(
+                        FoundryStorageReclaimReason.ModelSwitched, bytes, removed, FilesDeleted: 0, RuntimeDeletedAtNextStart: false);
+                }
+            }
+            finally
+            {
+                _initLock.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down; the marker stays set, so the next start finishes the job.
+        }
+        catch (Exception ex)
+        {
+            TryLogFailureShape(ex, "Removing the previously selected Foundry Local model failed; it is retried later.");
+        }
+
+        // After the init lock is released, so a notice handler cannot hold up the next initialization.
+        RaiseStorageReclaimed(reclaimed);
+    }
+
+    private static FoundryModelIdentity ToIdentity(IModel model) => new(model.Id, model.Alias);
+
+    private async Task<int> UnloadAllFoundryModelsAsync(ICatalog catalog, CancellationToken ct)
+    {
+        var unloaded = 0;
+        foreach (var model in await catalog.GetLoadedModelsAsync(ct).ConfigureAwait(false))
+        {
+            try
+            {
+                await model.UnloadAsync(ct).ConfigureAwait(false);
+                unloaded++;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                TryLogFailureShape(ex, "Could not unload a Foundry Local model.", LogLevel.Debug);
+            }
+        }
+
+        return unloaded;
+    }
+
+    // Removal goes through the SDK's own RemoveFromCacheAsync, which knows its cache layout; the
+    // size is measured first, read-only, purely for the log line. stillWanted is asked before each
+    // model, so work that the user's latest settings no longer call for stops at once.
+    private async Task<(int Removed, int Failures, long Bytes)> RemoveCachedModelsAsync(
+        IReadOnlyList<IModel> models, FoundryLocalStorage storage, Func<bool> stillWanted, CancellationToken ct)
+    {
+        var removed = 0;
+        var failures = 0;
+        long bytes = 0;
+        foreach (var model in models)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!stillWanted())
+            {
+                // Not a failure, but not finished either: the marker must not be cleared as if it were.
+                failures++;
+                break;
+            }
+
+            long size = 0;
+            try
+            {
+                size = storage.Janitor.MeasureBytes(storage.AppDataDir, await model.GetPathAsync(ct).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // Sizing only feeds the log; removal proceeds regardless.
+            }
+
+            try
+            {
+                await model.RemoveFromCacheAsync(ct).ConfigureAwait(false);
+                removed++;
+                bytes += size;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                TryLogFailureShape(ex, "Could not remove a Foundry Local model from the cache.", LogLevel.Debug);
+            }
+        }
+
+        return (removed, failures, bytes);
+    }
+
+    // Must be called holding _initLock.
+    private async Task StopFoundryWebServiceAsync(CancellationToken ct)
+    {
+        if (!_webServiceStarted || Volatile.Read(ref _foundryRuntime) is not { } runtime)
+        {
+            return;
+        }
+
+        try
+        {
+            await runtime.StopWebServiceAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            TryLogFailureShape(ex, "Stopping the Foundry Local web service failed.", LogLevel.Debug);
+        }
+
+        // Cleared either way, so a switch back to Foundry Local starts the service and rebuilds the
+        // client instead of trusting an endpoint that may be gone.
+        _webServiceStarted = false;
+        _managerReady = false;
+        _openAiClient = null;
+    }
+
+    // Logs a failure by its shape only. Used where a file-system or SDK message would name a path under
+    // the user profile (the reclaim log lines promise no user name) or a remote endpoint.
+    private void TryLogFailureShape(Exception exception, string message, LogLevel level = LogLevel.Warning)
+    {
+        try
+        {
+            _log.Log(level, "{Message} ({Failure})", message, CleanupFailureShape.Describe(exception));
+        }
+        catch (Exception)
+        {
+            // Logging must never turn a best-effort reclaim into a failure.
+        }
+    }
+
+    // Logs one reclaim pass and returns what it gave back, or null when nothing was freed.
+    private FoundryStorageReclaim? ReportReclaim(
+        FoundryLocalStorage storage,
+        FoundryStoragePlan plan,
+        FoundryStorageReclaimReason reason,
+        int unloaded,
+        int removed,
+        int removalFailures,
+        long removedBytes,
+        FoundryStorageReclaimResult files)
+    {
+        var freedBytes = removedBytes + files.BytesDeleted;
+        var megabytes = freedBytes / (1024.0 * 1024.0);
+        if (unloaded > 0 || removed > 0 || removalFailures > 0 || files.FilesDeleted > 0 ||
+            files.FilesDeferred > 0 || files.ReparsePointsSkipped > 0 || files.Refused)
+        {
+            _log.LogInformation(
+                "Reclaimed Foundry Local storage in {Directory}: {Megabytes:F0} MB, {Models} cached model(s) removed, {Files} file(s) deleted, {Unloaded} model(s) unloaded; {Deferred} left for a later attempt, {Skipped} link(s) skipped, refused={Refused}.",
+                FoundryLocalStorage.DisplayPath(storage.AppDataDir),
+                megabytes,
+                removed,
+                files.FilesDeleted,
+                unloaded,
+                removalFailures + files.FilesDeferred,
+                files.ReparsePointsSkipped,
+                files.Refused);
+        }
+
+        var runtimeDeferred = plan.RuntimeFiles == FoundryRuntimeFiles.DeferToNextStartup;
+        if (runtimeDeferred)
+        {
+            _log.LogInformation(
+                "Foundry Local execution-provider downloads in {Directory} are in use by this process; they are deleted at the next start if another provider is still selected.",
+                FoundryLocalStorage.DisplayPath(storage.ExecutionProviderDir));
+        }
+
+        return freedBytes > 0 || removed > 0 || files.FilesDeleted > 0
+            ? new FoundryStorageReclaim(reason, freedBytes, removed, files.FilesDeleted, runtimeDeferred)
+            : null;
+    }
+
+    // Tells subscribers what a reclaim gave back. Never under a Scribe lock, never after disposal
+    // began, and one throwing subscriber cannot stop the others (P-3).
+    private void RaiseStorageReclaimed(FoundryStorageReclaim? reclaimed)
+    {
+        if (reclaimed is null || _operations.IsClosed)
+        {
+            return;
+        }
+
+        ResilientEvent.InvokeAll(
+            FoundryStorageReclaimed,
+            reclaimed,
+            ex => TryLogFailureShape(ex, "A Foundry Local reclaim notice handler threw.", LogLevel.Debug));
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        CancellationTokenSource? configure;
+        List<AIAgent> agents;
+        Task drained;
+        lock (_gate)
+        {
+            if (_operations.IsClosed)
+            {
+                return;
+            }
+
+            // Closing admission under _gate is what makes every publication check (status, agents,
+            // Copilot client, Foundry runtime) refuse from this point on.
+            drained = _operations.Close();
+            configure = _configureCts;
+            _configureCts = null;
+            agents = DetachAgents();
+        }
+
+        // Outside _gate: cancellation runs registered callbacks, and so the cancelled operations'
+        // continuations, synchronously on this thread.
+        TryCancel(_lifetime);
+        TryCancel(configure);
+
+        // Every admitted operation, superseded initializations included, has to stop using the
+        // shared resources before any of them is released. One that will not stop in time keeps them:
+        // releasing a client or runtime in use turns a slow shutdown into a crash.
+        try
+        {
+            await drained.WaitAsync(DisposalDrainTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            DisposalOutcome = CleanupDisposalOutcome.LeftToProcessExit;
+            _log.LogWarning(
+                "AI cleanup shut down with {Count} operation(s) still running after {Seconds:F0}s; their shared resources are left to process exit rather than released while in use.",
+                _operations.ActiveCount,
+                DisposalDrainTimeout.TotalSeconds);
+            return;
+        }
+
+        /*
+         * Released on the thread pool, never on the caller's context.
+         *
+         * The app disposes this from the WPF dispatcher through Host.Dispose, which blocks on
+         * DisposeAsync. With nothing in flight the drain above completes synchronously, so everything
+         * below would otherwise run on that blocked dispatcher. The Copilot SDK's own cleanup awaits
+         * the CLI's exit and its stderr pump without ConfigureAwait(false) (GitHub.Copilot.SDK 1.0.5),
+         * so those continuations would be posted to the dispatcher and never run: the app would never
+         * exit, and would keep holding the single-instance mutex. Task.Yield would not help, because
+         * it posts back to the captured context too.
+         */
+        await Task.Run(() => ReleaseSharedResourcesAsync(agents)).ConfigureAwait(false);
+
+        _initLock.Dispose();
+        _foundryRuntimeGate.Dispose();
+        configure?.Dispose();
+        _lifetime.Dispose();
+        DisposalOutcome = CleanupDisposalOutcome.Released;
+    }
+
+    // Runs after the drain, so no cleanup call is still using any of these.
+    private async Task ReleaseSharedResourcesAsync(List<AIAgent> agents)
+    {
+        foreach (var agent in agents)
+        {
+            await DisposeQuietlyAsync(agent).ConfigureAwait(false);
+        }
 
         /*
          * The Copilot session is a child process, so it has to be asked to close.
          *
          * DropAgents only clears the agent references; nothing in it reaches the CLI. Without this
-         * the `copilot` process outlived the app on every exit, and this method returned a completed
-         * ValueTask while claiming asynchrony it never used. Ordered after the cancel so an
-         * initialization already in flight is told to stop before its session is taken away.
+         * the `copilot` process outlived the app on every exit.
          */
         await ReleaseCopilotSessionAsync().ConfigureAwait(false);
 
-        try { _manager?.Dispose(); } catch { /* best effort */ }
-        _initLock.Dispose();
+        // Stops the Foundry Local web service too, when Scribe started it.
+        var runtime = Interlocked.Exchange(ref _foundryRuntime, null);
+        Volatile.Write(ref _catalog, null);
+        _openAiClient = null;
+        try
+        {
+            runtime?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug("Could not dispose the Foundry Local manager ({Failure}).", DescribeFailureShape(ex));
+        }
+    }
+
+    // Must be called under _gate. The distinct agents the service holds, detached so nothing new can
+    // pick them up; they are disposed only after every operation that captured one has finished.
+    private List<AIAgent> DetachAgents()
+    {
+        var agents = new List<AIAgent>(_styleAgents.Count + 1);
+        if (_agent is not null)
+        {
+            agents.Add(_agent);
+        }
+
+        foreach (var styled in _styleAgents.Values)
+        {
+            if (!agents.Contains(styled))
+            {
+                agents.Add(styled);
+            }
+        }
+
+        DropAgents();
+        return agents;
+    }
+
+    private async Task DisposeQuietlyAsync(object resource)
+    {
+        try
+        {
+            switch (resource)
+            {
+                case IAsyncDisposable asyncDisposable:
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                    break;
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            // By shape: an agent over a remote endpoint can surface that endpoint in its failure.
+            TryLogFailureShape(ex, "Could not dispose a cleanup agent.", LogLevel.Debug);
+        }
     }
 }

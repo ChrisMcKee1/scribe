@@ -69,10 +69,13 @@ installer, observability, DPAPI, test). A bare line breaks the one convention th
 readable at approval time.
 
 **Also check the flow rules.** `Microsoft.Extensions.AI.Evaluation` is referenced
-`PrivateAssets="all"` in `tools/Scribe.Evals/Scribe.Evals.csproj:24` so the eval framework can never
-become a shipped dependency, and the file says so. A new dev-only or tool-only package referenced
-without `PrivateAssets="all"` from a project that flows into `Scribe.App` is 🟡. All four tools and
-the test project set `IsPackable=false`; a new tool project without it is 💡 at most.
+`PrivateAssets="all"` in `tools/Scribe.Evals/Scribe.Evals.csproj:25`, so the Evals project's own
+reference never flows anywhere. The package still ships with the app, because `Microsoft.Agents.AI` and
+`Microsoft.Agents.AI.OpenAI` depend on it, so it is a runtime dependency of cleanup and moves with the
+`Microsoft.Extensions.AI` set (the comment above its entry in `Directory.Packages.props` says so). A new
+dev-only or tool-only package referenced without `PrivateAssets="all"` from a project that flows into
+`Scribe.App` is 🟡. All four tools and the test project set `IsPackable=false`; a new tool project
+without it is 💡 at most.
 
 **There is no `nuget.config` and no `global.json` in this repository.** A diff that adds either is
 worth naming: a new feed changes where packages come from, and a new `global.json` pins the SDK,
@@ -84,26 +87,30 @@ diff also explains it; adding a feed with no explanation is 🟡.
 
 Most `PackageVersion` lines are ordinary. Two are not, and both carry their reason in the file.
 
-**`OpenAI` is held at `2.12.0` deliberately** (`Directory.Packages.props:49-52`).
-`Microsoft.Extensions.AI.OpenAI` 10.9.0 constrains `OpenAI` to `>= 2.12.0 && < 2.13.0`, so taking
-2.13.0 breaks restore with **NU1608**. `AGENTS.md:73-76` records the second half, which is the part
-that makes this a runtime issue rather than a restore issue: `ProjectResponsesClient` needs a
-constructor that exists only in 2.13.0, so calling it **compiles perfectly and throws
+**`OpenAI` is held at `2.12.0` deliberately** (`Directory.Packages.props:75`, with its reason in the
+comment above it). `Microsoft.Extensions.AI.OpenAI` 10.9.0 constrains `OpenAI` to `>= 2.12.0 && <
+2.13.0`, so taking 2.13.0 alone breaks restore with **NU1608**. The part that makes this a runtime
+issue rather than a restore issue is that `Microsoft.Extensions.AI.OpenAI` and
+`Microsoft.Agents.AI.OpenAI` are compiled against one `OpenAI` build and bind to its members at
+runtime, so an `OpenAI` that satisfies a declared range can still **compile perfectly and throw
 `MissingMethodException` at runtime**. That was one of the three defects in one release that compiled
-warning clean.
+warning clean: `ProjectResponsesClient` (from `Azure.AI.Projects`, since removed along with
+`Microsoft.Agents.AI.Foundry`) needed a constructor that exists only in 2.13.0.
 
-- **🔴 Critical:** moving `OpenAI` off 2.12.0 without moving `Microsoft.Extensions.AI.OpenAI` in the
-  same diff to a version whose range admits it, and without the PR body saying the range widened.
-- **🔴 Critical:** deleting or truncating the comment at `Directory.Packages.props:49-51` while
-  leaving the pin. The pin without its reason is the next agent's "harmless version bump".
-- The credential half of this belongs to `azure-credential`, which owns the
-  `ProjectResponsesClient` versus `AIProjectClient.AsAIAgent` path. Note the overlap and let synthesis
-  dedup; do not restate its mechanics.
+- **🔴 Critical:** moving `OpenAI` without moving `Microsoft.Extensions.AI.*` and
+  `Microsoft.Agents.AI.*` in the same diff to the set built against it (the prepared set is 2.13.0,
+  10.10.0 and 1.22.0; 2.14.0 is unsafe with `Microsoft.Extensions.AI.OpenAI` 10.10.0), and without the
+  PR body saying why.
+- **🔴 Critical:** deleting or truncating the comment above the `OpenAI` entry while leaving the pin.
+  The pin without its reason is the next agent's "harmless version bump".
+- The credential half of this belongs to `azure-credential`, which owns the Responses path that serves
+  both Foundry URL shapes and flags a reintroduced `AIProjectClient` or `ProjectResponsesClient`. Note
+  the overlap and let synthesis dedup; do not restate its mechanics.
 
 **`SQLitePCLRaw.bundle_e_sqlite3` is pinned directly to override a transitive bundle**
-(`Directory.Packages.props:25-29`, currently `3.0.5`). It overrides the bundle
+(`Directory.Packages.props:41-46`, currently `3.0.5`). It overrides the bundle
 `Microsoft.Data.Sqlite` brings in, which is flagged by **CVE-2025-6965** (GHSA-2m69-gcr7-jv3q), and
-`AGENTS.md:727-730` lists removing it under **Never**. It must stay at or above 3.0.3, and
+`AGENTS.md` lists removing it under **Never**. It must stay at or above 3.0.3, and
 `ScribeDatabase.ExpectedSqliteVersion` asserts the exact native version at runtime, so the constant
 and the package move together.
 
@@ -120,7 +127,7 @@ maintainer approved it. That is §9, not this section.
 
 ## §3. The version lives in `Directory.Build.props`, and nowhere else
 
-`Directory.Build.props:6` carries `<VersionPrefix>` (currently `0.3.11`), and `:8-9` derive `Version`
+`Directory.Build.props:6` carries `<VersionPrefix>` (currently `0.4.3`), and `:8-9` derive `Version`
 from it so CI can pass `-p:VersionSuffix=rc.1` without editing the file. `AGENTS.md:61-63` states the
 consequence directly: *"Read `<VersionPrefix>` from that file rather than trusting a number quoted
 here; a version pinned in prose is stale the next time anyone ships."*
@@ -216,9 +223,9 @@ Every caller passes `Platform` and the matching RID together:
 
 | Caller | Invocation |
 | --- | --- |
-| `build/pack.ps1:143-149` | `-r $Runtime --self-contained true -p:Platform=$OverlayPlatform`, targets table at `:64-71` |
+| `build/pack.ps1:157-163` | `-r $Runtime --self-contained true -p:Platform=$OverlayPlatform`, targets table at `:64-71` |
 | `build/pack-msix.ps1:177` | same pairing, targets table at `:56-63` |
-| `.github/workflows/ci.yml:70-72, :92` | `-p:Platform=${{ matrix.overlay-platform }}` on both the build and the publish |
+| `.github/workflows/ci.yml:70-72, :115` | `-p:Platform=${{ matrix.overlay-platform }}` on both the build and the publish |
 | `AGENTS.md:104-107` | documents the standalone build command for both platforms |
 
 Note the spelling asymmetry, which `pack-msix.ps1:52-53` calls out: the Velopack runtime is
@@ -265,8 +272,8 @@ What it actually does, verified:
   strict-mode change would leak into the caller's scope and turn the pack scripts' friendly XML errors
   into cryptic runtime failures.
 
-The four callers: `build/pack.ps1:156` (after the overlay is published into the payload, so the pill
-is covered), `build/pack-msix.ps1:185`, and `.github/workflows/ci.yml:94-98` on both matrix legs.
+The four callers: `build/pack.ps1:170` (after the overlay is published into the payload, so the pill
+is covered), `build/pack-msix.ps1:185`, and `.github/workflows/ci.yml:117-121` on both matrix legs.
 
 **🔴 Critical, hard flag:**
 
@@ -286,10 +293,12 @@ body to say what it was verified against. `AGENTS.md:620-623` records that the c
 working both ways, accepting a real ARM64 payload and rejecting that same payload when claimed as x64.
 
 **Also on the CI side.** `ci.yml` builds and exercises both architectures on native silicon: the
-matrix at `:29-40`, the overlay build at `:70-72`, the unit tests at `:74-76`,
-`tools/Scribe.AsrCheck` at `:82-84`, the self-contained publish at `:88-92`, and the payload check at
-`:94-98`. `AsrCheck` is load bearing and the file says why: the unit tests never load sherpa-onnx, so
-this is the only step proving the native engine actually decodes on that architecture. **🔴 Critical**
+matrix at `:29-40`, the overlay build at `:70-72`, the unit tests at `:74-81` (with
+`SCRIBE_MODELS_DIR`, so the model-dependent tests really run), `tools/Scribe.AsrCheck` at `:88-90`, the
+quick scenario suite and its report upload at `:97-107`, the self-contained publish at `:111-115`, and
+the payload check at `:117-121`. `AsrCheck` is load bearing and the file says why: the unit tests only
+smoke-test the engine, so this is the step that decodes the committed fixtures end to end and fails
+loudly on a broken native on that architecture. **🔴 Critical**
 for dropping the `windows-11-arm` leg, the `AsrCheck` step, or the payload verify step. The comment at
 `ci.yml:35-36` also records that the ARM64 runner is free only for public repositories and that a
 failure there is a deliberate signal about repository visibility; do not "fix" that by removing the
@@ -319,27 +328,27 @@ simpler" is drifting, not reviewing.
   non-zero fourth field is rejected at ingestion. 🔴 if either is removed.
 - **`ProcessorArchitecture` must match the payload.** Written from the targets table (`:56-63`,
   `:225`) and re-verified per runtime at `store.yml:115-119`. 🔴 if that verification is dropped.
-- **The virtualization exclusion is not optional.** `:251-255` declares
-  `virtualization:ExcludedDirectory` for `$(KnownFolder:LocalAppData)\ScribeData`, and `:289` declares
-  the `unvirtualizedResources` restricted capability that it requires. `AGENTS.md:527-554` records the
-  incident: a packaged app's **new** folder under `%LOCALAPPDATA%` is redirected into
-  `%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\`, the app reads its own path back through the
-  merged view so everything works, but File Explorer sees nothing, and a 0.3.10 Store user's log
-  request died there. AGENTS.md says **"Do not remove either."** Removing the exclusion or the
-  capability is 🔴. The `AppPaths` migration half belongs to `settings-and-persistence`; note the
-  overlap.
+- **No folder is exempted from AppData write virtualization, deliberately.** The manifest comment at
+  `:233-251` records why: 0.3.11 exempted `$(KnownFolder:LocalAppData)\ScribeData`, the Store denied the
+  `unvirtualizedResources` restricted capability that needs (policy 10.6.3, 2026-08-27), and 0.3.13
+  removed both. Windows only redirects folders a packaged app newly creates, so existing installs keep
+  the real path; the support problem is handled in code by `AppPaths.ResolveEffectiveRoot`, which
+  probes where writes physically land so `EffectiveRootDir` names a folder that exists outside the
+  container. Re-adding the exclusion or the capability is 🔴: certification rejects it. The `AppPaths`
+  half (the probe, the `Effective*` paths and the `VirtualizedRootDir` migration) belongs to
+  `settings-and-persistence`; note the overlap.
 - **`TargetDeviceFamily MinVersion` must agree with `SupportedOSPlatformVersion`.** Both are
-  `10.0.22000.0` today (`pack-msix.ps1:263`, `src/Scribe.App/Scribe.App.csproj:54`), and the manifest
-  comment at `:259-262` states the failure a lower MinVersion causes: the Store installs on a Windows
+  `10.0.22000.0` today (`pack-msix.ps1:261`, `src/Scribe.App/Scribe.App.csproj:54`), and the manifest
+  comment above it states the failure a lower MinVersion causes: the Store installs on a Windows
   10 build where the app is compiled against a higher floor and WinML cannot acquire execution
   providers, which fails at runtime rather than at install. 🔴 if they diverge.
 - **Lowering `SupportedOSPlatformVersion` is a closed decision.** `AGENTS.md:44-48` and
   `Scribe.App.csproj:48-52`: the higher floor is what lets the platform analyzer allow Windows 11 APIs
   without a guard and clears the WinML build 18362 minimum. Do not reopen it; a diff that lowers it is
   🔴 and belongs in the maintainer-decision gate.
-- **Capabilities are minimal on purpose.** `:283-291` declares `runFullTrust`, `unvirtualizedResources`,
-  and the `microphone` device capability. A new capability is 🟡 at minimum and needs a justification in
-  the PR body, because restricted capabilities are reviewed at certification.
+- **Capabilities are minimal on purpose.** `:288-291` declares `runFullTrust` and the `microphone`
+  device capability. A new capability is 🟡 at minimum and needs a justification in the PR body,
+  because restricted capabilities are reviewed at certification.
 - **Store logos are generated from `docs/icon.png` at build time** (`:127-152`, `:199-204`) so the
   listing artwork cannot drift from the in-app mark. A checked-in PNG replacing the generator is 🟡.
 - **The bundle is deleted before anything is built.** `:97-102` removes a previous
@@ -428,10 +437,10 @@ worth holding.
 
 **Shared helpers are dot-sourced, not duplicated.** `scripts/Model-Manifest.ps1` holds the five
 runtime model files with their exact sizes and SHA-256 hashes (`:2-8`) plus `Test-ScribeRuntimeModels`
-(`:10-41`). It is dot-sourced by `build/pack.ps1:91`, `build/pack-msix.ps1:104`, and
+(`:10-41`). It is dot-sourced by `build/pack.ps1:100`, `build/pack-msix.ps1:104`, and
 `scripts/Download-Models.ps1:40`, so the downloader and the release preflight can never disagree about
-what a correct payload contains. `pack.ps1` verifies the source models before doing any work (`:94`)
-and the **published** payload afterwards (`:159-161`). **🔴 Critical** for a second copy of the
+what a correct payload contains. `pack.ps1` verifies the source models before doing any work (`:104`)
+and the **published** payload afterwards (`:173-175`). **🔴 Critical** for a second copy of the
 manifest, for a publish path that skips `Test-ScribeRuntimeModels`, or for a hash edited without the
 PR body saying the model itself changed. A wrong hash there is indistinguishable from a corrupted
 download.
@@ -457,9 +466,9 @@ Note the split, because it matters when you judge a path: **`Scribe.App` and `Sc
   where you should grep `build/`, `scripts/`, and `.github/workflows/` for the old string and name
   every survivor in a single finding.
 
-**Release artifact expectations are asserted, not assumed.** `pack.ps1:195-208` builds the expected
+**Release artifact expectations are asserted, not assumed.** `pack.ps1:209-222` builds the expected
 artifact list per architecture and throws on a missing one, adding the delta package only when a prior
-full package for that channel exists (`:165-171`, `:201-203`). `release.yml:53-98` seeds that prior
+full package for that channel exists (`:179-185`, `:215-217`). `release.yml:53-98` seeds that prior
 package from the last stable release and is careful to tolerate **only** the genuine
 first-ship-for-an-architecture case, confirming the asset really is absent before swallowing the
 error. `release.yml:186-202` uploads with `if-no-files-found: error`. **🟡 Important** for weakening
@@ -544,8 +553,8 @@ changed. This is P-12 in `references/patterns.md`.
 The new publish passes `-r $Runtime` but not `-p:Platform=$OverlayPlatform`. WinUI has no AnyCPU
 story, so `Scribe.Overlay.csproj:20` declares `<Platforms>x64;ARM64</Platforms>` and derives
 `RuntimeIdentifier` from `Platform` at `:31-39`; without the property the build takes the default
-platform rather than the one this target intends. `build/pack.ps1:147` passes it, and
-`.github/workflows/ci.yml:92` passes it, so this is the one caller left behind.
+platform rather than the one this target intends. `build/pack.ps1:161` passes it, and
+`.github/workflows/ci.yml:115` passes it, so this is the one caller left behind.
 
 Fix: add `-p:Platform=$OverlayPlatform` to the invocation. The targets table at `:56-63` already
 carries the correctly spelled value for each runtime.

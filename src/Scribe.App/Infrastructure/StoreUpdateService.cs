@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 using Windows.ApplicationModel;
 using Windows.Services.Store;
 
@@ -71,7 +72,7 @@ public sealed class StoreUpdateService
         {
             // Sideloaded, offline, or the Store service is unavailable. Any of these mean "nothing
             // to offer", never a reason to fault the settings window.
-            _log.LogDebug(ex, "Store update check was unavailable.");
+            _log.LogDebug("Store update check was unavailable ({Failure}).", FailureShape.Describe(ex));
             _pending = null;
             return false;
         }
@@ -108,7 +109,7 @@ public sealed class StoreUpdateService
         }
         catch (Exception ex) when (IsExpectedStoreFailure(ex))
         {
-            _log.LogWarning(ex, "Could not install the Microsoft Store update.");
+            _log.LogWarning("Could not install the Microsoft Store update ({Failure}).", FailureShape.Describe(ex));
             return StoreUpdateOutcome.Failed;
         }
     }
@@ -133,7 +134,7 @@ public sealed class StoreUpdateService
         }
         catch (Exception ex) when (IsExpectedStoreFailure(ex))
         {
-            _log.LogDebug(ex, "Microsoft Store context was unavailable.");
+            _log.LogDebug("Microsoft Store context was unavailable ({Failure}).", FailureShape.Describe(ex));
             _context = null;
             return null;
         }

@@ -259,25 +259,41 @@ rubric.
 - **Tell:** a new `DateTime.Now`, `DateTimeOffset.Now`, `Stopwatch`, or `Environment.TickCount64` read
   inside a decision method in `Scribe.Core`.
 
-### P-11: Additive forward-only SQLite migration gated on `PRAGMA user_version`
+### P-11: Additive, idempotent schema on every open; `user_version` stays 7
 
-- **When:** the SQLite schema changes.
-- **Use:** bump the `SchemaVersion` constant, add one more `if (current < N) { Execute(..., SchemaVN, ...) }`
-  block that only adds, run the whole sequence inside one transaction, and set `PRAGMA user_version` at
-  the end of it. A database whose `user_version` is **greater** than this build supports throws with a
-  message telling the user to install a newer Scribe rather than silently downgrading their data.
-- **Exemplar:** `ScribeDatabase.Migrate` (`src/Scribe.Core/Persistence/ScribeDatabase.cs`, around line
-  383), with `SchemaVersion` (around line 23) currently at 6 and the later steps additionally guarded by
-  a column probe (`HistoryNeedsColumn`) so a partially migrated database converges.
-- **Also part of this shape:** `ExpectedSqliteVersion` (around line 20) asserts the exact native SQLite
-  version at runtime. `SQLitePCLRaw.bundle_e_sqlite3` is referenced directly to override a transitive
-  bundle affected by CVE-2025-6965, so that constant moves only deliberately, together with the package.
-- **Not:** a destructive migration, a column rename, or a `DROP`. Not a new column without a version bump
-  (the table exists on an upgraded install and the `CREATE TABLE` will not run again). Note that a schema
-  or migration change is an **"Ask first"** item in `AGENTS.md`, so it also belongs in the
-  maintainer-decision gate.
-- **Tell:** any diff touching `ScribeDatabase.cs` where `SchemaVersion` is unchanged, or where
-  `ExpectedSqliteVersion` moves without a matching `Directory.Packages.props` change.
+- **When:** the SQLite schema needs a new column, index, or table.
+- **Use:** add it to `ScribeDatabase.EnsureAdditiveSchema`. Probe first (`PRAGMA table_info` for a column,
+  `sqlite_master` for a table), then either `ALTER TABLE ... ADD COLUMN` with a default that rows written
+  by older builds already satisfy, or `CREATE INDEX IF NOT EXISTS`. It runs after `Migrate` on every open
+  (`Migrate` returns early once `user_version` matches) and on the fresh file before a corruption salvage
+  copies rows into it, so the salvage carries the column. The lazy repository probe
+  (`HistoryRepository.EnsureColumn`) stays as the fallback for a table that comes back without the column,
+  and a new column is read only after probing for it.
+- **Why the version stays 7:** builds up to 0.4.2, and the Store's 0.4.1, throw at startup when
+  `user_version` is above 7, inside `async void OnStartup` after the single-instance mutex is taken and
+  before the tray icon exists, so the old build keeps running invisibly and blocks relaunch. The Store and
+  direct-download channels share `%LOCALAPPDATA%\ScribeData`, and users roll back, so any build may open a
+  file a newer one wrote. From 0.4.3 a build that meets a newer schema throws
+  `NewerDatabaseSchemaException`, which `App.OnStartup` catches around its explicit
+  `ScribeDatabase.Initialize()` to tell the user to install the latest version and exit cleanly, but the
+  older builds are still in the field.
+- **Exemplar:** `ScribeDatabase.EnsureAdditiveSchema` (`src/Scribe.Core/Persistence/ScribeDatabase.cs`,
+  around line 928), called after `Migrate` (around line 525) and before salvage (around line 717), with
+  `SchemaVersion` (around line 30) still 7. `audio_blobs.encoding INTEGER NOT NULL DEFAULT 0` is the
+  model: 0 means float32, the only format older builds wrote. `AudioStorageSchemaTests` pins that a file
+  this build wrote keeps `user_version` at or below 7 and still works for the SQL 0.4.2 runs.
+- **Also part of this shape:** where a lost column would make data misread, the data describes itself:
+  PCM16 blobs open with `AudioBlobCodec.Pcm16Magic`, so an older build's repair that drops `encoding`
+  cannot turn them into float32 noise. `ExpectedSqliteVersion` (around line 21) asserts the exact native
+  SQLite version at runtime; `SQLitePCLRaw.bundle_e_sqlite3` is referenced directly to override a
+  transitive bundle affected by CVE-2025-6965, so that constant moves only deliberately, together with the
+  package.
+- **Not:** raising `user_version` above 7. Not a destructive migration, a column rename, or a `DROP`. Not
+  a `NOT NULL` column without a default older rows satisfy. A schema change is still an **"Ask first"**
+  item in `AGENTS.md`, so it also belongs in the maintainer-decision gate.
+- **Tell:** any change to `SchemaVersion`; any new column read without a probe (a statement naming it on a
+  path that neither checks `table_info` nor goes through `EnsureColumn`); `ExpectedSqliteVersion` moving
+  without a matching `Directory.Packages.props` change.
 
 ### P-12: One architecture-specific native asset, selected by RID, with a build error for the rest
 

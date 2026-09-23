@@ -49,6 +49,12 @@ public static class ScribeTelemetry
     public const string TagInjectComplete = "scribe.inject.complete";
     public const string TagInjectFallback = "scribe.inject.fallback";
 
+    /// <summary>How the clipboard paste path ended (a <c>PasteDelivery</c> name).</summary>
+    public const string TagPasteDelivery = "scribe.inject.paste";
+
+    /// <summary>What became of the clipboard content Scribe borrowed (a <c>ClipboardRestoreOutcome</c> name).</summary>
+    public const string TagClipboardRestore = "scribe.inject.clipboard_restore";
+
     /// <summary>The shared source. Dispose is not needed for a process-lifetime static.</summary>
     public static readonly ActivitySource Source = new(
         SourceName,
@@ -64,4 +70,15 @@ public static class DictationOutcome
     public const string NoSpeech = "no-speech";
     public const string EmptyAfterPostProcess = "empty-after-postprocess";
     public const string Error = "error";
+}
+
+/// <summary>
+/// Values for the <see cref="ScribeTelemetry.TagAiSkipReason"/> tag. Each is a code that
+/// <see cref="TraceTagPolicy"/> shows as is, so the trace keeps saying why cleanup did not run; free text
+/// there would be shown only as omitted.
+/// </summary>
+public static class AiSkipReason
+{
+    /// <summary>Cleanup was switched on but its provider was not ready, for example <c>not-ready-Initializing</c>.</summary>
+    public static string NotReady(Cleanup.CleanupStatus status) => "not-ready-" + status;
 }

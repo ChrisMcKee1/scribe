@@ -17,6 +17,47 @@ Windows now offers **Save** to refresh the corrected dictation and keep editing,
 close**. macOS `QuickAddView.swift` has not yet adopted those separate actions or the refreshed
 word-chip and recent-picker state between saves.
 
+Windows 0.4.3 follow-up (2026-09-23): these Windows behavior changes may have made the matching rows
+below stale. Nothing under `macos/Scribe` was changed for them.
+
+- **Pause passes the push-to-talk key through.** While paused, every new press of the bindings reaches
+  other apps and nothing starts a dictation; `HotkeyManager.swift` still swallows the key while paused.
+- **Conditional clipboard restore.** Windows puts the previous clipboard text back only when the
+  clipboard still holds exactly what Scribe placed there, so a copy made during a dictation is kept;
+  `TextInjector.swift` restores unconditionally.
+- **Adaptive silence auto-stop.** The tracker follows a noise floor and counts a buffer as voice only
+  above both an absolute floor (about -45 dBFS) and the floor plus 10 dB, after a short calibration.
+- **Chunk seam planning.** Long captures are split with all seams placed together on the quietest
+  audio, and one extra chunk is planned when a capture sits just under a multiple of 30 s.
+- **History no longer blocks readiness.** The next dictation is accepted as soon as text is inserted;
+  one ordered background writer commits history.
+- **Atomic ASR and VAD load and use.** Loading and using each model is one step under its service's
+  gate, so an idle unload can no longer land between them.
+- **Decode cancellation.** A long decode stops between chunks at shutdown and never returns a partial
+  transcript.
+- **Storage retention and PCM16.** Stored audio is 16-bit PCM with a self-describing header, kept 7
+  days and 250 MB at most; cleanup failure samples go after 7 days whatever later cleanups do; the
+  newest damaged database copy is kept until the user deletes it.
+- **AI cleanup safe reasons and shape-only logging.** Failure and skip reasons are diagnostics-safe
+  phrases, the endpoint's own text reaches only Settings, and provider failures are logged by their
+  shape, never their message.
+- **Store field policy.** Responses requests always send `store=false`; Chat Completions requests
+  never set `store`.
+- **Silence auto-stop follows the binding that fired.** A held binding never auto-stops, even when the
+  other binding is a toggle, and the tracker belongs to its own recording.
+- **One owner per capture.** A capture opened after its recording ended goes to that recording's
+  processing or is reclaimed, so a pause or microphone fault at the start never leaves the microphone
+  on.
+- **Mandatory clipboard receipt.** A paste is confirmed only by state read while the clipboard is held;
+  when the receipt cannot be written Scribe types instead.
+- **AI switch ordering.** The newest user choice for AI cleanup wins, from the tray or from Settings,
+  and a save never overwrites a switch value its window did not show.
+- **Lost settings after a repair.** History text is kept and partial settings writes are refused until
+  the user saves Settings.
+- **Prompt-only cleanup changes.** Editing the writing style, prompts or dictionary rebuilds the
+  cleanup agent in place instead of restarting the provider.
+- **Startup failure notice.** A failed start shows a notice and exits instead of staying hidden.
+
 ## Feature parity checklist
 
 | Feature | Status | Owner | macOS implementation approach |
@@ -37,7 +78,7 @@ word-chip and recent-picker state between saves.
 | Silence auto-stop for toggle mode | Done (stopgap) | Backend | `SilenceAutoStopDetector` implements an energy-threshold RMS detector (armed only for menu/toggle capture, never push-to-talk) firing after 2.0s below -45 dBFS once real speech was observed; unit-tested with XCTest. A trained Silero ONNX VAD (matching Windows exactly) is a follow-up, not yet done. |
 | Playground, raw recognition view | Done | Frontend | New "Playground" tab in `SettingsView.swift` displays the raw ASR transcript from the most recently completed dictation (hotkey or "Start Test Dictation"), pushed live via a new `PipelineReportStore` (`ObservableObject`) published from `AppDelegate.transcribeAndInject`. No separate playground window or dedicated "Run" button, unlike Windows: macOS's push-to-talk hotkey already fires regardless of which window/app is focused, so simply dictating normally while the Settings window is open on this tab is sufficient. Live-verified via AppleScript: triggered a real "Start Test Dictation" capture and confirmed the raw transcript, processed text, and timings rendered in the tab. |
 | Playground, replacement highlights | Done | Frontend | `TextPostProcessor` gained `processDetailed(_:) -> TextPostProcessingResult` (new `TextReplacement`/`TextReplacementKind` model, mirroring Windows' `ITextPostProcessor.ProcessDetailed`), extending the existing single-pass matcher to also report each dictionary/snippet substitution's exact range in the final text. Snippet spans are re-located after the dictionary phase runs on top of the expanded template (via a search-forward pass), matching Windows' `canonicalSnippets`-style two-phase reporting. The Playground tab renders these as inline colored/underlined `Text` segments (blue = dictionary, green = snippet). **Scope decision:** macOS has no dictionary "library" concept (established in a prior segment) and no live AI-cleanup/glossary wiring into the interactive pipeline yet, so unlike Windows' `ProcessDetailed`, this port has no `sourceText` parameter and no second "glossary" pass over pre-cleanup text; only base dictionary + snippet replacements are reported. 4 new XCTests (`testProcessDetailedReports*`) cover exact-span reporting, snippet-then-dictionary canonicalization, unchanged text producing no replacements, and blank input. |
-| Playground, per-step timings | Done | Backend | New `PipelineReport` struct (`PipelineReport.swift`) mirrors the shape of Windows' `DictationPipelineReport`: per-stage durations (capture, decode, AI cleanup, post-processing/dictionary+snippets, injection, total), a real-time factor, raw/processed/final text snapshots, the `InjectionResult`, and an optional `failureStage`/`failureReason` pair (mirroring Windows' `Fail(stage, reason)`). `transcribeAndInject` in `main.swift` times every stage including AI cleanup (previously only decode was timed) and publishes a report through `PipelineReportStore` after each run, success or failure. **Scope decision:** one Windows timing row is still intentionally not represented — a discrete "VAD decode" duration (macOS's capture uses an energy-threshold `SilenceAutoStopDetector`, not a trained Silero model with an inference step to time). Live-verified: real ambient speech captured via "Start Test Dictation" produced correct capture/decode/post-processing/injection timings, a total, and a real-time factor in the Settings window. |
+| Playground, per-step timings | Done | Backend | New `PipelineReport` struct (`PipelineReport.swift`) mirrors the shape of Windows' `DictationPipelineReport`: per-stage durations (capture, decode, AI cleanup, post-processing/dictionary+snippets, injection, total), a real-time factor, raw/processed/final text snapshots, the `InjectionResult`, and an optional `failureStage`/`failureReason` pair (mirroring Windows' `Fail(stage, reason)`). `transcribeAndInject` in `main.swift` times every stage including AI cleanup (previously only decode was timed) and publishes a report through `PipelineReportStore` after each run, success or failure. **Scope decision:** one Windows timing row is still intentionally not represented: a discrete "VAD decode" duration (macOS's capture uses an energy-threshold `SilenceAutoStopDetector`, not a trained Silero model with an inference step to time). Live-verified: real ambient speech captured via "Start Test Dictation" produced correct capture/decode/post-processing/injection timings, a total, and a real-time factor in the Settings window. |
 | Diagnostics panel, P50/P95 decode latency | Done | Backend | `DictationStats.swift` is a direct port of Windows' `Scribe.Core.Diagnostics.DictationStats` (same R-7/Excel-method percentile interpolation, verified against the same numeric fixtures via `DictationStatsTests`). `dictation_history` gained `decode_ms`/`cleanup_ms` columns (nullable, added via a non-destructive `ALTER TABLE` migration for existing databases). Rendered in the Settings window's new Diagnostics tab (24h/7d/30d window picker) and reachable headlessly via `Scribe --diagnostics [days]`. |
 | Diagnostics panel, real-time factor | Done | Backend | RTF (fastest/P50/P95) computed alongside decode latency in the same `DictationStats.compute`, from `decodeMilliseconds / audioMilliseconds` per dictation; audio duration was already recorded, decode time is now captured around the real `transcribe()` call in `main.swift` using `DispatchTime`. |
 | Usage insights, local totals and trend chart | Done | Backend | New `UsageAnalyzer.swift` is a faithful port of Windows' `Scribe.Core.Diagnostics.UsageAnalyzer` (trend bucketing via a new `LocalDate` calendar-date wrapper, top-apps ranking, and the covered/novel term-mining algorithm, sharing `DictionarySuggestionMiner.isJargonShaped` for novel-term detection). 11 XCTests ported 1:1 from `UsageAnalyzerTests.cs`, all passing on the first run. Rendered in a new "Usage Insights" Settings tab (7/30/90-day window picker) with a totals block (dictations, words, active days, speech time, average words) and a SwiftUI `Charts` bar-mark trend. Live-verified with seeded history: totals and trend chart rendered correctly. |
@@ -280,5 +321,5 @@ is the recommended default (best quality, 1.57s median latency), with `qwen2.5:1
 faster low-latency alternative in Settings. `llama3.2:1b` and `qwen2.5:0.5b` were tested and ruled
 out (worst quality, and both showed a 9-10s cold-start latency spike on one case). Note: scoring used
 a deterministic heuristic (no offline judge model available), so absolute scores are not directly
-comparable to the Windows `docs/model-leaderboard.md` numbers — re-run with a real judge before
+comparable to the Windows `docs/model-leaderboard.md` numbers; re-run with a real judge before
 finalizing for ship.

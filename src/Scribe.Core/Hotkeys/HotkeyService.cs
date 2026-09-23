@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Models;
@@ -9,6 +8,14 @@ namespace Scribe.Core.Hotkeys;
 /// Global push-to-talk hotkey via a <c>WH_KEYBOARD_LL</c> hook. The hook runs on its own
 /// thread with a native message pump (required for low-level hooks). The hook callback performs
 /// only key-set tracking, optional suppression, and transition enqueueing so it returns promptly.
+///
+/// The callback never waits for another thread. Windows calls it by sending a message to the hook
+/// thread and silently removes the hook if it answers after LowLevelHooksTimeout (at most 1000 ms),
+/// so the key state belongs to the hook thread alone (<see cref="HotkeyEngine"/>). Configuration
+/// and commands from other threads are queued through <see cref="HotkeyCommandRouter"/> and applied
+/// by the hook thread at its next key event, or sooner when a thread message wakes it; what other
+/// threads read is published without a lock; and transitions leave through a queue that never
+/// blocks its producer.
 /// </summary>
 public sealed class HotkeyService : IHotkeyService
 {
@@ -20,61 +27,54 @@ public sealed class HotkeyService : IHotkeyService
         (int)Marshal.OffsetOf<NativeMethods.KBDLLHOOKSTRUCT>(nameof(NativeMethods.KBDLLHOOKSTRUCT.dwExtraInfo));
 
     private static readonly TimeSpan WatchdogPeriod = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan InstallTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan JoinTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILogger<HotkeyService> _logger;
     private readonly object _sync = new();
-    private readonly NativeMethods.LowLevelKeyboardProc _proc;
-    private readonly ChordStateMachine _state;
+    private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
 
     /// <summary>
-    /// A transition in flight between the hook callback and the consumer thread. The generation
-    /// lets the dispatcher drop an Activated that was computed just before a state-clearing
-    /// operation (capture mode, binding update, hook reinstall) enqueued its own Deactivated;
-    /// without it a recording could start while capture mode is armed. Deactivations always
-    /// dispatch (a redundant stop is harmless, a missed stop is not). AllowReconcile is false for
-    /// transitions born from a state clear: right after a clear the reconciler cannot distinguish
-    /// a genuinely held key from a leaked one and could release a key the user is holding.
+    /// A transition in flight between the hook thread and the consumer thread. The generation
+    /// lets the dispatcher drop an Activated that was computed before a state-clearing request
+    /// (capture mode, binding update, pause, hook reinstall); without it a recording could start
+    /// while capture mode is armed. Deactivations always dispatch (a redundant stop is harmless, a
+    /// missed stop is not). AllowReconcile is false for transitions born from a state clear: right
+    /// after a clear the reconciler cannot distinguish a genuinely held key from a leaked one and
+    /// could release a key the user is holding.
     /// </summary>
     internal readonly record struct QueuedTransition(
         HotkeyTransition Transition, HotkeyTrigger Trigger, long Generation, bool AllowReconcile);
 
-    private volatile HotkeyBinding _binding = HotkeyBinding.Default;
-    private volatile HotkeyBinding? _dictationOnlyBinding;
-    private ChordStateMachine? _dictationOnlyState;
-    private readonly HotkeyTriggerArbiter _triggerArbiter = new();
-    private BlockingCollection<QueuedTransition>? _queue;
-    private Thread? _hookThread;
+    private HotkeyTransitionQueue? _transitions;
+    private HotkeyReconcileSignal? _reconcileSignal;
+    private HookInstallation? _installation;
     private Thread? _consumerThread;
     private Timer? _watchdog;
-    private uint _hookThreadId;
-    private nint _hookId;
     private long _hookCallbackCount;
     private readonly HookLivenessProbe _livenessProbe = new();
 
     public HotkeyService(ILogger<HotkeyService> logger)
+        : this(logger, HotkeyBinding.Default)
     {
-        _logger = logger;
-        _proc = HookCallback;
-        _state = new ChordStateMachine(_binding);
-        _reconciler = new SuppressedKeyReconciler(
-            NativeMethods.IsKeyLogicallyDown,
-            key => _state.IsPressed(key) || _dictationOnlyState?.IsPressed(key) == true,
-            key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
     }
 
     public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
-        : this(logger)
     {
-        _binding = binding;
-        _state.UpdateBinding(binding);
+        _logger = logger;
+        _router = new HotkeyCommandRouter(binding);
+        _reconciler = new SuppressedKeyReconciler(
+            NativeMethods.IsKeyLogicallyDown,
+            _router.IsPressed,
+            key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
     }
 
     public bool IsRunning { get; private set; }
 
-    public HotkeyBinding Binding => _binding;
+    public HotkeyBinding Binding => _router.Binding;
 
-    public HotkeyBinding? DictationOnlyBinding => _dictationOnlyBinding;
+    public HotkeyBinding? DictationOnlyBinding => _router.DictationOnlyBinding;
 
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
@@ -89,33 +89,27 @@ public sealed class HotkeyService : IHotkeyService
                 return;
             }
 
-            _queue = new BlockingCollection<QueuedTransition>(new ConcurrentQueue<QueuedTransition>());
-            _ = _state.Reset(); // fresh start: no consumer exists yet, so the transition is moot
-            _ = _dictationOnlyState?.Reset();
-            _triggerArbiter.Reset();
+            // A fresh engine in a fresh epoch, built from the published configuration: no consumer
+            // exists yet, so nothing from a previous run can leak into this one.
+            var transitions = new HotkeyTransitionQueue();
+            var reconcileSignal = new HotkeyReconcileSignal(ScheduleReconcile);
+            var (engine, _) = _router.BeginEngine(transitions);
+            var installation = new HookInstallation(this, engine, reconcileSignal);
 
-            using var installed = new ManualResetEventSlim(false);
-            Exception? installError = null;
-
-            _hookThread = new Thread(() => RunHookThread(installed, ref installError))
+            if (!installation.Install(InstallTimeout))
             {
-                Name = "Scribe.HotkeyHook",
-                IsBackground = true,
-            };
-            _hookThread.SetApartmentState(ApartmentState.STA);
-            _hookThread.Start();
-
-            installed.Wait(TimeSpan.FromSeconds(5));
-
-            if (_hookId == 0)
-            {
-                _queue.Dispose();
-                _queue = null;
+                _router.EndEngine(engine);
+                transitions.Complete();
+                transitions.Dispose();
+                reconcileSignal.Dispose();
                 throw new InvalidOperationException(
-                    "Failed to install the global keyboard hook.", installError);
+                    "Failed to install the global keyboard hook.", installation.InstallError);
             }
 
-            _consumerThread = new Thread(ConsumeTransitions)
+            _transitions = transitions;
+            _reconcileSignal = reconcileSignal;
+            _installation = installation;
+            _consumerThread = new Thread(() => ConsumeTransitions(transitions))
             {
                 Name = "Scribe.HotkeyDispatch",
                 IsBackground = true,
@@ -125,20 +119,23 @@ public sealed class HotkeyService : IHotkeyService
             // Windows silently removes a low-level hook whose callback misses the OS deadline
             // (documented: no notification of any kind). The watchdog probes liveness so a long
             // GC pause during ASR decode cannot permanently kill push-to-talk.
-            _hookCallbackCount = 0;
+            Interlocked.Exchange(ref _hookCallbackCount, 0);
             _livenessProbe.Disarm();
             _watchdog = new Timer(_ => WatchdogTick(), null, WatchdogPeriod, WatchdogPeriod);
 
             IsRunning = true;
+            var binding = Binding;
             _logger.LogInformation(
-                "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(_binding), _binding.Mode);
+                "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
         }
     }
 
     public void Stop()
     {
-        Thread? hookThread;
+        HookInstallation? installation;
         Thread? consumerThread;
+        HotkeyTransitionQueue? transitions;
+        HotkeyReconcileSignal? reconcileSignal;
 
         lock (_sync)
         {
@@ -150,277 +147,116 @@ public sealed class HotkeyService : IHotkeyService
             IsRunning = false;
             _watchdog?.Dispose();
             _watchdog = null;
-            hookThread = _hookThread;
+            installation = _installation;
             consumerThread = _consumerThread;
-
-            if (_hookThreadId != 0)
-            {
-                NativeMethods.PostThreadMessage(_hookThreadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);
-            }
-
-            _queue?.CompleteAdding();
-        }
-
-        hookThread?.Join(TimeSpan.FromSeconds(2));
-        consumerThread?.Join(TimeSpan.FromSeconds(2));
-
-        lock (_sync)
-        {
-            _queue?.Dispose();
-            _queue = null;
-            _hookThread = null;
+            transitions = _transitions;
+            reconcileSignal = _reconcileSignal;
+            _installation = null;
             _consumerThread = null;
-            _hookThreadId = 0;
-            _hookId = 0;
-            _ = _state.Reset();
-            _ = _dictationOnlyState?.Reset();
-            _triggerArbiter.Reset();
+            _transitions = null;
+            _reconcileSignal = null;
+
+            // From here on, requests only update the published configuration; the next Start
+            // builds its engine from it.
+            _router.EndEngine();
+            installation?.RequestQuit();
+            transitions?.Complete();
         }
+
+        installation?.Join(JoinTimeout);
+        consumerThread?.Join(JoinTimeout);
+        transitions?.Dispose();
+        reconcileSignal?.Dispose();
 
         _logger.LogInformation("Hotkey hook removed.");
     }
 
-    public void CancelToggle()
-    {
-        _state.CancelToggle();
-        _dictationOnlyState?.CancelToggle();
-        _triggerArbiter.Reset();
-    }
+    public void CancelToggle() => Wake(_router.CancelToggle());
 
     public void SetCaptureMode(bool enabled)
     {
-        var (transition, generation) = _state.SetCaptureMode(enabled);
-        var secondary = _dictationOnlyState?.SetCaptureMode(enabled);
-        if (transition != HotkeyTransition.None)
-        {
-            TryEnqueue(_queue, new QueuedTransition(
-                transition, _triggerArbiter.Take(HotkeyTrigger.Standard), generation, AllowReconcile: false));
-        }
-        else if (secondary is { Transition: not HotkeyTransition.None } secondaryTransition)
-        {
-            TryEnqueue(_queue, new QueuedTransition(
-                secondaryTransition.Transition, _triggerArbiter.Take(HotkeyTrigger.DictationOnly),
-                secondaryTransition.Generation, AllowReconcile: false));
-        }
-
+        Wake(_router.SetCaptureMode(enabled));
         _logger.LogInformation("Hotkey binding capture mode {State}.", enabled ? "enabled" : "disabled");
     }
 
-    public void UpdateBinding(HotkeyBinding binding) => UpdateBindings(binding, _dictationOnlyBinding);
+    public void SetPaused(bool paused) => OnPauseRequested(paused, _router.SetPaused(paused));
 
-    public void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
+    public void SetPaused(bool paused, long requestSequence)
     {
-        ArgumentNullException.ThrowIfNull(binding);
-        if (_binding == binding && _dictationOnlyBinding == dictationOnlyBinding)
+        if (_router.SetPaused(paused, requestSequence) is { } result)
+        {
+            OnPauseRequested(paused, result);
+        }
+        else
+        {
+            _logger.LogDebug("Ignored a hotkey pause request older than one already applied.");
+        }
+    }
+
+    private void OnPauseRequested(bool paused, (bool Changed, HotkeyEngine? Wake) result)
+    {
+        if (!result.Changed)
         {
             return;
         }
 
-        var activeTrigger = _triggerArbiter.Take(HotkeyTrigger.Standard);
-        _binding = binding;
-        var (transition, generation) = _state.UpdateBinding(binding);
-        _dictationOnlyBinding = dictationOnlyBinding;
-        var secondaryTransition = HotkeyTransition.None;
-        var secondaryGeneration = generation;
-        if (dictationOnlyBinding is null)
+        Wake(result.Wake);
+        _logger.LogInformation(
+            "Hotkey pass-through while paused {State}.", paused ? "enabled" : "disabled");
+    }
+
+    public void UpdateBinding(HotkeyBinding binding) => UpdateBindings(binding, DictationOnlyBinding);
+
+    public void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var (changed, wake) = _router.UpdateBindings(binding, dictationOnlyBinding);
+        if (!changed)
         {
-            if (_dictationOnlyState is not null)
-            {
-                (secondaryTransition, secondaryGeneration) = _dictationOnlyState.Reset();
-            }
-            _dictationOnlyState = null;
-        }
-        else if (_dictationOnlyState is null)
-        {
-            _dictationOnlyState = new ChordStateMachine(dictationOnlyBinding);
-        }
-        else
-        {
-            (secondaryTransition, secondaryGeneration) = _dictationOnlyState.UpdateBinding(dictationOnlyBinding);
+            return;
         }
 
-        if (transition != HotkeyTransition.None)
-        {
-            TryEnqueue(_queue, new QueuedTransition(
-                transition, activeTrigger, generation, AllowReconcile: false));
-        }
-        else if (secondaryTransition != HotkeyTransition.None)
-        {
-            TryEnqueue(_queue, new QueuedTransition(
-                secondaryTransition, activeTrigger,
-                secondaryGeneration, AllowReconcile: false));
-        }
-
+        Wake(wake);
         _logger.LogInformation(
             "Hotkey bindings updated: standard={Binding} ({Mode}), dictation-only={DictationOnly}.",
             DescribeBinding(binding), binding.Mode,
             dictationOnlyBinding is null ? "disabled" : DescribeBinding(dictationOnlyBinding));
     }
 
-    private void RunHookThread(ManualResetEventSlim installed, ref Exception? installError)
+    // Makes the hook thread apply queued commands now rather than at its next key event, so the
+    // Deactivated that ends a dictation (entering capture, rebinding) is not held back until the
+    // user happens to press a key. PostThreadMessage returns without waiting for the thread.
+    private static void Wake(HotkeyEngine? engine)
     {
-        // The handle stays thread-local: a hook thread that outlives its 2-second join (and got
-        // replaced by the watchdog) must unhook ITS hook on exit, never the replacement's, and
-        // must not clear the shared field if a replacement already owns it.
-        nint hookId = 0;
-        try
-        {
-            _hookThreadId = NativeMethods.GetCurrentThreadId();
-            nint module = NativeMethods.GetModuleHandle(null);
-            hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _proc, module, 0);
-            _hookId = hookId;
-
-            if (hookId == 0)
-            {
-                installError = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
-            }
-        }
-        catch (Exception ex)
-        {
-            installError = ex;
-        }
-        finally
-        {
-            try
-            {
-                installed.Set();
-            }
-            catch (ObjectDisposedException)
-            {
-                // The starter timed out waiting and disposed the event; it already treats the
-                // install as failed, so there is nobody left to signal.
-            }
-        }
-
-        if (hookId == 0)
+        if (engine is null)
         {
             return;
         }
 
-        while (NativeMethods.GetMessage(out NativeMethods.MSG msg, nint.Zero, 0, 0) > 0)
+        var threadId = engine.OwnerThreadId;
+        if (threadId == 0 ||
+            !NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_COMMANDS, nint.Zero, nint.Zero))
         {
-            NativeMethods.TranslateMessage(ref msg);
-            NativeMethods.DispatchMessage(ref msg);
+            engine.CancelWake();
         }
-
-        NativeMethods.UnhookWindowsHookEx(hookId);
-        Interlocked.CompareExchange(ref _hookId, 0, hookId);
     }
 
-    private nint HookCallback(int nCode, nint wParam, nint lParam)
+    private void ConsumeTransitions(HotkeyTransitionQueue queue)
     {
-        // The watchdog's liveness signal. Incremented before any filtering so the synthetic probe
-        // (which is marker-tagged and skipped below) still proves the hook is installed.
-        Interlocked.Increment(ref _hookCallbackCount);
-
-        if (nCode < 0)
-        {
-            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-        int message = (int)wParam;
-        bool isDown = message is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN;
-        bool isUp = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
-        if (!isDown && !isUp)
-        {
-            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-        // Two direct field reads instead of PtrToStructure: the callback races a hard OS deadline
-        // (LowLevelHooksTimeout) and a miss gets the hook silently removed, so every event must
-        // stay as cheap as possible.
-        var extraInfo = (nuint)Marshal.ReadIntPtr(lParam, ExtraInfoOffset);
-        if (extraInfo == SyntheticInputMarker.Value)
-        {
-            return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
-        }
-
-        var vkCode = (uint)Marshal.ReadInt32(lParam, VkCodeOffset);
-        var primaryUpdate = _state.Process(vkCode, isDown);
-        var secondaryUpdate = _dictationOnlyState?.Process(vkCode, isDown);
-        EnqueueTriggerUpdate(primaryUpdate, HotkeyTrigger.Standard);
-        if (secondaryUpdate is { } update)
-        {
-            EnqueueTriggerUpdate(update, HotkeyTrigger.DictationOnly);
-        }
-
-        // Toggle mode deactivates on key DOWN, so the deactivation-time reconcile still sees the
-        // key physically held and correctly skips it. The suppressed key UP is therefore the one
-        // moment that covers every mode: check for a leaked logical "down" right after it.
-        var shouldSuppress = primaryUpdate.ShouldSuppress || secondaryUpdate?.ShouldSuppress == true;
-        if (isUp && shouldSuppress)
-        {
-            ScheduleReconcile();
-        }
-
-        return shouldSuppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
-    }
-
-    private void EnqueueTriggerUpdate(ChordUpdate update, HotkeyTrigger trigger)
-    {
-        if (update.Transition == HotkeyTransition.Activated)
-        {
-            if (!_triggerArbiter.TryActivate(trigger))
-            {
-                return;
-            }
-        }
-        else if (update.Transition == HotkeyTransition.Deactivated)
-        {
-            if (!_triggerArbiter.TryDeactivate(trigger))
-            {
-                return;
-            }
-        }
-        else
-        {
-            return;
-        }
-
-        TryEnqueue(_queue, new QueuedTransition(
-            update.Transition, trigger, update.Generation, AllowReconcile: true));
-    }
-
-    // A final keyboard message can already be in the hook thread's native queue when Stop marks the
-    // managed transition queue complete. BlockingCollection.TryAdd still throws in that race, and an
-    // exception escaping a low-level Windows hook callback terminates the process. Shutdown simply
-    // discards that stale transition.
-    internal static bool TryEnqueue(
-        BlockingCollection<QueuedTransition>? queue, QueuedTransition transition)
-    {
-        if (queue is null)
-        {
-            return false;
-        }
-
         try
         {
-            return queue.TryAdd(transition);
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
-
-    private void ConsumeTransitions()
-    {
-        var queue = _queue;
-        if (queue is null)
-        {
-            return;
-        }
-
-        try
-        {
-            foreach (var transition in queue.GetConsumingEnumerable())
+            while (queue.WaitForWork())
             {
-                DispatchTransition(transition);
+                foreach (var transition in queue.TakeAll())
+                {
+                    DispatchTransition(transition);
+                }
             }
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        catch (ObjectDisposedException)
         {
-            // Queue completed or disposed during shutdown.
+            // Stop gave up waiting for this thread and released the queue; nothing is left to
+            // dispatch.
         }
     }
 
@@ -430,13 +266,12 @@ public sealed class HotkeyService : IHotkeyService
         {
             if (item.Transition == HotkeyTransition.Activated)
             {
-                // An Activated computed against state that was since cleared (capture mode,
-                // binding update, reinstall) must not start a recording; the clear's own
-                // Deactivated may already sit behind it in this queue.
-                var generation = item.Trigger == HotkeyTrigger.Standard
-                    ? _state.Generation
-                    : _dictationOnlyState?.Generation;
-                if (item.Generation != generation)
+                // An Activated computed before a state-clearing request (capture mode, binding
+                // update, pause, reinstall) must not start a recording; the request's own
+                // Deactivated may already sit behind it in this queue. The epoch advances when
+                // the request is made, so this holds even while the hook thread has yet to
+                // apply it.
+                if (!_router.IsCurrent(item.Generation))
                 {
                     _logger.LogInformation("Discarded a stale hotkey activation from a superseded state epoch.");
                     return;
@@ -464,14 +299,15 @@ public sealed class HotkeyService : IHotkeyService
 
     // Runs the leak check off the hook and consumer threads: GetAsyncKeyState is meaningless
     // inside the hook callback (async state updates after it returns), and the input queue needs
-    // a beat to settle after the final suppressed key-up.
+    // a beat to settle after the final suppressed key-up. The hook callback never calls this
+    // itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
     private void ScheduleReconcile() => Task.Run(async () =>
     {
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
-            var result = _reconciler.ReleaseLeakedKeys(_binding);
-            if (_dictationOnlyBinding is { } dictationOnly)
+            var result = _reconciler.ReleaseLeakedKeys(Binding);
+            if (DictationOnlyBinding is { } dictationOnly)
             {
                 var secondaryResult = _reconciler.ReleaseLeakedKeys(dictationOnly);
                 result = new SuppressedKeyReconciler.Result(
@@ -566,55 +402,48 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    // Tears down only the hook thread and spins a fresh one; the consumer thread, queue, watchdog
-    // and chord state survive. Callers hold _sync.
+    // Tears down only the hook thread and spins a fresh one; the consumer thread, queue and
+    // watchdog survive, while key state starts over in a new engine. Callers hold _sync.
     private void ReinstallHookLocked()
     {
+        var transitions = _transitions;
+        var reconcileSignal = _reconcileSignal;
+        if (transitions is null || reconcileSignal is null)
+        {
+            return;
+        }
+
         // A probe armed against the hook we are about to destroy must never be judged against its
         // replacement: the new hook has raised no callbacks yet and would look dead on the next
         // tick, reinstalling again in a loop.
         _livenessProbe.Disarm();
 
-        if (_hookThreadId != 0)
-        {
-            NativeMethods.PostThreadMessage(_hookThreadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);
-        }
+        var previous = _installation;
+        previous?.RequestQuit();
+        previous?.Join(JoinTimeout);
 
-        _hookThread?.Join(TimeSpan.FromSeconds(2));
-        _hookThreadId = 0;
-        _hookId = 0;
+        // A new engine rather than the old one on a new thread: if the join timed out, the old
+        // hook thread may still be running, and two threads must never share key state. Beginning
+        // it also retires the old engine, so that thread can no longer swallow a key or start or
+        // stop a dictation.
+        var (engine, interrupted) = _router.BeginEngine(transitions);
 
         // The reinstall may interrupt an active hold/toggle: the held key's eventual release can
         // no longer match the cleared state, so the recording must be stopped explicitly or the
         // microphone stays live until the next press.
-        var (transition, generation) = _state.Reset();
-        var secondaryTransition = _dictationOnlyState?.Reset();
-        if (transition != HotkeyTransition.None)
+        if (interrupted is { } trigger)
         {
-            TryEnqueue(_queue, new QueuedTransition(
-                transition, _triggerArbiter.Take(HotkeyTrigger.Standard), generation, AllowReconcile: false));
-        }
-        else if (secondaryTransition is { Transition: not HotkeyTransition.None } secondary)
-        {
-            TryEnqueue(_queue, new QueuedTransition(
-                secondary.Transition, _triggerArbiter.Take(HotkeyTrigger.DictationOnly),
-                secondary.Generation, AllowReconcile: false));
+            transitions.TryEnqueue(new QueuedTransition(
+                HotkeyTransition.Deactivated, trigger, _router.CurrentGeneration, AllowReconcile: false));
         }
 
-        using var installed = new ManualResetEventSlim(false);
-        Exception? installError = null;
-        _hookThread = new Thread(() => RunHookThread(installed, ref installError))
+        var installation = new HookInstallation(this, engine, reconcileSignal);
+        _installation = installation;
+        if (!installation.Install(InstallTimeout))
         {
-            Name = "Scribe.HotkeyHook",
-            IsBackground = true,
-        };
-        _hookThread.SetApartmentState(ApartmentState.STA);
-        _hookThread.Start();
-        installed.Wait(TimeSpan.FromSeconds(5));
-
-        if (_hookId == 0)
-        {
-            _logger.LogError(installError, "Reinstalling the keyboard hook failed; retrying on the next watchdog tick.");
+            _logger.LogError(
+                installation.InstallError,
+                "Reinstalling the keyboard hook failed; retrying on the next watchdog tick.");
         }
         else
         {
@@ -635,10 +464,195 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     public void Dispose() => Stop();
+
+    /// <summary>
+    /// One installation of the low-level hook: its thread, its native handle, its callback
+    /// delegate and the engine only that thread may drive. Keeping all of it per installation is
+    /// what lets a reinstall proceed while a previous hook thread is still winding down.
+    /// </summary>
+    private sealed class HookInstallation
+    {
+        private readonly HotkeyService _service;
+        private readonly HotkeyEngine _engine;
+        private readonly HotkeyReconcileSignal _reconcileSignal;
+
+        // Rooted here for as long as the hook can call it: a collected delegate behind a live
+        // hook crashes the process on the next key event.
+        private readonly NativeMethods.LowLevelKeyboardProc _proc;
+        private readonly ManualResetEventSlim _installed = new(false);
+        private readonly Thread _thread;
+        private Exception? _installError;
+        private nint _hookId;
+        private int _abandoned;
+
+        public HookInstallation(HotkeyService service, HotkeyEngine engine, HotkeyReconcileSignal reconcileSignal)
+        {
+            _service = service;
+            _engine = engine;
+            _reconcileSignal = reconcileSignal;
+            _proc = HookCallback;
+            _thread = new Thread(Run)
+            {
+                Name = "Scribe.HotkeyHook",
+                IsBackground = true,
+            };
+            _thread.SetApartmentState(ApartmentState.STA);
+        }
+
+        public Exception? InstallError => _installError;
+
+        /// <summary>Starts the hook thread and waits for the hook; false when it failed or timed out.</summary>
+        public bool Install(TimeSpan timeout)
+        {
+            _thread.Start();
+            if (_installed.Wait(timeout))
+            {
+                return Volatile.Read(ref _hookId) != 0;
+            }
+
+            // Gave up waiting. A hook that still lands afterwards must not stay installed with
+            // nobody listening to it (it would swallow the push-to-talk key for good), so the
+            // thread checks this flag once installed, and a thread that already started pumping
+            // is told to quit. Each side publishes before it reads the other's flag.
+            Interlocked.Exchange(ref _abandoned, 1);
+            RequestQuit();
+            return false;
+        }
+
+        public void RequestQuit()
+        {
+            var threadId = _engine.OwnerThreadId;
+            if (threadId != 0)
+            {
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_QUIT, nint.Zero, nint.Zero);
+            }
+        }
+
+        public bool Join(TimeSpan timeout) => _thread.Join(timeout);
+
+        private void Run()
+        {
+            // The handle stays per installation: a hook thread that outlives its 2-second join
+            // (and got replaced by the watchdog) must unhook ITS hook on exit, never the
+            // replacement's.
+            nint hookId = 0;
+            try
+            {
+                // Before the hook exists, so no hook callback can run inside the peek (a peek also
+                // delivers messages sent to this thread, which is how the hook is called).
+                NativeMethods.EnsureMessageQueue();
+
+                nint module = NativeMethods.GetModuleHandle(null);
+                hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _proc, module, 0);
+                if (hookId == 0)
+                {
+                    _installError = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+                }
+                else
+                {
+                    Volatile.Write(ref _hookId, hookId);
+
+                    // The queue already exists, so publishing the id makes every later wake and
+                    // quit deliverable; commands queued before this point apply here.
+                    _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
+                }
+            }
+            catch (Exception ex)
+            {
+                _installError = ex;
+            }
+            finally
+            {
+                try
+                {
+                    _installed.Set();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Nobody is waiting any more; the starter already treats the install as failed.
+                }
+            }
+
+            if (hookId == 0)
+            {
+                return;
+            }
+
+            if (Volatile.Read(ref _abandoned) == 0)
+            {
+                // GetMessage returns 0 for WM_QUIT and -1 on failure; both end the pump.
+                while (NativeMethods.GetMessage(out NativeMethods.MSG msg, nint.Zero, 0, 0) > 0)
+                {
+                    // Thread messages have no window, so DispatchMessage would drop this one.
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_COMMANDS)
+                    {
+                        _engine.OnWake();
+                        continue;
+                    }
+
+                    NativeMethods.TranslateMessage(ref msg);
+                    NativeMethods.DispatchMessage(ref msg);
+                }
+            }
+
+            _engine.DetachOwner();
+            NativeMethods.UnhookWindowsHookEx(hookId);
+        }
+
+        // Runs on this installation's thread, inside GetMessage, for every keyboard event on the
+        // desktop. It never waits for another thread and never logs: the only shared state it
+        // touches is interlocked counters, lock-free queues and kernel events.
+        private nint HookCallback(int nCode, nint wParam, nint lParam)
+        {
+            // The watchdog's liveness signal. Incremented before any filtering so the synthetic
+            // probe (which is marker-tagged and skipped below) still proves the hook is installed.
+            Interlocked.Increment(ref _service._hookCallbackCount);
+
+            if (nCode < 0)
+            {
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            int message = (int)wParam;
+            bool isDown = message is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN;
+            bool isUp = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
+            if (!isDown && !isUp)
+            {
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            // Two direct field reads instead of PtrToStructure: the callback races a hard OS
+            // deadline (LowLevelHooksTimeout) and a miss gets the hook silently removed, so every
+            // event must stay as cheap as possible.
+            var extraInfo = (nuint)Marshal.ReadIntPtr(lParam, ExtraInfoOffset);
+            if (extraInfo == SyntheticInputMarker.Value)
+            {
+                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            }
+
+            var vkCode = (uint)Marshal.ReadInt32(lParam, VkCodeOffset);
+            var decision = _engine.OnKeyEvent(vkCode, isDown);
+            if (decision.RequestReconcile)
+            {
+                _reconcileSignal.Signal();
+            }
+
+            return decision.Suppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+    }
 }
 
+/// <summary>
+/// Lets at most one trigger own the dictation, arbitrated without a lock. The same word records
+/// retirement, so "which dictation did this engine leave running" and "this engine may no longer
+/// start or stop one" are settled by one atomic operation rather than a flag and a read that a
+/// concurrent owner thread could interleave.
+/// </summary>
 internal sealed class HotkeyTriggerArbiter
 {
+    // Zero means no trigger is active; Retired is terminal.
+    private const int Retired = -1;
+
     private int _activeCode;
 
     public bool TryActivate(HotkeyTrigger trigger) =>
@@ -650,14 +664,43 @@ internal sealed class HotkeyTriggerArbiter
         return Interlocked.CompareExchange(ref _activeCode, 0, code) == code;
     }
 
-    public HotkeyTrigger Take(HotkeyTrigger fallback)
+    /// <summary>
+    /// Clears the active trigger and returns it, or <paramref name="fallback"/> when none was
+    /// active. Returns null once retired: the retirement already reported the active trigger, so the
+    /// caller must not stop anything itself.
+    /// </summary>
+    public HotkeyTrigger? TryTake(HotkeyTrigger fallback)
     {
-        var code = Interlocked.Exchange(ref _activeCode, 0);
-        return code == 0 ? fallback : (HotkeyTrigger)(code - 1);
+        var code = Volatile.Read(ref _activeCode);
+        while (code != Retired)
+        {
+            var observed = Interlocked.CompareExchange(ref _activeCode, 0, code);
+            if (observed == code)
+            {
+                return code == 0 ? fallback : Trigger(code);
+            }
+
+            code = observed;
+        }
+
+        return null;
     }
 
-    public void Reset() => Interlocked.Exchange(ref _activeCode, 0);
+    /// <summary>Clears the active trigger, unless retired.</summary>
+    public void Reset() => _ = TryTake(HotkeyTrigger.Standard);
+
+    /// <summary>
+    /// Refuses everything from now on, and returns the trigger that was still active (a dictation
+    /// that was started and never stopped), or null.
+    /// </summary>
+    public HotkeyTrigger? Retire()
+    {
+        var code = Interlocked.Exchange(ref _activeCode, Retired);
+        return code is 0 or Retired ? null : Trigger(code);
+    }
 
     // Reserve zero for no active trigger so compare-exchange can arbitrate without a lock.
     private static int Code(HotkeyTrigger trigger) => (int)trigger + 1;
+
+    private static HotkeyTrigger Trigger(int code) => (HotkeyTrigger)(code - 1);
 }

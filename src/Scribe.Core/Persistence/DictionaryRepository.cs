@@ -53,6 +53,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
             return [];
         }
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
         var persisted = new List<DictionaryEntry>(entries.Count);
@@ -80,6 +81,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
     {
         ArgumentNullException.ThrowIfNull(entry);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -96,6 +98,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
 
     public void Delete(long id)
     {
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM dictionary WHERE id = $id;";
@@ -107,6 +110,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
     {
         ArgumentNullException.ThrowIfNull(entries);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
         SaveAll(connection, transaction, entries);
@@ -180,6 +184,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
     {
         ArgumentNullException.ThrowIfNull(entries);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using (var count = connection.CreateCommand())
         {
@@ -211,6 +216,7 @@ public sealed class DictionaryRepository : IDictionaryRepository
     {
         ArgumentNullException.ThrowIfNull(entries);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
         var disabled = 0;

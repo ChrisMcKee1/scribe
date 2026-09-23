@@ -10,7 +10,7 @@ the code now produces. Not maliciously, just gradient descent toward green.
 In Scribe a **guardrail** is any deterministic check that can block a merge or catch a regression:
 the xUnit suite, the warning-clean build, the fail-closed privacy branches and the tests that pin them,
 the CVE pin on the SQLite native, the pack-time payload-architecture assertion, the CI matrix, the
-deterministic dash backstop, and the MSIX virtualization exclusion. **Erosion** is a diff that removes,
+deterministic dash backstop, and the AppData virtualization probe. **Erosion** is a diff that removes,
 disables, skips, or loosens one. It normally arrives as a deletion or a relaxed value, so read the `-`
 lines and the modified config at least as carefully as the additions.
 
@@ -61,7 +61,7 @@ This is the named rubric. Match what the diff touched against it. An entry not t
 ### G-1: The xUnit suite in `tests/Scribe.Core.Tests`
 
 `AGENTS.md` (line 101) states the rule inside the command itself: _"must stay green; the count only ever
-grows"_. That file also quotes a number, `878 as of 0.3.8`. **The prose number is stale by design.**
+grows"_. That file also quotes a number, `2695 as of 0.4.3`. **The prose number is stale by design.**
 Never cite it, never cite a number you remember, and never build a finding on "the count went down".
 Judge the diff: xUnit `[Theory]` cases expand at runtime, so attribute counts and reported test counts
 are different quantities and neither is derivable from a patch.
@@ -182,9 +182,9 @@ architecture, or when `Scribe.exe` itself is the wrong machine.
 
 Three callers, and losing any one is erosion:
 
-- `build/pack.ps1:92` (dot-source) and `:156` (call), the Velopack installer path.
+- `build/pack.ps1:101` (dot-source) and `:170` (call), the Velopack installer path.
 - `build/pack-msix.ps1:105` and `:185`, the Store path.
-- `.github/workflows/ci.yml:94` to `:98`, on both matrix legs.
+- `.github/workflows/ci.yml:117` to `:121`, on both matrix legs.
 
 Erosion, 🟡: deleting a call, wrapping one in a `try`/`catch` that swallows, moving it after the pack
 step so a bad payload is already packaged, or widening the accepted set in `$script:ScribePeMachine` so
@@ -201,11 +201,11 @@ native silicon** rather than trusted to compile-time checks.
   with `fail-fast: false` (line 28). The comment records that `windows-11-arm` will fail on a private
   repo and that this is intentional, because the repo's visibility changing is something to find out
   about. Dropping a leg, or flipping `fail-fast` to `true` so one failure hides the other, is erosion.
-- **The AsrCheck step** (line 82, `dotnet run --project tools/Scribe.AsrCheck -c Release`). `AGENTS.md`
-  (line 624): _"the only thing that proves the native engine actually decodes"_, because the unit tests
-  deliberately never load sherpa-onnx. Removing it means a wrongly packaged native passes every test
-  and fails on the user's first dictation.
-- **Publish plus verify** (lines 88 and 94). Publishing is what the installer does, so the payload
+- **The AsrCheck step** (line 90, `dotnet run --project tools/Scribe.AsrCheck -c Release`). `AGENTS.md`
+  ("Architecture support"): _"A decode through the real native engine is what proves it works"_, because
+  the model-dependent unit tests pass vacuously without models. Removing it means a wrongly packaged
+  native can pass every test and fail on the user's first dictation.
+- **Publish plus verify** (lines 111 and 117). Publishing is what the installer does, so the payload
   check runs against a real publish, not against build output.
 - **The unit test step** (line 74) and the overlay build (line 70, with `-p:Platform=` per leg).
 
@@ -237,29 +237,29 @@ covers `CleanupPrompt.DefaultWritingStyle`, `DefaultFrontierPrompt`, and `Single
 Deleting or narrowing any of those is 🟡. A dash reintroduced into a prompt constant is worse than a
 style slip, because that prompt is shown to the model on every dictation and teaches it the habit.
 
-### G-9: The MSIX virtualization exclusion and the `AppPaths` migration
+### G-9: The AppData virtualization probe and the `AppPaths` migration
 
-`AGENTS.md` (line 554): _"Do not remove either."_ A packaged app that creates a folder under `AppData`
-has that write redirected into the package's `LocalCache`, so File Explorer sees nothing at
-`%LOCALAPPDATA%\ScribeData`. It cost a real support dead end on 0.3.10: a Store user was sent to a log
-folder that, from outside the container, did not exist, and the bug behind the request went
-uninvestigated.
+A packaged app that creates a folder under `AppData` has that write redirected into the package's
+`LocalCache`, so File Explorer sees nothing at `%LOCALAPPDATA%\ScribeData`. It cost a real support dead
+end on 0.3.10: a Store user was sent to a log folder that, from outside the container, did not exist,
+and the bug behind the request went uninvestigated. 0.3.11 answered with a manifest exclusion, the
+Store denied the `unvirtualizedResources` capability it needs (policy 10.6.3, 2026-08-27), and 0.3.13
+replaced it with code; `build/pack-msix.ps1` now records that in its manifest comment and declares no
+exclusion.
 
-Both halves:
+Both halves that remain:
 
-- **`build/pack-msix.ps1`**: the `virtualization:FileSystemWriteVirtualization` block with
-  `<virtualization:ExcludedDirectory>` for `$(KnownFolder:LocalAppData)\ScribeData` (around lines 251 to
-  255) **and** the `unvirtualizedResources` restricted capability (around line 289) that it requires.
-  Removing either alone breaks the package: the exclusion without the capability fails validation, the
-  capability without the exclusion does nothing. Also in scope: swapping the narrow `virtualization:`
-  form for the `desktop6:` form, which unvirtualizes all of AppData and HKCU for no benefit.
-- **`AppPaths.VirtualizedRootDir`** (`src/Scribe.Core/Infrastructure/AppPaths.cs:50`, consumed at
-  `:254`), the one-time migration that carries data written by pre-exclusion Store builds forward.
-  Its ordering after the legacy migration is deliberate and commented. Pinned by
-  `tests/Scribe.Core.Tests/PackagedDataMigrationTests.cs`.
+- **`AppPaths.ResolveEffectiveRoot`** (`src/Scribe.Core/Infrastructure/AppPaths.cs`), the probe that
+  writes a uniquely named marker through `RootDir` and looks for it at the package-store twin, so
+  `EffectiveRootDir` names the folder that really holds the data. Settings, About shows it with copy
+  and open buttons.
+- **`AppPaths.VirtualizedRootDir`** (`AppPaths.cs:123`, set at `:58`), the one-time migration that
+  carries data written into the package store forward. Its ordering after the legacy migration is
+  deliberate and commented. Pinned by `tests/Scribe.Core.Tests/PackagedDataMigrationTests.cs`.
 
-Erosion, 🟡: removing either manifest element, deleting the migration, or removing
-`PackagedDataMigrationTests`. Adjacent and worth checking on any diff that touches the About page,
+Erosion, 🟡: re-adding the manifest exclusion (certification rejects it), deleting the probe or the
+migration, or removing `PackagedDataMigrationTests`. Adjacent and worth checking on any diff that
+touches the About page,
 `OpenFolder`, or the session banner: those hand a path **outside** the process and must use the
 `Effective*` family; internal file I/O uses the plain `RootDir`/`LogsDir`/`DatabasePath`. Swapping one
 family for the other is not this lens's finding (route it to `settings-and-persistence`), but a diff
@@ -334,13 +334,13 @@ cleaned dictation server side, which is the exact outcome this branch exists to 
 construction, and keep `Stored_output_override_fails_closed_on_an_unrecognised_raw_representation`
 (`tests/Scribe.Core.Tests/TextCleanupServiceTests.cs:140`) asserting it.
 
-🟡 **The AsrCheck step was removed from CI** (`.github/workflows/ci.yml:82`)
+🟡 **The AsrCheck step was removed from CI** (`.github/workflows/ci.yml:90`)
 
 `dotnet run --project tools/Scribe.AsrCheck -c Release` is gone from both matrix legs, and the
-description does not mention it. The unit tests deliberately never load sherpa-onnx, so per AGENTS.md
-this step is "the only thing that proves the native engine actually decodes"; without it a wrongly
-packaged native passes every test and fails on the user's first dictation. Restore it, or state why the
-coverage is no longer needed.
+description does not mention it. The unit tests only smoke-test the engine and pass vacuously without
+models, so per AGENTS.md a decode through the real native engine is what proves it works; without it a
+wrongly packaged native can pass every test and fail on the user's first dictation. Restore it, or
+state why the coverage is no longer needed.
 
 🟡 **2 tests deleted alongside the code they covered** (`tests/Scribe.Core.Tests/DashNormalizerTests.cs:141`, `:154`)
 
@@ -356,7 +356,7 @@ finding above for why the move itself is the problem.
 > No guardrail erosion: no tests deleted or skipped, no new warning suppressions, no CI steps or matrix
 > legs weakened, the fail-closed and banner privacy pins intact, the SQLite CVE pin and its runtime
 > assertion unchanged, `Payload-Architecture.ps1` still called by both installers and CI,
-> `DashNormalizer` still last and still model-output only, and the MSIX virtualization exclusion and
+> `DashNormalizer` still last and still model-output only, and the AppData virtualization probe and
 > `AppPaths` migration untouched.
 
 Trim that line to the guardrails the change could plausibly have touched. A one-file docs change does
@@ -378,7 +378,7 @@ not need the full recital.
   API surface, `CS0649` over the Win32 job-object structs) are acknowledgements, not erosion. A new one
   matching those shapes, scoped tightly and explained, is not a finding.
 - **The deliberate em-dash round-trips** in `Win32ClipboardTests` and `tools/Scribe.InjectionLab`.
-- **Test counts from prose.** `AGENTS.md` quotes `878 as of 0.3.8` and is stale by design. Never make a
+- **Test counts from prose.** `AGENTS.md` quotes `2695 as of 0.4.3` and is stale by design. Never make a
   finding out of a remembered or quoted number.
 - **Decisions AGENTS.md has already closed** are not guardrails you get to re-open from this lens: the
   absence of a language picker, `DefaultAzureCredential`, an in-process WPF transparent pill, an MSI,

@@ -258,4 +258,13 @@ public sealed class CleanupFailureDiagnosticsTests
             }
         }
     }
+
+    [Fact]
+    public void Whitespace_inside_the_server_message_collapses_to_single_spaces()
+    {
+        var message = TextCleanupService.DescribeFailure(
+            Http(400, "context length\r\n\texceeded   by   the prompt"), CleanupProvider.OpenAiCompatible);
+
+        Assert.Contains("context length exceeded by the prompt", message, StringComparison.Ordinal);
+    }
 }

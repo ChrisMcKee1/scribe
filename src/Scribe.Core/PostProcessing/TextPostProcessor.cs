@@ -32,6 +32,15 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     public string Process(string text) => ProcessDetailed(text).Text;
 
+    /// <summary>
+    /// When true (the default), a source identical to the text is not normalized a second time, and
+    /// a normalized source identical to the dictionary pass input is not rescanned: the source pass
+    /// projects the traces the dictionary pass already recorded. False runs the original algorithm
+    /// unchanged. Internal so the differential tests and the benchmark baseline arm can use that as
+    /// the reference; the results are identical either way.
+    /// </summary>
+    internal bool ReuseIdenticalSourceScan { get; init; } = true;
+
     public TextPostProcessingResult ProcessDetailed(string text, string? sourceText = null)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -41,27 +50,46 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
         EnsureLoaded();
 
-        // Normalize only the dictated source. Snippet templates are literal user content and may
+        // Normalize only dictated text. Snippet templates are literal user content and may
         // intentionally contain tabs, indentation, aligned columns, or repeated spaces.
-        text = NormalizeWhitespace(text);
+        var normalized = NormalizeWhitespace(text);
+
+        // NormalizeWhitespace is pure, so a source that is the very string being processed (AI
+        // cleanup off or skipped) normalizes to the same value without a second pair of regex passes.
+        var reuse = ReuseIdenticalSourceScan;
+        var source = string.IsNullOrWhiteSpace(sourceText)
+            ? null
+            : reuse && string.Equals(sourceText, text, StringComparison.Ordinal)
+                ? normalized
+                : NormalizeWhitespace(sourceText);
 
         // Snippets expand first so their templates then benefit from dictionary canonicalization.
         // Each phase matches its original input once; generated text is never fed back through later
         // rules in the same phase.
         var snippetRules = Volatile.Read(ref _snippetRules);
         var snippetApplications = new List<TextReplacement>();
-        text = ApplySinglePass(
-            text,
-            snippetRules.SelectMany((rule, order) => rule.Find(text, order)),
+        var dictionaryInput = ApplySinglePass(
+            normalized,
+            snippetRules.SelectMany((rule, order) => rule.Find(normalized, order)),
             snippetApplications,
             TextReplacementKind.Snippet);
 
         var rules = Volatile.Read(ref _rules);
         var replacements = new List<TextReplacement>();
-        text = ApplySinglePass(
-            text,
-            rules.SelectMany((rule, order) => rule.Find(text, order)),
+        var output = ApplySinglePass(
+            dictionaryInput,
+            rules.SelectMany((rule, order) => rule.Find(dictionaryInput, order)),
             replacements);
+
+        // The source pass below scans with this same rule snapshot. Matching is a pure function of
+        // (input, rules), and both passes record through the same ApplySinglePass with the same kind
+        // and the same no-op filter, so a source equal to the dictionary input would record exactly
+        // these traces. Copy them now: the snippet projection below edits `replacements` in place.
+        var sourceTraces = reuse &&
+            source is not null &&
+            string.Equals(source, dictionaryInput, StringComparison.Ordinal)
+                ? replacements.ToArray()
+                : null;
 
         var canonicalSnippets = snippetApplications.Select(application =>
         {
@@ -70,24 +98,30 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                 rules.SelectMany((rule, order) => rule.Find(application.Replacement, order)));
             return application with { Length = canonical.Length, Replacement = canonical };
         });
-        AddLocatedReplacements(text, canonicalSnippets, replacements, replaceOverlaps: true);
+        AddLocatedReplacements(output, canonicalSnippets, replacements, replaceOverlaps: true);
 
-        if (!string.IsNullOrWhiteSpace(sourceText))
+        if (source is not null)
         {
-            var source = NormalizeWhitespace(sourceText);
-            var glossaryApplications = new List<TextReplacement>();
-            _ = ApplySinglePass(
-                source,
-                rules.SelectMany((rule, order) => rule.Find(source, order)),
-                glossaryApplications);
+            IReadOnlyList<TextReplacement> glossaryApplications =
+                sourceTraces is not null ? sourceTraces : ScanSource(source, rules);
             // ponytail: ordered text search covers cleanup canonicalization; add token alignment only
             // if models start reordering repeated glossary terms enough to make this misleading.
-            AddLocatedReplacements(text, glossaryApplications, replacements, replaceOverlaps: false);
+            AddLocatedReplacements(output, glossaryApplications, replacements, replaceOverlaps: false);
         }
 
         return new TextPostProcessingResult(
-            text,
+            output,
             replacements.OrderBy(replacement => replacement.Start).ToList());
+    }
+
+    private static List<TextReplacement> ScanSource(string source, CompiledRule[] rules)
+    {
+        var glossaryApplications = new List<TextReplacement>();
+        _ = ApplySinglePass(
+            source,
+            rules.SelectMany((rule, order) => rule.Find(source, order)),
+            glossaryApplications);
+        return glossaryApplications;
     }
 
     public void Reload()
@@ -164,8 +198,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Skipping invalid snippet {Id} ('{Phrase}').",
-                    snippet.Id, snippet.Phrase);
+                LogSkippedSnippet(_logger, snippet, ex);
             }
         }
 
@@ -185,14 +218,26 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Skipping invalid dictionary entry {Id} ('{Pattern}').",
-                    entry.Id, entry.Pattern);
+                LogSkippedEntry(_logger, entry, ex);
             }
         }
 
         _logger.LogDebug("Post-processor loaded {Count} dictionary rule(s).", rules.Count);
         return rules.ToArray();
     }
+
+    // A trigger phrase and a dictionary pattern are the user's own words, and a regex error message
+    // quotes the pattern it rejected. So the warning carries the id, the length and the exception
+    // type only: never the text, and never the exception object whose message would repeat it.
+    internal static void LogSkippedSnippet(ILogger logger, Snippet snippet, Exception exception) =>
+        logger.LogWarning(
+            "Skipping invalid snippet {Id} (trigger phrase of {PhraseLength} characters): {ExceptionType}.",
+            snippet.Id, snippet.Phrase?.Length ?? 0, exception.GetType().Name);
+
+    internal static void LogSkippedEntry(ILogger logger, DictionaryEntry entry, Exception exception) =>
+        logger.LogWarning(
+            "Skipping invalid dictionary entry {Id} (pattern of {PatternLength} characters): {ExceptionType}.",
+            entry.Id, entry.Pattern?.Length ?? 0, exception.GetType().Name);
 
     private static string NormalizeWhitespace(string text)
     {

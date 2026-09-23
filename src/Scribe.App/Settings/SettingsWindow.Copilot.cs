@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using System.Windows;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Wpf.Ui.Controls;
 
 namespace Scribe.App.Settings;
@@ -274,7 +275,7 @@ public partial class SettingsWindow
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Could not launch a terminal for the Copilot CLI.");
+            _log.LogWarning("Could not launch a terminal for the Copilot CLI ({Failure}).", FailureShape.Describe(ex));
             CopilotCliBar.Severity = InfoBarSeverity.Error;
             CopilotCliBar.Title = failureTitle;
             CopilotCliBar.Message = "Run it yourself in a terminal: " + command;

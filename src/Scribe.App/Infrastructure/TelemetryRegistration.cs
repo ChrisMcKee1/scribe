@@ -15,7 +15,7 @@ internal static class TelemetryRegistration
     /// lifecycle is inspectable out of the box. A full OTLP exporter is added only when
     /// <c>OTEL_EXPORTER_OTLP_ENDPOINT</c> is set, so power users can stream traces to an Aspire
     /// dashboard, Jaeger or any collector without the exporter spamming connection errors when no
-    /// backend is running.
+    /// backend is running. Both paths carry only the tags <see cref="TraceTagPolicy"/> allows.
     /// </summary>
     public static IServiceCollection AddScribeTelemetry(this IServiceCollection services)
     {
@@ -31,6 +31,9 @@ internal static class TelemetryRegistration
 
                 if (!string.IsNullOrWhiteSpace(otlpEndpoint))
                 {
+                    // Processors run in the order they are added, so the scrub sits after the log
+                    // bridge and before the exporter: only allowlisted tag values reach a collector.
+                    tracing.AddProcessor(_ => new TraceTagScrubProcessor());
                     tracing.AddOtlpExporter();
                 }
             });

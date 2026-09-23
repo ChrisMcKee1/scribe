@@ -32,26 +32,36 @@ public sealed class VadService : IVadService
     // identical at 25 s, 60 s and whole-capture buffer sizes, so no such cap is warranted.
     private const float DetectorBufferSeconds = 60f;
 
-    private readonly ModelLocator _locator;
+    private readonly Func<ISpeechSegmentDetector?> _load;
     private readonly ILogger<VadService> _logger;
+
+    // Load, trim, unload and dispose all happen under this gate, so an idle Unload can never land between loading
+    // the detector and using it, and Dispose can never free it under a trim that is still running.
     private readonly object _gate = new();
 
-    private VoiceActivityDetector? _vad;
-    private int _windowSize = WindowSize;
-    private bool _available;
+    private ISpeechSegmentDetector? _detector;
     private bool _initialized;
     private bool _disposed;
     private double? _lastSpeechSeconds;
 
     public VadService(ModelLocator locator, ILogger<VadService> logger)
     {
-        _locator = locator;
+        _logger = logger;
+        _load = () => LoadSilero(locator);
+    }
+
+    /// <summary>
+    /// Test seam: supplies the detector instead of loading Silero. A loader returning null stands for a missing model.
+    /// </summary>
+    internal VadService(Func<ISpeechSegmentDetector?> load, ILogger<VadService> logger)
+    {
+        _load = load;
         _logger = logger;
     }
 
     public bool IsAvailable
     {
-        get { lock (_gate) { return _available; } }
+        get { lock (_gate) { return _detector is not null; } }
     }
 
     public double? LastSpeechSeconds
@@ -59,50 +69,55 @@ public sealed class VadService : IVadService
         get { lock (_gate) { return _lastSpeechSeconds; } }
     }
 
-    public void Initialize() => EnsureInitialized();
-
-    private void EnsureInitialized()
+    public void Initialize()
     {
-        if (Volatile.Read(ref _initialized)) return;
-
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_initialized) return;
-
-            var models = _locator.Resolve();
-            if (!models.VadAvailable)
-            {
-                _logger.LogWarning(
-                    "Silero VAD model not found at {Path}; voice activity detection is disabled.",
-                    models.SileroVadPath);
-                _available = false;
-                _initialized = true;
-                return;
-            }
-
-            var config = new VadModelConfig();
-            config.SileroVad.Model = models.SileroVadPath;
-            config.SileroVad.Threshold = Threshold;
-            config.SileroVad.MinSilenceDuration = MinSilenceSeconds;
-            config.SileroVad.MinSpeechDuration = MinSpeechSeconds;
-            config.SileroVad.MaxSpeechDuration = MaxSpeechSeconds;
-            config.SileroVad.WindowSize = WindowSize;
-            config.SampleRate = RequiredSampleRate;
-            config.NumThreads = 1;
-            config.Provider = "cpu";
-
-            var sw = Stopwatch.StartNew();
-            _vad = new VoiceActivityDetector(config, DetectorBufferSeconds);
-            _windowSize = config.SileroVad.WindowSize;
-            sw.Stop();
-
-            _available = true;
-            _initialized = true;
-            _logger.LogInformation(
-                "Loaded Silero VAD (window {Window}, threshold {Threshold}) in {ElapsedMs} ms.",
-                _windowSize, Threshold, sw.ElapsedMilliseconds);
+            EnsureInitialized();
         }
+    }
+
+    // Caller holds _gate.
+    private void EnsureInitialized()
+    {
+        if (_initialized) return;
+
+        _detector = _load();
+        _initialized = true;
+    }
+
+    private ISpeechSegmentDetector? LoadSilero(ModelLocator locator)
+    {
+        var models = locator.Resolve();
+        if (!models.VadAvailable)
+        {
+            _logger.LogWarning(
+                "Silero VAD model not found at {Path}; voice activity detection is disabled.",
+                models.SileroVadPath);
+            return null;
+        }
+
+        var config = new VadModelConfig();
+        config.SileroVad.Model = models.SileroVadPath;
+        config.SileroVad.Threshold = Threshold;
+        config.SileroVad.MinSilenceDuration = MinSilenceSeconds;
+        config.SileroVad.MinSpeechDuration = MinSpeechSeconds;
+        config.SileroVad.MaxSpeechDuration = MaxSpeechSeconds;
+        config.SileroVad.WindowSize = WindowSize;
+        config.SampleRate = RequiredSampleRate;
+        config.NumThreads = 1;
+        config.Provider = "cpu";
+
+        var sw = Stopwatch.StartNew();
+        var vad = new VoiceActivityDetector(config, DetectorBufferSeconds);
+        var windowSize = config.SileroVad.WindowSize;
+        sw.Stop();
+
+        _logger.LogInformation(
+            "Loaded Silero VAD (window {Window}, threshold {Threshold}) in {ElapsedMs} ms.",
+            windowSize, Threshold, sw.ElapsedMilliseconds);
+        return new SileroDetector(vad, windowSize);
     }
 
     public CapturedAudio Trim(CapturedAudio audio)
@@ -110,33 +125,39 @@ public sealed class VadService : IVadService
         ArgumentNullException.ThrowIfNull(audio);
         if (audio.IsEmpty) return CapturedAudio.Empty;
 
-        EnsureInitialized();
-
         lock (_gate)
         {
+            // Checked under the gate before loading, so a trim racing Dispose can never bring the model back.
+            ObjectDisposedException.ThrowIf(_disposed, this);
             _lastSpeechSeconds = null;
-            if (!_available || _vad is null) return audio;          // model unavailable: pass through
+
+            // Loaded under the same gate as the trim. Loading before taking it let an idle Unload slip in between,
+            // which turned this call into a silent pass-through of the untrimmed capture.
+            EnsureInitialized();
+            var detector = _detector;
+            if (detector is null) return audio;                      // model unavailable: pass through
             if (audio.SampleRate != RequiredSampleRate) return audio; // VAD model expects 16 kHz
 
             var samples = audio.Samples;
-            _vad.Reset();
+            var windowSize = detector.WindowSize;
+            detector.Reset();
 
             var minStart = int.MaxValue;
             var maxEnd = 0;
             var found = false;
             var voicedSamples = 0L;
 
-            var window = new float[_windowSize];
-            var iterations = samples.Length / _windowSize;
+            var window = new float[windowSize];
+            var iterations = samples.Length / windowSize;
             for (var i = 0; i < iterations; i++)
             {
-                Array.Copy(samples, i * _windowSize, window, 0, _windowSize);
-                _vad.AcceptWaveform(window);
-                Drain(ref minStart, ref maxEnd, ref found, ref voicedSamples);
+                Array.Copy(samples, i * windowSize, window, 0, windowSize);
+                detector.AcceptWaveform(window);
+                Drain(detector, ref minStart, ref maxEnd, ref found, ref voicedSamples);
             }
 
-            _vad.Flush();
-            Drain(ref minStart, ref maxEnd, ref found, ref voicedSamples);
+            detector.Flush();
+            Drain(detector, ref minStart, ref maxEnd, ref found, ref voicedSamples);
 
             if (!found)
             {
@@ -169,18 +190,16 @@ public sealed class VadService : IVadService
         }
     }
 
-    private void Drain(ref int minStart, ref int maxEnd, ref bool found, ref long voicedSamples)
+    private static void Drain(
+        ISpeechSegmentDetector detector, ref int minStart, ref int maxEnd, ref bool found, ref long voicedSamples)
     {
-        while (!_vad!.IsEmpty())
+        while (detector.TryPopSegment(out var start, out var length))
         {
-            var segment = _vad.Front();
-            var start = segment.Start;
-            var end = segment.Start + segment.Samples.Length;
+            var end = start + length;
             if (start < minStart) minStart = start;
             if (end > maxEnd) maxEnd = end;
-            voicedSamples += segment.Samples.Length;
+            voicedSamples += length;
             found = true;
-            _vad.Pop();
         }
     }
 
@@ -189,9 +208,8 @@ public sealed class VadService : IVadService
         lock (_gate)
         {
             if (_disposed || !_initialized) return;
-            _vad?.Dispose();
-            _vad = null;
-            _available = false;
+            _detector?.Dispose();
+            _detector = null;
             _initialized = false; // the next Trim/Initialize reloads the model on demand
             _lastSpeechSeconds = null;
             _logger.LogInformation("Silero VAD unloaded; it will reload on the next dictation.");
@@ -200,12 +218,43 @@ public sealed class VadService : IVadService
 
     public void Dispose()
     {
+        // Same gate as a trim: disposal during shutdown waits for a trim that is still running.
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
-            _vad?.Dispose();
-            _vad = null;
+            _detector?.Dispose();
+            _detector = null;
+            _initialized = false;
         }
+    }
+
+    private sealed class SileroDetector(VoiceActivityDetector vad, int windowSize) : ISpeechSegmentDetector
+    {
+        public int WindowSize { get; } = windowSize;
+
+        public void Reset() => vad.Reset();
+
+        public void AcceptWaveform(float[] window) => vad.AcceptWaveform(window);
+
+        public void Flush() => vad.Flush();
+
+        public bool TryPopSegment(out int start, out int length)
+        {
+            if (vad.IsEmpty())
+            {
+                start = 0;
+                length = 0;
+                return false;
+            }
+
+            var segment = vad.Front();
+            start = segment.Start;
+            length = segment.Samples.Length;
+            vad.Pop();
+            return true;
+        }
+
+        public void Dispose() => vad.Dispose();
     }
 }

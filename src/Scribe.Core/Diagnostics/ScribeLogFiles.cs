@@ -20,7 +20,7 @@ public static class ScribeLogFiles
     public const string SearchPattern = "scribe-????????.log";
 
     private const string FilePrefix = "scribe-";
-    private const string FileExtension = ".log";
+    internal const string FileExtension = ".log";
     private const string DayFormat = "yyyyMMdd";
 
     /// <summary>File name for a given day.</summary>

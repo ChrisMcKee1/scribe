@@ -389,11 +389,12 @@ public sealed class AzureCliInstaller
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…";
 
+    // By shape only, like every other log line around Azure sign-in (see FailureShape).
     private void TryLog(Exception ex, string message)
     {
         try
         {
-            _log.LogWarning(ex, message);
+            _log.LogWarning("{Message} ({Failure})", message, Scribe.Core.Diagnostics.FailureShape.Describe(ex));
         }
         catch
         {

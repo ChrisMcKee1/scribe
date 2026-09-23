@@ -10,7 +10,7 @@ namespace Scribe.Core.TextInjection;
 /// flattens line breaks to spaces, either everywhere or only when the focused process is a known
 /// terminal, per <see cref="NewlineInjectionMode"/>.
 /// </summary>
-public static class InjectionTextFormatter
+public static partial class InjectionTextFormatter
 {
     // Process names (no .exe suffix, compared case-insensitively) of hosts whose input line treats
     // Enter as "submit". IDE processes (e.g. Code) are deliberately absent: their integrated
@@ -40,8 +40,10 @@ public static class InjectionTextFormatter
     };
 
     // A line-break run plus the spaces/tabs hugging it collapses to one space, so a paragraph
-    // break never becomes a double space mid-sentence.
-    private static readonly Regex NewlineRun = new(@"[ \t]*[\r\n]+[ \t]*", RegexOptions.Compiled);
+    // break never becomes a double space mid-sentence. Source-generated: this runs on every
+    // dictation, and a RegexOptions.Compiled instance is emitted and jitted on first use.
+    [GeneratedRegex(@"[ \t]*[\r\n]+[ \t]*")]
+    private static partial Regex NewlineRun { get; }
 
     /// <summary>True when <paramref name="processName"/> is a known terminal host.</summary>
     public static bool IsTerminalProcess(string? processName) =>

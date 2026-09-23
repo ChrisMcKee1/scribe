@@ -46,22 +46,24 @@ public sealed class AppSettings
     /// return their memory to the OS; the next dictation reloads them with a one-to-two-second
     /// warm-up. 0 keeps the models resident forever (the pre-0.3.16 behavior). Ten minutes keeps
     /// Scribe out of the "top memory" list while it sits in the tray, which is most of its life,
-    /// without touching back-to-back dictation sessions.
+    /// without touching back-to-back dictation sessions. The recording pill's helper process follows
+    /// the same idle period.
     /// </summary>
     public int ReleaseModelsAfterIdleMinutes { get; set; } = 10;
 
     /// <summary>
     /// Hard ceiling on a single recording, in minutes; hitting it stops the dictation cleanly and
     /// transcribes what was captured. 0 removes the ceiling. This exists because a forgotten
-    /// toggle (or a stuck key) otherwise grows the raw capture buffer without bound — the only
-    /// truly unbounded memory path in the app — at roughly 23 MB per minute.
+    /// toggle (or a stuck key) otherwise grows the raw capture buffer without bound, the only
+    /// truly unbounded memory path in the app, at roughly 23 MB per minute.
     /// </summary>
     public int MaxDictationMinutes { get; set; } = 10;
 
     /// <summary>
-    /// Days dictation history (and any stored audio) is kept before startup pruning removes it;
-    /// 0 keeps everything forever. Stored audio is the disk cost that makes this matter: about
-    /// 1.9 MB per dictated minute, previously kept for the life of the install.
+    /// Days dictation history text is kept; 0 keeps it forever. Applied during the session by
+    /// <see cref="Persistence.StorageMaintenance"/>, not only at startup. Stored audio also has its
+    /// own fixed limits (<see cref="Persistence.StorageRetentionPolicy"/>), because at about 1.9 MB
+    /// per dictated minute it is the disk cost that grows; it never outlives its entry.
     /// </summary>
     public int HistoryRetentionDays { get; set; } = 90;
 
@@ -265,7 +267,10 @@ public sealed class AppSettings
     /// </summary>
     public bool ShiftEnterLineBreaks { get; set; } = true;
 
-    /// <summary>Persist a copy of each capture's audio alongside its history entry.</summary>
+    /// <summary>
+    /// Persist a compact (16-bit) copy of each capture's audio alongside its history entry, kept
+    /// within <see cref="Persistence.StorageRetentionPolicy"/>'s age and size limits.
+    /// </summary>
     public bool StoreAudioHistory { get; set; }
 
     /// <summary>

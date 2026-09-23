@@ -172,36 +172,48 @@ enum values stored **by name**. Four consequences, all of which the diff can tri
 
 ## §3. SQLite schema and migration
 
-`ScribeDatabase.Migrate` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:383`) is additive and
-forward-only, gated on `PRAGMA user_version`, with every step inside one transaction and
-`user_version` set at the end of it (`:427-428`). `SchemaVersion` is currently **6** (`:23`).
+The schema is **additive and idempotent, applied on every open, and `user_version` stays 7** (pattern
+P-11). `ScribeDatabase.Migrate` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:872`) still runs the
+historical `if (current < N)` steps up to v7 inside one transaction, with `user_version` set at the end,
+and returns early once the version matches. `SchemaVersion` is **7** (`:30`) and must not move. Every
+change after v7 goes into `EnsureAdditiveSchema` (`:928`), which runs after `Migrate` on every open and
+on the fresh file before a corruption salvage: probe with `PRAGMA table_info` or `sqlite_master`, then
+`ALTER TABLE ... ADD COLUMN` with a default that rows written by older builds already satisfy, or
+`CREATE INDEX IF NOT EXISTS`. The reason is in the field: builds up to 0.4.2 throw at startup on a
+`user_version` above 7, invisibly and with the single-instance mutex held, and the Store and
+direct-download builds share one data folder.
 
-**The single most common miss: a new column or table with no `SchemaVersion` bump and no matching
-`if (current < N)` block. 🔴** On an upgraded install the table already exists, so the `CREATE TABLE`
-in `SchemaV1` never runs again and the column simply is not there. The change works perfectly on any
-machine whose database was created after it, which includes the author's if they wiped their profile,
-and fails on every real user's.
+**The single most common miss: a new column or table that is not added through `EnsureAdditiveSchema`.
+🔴** On an upgraded install the table already exists, so a column written into a `CREATE TABLE` never
+appears there. The change works perfectly on any machine whose database was created after it, which
+includes the author's if they wiped their profile, and fails on every real user's. **Raising
+`SchemaVersion` is 🔴 as well**: every older build that shares the data folder stops opening it.
 
 The rest of the rubric for a schema change:
 
-- **Additive only.** No `DROP`, no column rename, no destructive rewrite. `SchemaV4` (`:572`) is the
+- **Additive only.** No `DROP`, no column rename, no destructive rewrite. `SchemaV4` (`:1120`) is the
   one data migration in the set, a targeted `DELETE` of timestamp-shaped junk snippet rows, and it is
-  `internal` rather than `private` because the salvage path re-executes it (`:280`) after copying rows
-  out of a damaged file. **A data migration must therefore be idempotent**, because it runs more than
-  once by design. Flag a new non-idempotent data step 🔴.
-- **Guard a late step with a column probe.** Steps 5 and 6 are additionally gated on
-  `HistoryNeedsCleanupColumn` and `HistoryNeedsColumn` (`:416`, `:421`), so a database that was
-  partially migrated, or whose column was added lazily by the repository, converges instead of failing
-  on a duplicate `ALTER`. A new `ALTER TABLE` step with no probe is 🟡 unless you can show the column
-  can only ever come from this one place.
-- **One transaction, `user_version` last.** Splitting the steps across transactions, or setting
-  `user_version` before the last step, leaves a half-migrated database on a crash. 🔴.
-- **Never weaken the downgrade guard.** `Migrate` throws when `current > SchemaVersion` (`:386-390`)
-  with a message telling the user to install a newer Scribe rather than silently operating on data it
-  does not understand. Pinned by `SnippetMigrationTests.Future_schema_is_rejected_without_retry_leaks`.
-  Removing or softening that branch is 🔴.
+  `internal` rather than `private` because the salvage path re-executes it after copying rows out of a
+  damaged file. **A data migration must therefore be idempotent**, because it runs more than once by
+  design. Flag a new non-idempotent data step 🔴.
+- **Probe before every additive step.** The late historical steps are gated on
+  `HistoryNeedsCleanupColumn` and `HistoryNeedsColumn`, and every `EnsureAdditiveSchema` step probes
+  first, so a database that was partially migrated, or whose column was added lazily by the repository,
+  converges instead of failing on a duplicate `ALTER`. A new `ALTER TABLE` step with no probe is 🟡
+  unless you can show the column can only ever come from this one place. A new column is read only
+  after probing for it.
+- **One transaction, `user_version` last, for `Migrate`'s steps.** Splitting those steps across
+  transactions, or setting `user_version` before the last step, leaves a half-migrated database on a
+  crash. 🔴. An `EnsureAdditiveSchema` step is idempotent on its own; a failure there is logged and
+  never stops startup.
+- **Never weaken the downgrade guard.** `Migrate` throws `NewerDatabaseSchemaException` when
+  `current > SchemaVersion`, and `App.OnStartup` catches it around its explicit
+  `ScribeDatabase.Initialize()` to tell the user to install the latest version and exit, rather than
+  silently operating on data it does not understand. Pinned by
+  `SnippetMigrationTests.Future_schema_is_rejected_without_retry_leaks` and `NewerDatabaseSchemaTests`.
+  Removing or softening that branch, or catching the exception anywhere that carries on, is 🔴.
 - **A new table joins `SalvageTables`. 🔴** The salvage rebuild copies a **fixed list**
-  (`ScribeDatabase.cs:26-27`: `settings`, `dictionary`, `snippets`, `audio_blobs`, `history`,
+  (`ScribeDatabase.cs:37-38`: `settings`, `dictionary`, `snippets`, `audio_blobs`, `history`,
   `cleanup_failures`), ordered so foreign-key targets are restored before the rows referencing them
   (`:271`). A table absent from that list is silently dropped the first time a user's database is
   rebuilt after corruption. Order matters as much as membership: a new table referencing `audio_blobs`
@@ -312,7 +324,8 @@ specific install that breaks:
 
 - the new property is in the diff and `Clone`, `CreateDefault`, or the converter list is visibly
   unchanged in the same diff,
-- the new column or table is in the diff and `SchemaVersion` is visibly unchanged,
+- the new column or table is in the diff and is not added through `EnsureAdditiveSchema`, or
+  `SchemaVersion` moved,
 - the renamed identifier is on a type you have confirmed is reachable from a persisted document,
 - the path is user-visible and built on the wrong family, or internal and built on the wrong family.
 
@@ -349,13 +362,14 @@ settings a dictation already in flight is reading. Add the rebuild next to the e
 
     clone.ProfileHotkeyOverrides = new Dictionary<string, string>(ProfileHotkeyOverrides);
 
-🔴 **`history.language_id` is added to `SchemaV6` with no `SchemaVersion` bump** `[needs-maintainer]` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:586`)
+🔴 **`history.language_id` is added to `SchemaV6` instead of `EnsureAdditiveSchema`** `[needs-maintainer]` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:586`)
 
-`SchemaVersion` is still 6 (`:23`), so `Migrate` returns at `if (current == SchemaVersion)` (`:393`)
-on every already-installed machine and the column never appears. It exists only on a database created
-after this change. Bump `SchemaVersion` to 7, move the `ALTER` into a new `SchemaV7`, and add
-`if (current < 7 && HistoryNeedsColumn(connection, transaction, "language_id"))` alongside the v5 and
-v6 blocks. `AGENTS.md` lists schema changes under "Ask first", so this also needs the maintainer.
+`Migrate` returns at `if (current == SchemaVersion)` on every already-installed machine, so the edited
+`SchemaV6` never runs there and the column never appears. It exists only on a database created after
+this change. Move the column into `EnsureAdditiveSchema`: probe `PRAGMA table_info(history)`, then
+`ALTER TABLE history ADD COLUMN language_id TEXT` (nullable, so rows written by older builds satisfy
+it), and leave `SchemaVersion` at 7 so older builds can still open the file. `AGENTS.md` lists schema
+changes under "Ask first", so this also needs the maintainer.
 ```
 
 **If clean:** `Settings and persistence clean: new state is defaulted, cloned, and migrated correctly, and no persisted identifier changed shape.`

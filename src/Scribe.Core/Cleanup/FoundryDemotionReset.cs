@@ -35,15 +35,13 @@ public static class FoundryDemotionReset
 
         try
         {
-            // A failed settings load reports every flag as unset, so proceeding would clear the
-            // markers on every launch and keep undoing demotions the probe path had just relearned.
-            if (settings.LastLoadFailed)
-            {
-                return false;
-            }
-
+            // Checked after this load, not before it: only the read that returned these values knows
+            // whether they are defaults standing in for settings it could not use (unreadable, or lost
+            // in a repair). Saving those would pass them off as the user's and end the recorded loss,
+            // and because they report every flag as unset, the markers would also be cleared on every
+            // launch, undoing demotions the probe path had just relearned.
             var current = settings.Load();
-            if (current.HasResetFoundryDemotions)
+            if (settings.LastLoadFailed || current.HasResetFoundryDemotions)
             {
                 return false;
             }
@@ -71,8 +69,8 @@ public static class FoundryDemotionReset
         catch (Exception ex)
         {
             // Never block startup for a best-effort cleanup. Leaving the flag unset simply retries
-            // on the next launch.
-            log?.LogDebug(ex, "Could not clear the Foundry Local demotion markers.");
+            // on the next launch. By shape: a file-system message names a path under the profile.
+            log?.LogDebug("Could not clear the Foundry Local demotion markers ({Failure}).", CleanupFailureShape.Describe(ex));
             return false;
         }
     }

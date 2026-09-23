@@ -190,18 +190,19 @@ Flag when the diff:
 
 ## §5. A green test run proves nothing about the native engine
 
-The unit suite cannot catch a wrongly-packaged native. `TranscriptionServiceTests` and
-`TranscriptionAccuracyTests` both return early and pass silently when the model files are absent
-(`tests/Scribe.Core.Tests/TranscriptionServiceTests.cs:20-21`,
-`tests/Scribe.Core.Tests/TranscriptionAccuracyTests.cs:25-27`). AGENTS.md puts it plainly: the unit
-tests deliberately never load sherpa-onnx, **so a wrongly-packaged native passes every test and fails
-on the user's first dictation.**
+The unit suite is not the check for a wrongly-packaged native. `TranscriptionServiceTests` and
+`TranscriptionAccuracyTests` load the real engine only when the model files are found
+(`SCRIBE_MODELS_DIR`, which CI sets, or the repository's models folder), and otherwise return early
+and pass silently (`tests/Scribe.Core.Tests/TranscriptionServiceTests.cs:20-21`,
+`tests/Scribe.Core.Tests/TranscriptionAccuracyTests.cs:25-27`). AGENTS.md puts it plainly: without
+models they pass vacuously, **so a green local run on a machine without models says nothing about the
+native engine.**
 
-`tools/Scribe.AsrCheck` is the only thing that proves the engine decodes on the silicon just built
-for. It exits non-zero on a word-overlap below 0.6 (`tools/Scribe.AsrCheck/Program.cs:29`) and reports
+`tools/Scribe.AsrCheck` is the check that fails loudly when the engine does not decode on the silicon
+just built for. It exits non-zero on a word-overlap below 0.6 (`tools/Scribe.AsrCheck/Program.cs:29`) and reports
 `DllNotFoundException` and `BadImageFormatException` by type, because those are the architecture
 regressions it exists to catch (`Program.cs:38-44`). CI runs it on both x64 and `windows-11-arm`
-(`.github/workflows/ci.yml:79-84`).
+(`.github/workflows/ci.yml:83-90`).
 
 **🟡 Important, or 🔴 when the payload itself changes:** a change to the native package reference, the
 model set, the model file names, or the decode configuration, with no AsrCheck run named in the PR

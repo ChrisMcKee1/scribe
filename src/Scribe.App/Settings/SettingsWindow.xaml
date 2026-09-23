@@ -338,9 +338,15 @@
                                                        HorizontalAlignment="Left" Margin="0,8,0,0"
                                                        Click="StartupSettings_Click"/>
                                         </StackPanel>
-                                        <ui:ToggleSwitch x:Name="LaunchCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         IsEnabled="False" AutomationProperties.Name="Start with Windows"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=LaunchStatusText}"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <ui:ToggleSwitch x:Name="LaunchCheck" HorizontalAlignment="Right"
+                                                             IsEnabled="False" AutomationProperties.Name="Start with Windows"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LaunchStatusText}"
+                                                             Checked="LaunchCheck_Changed" Unchecked="LaunchCheck_Changed"/>
+                                            <!-- Every other switch on this page waits for Save; this one does not. -->
+                                            <TextBlock Text="Applies immediately." Style="{StaticResource SettingHint}"
+                                                       HorizontalAlignment="Right"/>
+                                        </StackPanel>
                                     </Grid>
                                 </ui:Card>
 
@@ -352,8 +358,9 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Keep audio with history" Style="{StaticResource SettingTitle}"/>
-                                            <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="Store a copy of the captured audio with each history entry."/>
+                                            <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
+                                                 names the limits maintenance actually enforces. -->
+                                            <TextBlock x:Name="StoreAudioHintText" Style="{StaticResource SettingHint}"/>
                                         </StackPanel>
                                         <ui:ToggleSwitch x:Name="StoreAudioCheck" Grid.Column="1" VerticalAlignment="Center"/>
                                     </Grid>
@@ -367,8 +374,8 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Keep dictation history for" Style="{StaticResource SettingTitle}"/>
-                                            <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="Days dictation history and any stored audio are kept. Older entries are removed the next time Scribe starts. Set to 0 to keep everything forever."/>
+                                            <!-- Text comes from StorageRetentionPolicy.TextRetentionHint. -->
+                                            <TextBlock x:Name="HistoryRetentionHintText" Style="{StaticResource SettingHint}"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ui:NumberBox x:Name="HistoryRetentionBox" Width="130"
@@ -553,7 +560,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Release speech models when idle" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="After this many minutes without a dictation, Scribe unloads the speech models to free about 700 MB of memory. The next dictation reloads them with a short warm-up of a second or two. Set to 0 to keep the models loaded forever."/>
+                                                       Text="After this many minutes without a dictation, Scribe unloads the speech models to free about 700 MB of memory. The next dictation reloads them with a short warm-up of a second or two. The recording pill's helper also closes after this idle time. Set to 0 to keep the models loaded forever."/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ui:NumberBox x:Name="IdleReleaseBox" Width="130"
@@ -782,6 +789,7 @@
                                                            Style="{StaticResource SettingHint}" Margin="0,0,12,0"
                                                            Text="No on-device model is loaded yet."/>
                                                 <ui:Button x:Name="AiLoadButton" Grid.Column="1" Content="Load" MinWidth="80"
+                                                           ToolTip="Downloads the selected model if needed (the first time, also the hardware runtime for this PC), then loads it. Only one model stays loaded."
                                                            Margin="0,0,8,0" Appearance="Primary" Click="AiLoadButton_Click"/>
                                                 <ui:Button x:Name="AiUnloadButton" Grid.Column="2" Content="Unload" MinWidth="80"
                                                            Appearance="Secondary" Click="AiUnloadButton_Click"/>
@@ -797,12 +805,15 @@
                                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
                                                         <TextBlock Text="Requires Foundry Local" Style="{StaticResource SettingTitle}" FontSize="13"/>
                                                         <TextBlock x:Name="AiStatusText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                   Text="The selected model downloads automatically on first use (about 1 to 2 GB)."/>
+                                                                   Text="Nothing downloads while you browse. Load, or saving with AI cleanup on, downloads the selected model. Switching to another provider, or restarting with another one saved, removes what Foundry Local downloaded."/>
+                                                        <!-- Never written by code: live status goes to AiStatusText above, so no provider's status can replace this warning. -->
+                                                        <TextBlock x:Name="AiSetupNoteText" Style="{StaticResource SettingHint}" Margin="0,4,0,0"
+                                                                   Text="The first setup downloads the hardware runtime for this PC, which can be several GB. If no model is loaded afterwards, Scribe removes it again at the next start."/>
                                                     </StackPanel>
-                                                    <ui:Button x:Name="AiCheckButton" Grid.Column="1" Content="Check status"
+                                                    <ui:Button x:Name="AiSetupButton" Grid.Column="1" Content="Set up Foundry Local"
                                                                MinWidth="76" VerticalAlignment="Center"
-                                                               ToolTip="Checks that Foundry Local is running and refreshes the model dropdown above."
-                                                               Click="AiCheckButton_Click"/>
+                                                               ToolTip="Starts Foundry Local and fills the model dropdown above. The first setup downloads the hardware runtime for this PC, which can be several GB."
+                                                               Click="AiSetupButton_Click"/>
                                                 </Grid>
                                             </Border>
                                         </StackPanel>
@@ -1601,11 +1612,13 @@
                                                         <Button Style="{StaticResource HistoryThumbButton}"
                                                                 Content="{Binding ThumbUpGlyph}"
                                                                 Tag="{Binding Id}"
+                                                                IsEnabled="{Binding CanRate}"
                                                                 ToolTip="This rewrite was useful"
                                                                 Click="HistoryThumbUp_Click"/>
                                                         <Button Style="{StaticResource HistoryThumbButton}"
                                                                 Content="{Binding ThumbDownGlyph}"
                                                                 Tag="{Binding Id}"
+                                                                IsEnabled="{Binding CanRate}"
                                                                 ToolTip="This rewrite was not useful"
                                                                 Click="HistoryThumbDown_Click"/>
                                                         <Button Style="{StaticResource HistoryThumbButton}"
@@ -2257,8 +2270,8 @@
 
                                         <TextBlock Text="Scribe data file" Style="{StaticResource SettingTitle}"
                                                    FontSize="13" Margin="0,18,0,0"/>
-                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                   Text="One database holding your dictation history, dictionary, snippets, profiles and settings, plus stored audio. Turning off &quot;Keep audio with history&quot; stops new audio being saved; audio already saved stays until you delete those history entries."/>
+                                        <!-- Text comes from StorageRetentionPolicy.DataFileHint so it names the audio limits maintenance enforces. -->
+                                        <TextBlock x:Name="AboutDataFileHintText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                    Foreground="{DynamicResource SystemFillColorCautionBrush}"
                                                    Text="Never send or post this file. It contains everything you have dictated, and your saved API keys. To clear dictations use the History page instead, because deleting this file also erases your dictionary, snippets, profiles and settings."/>

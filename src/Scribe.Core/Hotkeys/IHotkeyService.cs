@@ -47,6 +47,28 @@ public interface IHotkeyService : IDisposable
     /// </summary>
     void SetCaptureMode(bool enabled);
 
+    /// <summary>
+    /// While paused, the hook stands down: every new press of the bindings reaches other apps
+    /// untouched and nothing activates dictation. A key whose press was already swallowed before
+    /// the pause stays swallowed through its autorepeat and release, so no app is left with an
+    /// orphaned key-up; a key pressed during the pause keeps passing through even if dictation
+    /// resumes before it is released, and a chord held across the resume activates only when it
+    /// is pressed again. Pausing cancels any hold or toggle latch WITHOUT raising
+    /// <see cref="Deactivated"/>: stopping a dictation already in progress is the caller's job.
+    /// Binding capture keeps working while paused.
+    /// </summary>
+    void SetPaused(bool paused);
+
+    /// <summary>
+    /// <see cref="SetPaused(bool)"/> for a caller whose calls can arrive out of order, such as one
+    /// that changes its own pause state under a lock and calls this after releasing it: two such
+    /// calls on different threads can reach the hook in the opposite order, and a bare flag cannot
+    /// tell which is newer. Number each request while still holding that lock, with a positive
+    /// value that increases on every change for the lifetime of this service. A request that is not
+    /// newer than one already applied changes nothing, so the latest request wins in any order.
+    /// </summary>
+    void SetPaused(bool paused, long requestSequence);
+
     /// <summary>Raised when dictation should begin (hold key down, or toggle on).</summary>
     event EventHandler<HotkeyTriggerEventArgs>? Activated;
 

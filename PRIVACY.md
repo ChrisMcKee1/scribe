@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** September 3, 2026
+**Effective date:** September 23, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice
@@ -27,7 +27,11 @@ processed locally to detect speech and create a transcript.
 
 By default, captured audio is held in memory and discarded after processing. If
 you enable audio history, Scribe stores recorded audio locally with the
-corresponding history entry until you delete that entry or clear your history.
+corresponding history entry for up to seven days, and keeps no more than 250 MB
+of recordings in total, removing the oldest first once that limit is reached.
+Deleting the entry or clearing your history removes its recording sooner. When a
+recording is removed, the entry's text stays, as described under Dictation
+history.
 
 Scribe never transmits microphone audio off your device.
 
@@ -60,8 +64,13 @@ suggestions. A history entry may include:
 - The speech or AI model used
 - Recorded audio, only when audio history is enabled
 
-Transcript history remains on the device until you delete individual entries or
-clear the history.
+Transcript history remains on the device for the history retention period you
+choose in Settings (90 days unless you change it; 0 keeps history until you
+delete it), and you can delete individual entries or clear the history at any
+time. If Scribe starts without your saved settings, because they could not be
+read or were lost when a damaged database was repaired, it deletes no transcript
+history for as long as it runs without them, which after such a repair lasts
+until you review and save your settings.
 
 ### Dictionary, snippets, profiles, and settings
 
@@ -75,8 +84,8 @@ Imported dictionaries and libraries are also stored locally.
 When optional AI cleanup fails, Scribe may retain a shortened sample of the
 unprocessed transcript, together with failure details, to help diagnose and
 improve the local cleanup configuration. These samples are stored locally and
-are pruned after approximately seven days. You can also clear them from the
-application.
+are deleted automatically after seven days, whether or not later cleanups
+succeed. You can also clear them from the application.
 
 ### Clipboard and keyboard access
 
@@ -87,7 +96,10 @@ you type.
 If clipboard-paste injection is selected or used as a fallback, Scribe may
 temporarily read the existing text clipboard so it can restore that content
 after pasting the dictation. Scribe does not retain or transmit the previous
-clipboard content.
+clipboard content. Scribe restores your previous clipboard text only when it can
+confirm the clipboard still holds what Scribe placed there, so anything you copy
+during a dictation is kept. Scribe's own clipboard item carries a small random
+marker so Scribe can recognize it; the marker contains no data.
 
 Clipboard writes that Scribe performs itself are marked so Windows excludes them
 from clipboard history (Win+V) and from cross-device cloud clipboard sync.
@@ -98,21 +110,56 @@ Scribe writes diagnostic logs locally. Logs may include application lifecycle
 events, the selected audio device, the name of the focused application,
 performance measurements, model and provider configuration identifiers, and
 error details. Scribe does not write microphone audio, transcripts, dictionary
-entries, snippet contents, custom prompts, API keys, or service-principal
-secrets to its diagnostic log files. Configured endpoint addresses are recorded
-only as configured or unset, never as the address itself.
+entries, snippet contents, custom dictionary library names, custom prompts, API
+keys, or service-principal secrets to its diagnostic log files. Configured
+endpoint addresses, and Azure deployment, account and subscription names, are
+recorded only as configured or unset, never as the value itself. When something
+fails in the Scribe app itself (Settings, the tray, quick add and the dictation
+pipeline) or in the parts of Scribe that talk to AI providers or handle what they
+return, the log records the failure by its kind only: the type of error, status
+and error codes, and, for a failure that points to a defect in Scribe, the places
+in Scribe's code where it happened. It never records the error's message, which
+can quote an endpoint, an account or resource name, or text from a report you
+chose to send. The one exception is Foundry Local's own diagnostic messages, which
+are kept, with your user profile folder replaced by a placeholder, because they
+are needed to diagnose on-device hardware problems. In parts of Scribe that never
+talk to a provider, such as audio capture and local storage, the message of a
+local error can still appear in the log.
+
+Earlier versions of Scribe wrote some of this information into their logs in a
+small number of known formats: the recognized text of each dictation (versions
+0.3.11 to 0.4.2), the host name or address of a custom AI cleanup endpoint
+(0.1.7 to 0.4.2), Azure deployment, account and subscription names (0.1.0 to
+0.4.2), invalid dictionary entries and snippet phrases, dictionary library names
+and paths, and per-app profile names (0.1.0 to 0.4.2), failure text returned by
+AI providers (0.1.0 to 0.4.2), the error text attached to Settings warnings about
+Azure sign-in, subscriptions, deployments, Azure CLI and credential checks (0.2.4
+to 0.4.2), and the text of an AI output report when no mail app could open it,
+which can include dictation you chose to include in the report (0.3.14 to
+0.4.2). Current versions replace those values with a
+placeholder wherever they appear in a known format: in log files kept from
+earlier days, which Scribe rewrites once, at startup and after midnight, never
+while Scribe may still be adding to a file; and in the copies of the logs that
+Save diagnostics puts in its zip. A small file named `redaction-ledger.txt` in the
+log folder records which log files were already checked, by name, size and time
+only. Values written in any other format are not changed.
 
 Diagnostic logs are kept for seven days and then deleted automatically. The log
-folder is also size-limited, so it cannot grow without bound: the oldest days
-are removed first once it exceeds its budget. You can delete the logs yourself
-at any time from the folder shown in Settings, under About.
+folder also has soft size budgets of about 16 MB per day and 64 MB in total:
+once a day's file passes its budget only warnings and errors are added to it for
+the rest of that day, and the oldest days are removed when Scribe starts and at
+midnight, so the folder can briefly exceed the total until the next sweep. You
+can delete the logs yourself at any time from the folder shown in Settings,
+under About.
 
 Settings, under About, includes "Save diagnostics", which writes the kept log
 files and a summary of your PC into a single zip file at a location you choose.
 That file is intended to be attached to a bug report. It never includes
 `scribe.db`, which holds your dictation history and saved credentials. The zip
 contains a `report.txt` describing exactly what is inside, so you can read it
-before sharing it with anyone.
+before sharing it with anyone. The logs in the zip have the values described
+above replaced, and `report.txt` lists the recognized formats, the versions that
+wrote them, and how many values of each kind were replaced.
 
 Advanced users may configure an OpenTelemetry endpoint through the
 `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable. When configured, Scribe
@@ -197,6 +244,21 @@ encrypt transcript history, optional stored audio, dictionary content, snippets,
 profiles, or diagnostic logs. Provider API keys and service-principal secrets
 receive the additional Windows Data Protection API protection described above.
 
+If Scribe finds its database damaged when it starts, it rebuilds the database
+from whatever can still be read and keeps the damaged file beside it, named
+`scribe.db.corrupt-` followed by the date and time, so it can be recovered by
+hand. The most recent such copy is kept until you delete it. Older copies are
+deleted automatically 14 days after Scribe first finds them. These copies can
+contain the same history, recordings, settings and saved credentials as the
+database itself, with credentials still protected as described above.
+
+If you use the on-device Foundry Local provider, the Foundry Local runtime and
+models Scribe downloads are stored in `%USERPROFILE%\.Scribe` (for an isolated
+profile started with the `SCRIBE_DATA_DIR` environment variable, in a `foundry`
+folder inside that data folder instead). Scribe removes them after you save a
+different AI cleanup provider; files that are still in use are removed the next
+time Scribe starts.
+
 Because dictated material may include confidential, health, financial, or other
 sensitive information, you should use the device security and AI-provider
 settings appropriate for the material you dictate.
@@ -220,7 +282,9 @@ Uninstalling Scribe may not remove data stored outside the application's package
 container. To remove all remaining local Scribe data, delete
 `%LOCALAPPDATA%\ScribeData` after closing and uninstalling Scribe. This
 permanently removes local history, optional stored audio, settings, credentials,
-and logs.
+and logs. If you used Foundry Local, also delete `%USERPROFILE%\.Scribe`, which
+holds the Foundry Local runtime and models Scribe downloaded; saving a different
+AI cleanup provider also removes them, as described under Storage and security.
 
 Because the publisher does not receive or possess your locally stored content,
 the publisher generally cannot view, export, correct, or delete that content for

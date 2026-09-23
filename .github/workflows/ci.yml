@@ -73,15 +73,38 @@ jobs:
 
       - name: Run unit tests
         shell: pwsh
+        # Explicit rather than left to the test assembly's walk up to src/Scribe.App/models: the engine and
+        # VAD tests return early when no model is found, so a layout change that broke the walk would turn
+        # them into passing no-ops. The models are restored or downloaded above.
+        env:
+          SCRIBE_MODELS_DIR: ${{ github.workspace }}/src/Scribe.App/models
         run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release --nologo
 
-      # The unit tests never touch the native recogniser, so this is the only step that proves
-      # sherpa-onnx and its ONNX Runtime actually load and decode on this architecture. The speech
-      # fixtures are committed rather than generated here: SAPI fails with 0x8004503A on the
-      # headless x64 and Arm64 runners, and the audio stack is not something CI should depend on.
+      # The unit tests only smoke-test the engine; this step decodes the committed fixtures end to end
+      # and fails loudly on a broken native, which is what proves sherpa-onnx and its ONNX Runtime load
+      # and decode correctly on this architecture. The speech fixtures are committed rather than
+      # generated here: SAPI fails with 0x8004503A on the headless x64 and Arm64 runners, and the audio
+      # stack is not something CI should depend on.
       - name: Transcribe fixtures through the real pipeline
         shell: pwsh
         run: dotnet run --project tools/Scribe.AsrCheck -c Release
+
+      # Plays the committed scenario fixtures through the production Core pipeline: device formats,
+      # levels, noise, timing, long dictations and their chunk seams, silence auto-stop, post-processing,
+      # engine lifecycle races and history storage. Quick mode leaves out the 60 s and longer dictations
+      # and shortens the lifecycle windows. It fails only on a robust regression (a failed asserted
+      # check); everything else is reported in the uploaded JSON.
+      - name: Scenario suite (quick)
+        shell: pwsh
+        run: dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick --report artifacts/scenarios/report-${{ matrix.name }}.json
+
+      - name: Upload scenario report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-report-${{ matrix.name }}
+          path: artifacts/scenarios/report-${{ matrix.name }}.json
+          if-no-files-found: warn
 
       # Publishing is what the installer does, and it is where an architecture mismatch would
       # actually ship, so verify the payload rather than just the build output.

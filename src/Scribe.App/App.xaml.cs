@@ -13,6 +13,7 @@ using Scribe.App.Settings;
 using Scribe.App.Tray;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
@@ -40,12 +41,16 @@ public partial class App : Application
     // deliberate "open settings" into a dead end.
     private const string ShowSettingsEventName = "Scribe.ShowSettings.9E5C1A2F";
 
+    // How long quitting waits for a tray settings change already on its way to the database.
+    private static readonly TimeSpan SettingsWriteDrainTimeout = TimeSpan.FromSeconds(2);
+
     private Mutex? _singleInstanceMutex;
     private EventWaitHandle? _showSettingsSignal;
     private RegisteredWaitHandle? _showSettingsRegistration;
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
+    private Scribe.Core.Lifecycle.PresentationRelay<DictationStateChange>? _dictationState;
     private IOverlayController? _overlay;
     private SettingsWindow? _settingsWindow;
     private Onboarding.WelcomeWindow? _welcomeWindow;
@@ -57,6 +62,12 @@ public partial class App : Application
     private SessionDiagnostics? _diagnostics;
     private ILogger? _appLog;
     private int _learningFromHistory;
+
+    // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
+    private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
+
+    // Kept so the first stage of OnExit can stop it before anything it uses is torn down.
+    private StorageMaintenance? _storageMaintenance;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -80,6 +91,35 @@ public partial class App : Application
             return;
         }
 
+        // Everything from here on holds the single-instance mutex, so nothing may fail without ending the process.
+        // This method is async void and the dispatcher handler marks what reaches it as handled, so a failure that
+        // escaped used to leave a hidden process that every relaunch reported as already running, or a tray icon
+        // over a dictation loop that never started.
+        bool started;
+        try
+        {
+            started = await StartAsync();
+        }
+        catch (Exception ex)
+        {
+            AbandonStartup(ex);
+            return;
+        }
+
+        // Allow `Scribe.exe --settings` to jump straight to the settings window on launch. After the guard on purpose:
+        // Scribe is running by now, so a window that fails to open is a window fault, reported as any other is.
+        if (started && !Dispatcher.HasShutdownStarted && HasSettingsSwitch(e.Args))
+        {
+            OpenSettings();
+        }
+    }
+
+    /// <summary>
+    /// Everything startup does once this is the only instance. Returns false when it ended the process on purpose,
+    /// having told the user why: the data folder cannot be created, or the database is from a newer Scribe.
+    /// </summary>
+    private async Task<bool> StartAsync()
+    {
         StartShowSettingsListener();
 
         // Tray app: never exit just because a window closed; quit happens explicitly from the tray.
@@ -94,7 +134,7 @@ public partial class App : Application
         {
             ShowFatalDataPathNotice(ex);
             Shutdown();
-            return;
+            return false;
         }
 
         var builder = Host.CreateApplicationBuilder();
@@ -109,8 +149,13 @@ public partial class App : Application
         // Held in a static so Settings can report whether logging is ACTUALLY working rather
         // than displaying the folder it was asked to use. A packaged build was found writing
         // nothing for an entire session while the About page confidently showed a path.
-        LogSink = new FileLoggerProvider(paths.LogsDir);
-        builder.Logging.AddProvider(LogSink);
+        var logSink = new FileLoggerProvider(paths.LogsDir);
+        LogSink = logSink;
+
+        // A factory registration rather than AddProvider(instance): the container disposes what a
+        // factory hands it but never an instance it was given, and disposing the provider is what
+        // drains its background writer when the host shuts down.
+        builder.Services.AddSingleton<ILoggerProvider>(_ => logSink);
         builder.Logging.AddDebug();
 
         // Debug, not Information. The log is the only diagnostic channel this app has: it is a tray
@@ -171,23 +216,74 @@ public partial class App : Application
             log.LogInformation("Azure CLI environment prepared for Microsoft Foundry authentication.");
         }
 
+        // Open the database here, before anything else relies on it. A file written by a newer Scribe
+        // (a later schema) cannot be used by this build, and gets its own message rather than the generic
+        // one OnStartup shows for any other failure here.
+        try
+        {
+            services.GetRequiredService<ScribeDatabase>().Initialize();
+        }
+        catch (NewerDatabaseSchemaException ex)
+        {
+            log.LogError(
+                "The database was written by a newer Scribe (schema v{DatabaseVersion}; this build supports v{SupportedVersion}). Exiting.",
+                ex.DatabaseVersion,
+                ex.SupportedVersion);
+            ShowNewerDataNotice();
+            Shutdown();
+            return false;
+        }
+
         // Install the seed dictionary on first run so post-processing is useful out of the box, then
         // retire the entries older versions seeded that replaced ordinary words.
         var dictionary = services.GetRequiredService<IDictionaryRepository>();
         var settingsRepository = services.GetRequiredService<ISettingsRepository>();
+
+        // Decided here, before anything below can write the settings document (the seed retirement and Foundry reset
+        // flags, the welcome flag): once defaults are saved over a lost or unreadable document, nothing can tell them
+        // from the user's choice. A session on defaults must never delete history text by a retention period the
+        // user did not pick.
+        var withoutSavedSettings = SettingsRepository.StartsWithoutSavedSettings(
+            settingsRepository, services.GetRequiredService<ScribeDatabase>());
+        if (withoutSavedSettings)
+        {
+            services.GetRequiredService<StorageMaintenance>().KeepAllTextThisSession();
+        }
+
         dictionary.SeedIfEmpty(DefaultVocabulary.Entries);
-        SeedVocabularyRetirement.Apply(
+
+        // Both save the whole settings document, so they wait for a start that could read it. A read that failed
+        // outright (a transient lock) answers true above without recording anything in the repository, so neither may
+        // go by the repository alone; each also checks the read it makes itself.
+        if (!withoutSavedSettings)
+        {
+            SeedVocabularyRetirement.Apply(
+                settingsRepository,
+                dictionary,
+                DefaultVocabulary.RetiredEntries,
+                log);
+
+            // Older builds demoted a model to its CPU build on any load failure, including a variant
+            // needing an execution provider this PC never had. Scribe now avoids that up front, so the
+            // saved markers only pin cleanup to the CPU for no reason.
+            FoundryDemotionReset.Apply(settingsRepository, services.GetRequiredService<AppPaths>(), log);
+        }
+
+        _settingsWrites = new Scribe.Core.Settings.SettingsWriteLane(
             settingsRepository,
-            dictionary,
-            DefaultVocabulary.RetiredEntries,
-            log);
+            callback => Dispatcher.BeginInvoke(callback));
 
-        // Older builds demoted a model to its CPU build on any load failure, including a variant
-        // needing an execution provider this PC never had. Scribe now avoids that up front, so the
-        // saved markers only pin cleanup to the CPU for no reason.
-        FoundryDemotionReset.Apply(settingsRepository, services.GetRequiredService<AppPaths>(), log);
-
-        _tray = new TrayIconHost();
+        _tray = new TrayIconHost(ex =>
+        {
+            try
+            {
+                _appLog?.LogWarning("A tray update failed ({Failure}).", FailureShape.Describe(ex));
+            }
+            catch
+            {
+                // Tray updates are best effort, and so is saying one failed.
+            }
+        });
         _tray.QuitRequested += () => Dispatcher.Invoke(Shutdown);
         _tray.SettingsRequested += OpenSettings;
         _tray.LearnFromHistoryRequested += LearnFromHistory;
@@ -211,7 +307,7 @@ public partial class App : Application
             services.GetRequiredService<ITextPostProcessor>(),
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<ITextInjector>(),
-            services.GetRequiredService<IHistoryRepository>(),
+            services.GetRequiredService<IHistoryWriter>(),
             services.GetRequiredService<IDictionaryRepository>(),
             services.GetRequiredService<IDictionaryLibraryService>(),
             services.GetRequiredService<ICleanupFailureLog>(),
@@ -223,6 +319,24 @@ public partial class App : Application
             services.GetRequiredService<IAudioCaptureService>(),
             services.GetRequiredService<ILogger<OverlayProcessClient>>());
 
+        // State changes are raised on whichever thread made them and can arrive out of order; the relay posts each to this
+        // thread without making the raising thread wait, and shows only the newest (see PresentationRelay).
+        var controllerForState = _controller;
+        _dictationState = new Scribe.Core.Lifecycle.PresentationRelay<DictationStateChange>(
+            post: work => Dispatcher.BeginInvoke(work),
+            render: RenderDictationState,
+            isClosed: () => controllerForState.IsClosing,
+            onFailure: ex =>
+            {
+                try
+                {
+                    _appLog?.LogWarning("Could not show a dictation state change ({Failure}).", FailureShape.Describe(ex));
+                }
+                catch
+                {
+                    // Best effort, like the views it describes.
+                }
+            });
         _controller.StateChanged += OnStateChanged;
         _controller.PipelineReported += report =>
             Dispatcher.BeginInvoke(() => _settingsWindow?.ShowPlaygroundPipeline(report));
@@ -233,10 +347,11 @@ public partial class App : Application
             // pill mid-dictation, not the tray, when the microphone produces nothing.
             OnCleanupFailed(message);
         };
-        _controller.Warning += message =>
+        _controller.Warning += warning =>
         {
-            _tray!.ShowNotification(message, isError: true);
-            OnRecordingWarning("Microphone muted");
+            // The tray notice stands on its own; the pill's warning belongs to one recording and follows its revision.
+            _tray!.ShowNotification(warning.Message, isError: true);
+            OnRecordingWarning(warning.RecordingRevision, "Microphone muted");
         };
         _controller.CleanupFailed += OnCleanupFailed;
         _controller.CleanupProviderChanged += message => Dispatcher.BeginInvoke(new Action(() =>
@@ -249,24 +364,9 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                _appLog?.LogDebug(ex, "Could not show the AI cleanup provider notification.");            }
+                _appLog?.LogDebug("Could not show the AI cleanup provider notification ({Failure}).", FailureShape.Describe(ex));
+            }
         }));
-        _controller.ModelsReleased += () =>
-        {
-            // The overlay helper is the other idle-only resident (~100 MB of WinUI runtime).
-            // Suspend, NOT CloseOverlay: close completes the command queue and joins the consumer
-            // thread, which is a one-way door - after the first idle release the overlay could
-            // never appear again for the life of the process (a live session proved it). Suspend
-            // ends only the helper process; the next ShowRecording relaunches it.
-            try
-            {
-                _overlay?.SuspendOverlay();
-            }
-            catch (Exception ex)
-            {
-                _appLog?.LogDebug(ex, "Could not suspend the overlay during idle release.");
-            }
-        };
 
         _controller.InjectionFailed += () =>
         {
@@ -280,7 +380,7 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                log.LogWarning(ex, "Failed to show the injection recovery notification.");
+                log.LogWarning("Failed to show the injection recovery notification ({Failure}).", FailureShape.Describe(ex));
             }
         };
 
@@ -298,25 +398,36 @@ public partial class App : Application
             }
             catch (FileNotFoundException ex)
             {
-                log.LogInformation(ex, "No transcription model is installed; waiting for a Settings selection.");
+                log.LogInformation(
+                    "No transcription model is installed; waiting for a Settings selection ({Failure}).",
+                    FailureShape.Describe(ex));
                 _tray!.ShowInfo("No speech model is installed. Choose one in Settings.");
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Failed to warm-load the transcription engine.");
+                log.LogError("Failed to warm-load the transcription engine: {Failure}", FailureShape.DescribeWithStack(ex));
                 _tray!.ShowError("model failed to load, see logs");
             }
         });
+
+        // Before Start(): the startup reclaim of an earlier session's Foundry Local leftovers runs in the
+        // background right after the first Configure, which Start() makes.
+        services.GetRequiredService<ITextCleanupService>().FoundryStorageReclaimed += OnFoundryStorageReclaimed;
 
         _controller.Start();
 
         // Settings-dependent wiring goes AFTER Start(): CurrentSettings returns compiled defaults
         // until Start() loads the persisted settings, so reading it earlier silently ignored the
         // user's saved overlay position, overlay toggle, and AI-cleanup state on every launch.
+        // The helper's idle lifetime follows the speech models' keep-warm setting but is decided inside
+        // the client, never on the models' release, which could end a newer recording's pill. It is
+        // pushed here before the warmup can arm it, and again with every state change.
+        _overlay.SetKeepWarm(_controller.CurrentSettings.ReleaseModelsAfterIdleMinutes);
         _overlay.SetPosition(_controller.CurrentSettings.OverlayPosition);
         // Pre-warm the out-of-process WinUI pill so its transparent surface is ready before first
         // use. Only spawn the helper when the overlay is actually enabled; if the user turns it on
-        // later, ShowRecording launches it lazily.
+        // later, ShowRecording launches it lazily. A warmed helper left unused is suspended after the
+        // keep-warm period like any other, and relaunches on the next show.
         if (_controller.CurrentSettings.ShowOverlay)
         {
             _overlay.Warmup();
@@ -324,28 +435,33 @@ public partial class App : Application
 
         _tray.SetAiCleanupChecked(_controller.CurrentSettings.EnableAiCleanup);
 
-        // Trim any stale AI-failure log entries (older than the rolling one-week window) on startup,
-        // off the UI thread, so the Settings failure list never accumulates indefinitely.
-        _ = Task.Run(() => _controller!.PruneFailureLog());
+        // History text, stored audio, the AI cleanup failure log and damaged-database copies are
+        // kept bounded by Core for the whole session, off the UI thread: shortly after startup,
+        // hourly, and soon after audio is stored or history is deleted. The retention setting is
+        // read live, so a change in Settings applies without a restart. The one-time VACUUM that
+        // shrinks an old database runs only while no dictation is in flight and no window that
+        // writes on the UI thread (Settings, quick add) is open; Core asks again right before it
+        // starts. A dictation starting makes maintenance yield at once: a running VACUUM is
+        // interrupted and rolls back, so the history write at its end never queues behind one.
+        // OnExit stops it first, right after the controller begins shutting down, so a VACUUM in
+        // flight is interrupted before anything else is torn down; the host's disposal repeats that.
+        var controller = _controller;
+        var historyMaintenance = services.GetRequiredService<IHistoryMaintenance>();
+        var storageMaintenance = services.GetRequiredService<StorageMaintenance>();
+        _storageMaintenance = storageMaintenance;
 
-        // Apply the history retention window the same way. Stored audio is the cost that makes
-        // this matter (~1.9 MB per dictated minute); before this, both tables grew for the life
-        // of the install with no pruning path but a manual Clear.
-        var retentionDays = _controller.CurrentSettings.HistoryRetentionDays;
-        if (retentionDays > 0)
+        // Whether a dictation is in flight comes from the controller's lifecycle; this handler is only the
+        // push that makes maintenance let go the moment one starts.
+        controller.StateChanged += state =>
         {
-            var history = services.GetRequiredService<IHistoryRepository>();
-            _ = Task.Run(() =>
+            if (state.State is DictationState.Recording or DictationState.Processing)
             {
-                var removed = history.PruneOlderThan(DateTimeOffset.UtcNow.AddDays(-retentionDays));
-                if (removed > 0)
-                {
-                    log.LogInformation(
-                        "Pruned {Count} dictation history entries older than {Days} days.",
-                        removed, retentionDays);
-                }
-            });
-        }
+                historyMaintenance.RequestYield();
+            }
+        };
+        storageMaintenance.Start(
+            () => controller.CurrentSettings,
+            () => !controller.IsDictationInFlight && _settingsWindow is null && _quickAddWindow is null);
 
         log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
 
@@ -361,28 +477,26 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            log.LogDebug(ex, "Compute capability detection failed.");
+            log.LogDebug("Compute capability detection failed ({Failure}).", FailureShape.Describe(ex));
         }
 
         // The dictionary seed above forced database initialization, so a corruption repair (if any)
         // already ran; tell the user now rather than let them discover missing history on their own.
-        // The two outcomes get different messages on purpose: "recovered" when settings survived,
-        // and a loud reset warning when they did not - the old single message claimed settings were
-        // recovered even when the salvage got zero rows, which is exactly the silent reset a user
-        // cannot diagnose.
+        // What it says follows what the repair brought back: an old single message claimed settings
+        // were recovered even when the salvage got none of them, which is exactly the silent reset a
+        // user cannot diagnose.
         var database = services.GetRequiredService<ScribeDatabase>();
         if (database.RepairedAtStartup)
         {
-            if (database.SettingsLostInRepair)
+            var (notice, isError) = DatabaseRepairNotice.Compose(
+                database.SettingsLostInRepair, database.DictionaryLostInRepair);
+            if (isError)
             {
-                _tray.ShowNotification(
-                    "Scribe repaired its database, but your settings could not be recovered and were " +
-                    "reset. The damaged file was kept next to the database for manual recovery.",
-                    isError: true);
+                _tray.ShowNotification(notice, isError: true);
             }
             else
             {
-                _tray.ShowInfo("Scribe repaired its database. Settings and dictionary were recovered; some history may be missing.");
+                _tray.ShowInfo(notice);
             }
         }
 
@@ -396,13 +510,25 @@ public partial class App : Application
             var repo = services.GetRequiredService<ISettingsRepository>();
             if (!repo.LastLoadFailed)
             {
-                var settings = repo.Load();
-                settings.HasCompletedFirstRun = true;
-                repo.Save(settings);
+                // One field, atomically, and deliberately still on this thread, before any window can take input: the
+                // Settings window saves its whole document, so a copy it loaded before this write landed would put the
+                // welcome back on the next launch. It runs once per install.
+                try
+                {
+                    repo.Update(stored => stored.HasCompletedFirstRun = true);
+                }
+                catch (Exception ex)
+                {
+                    log.LogWarning(
+                        "Could not record that the welcome was shown; it will show again at the next launch ({Failure}).",
+                        FailureShape.Describe(ex));
+                }
             }
             else
             {
-                _tray.ShowError("settings were recovered, review and save them in Settings");
+                // The stored settings were unreadable, or a repair lost them: the welcome flag is not written over
+                // them, and the tooltip says so in words true for both.
+                _tray.ShowError(SavedSettingsNotice.AtStartup);
             }
         }
         // --- End onboarding -----------------------------------------------------------------
@@ -415,20 +541,79 @@ public partial class App : Application
 
         // Finish synchronous initialization before yielding to WinRT. Store installs need a
         // manifest startup task, not a virtualized Run key; existing opt-ins migrate here.
-        if (!settingsRepository.LastLoadFailed)
+        // An isolated data folder (SCRIBE_DATA_DIR) never reconciles: its preference belongs to a
+        // scratch profile, while the Run entry or task belongs to the installed app, which a
+        // direct-download build would otherwise delete or repoint at this build.
+        if (paths.IsIsolatedRoot)
+        {
+            log.LogInformation("Startup registration not reconciled: this instance uses an isolated data folder.");
+        }
+        else if (!settingsRepository.LastLoadFailed)
         {
             var startup = await services.GetRequiredService<StartupRegistration>()
                 .SyncAsync(_controller.CurrentSettings.LaunchOnLogin);
             if (!startup.IsKnown)
             {
-                log.LogWarning("Startup registration could not be reconciled. {Reason}", startup.Message);
+                log.LogWarning("Startup registration could not be reconciled: Windows did not report its startup state.");
             }
         }
 
-        // Allow `Scribe.exe --settings` to jump straight to the settings window on launch.
-        if (!Dispatcher.HasShutdownStarted && HasSettingsSwitch(e.Args))
+        return true;
+    }
+
+    /// <summary>
+    /// Ends a start that failed partway: records why, tells the user, and shuts down, which releases the
+    /// single-instance mutex so the next launch starts cleanly. Never throws.
+    /// </summary>
+    private void AbandonStartup(Exception failure)
+    {
+        try
         {
-            OpenSettings();
+            // If the host never started, the sink it would have used writes the line itself.
+            var log = _appLog ?? LogSink?.CreateLogger(typeof(App).FullName!);
+            log?.LogCritical("Scribe could not start: {Failure}", FailureShape.DescribeWithStack(failure));
+            LogSink?.Flush(TimeSpan.FromSeconds(1));
+        }
+        catch
+        {
+            // Nothing is left to write to; the notice still tells the user.
+        }
+
+        // The newer-schema message wherever that failure surfaces, since it tells the user exactly what to do.
+        if (failure is NewerDatabaseSchemaException)
+        {
+            ShowNewerDataNotice();
+        }
+        else
+        {
+            ShowStartupFailureNotice();
+        }
+
+        try
+        {
+            Shutdown();
+        }
+        catch
+        {
+            // A process that cannot shut down must still not keep the mutex.
+            Environment.Exit(1);
+        }
+    }
+
+    private static void ShowStartupFailureNotice()
+    {
+        try
+        {
+            var log = LogSink?.CurrentStatus();
+            MessageBox.Show(
+                Scribe.Core.Lifecycle.StartupFailureNotice.Compose(log is { } status && status.Healthy ? status.Path : null),
+                Scribe.Core.Lifecycle.StartupFailureNotice.Title,
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        catch
+        {
+            // Exiting is still right if Windows cannot show the dialog.
         }
     }
 
@@ -450,6 +635,22 @@ public partial class App : Application
         catch
         {
             // If Windows cannot show the dialog, there is no safe startup path left.
+        }
+    }
+
+    private static void ShowNewerDataNotice()
+    {
+        try
+        {
+            MessageBox.Show(
+                NewerDatabaseSchemaException.UserMessage,
+                "Scribe",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch
+        {
+            // Exiting is still right if Windows cannot show the dialog.
         }
     }
 
@@ -553,12 +754,20 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Reflects a dictation state change in the tray icon and the recording overlay. Runs on a
-    /// background thread, so overlay mutations are marshalled to the UI thread. The overlay only
-    /// shows while recording and only when the user has it enabled.
+    /// Hands a dictation state change to the relay, which shows it on the UI thread unless a newer one has been shown
+    /// already. Raised on background threads (and on the UI thread for a pause), so nothing here may wait.
     /// </summary>
-    private void OnStateChanged(DictationState state)
+    private void OnStateChanged(DictationStateChange change) => _dictationState?.Publish(change.Revision, change);
+
+    /// <summary>
+    /// Reflects the newest dictation state in the tray icon and the recording overlay. Runs on the UI thread, only for a
+    /// change newer than the last one shown, so a late notice from the previous dictation can never hide the pill of the
+    /// recording that started after it. The overlay only shows while recording and only when the user has it enabled.
+    /// </summary>
+    private void RenderDictationState(DictationStateChange change)
     {
+        var state = change.State;
+
         // The tray and the overlay are independent views of the same state. A failure updating one
         // must never stop the other: when this method threw, the overlay was left showing whatever
         // it had last been told, so the pill sat on "Transcribing" while dictation kept working.
@@ -568,41 +777,57 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            _host?.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Could not update the tray icon for state {State}.", state);
+            _appLog?.LogWarning("Could not update the tray icon for state {State} ({Failure}).", state, FailureShape.Describe(ex));
         }
 
-        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
-        // The dictation-only hotkey overrides AI cleanup for its capture without changing the
-        // global setting, so the overlay must read the active capture snapshot.
-        var aiPolishing = _controller?.ActiveCaptureUsesAiCleanup ?? false;
-        Dispatcher.BeginInvoke(() =>
-        {
-            if (!overlayEnabled)
-            {
-                _overlay?.HideOverlay();
-                return;
-            }
+        // Read here, at the render, so a setting saved since the change was raised applies to it.
+        var settings = _controller?.CurrentSettings;
+        var overlayEnabled = settings?.ShowOverlay ?? false;
 
+        // Pushed with every state change, so a keep-warm saved in Settings reaches the overlay client
+        // without its command thread ever reading the controller's settings. Unchanged values cost nothing.
+        if (settings is not null)
+        {
+            _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
+        }
+
+        if (!overlayEnabled)
+        {
+            _overlay?.HideOverlay();
+        }
+        else
+        {
             switch (state)
             {
                 case DictationState.Recording:
                     _overlay?.ShowRecording();
                     break;
                 case DictationState.Processing:
-                    _overlay?.ShowProcessing(aiPolishing);
+                    // The dictation-only hotkey overrides AI cleanup for its capture without changing the global
+                    // setting, so this comes from the capture that was admitted, carried with the change.
+                    _overlay?.ShowProcessing(change.AiPolishing);
                     break;
                 default:
                     _overlay?.HideOverlay();
                     break;
             }
-        });
+        }
+
+        // Pausing is the user standing Scribe down, so the idle helper (~100 MB) is ended now rather
+        // than after the keep-warm period, as pausing already does for the speech models. Only the
+        // newest change gets here, so a pause shown late can never release the helper under a newer
+        // recording; a newer command or an on-screen state still vetoes it inside the client as well.
+        if (state == DictationState.Paused)
+        {
+            _overlay?.ReleaseWhenIdle();
+        }
     }
 
     /// <summary>
     /// Shows the brief red "intelligence failed" overlay when AI cleanup fell back to raw text.
-    /// Raised on a background thread, so the overlay mutation is marshalled to the UI thread and
-    /// only shown when the user has the overlay enabled.
+    /// Raised on a background thread, so the overlay mutation is posted to the UI thread (never
+    /// invoked: the raising thread must not wait for it) and only shown when the user has the overlay
+    /// enabled and the app is not already shutting down by the time it runs.
     /// </summary>
     private void OnCleanupFailed(string reason)
     {
@@ -612,51 +837,156 @@ public partial class App : Application
             return;
         }
 
-        Dispatcher.BeginInvoke(() => _overlay?.ShowFailed(reason));
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_controller?.IsClosing == false)
+            {
+                _overlay?.ShowFailed(reason);
+            }
+        });
     }
 
-    private void OnRecordingWarning(string reason)
+    /// <summary>
+    /// Shows a warning on the recording pill, in the same ordered queue as the state changes and only while the recording
+    /// it belongs to is still what the pill shows. Showing a warning puts the pill in its recording state, so one that ran
+    /// after a pause or a stop had been shown would bring back a recording pill that nothing would ever hide.
+    /// </summary>
+    private void OnRecordingWarning(long recordingRevision, string reason)
     {
-        var overlayEnabled = _controller?.CurrentSettings.ShowOverlay ?? false;
-        if (!overlayEnabled)
+        if (recordingRevision <= 0)
         {
-            return;
+            return; // the recording was already over when the warning was raised
         }
 
-        Dispatcher.BeginInvoke(() => _overlay?.ShowRecordingWarning(reason));
+        _dictationState?.PublishIfCurrent(recordingRevision, () =>
+        {
+            if (_controller?.CurrentSettings.ShowOverlay == true)
+            {
+                _overlay?.ShowRecordingWarning(reason);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Tells the user once, with a tray notice, that Scribe gave back disk space Foundry Local was using.
+    /// Raised on a background thread by the cleanup service, possibly while the host is stopping, so it is
+    /// marshalled without blocking that thread and nothing here throws back into it. The log gets numbers
+    /// and the reason code only.
+    /// </summary>
+    private void OnFoundryStorageReclaimed(FoundryStorageReclaim reclaim)
+    {
+        try
+        {
+            var notice = FoundryStorageReclaimNotice.Format(reclaim);
+            _appLog?.LogDebug(
+                "Foundry Local storage reclaim notice: reason={Reason} bytes={Bytes} models={Models} files={Files} nextStart={NextStart} shown={Shown}.",
+                reclaim.Reason,
+                reclaim.BytesFreed,
+                reclaim.ModelsRemoved,
+                reclaim.FilesDeleted,
+                reclaim.RuntimeDeletedAtNextStart,
+                notice is not null);
+            if (notice is null || Dispatcher.HasShutdownStarted)
+            {
+                return;
+            }
+
+            Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    _tray?.ShowNotification(notice);
+                }
+                catch (Exception ex)
+                {
+                    _appLog?.LogDebug("Could not show the Foundry Local storage notice ({Error}).", ex.GetType().Name);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _appLog?.LogDebug("Could not queue the Foundry Local storage notice ({Error}).", ex.GetType().Name);
+            }
+            catch (Exception)
+            {
+                // A notice is a courtesy; its failure must never reach the cleanup service's thread.
+            }
+        }
     }
 
     /// <summary>
     /// Quick tray toggle for AI cleanup: persist the flipped flag and apply it live, without
     /// opening settings. Lets the user hop between raw Parakeet output and AI-polished text in
-    /// two clicks. Note an already-open settings window keeps its own snapshot; saving it wins.
+    /// two clicks. The flag is saved on a worker, in click order, as a one-field change, and
+    /// applied once it is stored; an open settings window adopts it at once so its next save keeps it.
     /// </summary>
     private void ToggleAiCleanup(bool enabled)
     {
+        // Taken first, so an open settings window can tell this change, and word of how it ended, from anything newer.
+        var revision = Scribe.Core.Settings.ExternalSwitchSync.NextRevision();
         try
         {
             var repo = _host!.Services.GetRequiredService<ISettingsRepository>();
             if (repo.LastLoadFailed)
             {
                 _tray?.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
-                _tray?.ShowError("review recovered settings before changing AI cleanup");
+                _tray?.ShowError(SavedSettingsNotice.FromTray("AI cleanup"));
                 return;
             }
 
-            var settings = repo.Load();
-            settings.EnableAiCleanup = enabled;
-            repo.Save(settings);
-            _controller?.ApplySettings(settings);
-            _settingsWindow?.ReloadExternalSettings();
-            _tray?.ShowInfo(enabled ? "AI cleanup on" : "AI cleanup off");
+            // Refused only once quitting has begun, when nothing is left to apply the change to.
+            if (_settingsWrites?.Submit(
+                    stored => stored.EnableAiCleanup = enabled,
+                    revision,
+                    (stored, superseded) => OnAiCleanupToggleSaved(stored, superseded, revision),
+                    error => OnAiCleanupToggleFailed(error, revision)) == true)
+            {
+                // At once, like the tray item itself, and even while the window is recording a hotkey (its switch then
+                // catches up when the recording ends): a Settings save made before the write lands carries the switch
+                // instead of putting back the window's older value.
+                _settingsWindow?.AdoptExternalAiCleanup(enabled, revision);
+            }
         }
         catch (Exception ex)
         {
-            _host?.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Toggling AI cleanup from the tray failed.");
-            _tray?.SetAiCleanupChecked(_controller?.CurrentSettings.EnableAiCleanup ?? false);
-            _tray?.ShowError("couldn't toggle AI cleanup");
+            OnAiCleanupToggleFailed(ex, revision);
         }
+    }
+
+    // Runs on the UI thread with the settings as stored, which are the truth even when a Settings save landed meanwhile,
+    // so dictation and the tray always take them, never the value asked for. A superseded change was never written: a
+    // Settings save that accounted for it committed first, so the window already holds a newer choice and is not told
+    // again. Otherwise an open window takes it unless something newer, such as a later click in it, has set its switch.
+    private void OnAiCleanupToggleSaved(AppSettings stored, bool superseded, long revision)
+    {
+        _controller?.ApplySettings(stored);
+        if (!superseded)
+        {
+            _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
+        }
+
+        _tray?.SetAiCleanupChecked(stored.EnableAiCleanup);
+        _tray?.ShowInfo(stored.EnableAiCleanup ? "AI cleanup on" : "AI cleanup off");
+    }
+
+    private void OnAiCleanupToggleFailed(Exception ex, long revision)
+    {
+        try
+        {
+            _appLog?.LogWarning("Toggling AI cleanup from the tray failed ({Failure}).", FailureShape.Describe(ex));
+        }
+        catch
+        {
+            // The log must never stop the tray from showing the real state.
+        }
+
+        // Back to what dictation is actually using.
+        var current = _controller?.CurrentSettings.EnableAiCleanup ?? false;
+        _settingsWindow?.AdoptExternalAiCleanup(current, revision);
+        _tray?.SetAiCleanupChecked(current);
+        _tray?.ShowError("couldn't toggle AI cleanup");
     }
 
     /// <summary>
@@ -673,34 +1003,56 @@ public partial class App : Application
         }
 
         var services = _host!.Services;
-        _settingsWindow = new SettingsWindow(
-            services.GetRequiredService<ISettingsRepository>(),
-            services.GetRequiredService<IAudioCaptureService>(),
-            services.GetRequiredService<IDictionaryRepository>(),
-            services.GetRequiredService<IDictionaryLibraryService>(),
-            services.GetRequiredService<ISnippetRepository>(),
-            services.GetRequiredService<IHistoryRepository>(),
-            services.GetRequiredService<ITextCleanupService>(),
-            services.GetRequiredService<IAzureFoundryDiscovery>(),
-            services.GetRequiredService<AzureCliInstaller>(),
-            services.GetRequiredService<ILogger<SettingsWindow>>(),
-            services.GetRequiredService<ICleanupFailureLog>(),
-            services.GetRequiredService<ITranscriptionModelInstaller>(),
-            services.GetRequiredService<AppPaths>(),
-            services.GetRequiredService<StartupRegistration>(),
-            position => _overlay?.Preview(position),
-            settings =>
+
+        // While the window is open its saves run on this thread: the one-time VACUUM stays off until it
+        // closes, and one already running stops now.
+        var foreground = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
+        try
+        {
+            _settingsWindow = new SettingsWindow(
+                services.GetRequiredService<ISettingsRepository>(),
+                services.GetRequiredService<IAudioCaptureService>(),
+                services.GetRequiredService<IDictionaryRepository>(),
+                services.GetRequiredService<IDictionaryLibraryService>(),
+                services.GetRequiredService<ISnippetRepository>(),
+                services.GetRequiredService<IHistoryRepository>(),
+                services.GetRequiredService<ITextCleanupService>(),
+                services.GetRequiredService<IAzureFoundryDiscovery>(),
+                services.GetRequiredService<AzureCliInstaller>(),
+                services.GetRequiredService<ILogger<SettingsWindow>>(),
+                services.GetRequiredService<ICleanupFailureLog>(),
+                services.GetRequiredService<ITranscriptionModelInstaller>(),
+                services.GetRequiredService<AppPaths>(),
+                services.GetRequiredService<StartupRegistration>(),
+                position => _overlay?.Preview(position),
+                settings =>
+                {
+                    // The window has just saved (or applied) its whole document, so a tray change still on its way reads
+                    // the stored settings again before applying anything.
+                    _settingsWrites?.NoteExternalApply();
+                    _controller!.ApplySettings(settings);
+                    _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
+                    _overlay?.SetPosition(settings.OverlayPosition);
+                    _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
+                },
+                capturing => _controller?.SetHotkeyCaptureMode(capturing),
+                _updates,
+                services.GetRequiredService<SessionDiagnostics>());
+            _settingsWindow.Closed += (_, _) =>
             {
-                _controller!.ApplySettings(settings);
-                _overlay?.SetPosition(settings.OverlayPosition);
-                _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
-            },
-            capturing => _controller?.SetHotkeyCaptureMode(capturing),
-            _updates,
-            services.GetRequiredService<SessionDiagnostics>());
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-        _settingsWindow.Show();
-        _settingsWindow.Activate();
+                _settingsWindow = null;
+                foreground.Dispose();
+            };
+            _settingsWindow.Show();
+            _settingsWindow.Activate();
+        }
+        catch
+        {
+            // A window that never opened never closes, and its scope would hold the compaction off for
+            // the rest of the session. Disposing twice is harmless if it did close.
+            foreground.Dispose();
+            throw;
+        }
     });
 
     private void CopyLastDictation() => Dispatcher.Invoke(() =>
@@ -732,7 +1084,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Copying the last dictation failed.");
+                .LogWarning("Copying the last dictation failed ({Failure}).", FailureShape.Describe(ex));
             _tray.ShowNotification("Couldn't copy the last dictation.", isError: true);
         }
     });
@@ -759,7 +1111,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Copying a recent dictation failed.");
+                .LogWarning("Copying a recent dictation failed ({Failure}).", FailureShape.Describe(ex));
             _tray.ShowNotification("Couldn't copy the dictation.", isError: true);
         }
     });
@@ -784,7 +1136,9 @@ public partial class App : Application
             // Falls back to the web listing: the protocol handler is missing on a machine where
             // the Store app has been removed, which is common on managed devices.
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Opening the Microsoft Store listing failed; falling back to the web listing.");
+                .LogWarning(
+                    "Opening the Microsoft Store listing failed; falling back to the web listing ({Failure}).",
+                    FailureShape.Describe(ex));
             try
             {
                 Process.Start(new ProcessStartInfo(ScribeLinks.StoreWeb) { UseShellExecute = true });
@@ -792,7 +1146,7 @@ public partial class App : Application
             catch (Exception fallbackError)
             {
                 _host.Services.GetRequiredService<ILogger<App>>()
-                    .LogWarning(fallbackError, "Opening the Store web listing failed.");
+                    .LogWarning("Opening the Store web listing failed ({Failure}).", FailureShape.Describe(fallbackError));
                 _tray.ShowNotification("Couldn't open the Microsoft Store.", isError: true);
             }
         }
@@ -817,7 +1171,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogWarning(ex, "Copying the Store link failed.");
+                .LogWarning("Copying the Store link failed ({Failure}).", FailureShape.Describe(ex));
             _tray.ShowNotification("Couldn't copy the Store link.", isError: true);
         }
     });
@@ -838,6 +1192,10 @@ public partial class App : Application
         try
         {
             var services = _host.Services;
+
+            // Its dictionary write lands on this thread, so the one-time VACUUM stays off (and stops
+            // at once if it is running) until the learning is done.
+            using var foreground = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
             var candidates = await Task.Run(() =>
             {
                 var history = services.GetRequiredService<IHistoryRepository>();
@@ -864,7 +1222,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogError(ex, "Failed to learn dictionary terms from history.");
+                .LogError("Failed to learn dictionary terms from history: {Failure}", FailureShape.DescribeWithStack(ex));
             _tray.ShowNotification("Couldn't learn from history. See the Scribe log for details.", isError: true);
         }
         finally
@@ -915,9 +1273,15 @@ public partial class App : Application
             return;
         }
 
+        IDisposable? foreground = null;
         try
         {
             var services = _host.Services;
+
+            // The popup writes the dictionary on this thread: the one-time VACUUM stays off (and stops
+            // at once if it is running) until the popup closes.
+            var scope = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
+            foreground = scope;
             var store = services.GetRequiredService<LastTranscriptStore>();
             var recent = store.GetRecent();
             if (recent.Count == 0)
@@ -981,6 +1345,7 @@ public partial class App : Application
             {
                 window.Saved -= OnQuickAddSaved;
                 _quickAddWindow = null;
+                scope.Dispose();
             };
 
             _quickAddWindow = window;
@@ -990,8 +1355,9 @@ public partial class App : Application
         catch (Exception ex)
         {
             _quickAddWindow = null;
+            foreground?.Dispose();
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogError(ex, "Failed to open the quick dictionary add window.");
+                .LogError("Failed to open the quick dictionary add window: {Failure}", FailureShape.DescribeWithStack(ex));
             _tray.ShowNotification("Couldn't open the quick add window.", isError: true);
         }
     });
@@ -1028,7 +1394,9 @@ public partial class App : Application
                 // Never surfaced: the rule is saved and working, and a stale recovery copy is a far
                 // smaller problem than an error toast implying the save failed.
                 _host.Services.GetRequiredService<ILogger<App>>()
-                    .LogWarning(ex, "Failed to repair the retained transcript after a quick dictionary add.");
+                    .LogWarning(
+                        "Failed to repair the retained transcript after a quick dictionary add: {Failure}",
+                        FailureShape.DescribeWithStack(ex));
             }
         }
 
@@ -1046,7 +1414,9 @@ public partial class App : Application
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
-                .LogError(ex, "Failed to reload the post-processor after a quick dictionary add.");
+                .LogError(
+                    "Failed to reload the post-processor after a quick dictionary add: {Failure}",
+                    FailureShape.DescribeWithStack(ex));
             _tray.ShowNotification(
                 "Saved the rule, but it won't apply until Scribe restarts.", isError: true);
         }
@@ -1063,7 +1433,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Unable to subscribe to Windows theme changes.");
+            log.LogWarning("Unable to subscribe to Windows theme changes ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -1080,7 +1450,7 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            _appLog?.LogWarning(ex, "Unable to queue Windows theme refresh.");
+            _appLog?.LogWarning("Unable to queue Windows theme refresh ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -1095,13 +1465,15 @@ public partial class App : Application
             log?.LogInformation(
                 "Applied Windows theme: {Theme} (AppsUseLightTheme={RegistryValue}, source={Source}, registryRead={RegistryRead}).",
                 applied,
-                registryValue?.ToString() ?? "unavailable",
+                (object?)registryValue ?? "unavailable",
                 reason,
                 readRegistry);
         }
         catch (Exception ex)
         {
-            log?.LogWarning(ex, "Unable to apply the Windows theme; keeping the current app resources.");
+            log?.LogWarning(
+                "Unable to apply the Windows theme; keeping the current app resources ({Failure}).",
+                FailureShape.Describe(ex));
         }
     }
 
@@ -1148,44 +1520,68 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        try
-        {
-            // Closes the story the banner opened. A log covering several restarts is otherwise a
-            // run of session banners with no way to tell an orderly quit from a crash: the absence
-            // of this line before the next banner is the signal that the process died.
-            if (_diagnostics is { } diagnostics)
+        // Each step is independent and guarded on its own, so one failure no longer skips the rest:
+        // a single try block used to abandon tray, theme, host shutdown and host disposal together on
+        // the first throw. The order still matters and is kept: storage maintenance stops, the
+        // controller stops using the core services (and drains its history), and the tray's settings
+        // writes finish, before the host disposes them, and the settings-signal registration is
+        // unregistered before the handle it waits on is disposed. There is no exit deadline beyond the
+        // bounded waits inside the steps themselves.
+        Scribe.Core.Lifecycle.StagedTeardown.Run(
+        [
+            // First, and waiting for nothing: from here the controller starts nothing new and stops raising the events
+            // whose handlers marshal synchronously onto this thread, so nothing raised during the steps below can park
+            // behind OnExit and turn the controller's bounded wait into a stall.
+            new("begin dictation shutdown", () => _controller?.BeginShutdown()),
+
+            // Next, before anything is disposed: a VACUUM in flight is interrupted and rolls back, and a pass stops at
+            // its next step, so the history drain in the controller's disposal and the host's disposal of the database
+            // below never wait behind storage maintenance. Bounded; past the bound SQLite still commits or rolls back
+            // atomically on its own.
+            new("stop storage maintenance", () => _storageMaintenance?.Stop(TimeSpan.FromSeconds(3))),
+
+            // Nothing new is queued and nothing is applied from here on; a tray change already on its way still reaches
+            // the database, and the drain before host shutdown below waits for it.
+            new("stop settings writes", () => _settingsWrites?.Close()),
+            new("session end", () =>
             {
-                _appLog?.LogInformation(
-                    "===== Scribe session end ===== session={Session} uptime={Uptime:hh\\:mm\\:ss}",
-                    diagnostics.Session.Id,
-                    DateTimeOffset.Now - diagnostics.Session.StartedLocal);
-            }
+                // Closes the story the banner opened. A log covering several restarts is otherwise a
+                // run of session banners with no way to tell an orderly quit from a crash: the absence
+                // of this line before the next banner is the signal that the process died.
+                if (_diagnostics is { } diagnostics)
+                {
+                    _appLog?.LogInformation(
+                        "===== Scribe session end ===== session={Session} uptime={Uptime:hh\\:mm\\:ss}",
+                        diagnostics.Session.Id,
+                        DateTimeOffset.Now - diagnostics.Session.StartedLocal);
+                }
+            }),
 
-            // Stage any downloaded update first so the updater is waiting as the process exits.
-            _updates?.ApplyPendingOnExit();
-
-            _overlay?.CloseOverlay();
-            _controller?.Dispose();
-            _tray?.Dispose();
-            DisposeThemeWatcher();
-
-            if (_host is not null)
+            // Stage any downloaded update early, before the slower steps, so the updater is waiting as the process exits.
+            new("pending update", () => _updates?.ApplyPendingOnExit()),
+            new("overlay", () => _overlay?.CloseOverlay()),
+            new("dictation controller", () => _controller?.Dispose()),
+            new("tray icon", () => _tray?.Dispose()),
+            new("theme watcher", DisposeThemeWatcher),
+            new("drain settings writes", () =>
             {
-                _host.StopAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
-                _host.Dispose();
-            }
-        }
-        catch
-        {
-            // Best-effort shutdown; never let teardown errors block process exit.
-        }
-        finally
-        {
-            // Unregister before disposing the handle it waits on, or the pool can touch a freed one.
-            try { _showSettingsRegistration?.Unregister(null); } catch { }
-            try { _showSettingsSignal?.Dispose(); } catch { }
-            _singleInstanceMutex?.Dispose();
-        }
+                if (_settingsWrites is { } writes && !writes.WaitForIdle(SettingsWriteDrainTimeout))
+                {
+                    _appLog?.LogWarning(
+                        "A tray settings change was still being saved after {Seconds} s at exit; it may not be stored.",
+                        SettingsWriteDrainTimeout.TotalSeconds);
+                }
+            }),
+            new("host stop", () => _host?.StopAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult()),
+            new("host dispose", () => _host?.Dispose()),
+            new("settings signal registration", () => _showSettingsRegistration?.Unregister(null)),
+            new("settings signal", () => _showSettingsSignal?.Dispose()),
+            new("single-instance mutex", () => _singleInstanceMutex?.Dispose()),
+        ],
+        (step, ex) => _appLog?.LogWarning(
+            "Shutdown step '{Step}' failed; the remaining steps still ran: {Failure}",
+            step,
+            FailureShape.DescribeWithStack(ex)));
 
         base.OnExit(e);
     }
@@ -1197,18 +1593,39 @@ public partial class App : Application
     /// </summary>
     private void WireGlobalExceptionLogging(ILogger log)
     {
+        // The session banner was queued just before this, and startup goes on to load the native
+        // speech and cleanup runtimes, where a hard crash would take unwritten lines with it. Wait
+        // (briefly) until the banner is on disk. Warnings and errors, including the ones below, wait a
+        // short bounded time to be written before their logging call returns, and the provider drains
+        // its queue on its own at process exit and on an unhandled exception.
+        LogSink?.Flush(FileLoggerProvider.PromptFlushTimeout);
+
+        // Only now, so the log opens with the banner: removes sensitive values that earlier versions
+        // wrote into past days' log files, on a background thread.
+        LogSink?.StartHistoricalRedaction();
+
+        // By shape and stack (FailureShape): the frames are the diagnosis of a crash, and the messages can be a
+        // provider's or the user's text.
         DispatcherUnhandledException += (_, args) =>
         {
-            log.LogError(args.Exception, "Unhandled dispatcher exception.");
+            log.LogError("Unhandled dispatcher exception: {Failure}", FailureShape.DescribeWithStack(args.Exception));
             args.Handled = true;
         };
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
-            log.LogCritical(args.ExceptionObject as Exception, "Unhandled domain exception (terminating={Terminating}).", args.IsTerminating);
+        {
+            log.LogCritical(
+                "Unhandled domain exception (terminating={Terminating}): {Failure}",
+                args.IsTerminating,
+                FailureShape.DescribeWithStack(args.ExceptionObject as Exception));
+
+            // The process is about to end: give the crash line itself a bounded chance to reach the disk.
+            LogSink?.Flush(TimeSpan.FromSeconds(1));
+        };
 
         System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (_, args) =>
         {
-            log.LogError(args.Exception, "Unobserved task exception.");
+            log.LogError("Unobserved task exception: {Failure}", FailureShape.DescribeWithStack(args.Exception));
             args.SetObserved();
         };
     }

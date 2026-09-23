@@ -8,7 +8,16 @@ namespace Scribe.Core.Persistence;
 /// <inheritdoc cref="ISettingsRepository"/>
 public sealed class SettingsRepository : ISettingsRepository
 {
-    private const string SettingsKey = "app_settings";
+    /// <summary>The settings row holding the user's document; every other row is auxiliary.</summary>
+    internal const string SettingsKey = "app_settings";
+
+    /// <summary>
+    /// Present while a document a repair lost has not been replaced (<see cref="ScribeDatabase.SettingsLostInRepair"/>
+    /// writes it). Without it, the start after the repair would read the missing document as a first run and
+    /// quietly make the defaults the user's settings. Older builds ignore it.
+    /// </summary>
+    internal const string LostMarkerKey = "app_settings_lost";
+
     private const string RecoveryKey = "app_settings_recovery";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -19,76 +28,272 @@ public sealed class SettingsRepository : ISettingsRepository
 
     private readonly ScribeDatabase _database;
 
+    // Every write of the settings document (Save, SaveBundle and both kinds of Update) runs whole under this one lock:
+    // BEGIN, the reads it decides by, the write, COMMIT, and the bookkeeping after it. Within this process that fixes
+    // the order writes happen in, whatever SQLite does with its own lock (after some failures it rolls back and
+    // releases that lock at once), and it keeps two load-edit-save writers on different threads from overwriting each
+    // other's field. The IMMEDIATE transactions are what exclude every other connection.
+    private readonly Lock _updateLock = new();
+    private int _updatingThread;
+
+    // The AI cleanup switch follows one invariant: the newest intent wins, ordered by when the user made it, from the
+    // tray or in the Settings window, and a whole-document save never writes over a stored value its window neither
+    // showed nor changed. So a save carries the revision of its window's newest intent for the switch (a click there,
+    // or a tray change the window took; see ExternalSwitchSync) and, carrying none, keeps the stored value. A tray
+    // change is superseded by a committed save whose intent is at least as new. This is the newest intent a committed
+    // save carried. It changes only after that commit has succeeded, under the write lock, so no writer can ever act
+    // on a save that did not happen.
+    private long _savedThrough;
+
     public SettingsRepository(ScribeDatabase database) => _database = database;
 
+    /// <summary>
+    /// Test seam: runs where a whole-document save and a checked change meet, with the step's connection and
+    /// transaction, on the writing thread and under the write lock. "update began": a checked
+    /// <see cref="Update(Action{AppSettings}, long, out bool)"/> has begun its transaction and has not yet looked at
+    /// what saves carried. "save committing": <see cref="SaveBundle"/> has written and not committed. "save
+    /// committed": that commit has returned (no transaction) and the save has not yet recorded its intent. Unset in the
+    /// app.
+    /// </summary>
+    internal Action<string, SqliteConnection, SqliteTransaction?>? WriteStep { get; set; }
+
+    /// <summary>
+    /// Test seam: runs on a writing thread just before it asks for the write lock, so a test knows that a writer has
+    /// reached the lock instead of guessing from a timer. Unset in the app.
+    /// </summary>
+    internal Action? WriteLockRequested { get; set; }
+
+    /// <summary>Whether the calling thread holds the write lock, for tests proving a step runs under it.</summary>
+    internal bool WriteLockHeldByCurrentThread => _updateLock.IsHeldByCurrentThread;
+
     public bool LastLoadFailed { get; private set; }
+
+    /// <summary>
+    /// Whether this session starts on defaults the user never chose: the stored settings could not be read, or a
+    /// repair of a damaged database lost them, at this start or an earlier one whose loss nothing has replaced yet.
+    /// Reads the stored document, so ask before anything writes it. Never throws; a read that fails answers true,
+    /// the answer that makes no decision on the user's behalf. Such a read leaves <see cref="LastLoadFailed"/> as it
+    /// was, so a caller deciding by this answer (whether startup may save the whole document) must keep the answer
+    /// rather than consult the flag again.
+    /// </summary>
+    public static bool StartsWithoutSavedSettings(ISettingsRepository settings, ScribeDatabase database)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(database);
+
+        try
+        {
+            settings.Load();
+            return settings.LastLoadFailed || database.SettingsLostInRepair;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>True when <paramref name="json"/> is a settings document <see cref="Load"/> can read.</summary>
+    internal static bool IsReadableDocument(string? json)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is not null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 
     public AppSettings Load()
     {
         var json = Get(SettingsKey);
         if (string.IsNullOrWhiteSpace(json))
         {
-            LastLoadFailed = false;
+            // No document is a first run, unless a repair lost the one the user had. Those defaults are no more
+            // their choice than an unreadable document's, so they are reported the same way until one is saved.
+            LastLoadFailed = _database.SettingsLostInRepair || Get(LostMarkerKey) is not null;
             return AppSettings.CreateDefault();
         }
 
-        try
+        if (TryDeserialize(json) is { } settings)
         {
-            var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
-            if (settings is null)
+            LastLoadFailed = false;
+            return settings;
+        }
+
+        LastLoadFailed = true;
+        PreserveRecoveryCopy(json);
+        return AppSettings.CreateDefault();
+    }
+
+    public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, revision: null, out _);
+
+    public AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded) =>
+        UpdateCore(mutate, revision, out superseded);
+
+    private AppSettings UpdateCore(Action<AppSettings> mutate, long? revision, out bool superseded)
+    {
+        ArgumentNullException.ThrowIfNull(mutate);
+
+        var (stored, wasSuperseded) = Serialized(() =>
+        {
+            // Not behind the write gate, like SaveBundle: a caller can be on the UI thread (the
+            // first-run welcome's flag is), so it asks a running VACUUM to yield instead of
+            // queueing behind it.
+            _database.RequestYield();
+            using var connection = _database.Open();
+
+            // Non-deferred is BEGIN IMMEDIATE in Microsoft.Data.Sqlite: the read and the write
+            // below are one SQLite write transaction, so no other connection or process can
+            // commit between them either.
+            using var transaction = connection.BeginTransaction(deferred: false);
+            WriteStep?.Invoke("update began", connection, transaction);
+
+            // Decided inside the transaction the change would be written in. Every save that could supersede it has
+            // already committed and recorded its intent, or has not begun: saves take the write lock this change holds.
+            if (revision is { } asked && asked <= _savedThrough)
             {
-                throw new JsonException("The settings document contained null.");
+                return (ReadForUpdate(connection, transaction), true);
             }
 
+            var settings = ReadForUpdate(connection, transaction);
+            mutate(settings);
+            WriteValue(connection, transaction, SettingsKey, JsonSerializer.Serialize(settings, JsonOptions));
+            ForgetLoss(connection, transaction);
+            transaction.Commit();
             LastLoadFailed = false;
-            return Normalize(settings);
-        }
-        catch (JsonException)
-        {
-            LastLoadFailed = true;
-            PreserveRecoveryCopy(json);
-            return AppSettings.CreateDefault();
-        }
+            return (settings, false);
+        });
+
+        superseded = wasSuperseded;
+        return stored;
     }
 
     public void Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         var json = JsonSerializer.Serialize(settings, JsonOptions);
-        Set(SettingsKey, json);
+
+        // Not behind the write gate, like SaveBundle. The document and the end of any recorded loss are one commit.
+        Serialized(() =>
+        {
+            _database.RequestYield();
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
+            WriteValue(connection, transaction, SettingsKey, json);
+            ForgetLoss(connection, transaction);
+            transaction.Commit();
+
+            // The stored document is the one just written, which is readable, whatever the last load found.
+            LastLoadFailed = false;
+        });
     }
 
     public void SaveBundle(
         AppSettings settings,
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
-        IReadOnlyList<Snippet>? snippets)
+        IReadOnlyList<Snippet>? snippets,
+        long aiCleanupIntent = 0)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        var json = JsonSerializer.Serialize(settings, JsonOptions);
 
-        using var connection = _database.Open();
-        using var transaction = connection.BeginTransaction();
-        if (dictionaryEntries is not null)
+        Serialized(() =>
         {
-            DictionaryRepository.SaveAll(connection, transaction, dictionaryEntries);
+            // Not behind the write gate: Settings save runs on the UI thread and must never queue behind
+            // storage maintenance. Asking a running VACUUM to yield keeps SQLite's busy wait short.
+            _database.RequestYield();
+            using var connection = _database.Open();
+
+            // IMMEDIATE, so the stored switch read below cannot change before this transaction writes.
+            using var transaction = connection.BeginTransaction(deferred: false);
+
+            // Without an intent for the switch, the window neither changed it nor took a tray change, so what it shows
+            // can be older than what is stored: a tray change that committed before word of it reached the window. The
+            // stored value stays. With no readable document there is nothing to keep, and the window's value is saved.
+            var document = settings;
+            bool? kept = null;
+            if (aiCleanupIntent <= 0 &&
+                ReadValue(connection, transaction, SettingsKey) is { } storedJson &&
+                TryDeserialize(storedJson) is { } stored &&
+                stored.EnableAiCleanup != settings.EnableAiCleanup)
+            {
+                kept = stored.EnableAiCleanup;
+                document = settings.Clone();
+                document.EnableAiCleanup = stored.EnableAiCleanup;
+            }
+
+            if (dictionaryEntries is not null)
+            {
+                DictionaryRepository.SaveAll(connection, transaction, dictionaryEntries);
+            }
+
+            if (snippets is not null)
+            {
+                SnippetRepository.SaveAll(connection, transaction, snippets);
+            }
+
+            WriteValue(connection, transaction, SettingsKey, JsonSerializer.Serialize(document, JsonOptions));
+            ForgetLoss(connection, transaction);
+            WriteStep?.Invoke("save committing", connection, transaction);
+            transaction.Commit();
+            WriteStep?.Invoke("save committed", connection, null);
+
+            // Only now that the commit has succeeded, and still under the write lock: no writer can ever see an intent
+            // carried by a save that failed, however SQLite rolled it back. The caller's document takes the value kept,
+            // so what it shows and applies is what is stored.
+            RecordSavedThrough(aiCleanupIntent);
+            if (kept is { } keptValue)
+            {
+                settings.EnableAiCleanup = keptValue;
+            }
+
+            LastLoadFailed = false;
+        });
+    }
+
+    /// <summary>
+    /// Records the intent a committed save carried, keeping the newest. <see cref="SaveBundle"/> calls it once its
+    /// commit has succeeded; tests call it to stand for such a save. Only on a thread that holds the write lock, as
+    /// inside a <see cref="WriteStep"/> callback.
+    /// </summary>
+    internal void RecordSavedThrough(long revision)
+    {
+        if (revision > _savedThrough)
+        {
+            _savedThrough = revision;
+        }
+    }
+
+    private void Serialized(Action write) => Serialized(() =>
+    {
+        write();
+        return 0;
+    });
+
+    // Runs one write of the settings document whole under the write lock (see _updateLock).
+    private T Serialized<T>(Func<T> write)
+    {
+        // A nested write would sit in SQLite's busy handler behind its own open transaction until
+        // the timeout; failing at once turns that hang into an obvious bug.
+        if (Volatile.Read(ref _updatingThread) == Environment.CurrentManagedThreadId)
+        {
+            throw new InvalidOperationException("Settings Update cannot be called from inside its own mutate callback.");
         }
 
-        if (snippets is not null)
+        WriteLockRequested?.Invoke();
+        lock (_updateLock)
         {
-            SnippetRepository.SaveAll(connection, transaction, snippets);
+            Volatile.Write(ref _updatingThread, Environment.CurrentManagedThreadId);
+            try
+            {
+                return write();
+            }
+            finally
+            {
+                Volatile.Write(ref _updatingThread, 0);
+            }
         }
-
-        using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            INSERT INTO settings (key, value) VALUES ($key, $value)
-            ON CONFLICT (key) DO UPDATE SET value = excluded.value;
-            """;
-        command.Parameters.AddWithValue("$key", SettingsKey);
-        command.Parameters.AddWithValue("$value", json);
-        command.ExecuteNonQuery();
-        transaction.Commit();
     }
 
     public string? Get(string key)
@@ -107,6 +312,8 @@ public sealed class SettingsRepository : ISettingsRepository
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
 
+        // Not behind the write gate, like SaveBundle: the tray AI toggle writes here on the UI thread.
+        _database.RequestYield();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -132,6 +339,98 @@ public sealed class SettingsRepository : ISettingsRepository
         {
             // Recovery metadata must never turn a settings fallback into a startup failure.
         }
+    }
+
+    // The settings document the way Load reads it: the same options (so the DPAPI-protected
+    // secrets decrypt exactly as they do there) and the same normalization. Null when unreadable.
+    private static AppSettings? TryDeserialize(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) is { } settings
+                ? Normalize(settings)
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    // Load's rules inside Update's transaction: defaults when nothing is stored. A document that
+    // cannot be read is never written over, because defaults plus one field would discard everything
+    // else the user saved: it gets Load's recovery copy (written once, never overwritten), committed
+    // on its own, and the change is refused. The copy is written on this connection because a second
+    // one would wait behind this very transaction. A document a repair lost is refused the same way:
+    // defaults plus one field would stand in for it as if the user had chosen them.
+    private AppSettings ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var json = ReadValue(connection, transaction, SettingsKey);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            if (_database.SettingsLostInRepair || ReadValue(connection, transaction, LostMarkerKey) is not null)
+            {
+                LastLoadFailed = true;
+                throw new InvalidOperationException(
+                    "The saved settings were lost when the database was repaired, so they were not changed.");
+            }
+
+            LastLoadFailed = false;
+            return AppSettings.CreateDefault();
+        }
+
+        if (TryDeserialize(json) is { } settings)
+        {
+            LastLoadFailed = false;
+            return settings;
+        }
+
+        LastLoadFailed = true;
+        using (var recovery = connection.CreateCommand())
+        {
+            recovery.Transaction = transaction;
+            recovery.CommandText =
+                "INSERT INTO settings (key, value) VALUES ($key, $value) ON CONFLICT (key) DO NOTHING;";
+            recovery.Parameters.AddWithValue("$key", RecoveryKey);
+            recovery.Parameters.AddWithValue("$value", json);
+            recovery.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        throw new InvalidOperationException("The stored settings could not be read, so they were not changed.");
+    }
+
+    private static string? ReadValue(SqliteConnection connection, SqliteTransaction transaction, string key)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT value FROM settings WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", key);
+        return command.ExecuteScalar() as string;
+    }
+
+    // A readable document is being stored, so a loss a repair recorded is over.
+    private static void ForgetLoss(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM settings WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", LostMarkerKey);
+        command.ExecuteNonQuery();
+    }
+
+    private static void WriteValue(SqliteConnection connection, SqliteTransaction transaction, string key, string value)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO settings (key, value) VALUES ($key, $value)
+            ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+            """;
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$value", value);
+        command.ExecuteNonQuery();
     }
 
     private static AppSettings Normalize(AppSettings settings)

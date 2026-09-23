@@ -13,6 +13,11 @@ internal static partial class NativeMethods
     internal const int WM_SYSKEYUP = 0x0105;
     internal const uint WM_QUIT = 0x0012;
 
+    // Private thread message that wakes the hook thread to apply queued commands. WM_APP and above
+    // is the range reserved for application-defined messages.
+    internal const uint WM_APP = 0x8000;
+    internal const uint WM_HOTKEY_COMMANDS = WM_APP + 1;
+
     internal const int VK_SHIFT = 0x10;
     internal const int VK_CONTROL = 0x11;
     internal const int VK_MENU = 0x12; // Alt
@@ -73,6 +78,22 @@ internal static partial class NativeMethods
 
     internal static int GetMessage(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax)
         => GetMessageW(out lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax);
+
+    internal const uint WM_USER = 0x0400;
+    private const uint PM_NOREMOVE = 0x0000;
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool PeekMessageW(out MSG lpMsg, nint hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+    /// <summary>
+    /// Gives the calling thread a message queue if it has none yet, which PostThreadMessage needs
+    /// before any other thread can post to it. This is the method the PostThreadMessage
+    /// documentation prescribes, a PM_NOREMOVE peek that retrieves and removes nothing; the
+    /// documentation is not consistent about which other calls create the queue, so the hook thread
+    /// does not rely on SetWindowsHookEx doing it.
+    /// </summary>
+    internal static void EnsureMessageQueue() => _ = PeekMessageW(out _, 0, WM_USER, WM_USER, PM_NOREMOVE);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

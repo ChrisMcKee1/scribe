@@ -64,6 +64,21 @@ public static class SessionBanner
     public const string StartMarker = "===== Scribe session start =====";
 
     /// <summary>
+    /// Opens the line written at an orderly exit. Its absence before the next <see cref="StartMarker"/>
+    /// is how a reader tells that the process died.
+    /// </summary>
+    public const string EndMarker = "===== Scribe session end =====";
+
+    /// <summary>
+    /// True for a message that opens with either session marker. The file logger writes these promptly,
+    /// like warnings, because whether one made it to disk is itself the evidence.
+    /// </summary>
+    public static bool IsSessionMarker(string? message) =>
+        message is not null &&
+        (message.StartsWith(StartMarker, StringComparison.Ordinal) ||
+         message.StartsWith(EndMarker, StringComparison.Ordinal));
+
+    /// <summary>
     /// Builds the banner. Every argument is optional so a caller can log what it has: a probe that
     /// failed (no audio devices, no model) must still leave a banner behind, because "the thing we
     /// could not detect" is usually the answer.
@@ -126,8 +141,10 @@ public static class SessionBanner
             lines.Add("settings: unavailable (the settings store did not load)");
         }
 
+        // Soft budgets (see LogRetentionPolicy): warnings always get through past the daily figure, and
+        // the total is enforced at startup and midnight, so saying "cap" would overstate them.
         lines.Add($"logs: {LogRetentionPolicy.DefaultRetentionDays} day retention, " +
-            $"{LogRetentionPolicy.DefaultDailyBudgetBytes / (1024 * 1024)} MB per day, " +
+            $"soft budgets of {LogRetentionPolicy.DefaultDailyBudgetBytes / (1024 * 1024)} MB per day and " +
             $"{LogRetentionPolicy.DefaultTotalBudgetBytes / (1024 * 1024)} MB total");
 
         return lines;
@@ -215,14 +232,15 @@ public static class SessionBanner
             return "off";
         }
 
-        // Model and provider names are product identifiers, not user content. Endpoints and keys
-        // are reported as presence only: an endpoint can carry a tenant or a resource name a user
-        // would not expect to hand out with a log file.
+        // Model and provider names are product identifiers, not user content. Endpoints, Azure
+        // deployment names and keys are reported as presence only: an endpoint can carry a tenant or
+        // a resource name, and a deployment is named by whoever created it, neither of which a user
+        // would expect to hand out with a log file.
         var target = settings.AiCleanupProvider switch
         {
             Cleanup.CleanupProvider.FoundryLocal => $"model={settings.AiCleanupModel}",
             Cleanup.CleanupProvider.AzureFoundry =>
-                $"deployment={settings.AiCleanupAzureDeployment ?? "unset"} " +
+                $"deployment={Presence(settings.AiCleanupAzureDeployment)} " +
                 $"endpoint={Presence(settings.AiCleanupAzureEndpoint)} auth={settings.AiCleanupAzureAuthMode}",
             /*
              * Copilot needs its own arm rather than falling into the custom-endpoint one.

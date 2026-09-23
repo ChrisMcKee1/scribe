@@ -59,6 +59,7 @@ public class SessionBannerTests : IDisposable
         settings.EnableAiCleanup = true;
         settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
         settings.AiCleanupAzureEndpoint = "https://contoso-secret-resource.openai.azure.com/";
+        settings.AiCleanupAzureDeployment = "contoso-merger-deployment";
         settings.AiCleanupAzureApiKey = "sk-do-not-log-me";
         settings.AiCleanupAzureClientSecret = "client-secret-value";
         settings.AiCleanupAzureAuthMode = AzureAuthMode.ServicePrincipal;
@@ -72,11 +73,13 @@ public class SessionBannerTests : IDisposable
         Assert.DoesNotContain("sk-do-not-log-me", text);
         Assert.DoesNotContain("client-secret-value", text);
         Assert.DoesNotContain("contoso-secret-resource", text);
+        Assert.DoesNotContain("contoso-merger-deployment", text);
         Assert.DoesNotContain("pirate", text);
         Assert.DoesNotContain("internal prompt text", text);
 
         // What it says instead: enough to tell a configured endpoint from a missing one.
         Assert.Contains("endpoint=configured", text);
+        Assert.Contains("deployment=configured", text);
         Assert.Contains("writingStyle=configured", text);
         Assert.Contains("auth=ServicePrincipal", text);
     }
@@ -91,6 +94,7 @@ public class SessionBannerTests : IDisposable
         var text = Compose(settings);
 
         Assert.Contains("endpoint=unset", text);
+        Assert.Contains("deployment=unset", text);
         Assert.Contains("writingStyle=unset", text);
     }
 
@@ -120,5 +124,24 @@ public class SessionBannerTests : IDisposable
         // with how long that day actually survives.
         Assert.Contains($"logs: {LogRetentionPolicy.DefaultRetentionDays} day retention",
             Compose(AppSettings.CreateDefault()));
+    }
+
+    [Fact]
+    public void Banner_calls_the_size_budgets_soft()
+    {
+        // Warnings get through past the daily figure and the total is only swept at startup and
+        // midnight, so presenting either as a hard cap would mislead whoever reads the file.
+        Assert.Contains("soft budgets of 16 MB per day and 64 MB total", Compose(AppSettings.CreateDefault()));
+    }
+
+    [Fact]
+    public void Session_markers_are_recognized_from_the_start_of_the_message()
+    {
+        Assert.True(SessionBanner.IsSessionMarker(SessionBanner.StartMarker));
+        Assert.True(SessionBanner.IsSessionMarker(SessionBanner.EndMarker + " session=abc123 uptime=00:10:00"));
+        Assert.False(SessionBanner.IsSessionMarker("session=abc123 pid=4242"));
+        Assert.False(SessionBanner.IsSessionMarker("===== Scribe session restart ====="));
+        Assert.False(SessionBanner.IsSessionMarker("text before " + SessionBanner.StartMarker));
+        Assert.False(SessionBanner.IsSessionMarker(null));
     }
 }

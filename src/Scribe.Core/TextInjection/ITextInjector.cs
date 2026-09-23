@@ -5,8 +5,8 @@ namespace Scribe.Core.TextInjection;
 /// <summary>
 /// Places transcribed text into whatever application currently has keyboard focus.
 /// The default strategy sets the clipboard and sends Ctrl+V, then restores the prior
-/// clipboard text; a Unicode keystroke strategy is available as a fallback for fields
-/// that block synthetic paste.
+/// clipboard text unless another application has replaced Scribe's text in the meantime;
+/// a Unicode keystroke strategy is available as a fallback for fields that block synthetic paste.
 /// </summary>
 public interface ITextInjector
 {
@@ -27,5 +27,21 @@ public interface ITextInjector
 /// <summary>Outcome of placing text into the target application.</summary>
 public sealed record InjectionResult(bool Succeeded, string Method, int Sent, int Total, string? Error = null)
 {
+    /// <summary>
+    /// The exact <see cref="Error"/> reported when the focused window changed before the text could be
+    /// placed. Callers match on it to tell the user focus moved, so it must never be reworded.
+    /// </summary>
+    public const string FocusChangedError = "The focused window changed while processing.";
+
     public static InjectionResult Empty { get; } = new(true, "none", 0, 0);
+
+    /// <summary>How the clipboard paste path ended; <see cref="PasteDelivery.NotUsed"/> on every other path.</summary>
+    public PasteDelivery Paste { get; init; }
+
+    /// <summary>
+    /// What happened to the clipboard content Scribe borrowed. Independent of <see cref="Succeeded"/>:
+    /// a delivered paste stays a success when the restore fails, because typing the text again to
+    /// "recover" would insert it twice.
+    /// </summary>
+    public ClipboardRestoreOutcome ClipboardRestore { get; init; }
 }

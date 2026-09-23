@@ -22,9 +22,12 @@ compile-time reference, so the evidence for a break is almost never inside a sin
 
 **Rule zero: no automated gate exists for most of this.** `tests/Scribe.Core.Tests` references only
 `Scribe.Core` (`tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj`), so no xUnit test can compare
-`OverlayPosition` against `OverlayAnchor`, and no test loads the WinUI process at all. The only Core
-type on this path with tests is `OverlayExecutableSelector`. Everything else in this lens is gated by
-review or by nothing. Never close a finding here with "a test would have caught it".
+`OverlayPosition` against `OverlayAnchor`, and no test loads the WinUI process at all. The Core types
+on this path with tests are `OverlayExecutableSelector`, `OverlayHelperLifetime` (with its internal
+`OverlayIdleDeadline` and `OverlayLaunchBackoff`) and `OverlayPreviewGate`, pinned by
+`OverlayExecutableSelectorTests`, `OverlayHelperLifetimeTests`, `OverlayIdleDeadlineTests`,
+`OverlayLaunchBackoffTests` and `OverlayPreviewGateTests` (see Section 4b). Everything else in this lens
+is gated by review or by nothing. Never close a finding here with "a test would have caught it".
 
 ---
 
@@ -92,8 +95,9 @@ repo. Do not cite `SystemBackdropElement` as code; cite `TransparentBackdrop` an
 
 **This is the single highest-value check in this lens.** The wire token for the pill's anchor is the
 enum *value name*. The overlay deliberately holds no reference to `Scribe.Core`
-(`src/Scribe.Overlay/Scribe.Overlay.csproj` has exactly one `PackageReference`, to
-`Microsoft.WindowsAppSDK`, and no `ProjectReference`), so the compiler cannot see the two enums at
+(`src/Scribe.Overlay/Scribe.Overlay.csproj` references only the four Windows App SDK component
+packages, `Microsoft.WindowsAppSDK.WinUI`, `.Foundation`, `.InteractiveExperiences` and `.Base`, and no
+`ProjectReference`), so the compiler cannot see the two enums at
 once. Add or rename a value in one and not the other and the overlay silently ignores the command,
 with only `OverlayIpcServer POSITION with unknown anchor '<name>'` in the log
 (`src/Scribe.Overlay/Ipc/OverlayIpcServer.cs:129`).
@@ -180,20 +184,52 @@ Flag when the diff:
 
 A freshly launched overlay starts at its own built-in default (`OverlayAnchor.BottomCenter`,
 `src/Scribe.Overlay/OverlayWindow.xaml.cs`, around line 37). The engine therefore replays the applied
-anchor and the desired visible state immediately after every connect
-(`OverlayProcessClient.cs:332` and `:333`), so a relaunch after a crash or a lazy first launch comes up
-where the user chose rather than waiting for the next dictation transition.
+anchor and the desired visible state immediately after every connect (`OverlayProcessClient.cs`, the
+`POSITION` and `_desired.Line` writes around lines 771 and 772), so a relaunch after a crash or a lazy
+first launch comes up where the user chose rather than waiting for the next dictation transition.
+`_desired` is one immutable object carrying the command line and its demand, so the replay can never
+pair one state's command with another state's demand.
 
 Flag 🟡 when the diff adds a new connect or reconnect path that does not replay `POSITION` and
-`_desiredState`, or reorders the replay after the first state-dependent write.
+`_desired.Line`, reorders the replay after the first state-dependent write, or splits `_desired` back
+into separately written fields.
 
 Two details that look like bugs but are not, so do not flag them:
 
-- `SetPosition` enqueues with `ensureAlive: false` (`OverlayProcessClient.cs:123`). Moving the pill
+- `SetPosition` enqueues with `ensureAlive: false` (`OverlayProcessClient.cs:153`). Moving the pill
   must not launch the helper; the relaunch replays `_position` anyway.
-- `Preview` changes what is on screen but never writes `_position` (see the field comment at
-  `OverlayProcessClient.cs:57`), so a cancelled settings dialog costs nothing. A preview that did
-  write `_position` would be the finding.
+- `Preview` changes what is on screen but never writes `_position` (see the field comment above
+  `_position`, around `OverlayProcessClient.cs:85`), so a cancelled settings dialog costs nothing. A
+  preview that did write `_position` would be the finding.
+
+---
+
+## §4b. The helper's lifetime is decided in Core, and only there
+
+Every decision about keeping, suspending or relaunching the helper is made by
+`Scribe.Core.Overlay.OverlayHelperLifetime`, built on the internal `OverlayIdleDeadline` and
+`OverlayLaunchBackoff`. `OverlayProcessClient` only carries the decisions out: it starts the process,
+does the pipe I/O and kills. The rules the tests pin:
+
+- The helper is suspended after the keep-warm period (`ReleaseModelsAfterIdleMinutes`, pushed by the
+  app with `SetKeepWarm`; 0 keeps it resident), and on pause through a stamped `ReleaseWhenIdle`. Both
+  commits are re-validated at the commit point: a command stamped after the deadline was armed, or a
+  recording or processing pill that must show, vetoes them.
+- A failed launch starts a cooldown of 1 s doubling to 60 s. While it runs, commands that need the
+  helper do not relaunch it; if a recording or processing pill must show, one retry at cooldown end
+  replays only the latest state and position. A helper lost within 10 s of its launch, judged by its
+  process exit time, counts as a failed launch.
+- Stamps are taken on the producer side, when a command is queued, never in the consumer, so a commit
+  can see a command that is still queued.
+- `OverlayPreviewGate` drops the commands of a superseded preview and restores the applied position on
+  the first engine command after one.
+- The helper's lifetime is never tied to `DictationController.ModelsReleased`. Releasing the speech
+  models and ending the pill are separate decisions, and the old wiring could end a newer recording's
+  pill.
+
+Flag 🟡 when the diff moves one of these decisions back into `OverlayProcessClient`, takes a stamp in
+the consumer, or reads the demand anywhere but live at the call. Flag 🔴 when it ties the helper's
+lifetime to `ModelsReleased` again.
 
 ---
 
@@ -304,8 +340,13 @@ the destructive catch is on the overlay launch path; synthesis will dedup on roo
   then calls `Test-ScribePayloadArchitecture`. A diff that reorders the two publishes, drops the
   existence check, or skips the architecture assertion is a hard 🔴. An x64 pill beside an ARM64 app
   runs emulated: it works, so nothing fails, and the only symptom is battery and latency.
-- **Windows App SDK version.** Pinned centrally at `2.2.0`
-  (`Directory.Packages.props:13`). A bump is an `AGENTS.md` "Ask first" item; surface it for
+- **Windows App SDK components.** The overlay references the four component packages rather than the
+  `Microsoft.WindowsAppSDK` metapackage, because a self-contained build ships every referenced
+  component's runtime and the pill needs only WinUI and what WinUI depends on. `Directory.Packages.props`
+  pins them to the set the 2.5.1 metapackage lists (WinUI 2.3.9, Foundation 2.3.12,
+  InteractiveExperiences 2.1.9, Base 2.0.4), and they move together. A diff that starts using a Windows
+  App SDK feature from another component must add that component package, or the feature is missing at
+  runtime while the build stays green. A version move is an `AGENTS.md` "Ask first" item; surface it for
   `maintainer-decision` rather than judging it here.
 
 ---

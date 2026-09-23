@@ -432,7 +432,16 @@ public class PersistenceTests
         var audio = repo.GetAudio(blobId);
         Assert.NotNull(audio);
         Assert.Equal(16000, audio!.SampleRate);
-        Assert.Equal(samples, audio.Samples);
+
+        // Stored as 16-bit PCM by this build: exact at the rails and at zero, within half a
+        // quantization step everywhere else.
+        Assert.Equal(samples.Length, audio.Samples.Length);
+        for (var i = 0; i < samples.Length; i++)
+        {
+            Assert.InRange(MathF.Abs(audio.Samples[i] - samples[i]), 0f, 0.5f / 32767f + 1e-7f);
+        }
+
+        Assert.Equal(new[] { -1f, 0f, 1f }, new[] { audio.Samples[0], audio.Samples[2], audio.Samples[4] });
     }
 
     [Fact]

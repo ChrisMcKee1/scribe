@@ -229,10 +229,12 @@ is a real guard living somewhere other than the callsite, and each has refuted f
   the worker exception on the caller.
 - **A `SendInput` that looks like it ignores truncation.** `SendWithRetry` resends only the unsent
   remainder by advancing the offset.
-- **A new SQLite column that looks unmigrated.** `ScribeDatabase.Migrate` runs the additive
-  `if (current < N)` sequence in one transaction, guards later steps with a column probe so a partially
-  migrated database converges, and throws when `user_version` exceeds `SchemaVersion` (currently 6,
-  `ScribeDatabase.cs:23`) rather than silently downgrading data.
+- **A new SQLite column that looks unmigrated.** `ScribeDatabase.Migrate` runs the historical additive
+  `if (current < N)` sequence in one transaction and guards later steps with a column probe so a
+  partially migrated database converges; `SchemaVersion` stays 7 (`ScribeDatabase.cs:30`), and newer
+  columns are added by `EnsureAdditiveSchema` on every open, probed first (P-11). A database whose
+  `user_version` exceeds `SchemaVersion` throws `NewerDatabaseSchemaException` rather than silently
+  downgrading data, and the app tells the user to install the latest version.
 - **A native package that looks architecture blind.** `ScribeNativeRid`
   (`src/Scribe.Core/Scribe.Core.csproj:22-24`) falls back from `RuntimeIdentifier` to
   `NETCoreSdkRuntimeIdentifier` to `win-x64`, exactly one sherpa runtime is referenced under a condition

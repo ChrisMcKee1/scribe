@@ -164,4 +164,8 @@ internal static class InjectionNativeMethods
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern nint GlobalFree(nint hMem);
+
+    // The allocated size of a global block, which may exceed what was requested; 0 on failure.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern nuint GlobalSize(nint hMem);
 }

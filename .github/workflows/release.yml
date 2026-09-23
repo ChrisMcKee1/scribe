@@ -56,6 +56,10 @@ jobs:
 
       - name: Run regression tests
         shell: pwsh
+        # As in CI: point the engine and VAD tests at the models downloaded above explicitly, so they
+        # cannot pass by finding no model and returning early.
+        env:
+          SCRIBE_MODELS_DIR: ${{ github.workspace }}/src/Scribe.App/models
         run: dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj -c Release
 
       - name: Seed previous release for delta packaging

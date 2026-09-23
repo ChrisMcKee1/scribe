@@ -33,15 +33,13 @@ public static class SeedVocabularyRetirement
 
         try
         {
-            // A failed settings load reports every flag as unset, so proceeding would re-run the
-            // cleanup on every launch and keep undoing the user's choice.
-            if (settings.LastLoadFailed)
-            {
-                return 0;
-            }
-
+            // Checked after this load, not before it: only the read that returned these values knows
+            // whether they are defaults standing in for settings it could not use (unreadable, or lost
+            // in a repair). Saving those would pass them off as the user's and end the recorded loss,
+            // and because they report every flag as unset, the cleanup would also re-run on every
+            // launch and keep undoing the user's choice.
             var current = settings.Load();
-            if (current.HasRetiredSeedVocabulary)
+            if (settings.LastLoadFailed || current.HasRetiredSeedVocabulary)
             {
                 return 0;
             }

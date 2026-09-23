@@ -5,8 +5,10 @@ namespace Scribe.Core.Tests;
 
 /// <summary>
 /// A discovered deployment must offer the Foundry <b>project</b> endpoint, which is the shape
-/// Microsoft documents for <c>AIProjectClient</c> and the one TextCleanupService routes natively.
-/// The project data plane is Entra-only, so key auth has to keep getting the account endpoint.
+/// Microsoft documents for a Foundry project and the one the portal shows. Cleanup takes only its host
+/// and sends inference to the account's <c>/openai/v1/</c> endpoint
+/// (<c>AzureOpenAIResponsesClientFactory.GetV1Endpoint</c>), so the saved shape decides nothing about
+/// routing. The project data plane is Entra-only, so key auth has to keep getting the account endpoint.
 /// </summary>
 public class AzureFoundryDeploymentEndpointTests
 {
@@ -56,10 +58,10 @@ public class AzureFoundryDeploymentEndpointTests
     }
 
     [Fact]
-    public void The_project_endpoint_takes_the_shape_TextCleanupService_routes_natively()
+    public void The_project_endpoint_keeps_the_project_path_shape()
     {
-        // TextCleanupService selects AIProjectClient on "/api/projects/" in the path; if this shape
-        // ever changes, the native Foundry path silently degrades to the account client.
+        // Settings fills in and saves this URL. Cleanup normalizes either shape to account inference,
+        // so this pins what is shown and saved, not how a request is routed.
         var d = Deployment("https://acct.services.ai.azure.com/api/projects/proj");
 
         Assert.Contains("/api/projects/", d.PreferredEndpoint, StringComparison.OrdinalIgnoreCase);

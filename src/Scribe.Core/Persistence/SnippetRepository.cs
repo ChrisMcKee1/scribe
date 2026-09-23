@@ -41,6 +41,7 @@ public sealed class SnippetRepository : ISnippetRepository
     {
         ArgumentNullException.ThrowIfNull(snippets);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var transaction = connection.BeginTransaction();
         SaveAll(connection, transaction, snippets);

@@ -119,8 +119,8 @@ public sealed class SnippetMigrationTests
             }
 
             using var db = new ScribeDatabase(new AppPaths(root), NullLogger<ScribeDatabase>.Instance);
-            Assert.Throws<InvalidOperationException>(() => db.Initialize());
-            Assert.Throws<InvalidOperationException>(() => db.Initialize());
+            Assert.Throws<NewerDatabaseSchemaException>(() => db.Initialize());
+            Assert.Throws<NewerDatabaseSchemaException>(() => db.Initialize());
         }
         finally
         {

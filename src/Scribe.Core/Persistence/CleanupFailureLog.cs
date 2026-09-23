@@ -18,6 +18,7 @@ public sealed class CleanupFailureLog : ICleanupFailureLog
     {
         ArgumentNullException.ThrowIfNull(failure);
 
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText =
@@ -80,6 +81,7 @@ public sealed class CleanupFailureLog : ICleanupFailureLog
 
     public int Clear()
     {
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM cleanup_failures;";
@@ -88,6 +90,7 @@ public sealed class CleanupFailureLog : ICleanupFailureLog
 
     public int PruneOlderThan(DateTimeOffset cutoffUtc)
     {
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM cleanup_failures WHERE timestamp_utc < $cutoff;";

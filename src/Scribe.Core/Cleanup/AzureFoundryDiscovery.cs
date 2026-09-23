@@ -244,8 +244,11 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
             // Resource Graph is the fast way to locate accounts, but can be unavailable (e.g. the
             // provider isn't registered, or a sovereign-cloud quirk). Fall back to the slower
             // per-subscription crawl rather than failing outright. Auth failures still bubble up so
-            // the UI can prompt for az login.
-            _log.LogWarning(ex, "Resource Graph account discovery failed; falling back to per-subscription enumeration.");
+            // the UI can prompt for az login. Logged by shape: an ARM failure quotes resource ids,
+            // which carry the subscription, resource group and account names.
+            _log.LogWarning(
+                "Resource Graph account discovery failed ({Failure}); falling back to per-subscription enumeration.",
+                CleanupFailureShape.Describe(ex));
             return await DiscoverViaEnumerationAsync(
                 arm,
                 tenantId,
@@ -279,34 +282,40 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         {
             // A missing az login is routine and stays at Debug. A rejected service principal is not:
             // the user explicitly entered those details, so log the reason at Warning and hand it
-            // back so the UI can say something better than "it didn't work".
+            // back so the UI can say something better than "it didn't work". The log gets the shape,
+            // whose AADSTS code is the diagnosis; Entra's message also names the tenant and client.
             if (servicePrincipal is not null)
             {
                 _log.LogWarning(
-                    "Azure sign-in probe: the service principal was rejected. {Message}", ex.Message);
+                    "Azure sign-in probe: the service principal was rejected ({Failure}).",
+                    CleanupFailureShape.Describe(ex));
                 return new AzureSignInStatus(
                     false, null, null, AzureSignInDiagnostics.Describe(ex.ToString()));
             }
 
-            _log.LogDebug(ex, "Azure sign-in probe: no non-interactive credential available.");
+            _log.LogDebug(
+                "Azure sign-in probe: no non-interactive credential available ({Failure}).",
+                CleanupFailureShape.Describe(ex));
             return new AzureSignInStatus(false, null);
         }
         catch (InvalidOperationException ex)
         {
             // An incomplete service principal: the same "not usable yet" state as a missing sign-in.
-            _log.LogDebug(ex, "Azure sign-in probe: service principal is incomplete.");
+            _log.LogDebug("Azure sign-in probe: service principal is incomplete ({Failure}).", CleanupFailureShape.Describe(ex));
             return new AzureSignInStatus(false, null, null, ex.Message);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             if (servicePrincipal is not null)
             {
-                _log.LogWarning(ex, "Azure sign-in probe failed for the service principal.");
+                _log.LogWarning(
+                    "Azure sign-in probe failed for the service principal ({Failure}).",
+                    CleanupFailureShape.Describe(ex));
                 return new AzureSignInStatus(
                     false, null, null, AzureSignInDiagnostics.Describe(ex.ToString()));
             }
 
-            _log.LogDebug(ex, "Azure sign-in probe failed.");
+            _log.LogDebug("Azure sign-in probe failed ({Failure}).", CleanupFailureShape.Describe(ex));
             return new AzureSignInStatus(false, null);
         }
     }
@@ -475,9 +484,10 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
                 if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                 {
+                    // The model name and capabilities explain the skip; the deployment name is the
+                    // user's own resource name and stays out of the log.
                     _log.LogDebug(
-                        "Skipping non-text deployment {Deployment} ({Model}); capabilities: {Capabilities}.",
-                        deploymentName,
+                        "Skipping a non-text deployment ({Model}); capabilities: {Capabilities}.",
                         modelName,
                         FormatCapabilities(deployment.Data?.Properties?.Capabilities));
                     continue;
@@ -501,7 +511,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogDebug(ex, "Could not list deployments for account {Account}.", account.AccountName);
+            _log.LogDebug("Could not list the deployments for one account ({Failure}).", CleanupFailureShape.Describe(ex));
         }
 
         return results;
@@ -644,8 +654,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                             if (!SupportsTextCleanup(deployment.Data?.Properties?.Capabilities, modelName, deploymentName))
                             {
                                 _log.LogDebug(
-                                    "Skipping non-text deployment {Deployment} ({Model}); capabilities: {Capabilities}.",
-                                    deploymentName,
+                                    "Skipping a non-text deployment ({Model}); capabilities: {Capabilities}.",
                                     modelName,
                                     FormatCapabilities(deployment.Data?.Properties?.Capabilities));
                                 continue;
@@ -669,13 +678,15 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        _log.LogDebug(ex, "Could not list deployments for account {Account}.", accountName);
+                        _log.LogDebug("Could not list the deployments for one account ({Failure}).", CleanupFailureShape.Describe(ex));
                     }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _log.LogDebug(ex, "Could not list Cognitive Services accounts in subscription {Subscription}.", subName);
+                _log.LogDebug(
+                    "Could not list the Cognitive Services accounts in one subscription ({Failure}).",
+                    CleanupFailureShape.Describe(ex));
             }
         }
 
@@ -841,7 +852,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not list Foundry projects for account {Account}.", account.Id.Name);
+            _log.LogDebug("Could not list the Foundry projects for one account ({Failure}).", CleanupFailureShape.Describe(ex));
             return (null, null);
         }
     }

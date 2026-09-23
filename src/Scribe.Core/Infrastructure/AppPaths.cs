@@ -22,19 +22,27 @@ public sealed class AppPaths
     /// <summary>Legacy data folder name: the Velopack install root that data used to share.</summary>
     public const string LegacyAppFolderName = "Scribe";
 
+    /// <summary>Environment variable naming an isolated data folder (screenshots, test profiles).</summary>
+    public const string DataDirVariable = "SCRIBE_DATA_DIR";
+
     public AppPaths(string? rootOverride = null)
+        : this(rootOverride, Environment.GetEnvironmentVariable(DataDirVariable))
+    {
+    }
+
+    internal AppPaths(string? rootOverride, string? dataDirOverride)
     {
         // Resolution order: explicit override (tests) > SCRIBE_DATA_DIR env (isolated/portable
         // profiles, e.g. screenshot capture) > the per-user %LOCALAPPDATA%\ScribeData known folder.
         // Mirrors the SCRIBE_MODELS_DIR override honoured by ModelLocator.
-        var envOverride = Environment.GetEnvironmentVariable("SCRIBE_DATA_DIR");
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var usingDefaultRoot = rootOverride is null && string.IsNullOrWhiteSpace(envOverride);
+        var usingDefaultRoot = rootOverride is null && string.IsNullOrWhiteSpace(dataDirOverride);
 
         RootDir = rootOverride
-            ?? (string.IsNullOrWhiteSpace(envOverride)
+            ?? (string.IsNullOrWhiteSpace(dataDirOverride)
                 ? Path.Combine(localAppData, AppFolderName)
-                : envOverride);
+                : dataDirOverride);
+        IsIsolatedRoot = !usingDefaultRoot;
 
         // Only consider the legacy Velopack-install-root location when running with the real default
         // root. Explicit overrides are self-contained and must never pull in unrelated legacy data.
@@ -64,7 +72,12 @@ public sealed class AppPaths
         EffectiveRootDir = RootDir;
     }
 
-    private AppPaths(string rootDir, string? legacyRootDir, string preferredRootDir, string creationFailureMessage)
+    private AppPaths(
+        string rootDir,
+        string? legacyRootDir,
+        string preferredRootDir,
+        string creationFailureMessage,
+        bool isIsolatedRoot)
     {
         RootDir = rootDir;
         LegacyRootDir = legacyRootDir;
@@ -75,10 +88,23 @@ public sealed class AppPaths
         PreferredRootDir = preferredRootDir;
         CreationFailureMessage = creationFailureMessage;
         EffectiveRootDir = RootDir;
+        IsIsolatedRoot = isIsolatedRoot;
     }
 
     /// <summary>Root writable directory (<c>%LOCALAPPDATA%\ScribeData</c>).</summary>
     public string RootDir { get; }
+
+    /// <summary>
+    /// True when this process uses a data folder of its own instead of the user's normal one: the
+    /// folder named by <c>SCRIBE_DATA_DIR</c>, or an explicit root (a test, portable or screenshot
+    /// profile). Such a profile shares nothing with the installed app's data, including files
+    /// outside this root such as the Foundry Local runtime and models, so it must not change state
+    /// that belongs to that app, and it never falls back to the normal installation's folders. A
+    /// fallback root inherits the answer from the root it replaced, so a normal installation that
+    /// fell back is still a normal installation, and an isolated one that fell back to a folder its
+    /// caller named is still isolated.
+    /// </summary>
+    public bool IsIsolatedRoot { get; }
 
     /// <summary>
     /// Legacy writable directory (<c>%LOCALAPPDATA%\Scribe</c>) used by builds that stored data in
@@ -158,13 +184,35 @@ public sealed class AppPaths
     /// <summary>
     /// Creates startup paths, falling back to a sibling folder when the preferred root fails.
     /// </summary>
-    public static AppPaths CreateForStartup(string? rootOverride = null, string? fallbackRootOverride = null)
+    /// <remarks>
+    /// An isolated root (<see cref="IsIsolatedRoot"/>) never falls back to the normal installation's
+    /// fallback folder under <c>%LOCALAPPDATA%</c>: that would run a scratch profile on real data
+    /// folders. When it cannot be created or written, startup stops with an
+    /// <see cref="IsolatedDataFolderException"/> instead, unless the caller names a fallback itself.
+    /// </remarks>
+    public static AppPaths CreateForStartup(string? rootOverride = null, string? fallbackRootOverride = null) =>
+        CreateForStartup(rootOverride, fallbackRootOverride, Environment.GetEnvironmentVariable(DataDirVariable));
+
+    internal static AppPaths CreateForStartup(
+        string? rootOverride,
+        string? fallbackRootOverride,
+        string? dataDirOverride)
     {
-        var preferred = new AppPaths(rootOverride);
-        if (preferred.TryEnsureCreated(out var preferredFailure))
+        var preferred = new AppPaths(rootOverride, dataDirOverride);
+        if (preferred.TryEnsureCreated(out var preferredFailure) &&
+            (!preferred.IsIsolatedRoot || TryProbeWritable(preferred.RootDir, out preferredFailure)))
         {
-            preferred.OrphanedFallbackRootDir = FindOrphanedFallback(rootOverride, fallbackRootOverride);
+            // An isolated profile must not be told about a fallback belonging to the normal
+            // installation, so only an explicitly named fallback is ever reported for it.
+            preferred.OrphanedFallbackRootDir = preferred.IsIsolatedRoot && fallbackRootOverride is null
+                ? null
+                : FindOrphanedFallback(rootOverride, fallbackRootOverride);
             return preferred;
+        }
+
+        if (preferred.IsIsolatedRoot && fallbackRootOverride is null)
+        {
+            throw new IsolatedDataFolderException(preferred.RootDir, preferredFailure);
         }
 
         // Deliberately NOT under Path.GetTempPath(): that resolves inside %LOCALAPPDATA%\Temp, which
@@ -178,7 +226,8 @@ public sealed class AppPaths
             fallbackRoot,
             legacyRootDir: null,
             preferred.RootDir,
-            FormatCreationFailure(preferred.RootDir, preferredFailure));
+            FormatCreationFailure(preferred.RootDir, preferredFailure),
+            preferred.IsIsolatedRoot);
 
         if (fallback.TryEnsureCreated(out var fallbackFailure))
         {
@@ -464,6 +513,28 @@ public sealed class AppPaths
         }
     }
 
+    // Creating the directories proves little on its own: a folder that already exists but cannot be
+    // written passes creation and only fails later, at the first database or log write.
+    private static bool TryProbeWritable(string rootDir, out Exception? exception)
+    {
+        var probe = Path.Combine(rootDir, $".scribe-write-probe-{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllBytes(probe, []);
+            exception = null;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            exception = ex;
+            return false;
+        }
+        finally
+        {
+            TryDelete(probe);
+        }
+    }
+
     private static string FormatCreationFailure(string rootDir, Exception? exception)
     {
         if (exception is null)
@@ -499,4 +570,23 @@ public sealed class AppPathsCreationException : Exception
     public Exception? PreferredFailure { get; }
 
     public Exception? FallbackFailure { get; }
+}
+
+/// <summary>
+/// An isolated data folder (<c>SCRIBE_DATA_DIR</c>, or an explicit root) could not be created or
+/// written. Startup stops rather than fall back to the normal installation's folders.
+/// </summary>
+public sealed class IsolatedDataFolderException : Exception
+{
+    public IsolatedDataFolderException(string rootDir, Exception? failure)
+        : base(
+            $"Scribe could not use its isolated data folder at {rootDir}, set by {AppPaths.DataDirVariable}. " +
+            "An isolated data folder never falls back to your normal Scribe data, so Scribe will close." +
+            (failure is null ? string.Empty : $" {failure.GetType().Name}: {failure.Message}"),
+            failure)
+    {
+        RootDir = rootDir;
+    }
+
+    public string RootDir { get; }
 }

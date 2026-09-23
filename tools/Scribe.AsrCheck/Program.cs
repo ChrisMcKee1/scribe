@@ -26,13 +26,13 @@ internal static class Program
     // A correct decode of a clean TTS phrase overlaps almost entirely. This threshold tolerates a
     // synthetic voice fumbling the odd word while still failing loudly on a broken native, which
     // produces empty output or noise rather than most of the right words.
-    private const double MinimumWordOverlap = 0.6;
+    internal const double MinimumWordOverlap = 0.6;
 
     private static int Main(string[] args)
     {
         try
         {
-            return Run(args);
+            return args.Contains("--scenarios") ? Scenarios.ScenarioSuite.Run(args) : Run(args);
         }
         catch (Exception ex)
         {
@@ -53,7 +53,7 @@ internal static class Program
         Console.OutputEncoding = Encoding.UTF8;
         Console.WriteLine("Scribe ASR check");
         Console.WriteLine($"  {ComputeCapabilityReport.Detect().Describe()}");
-        Console.WriteLine($"  process={RuntimeInformation.ProcessArchitecture} os={RuntimeInformation.OSArchitecture}");
+        Console.WriteLine($"  process={RuntimeInformation.ProcessArchitecture} os={RuntimeInformation.OSArchitecture} priority={CurrentPriority()}");
         Console.WriteLine($"  fixtures={fixtureDir}");
         Console.WriteLine();
 
@@ -69,6 +69,24 @@ internal static class Program
         var decoding = ArgValue(args, "--decoding") ?? TranscriptionDecoding.Greedy;
         Console.WriteLine($"  decoding={decoding}");
 
+        var failures = RunEngineChecks(args, fixtures, decoding);
+
+        // After the checks' recognizer is disposed, so the sweep never holds two models at once.
+        if (ArgValue(args, "--threads") is { } threadList)
+        {
+            var clips = fixtures.Select(f => WavReader.ReadMonoFloat(f.Path, out _)).ToList();
+            failures += ThreadSweep.Run(args, threadList, clips, decoding);
+        }
+
+        Console.WriteLine(failures == 0
+            ? $"All {fixtures.Count} fixtures decoded correctly."
+            : $"{failures} check(s) failed.");
+
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static int RunEngineChecks(string[] args, List<Fixture> fixtures, string decoding)
+    {
         using var service = new TranscriptionService(
             new ModelLocator(new AppPaths()),
             Options.Create(new TranscriptionOptions
@@ -126,11 +144,20 @@ internal static class Program
             failures += RunDegradedAudioCheck(service, fixtures);
         }
 
-        Console.WriteLine(failures == 0
-            ? $"All {fixtures.Count} fixtures decoded correctly."
-            : $"{failures} check(s) failed.");
+        return failures;
+    }
 
-        return failures == 0 ? 0 : 1;
+    private static string CurrentPriority()
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            return process.PriorityClass.ToString();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return "unknown";
+        }
     }
 
     /// <summary>
@@ -368,7 +395,7 @@ internal static class Program
         return output;
     }
 
-    private static float[] Concatenate(List<float[]> clips, int sampleRate, int seconds, int offset)
+    internal static float[] Concatenate(List<float[]> clips, int sampleRate, int seconds, int offset)
     {
         var gap = new float[sampleRate / 4];
         var buffer = new List<float>(seconds * sampleRate);
@@ -395,7 +422,7 @@ internal static class Program
         return mixed;
     }
 
-    private static string? ArgValue(string[] args, string name)
+    internal static string? ArgValue(string[] args, string name)
     {
         var index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;

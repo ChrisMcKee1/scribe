@@ -120,7 +120,8 @@ Three facts make a dependency question worth asking here:
   touching `Directory.Packages.props`"), and a new third-party component must be license compatible
   with MIT and credited in the README attribution section.
 - **A package add that restores and compiles can still fail at runtime.** `OpenAI` is held at 2.12.0
-  because `Microsoft.Extensions.AI.OpenAI` constrains it below 2.13.0, and the type that needed 2.13.0
+  because `Microsoft.Extensions.AI.OpenAI` constrains it below 2.13.0 and the AI packages bind to the
+  `OpenAI` build they were compiled against, so they move together; the type that once needed 2.13.0
   threw `MissingMethodException` while compiling perfectly. Never argue a dependency question from
   "it builds".
 - **Versions come from the feed, not from recall.** `dotnet package search <id> --exact-match
@@ -252,8 +253,10 @@ Three worked examples, all from this codebase, all with the symptom and the real
 - **"My logs folder isn't there."** The symptom was a Store user who could not find
   `%LOCALAPPDATA%\ScribeData\logs`. The root cause was packaged-app write virtualization redirecting
   folders the app creates into `LocalCache\Local\`, which `AGENTS.md` had asserted the opposite of
-  until 0.3.11. The fix was a `virtualization:ExcludedDirectory` plus a migration, and the cost of the
-  wrong model was a support dead end in which the underlying bug went uninvestigated.
+  until 0.3.11. The first fix was a `virtualization:ExcludedDirectory` plus a migration; the Store
+  denied the capability it needed, so 0.3.13 replaced the exclusion with a probe of where writes
+  really land (`AppPaths.EffectiveRootDir`). The cost of the wrong model was a support dead end in
+  which the underlying bug went uninvestigated.
 
 **Ask when** the fix widens a threshold, adds a retry, adds a delay, broadens a `catch`, disables a
 path, or clamps a value, and the description does not name the mechanism that produced the reported

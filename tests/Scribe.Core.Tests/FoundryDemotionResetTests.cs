@@ -103,10 +103,17 @@ public class FoundryDemotionResetTests : IDisposable
         public void Save(Models.AppSettings settings) =>
             throw new InvalidOperationException("Save must not be reached when the load failed.");
 
+        public Models.AppSettings Update(Action<Models.AppSettings> mutate) =>
+            throw new InvalidOperationException("Update must not be reached when the load failed.");
+
+        public Models.AppSettings Update(Action<Models.AppSettings> mutate, long revision, out bool superseded) =>
+            throw new InvalidOperationException("Update must not be reached when the load failed.");
+
         public void SaveBundle(
             Models.AppSettings settings,
             IReadOnlyList<Models.DictionaryEntry>? dictionaryEntries,
-            IReadOnlyList<Models.Snippet>? snippets) =>
+            IReadOnlyList<Models.Snippet>? snippets,
+            long aiCleanupIntent = 0) =>
             throw new InvalidOperationException("SaveBundle must not be reached when the load failed.");
 
         public string? Get(string key) => null;

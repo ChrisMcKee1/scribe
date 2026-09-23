@@ -70,6 +70,25 @@ public sealed record CleanupOptions(
     public static CleanupOptions Disabled { get; } =
         new(false, CleanupProvider.FoundryLocal, CleanupModelCatalog.DefaultAlias, null, null);
 
+    /// <summary>
+    /// True when <paramref name="other"/> is the same configuration apart from what the prompt says:
+    /// the writing style, the glossary, the prompt style and either guardrail prompt. Those change
+    /// the instructions an agent is built with, and nothing about the provider, model, endpoint or
+    /// credentials it talks to, so a change confined to them needs no reconnect, no new readiness
+    /// probe and no "cleanup is now running on" notice.
+    /// </summary>
+    public bool MatchesIgnoringPrompt(CleanupOptions? other) =>
+        other is not null && WithoutPrompt() == other.WithoutPrompt();
+
+    private CleanupOptions WithoutPrompt() => this with
+    {
+        WritingStyle = null,
+        Glossary = null,
+        PromptStyle = CleanupPromptStyle.Auto,
+        FrontierPrompt = null,
+        LocalPrompt = null,
+    };
+
     /// <summary>True when the selected provider has everything it needs to initialize.</summary>
     public bool IsActionable => Enabled && Provider switch
     {

@@ -8,18 +8,18 @@ using static Scribe.Core.TextInjection.InjectionNativeMethods;
 namespace Scribe.Core.TextInjection;
 
 /// <summary>
-/// Default <see cref="ITextInjector"/>. Clipboard-paste runs the whole save → set → Ctrl+V →
-/// restore sequence on a dedicated STA thread, with small delays so the target app reads the
-/// clipboard before it is restored. Falls back to Unicode keystroke typing when the clipboard
-/// cannot be acquired, and exposes typing directly via <see cref="InjectionMethod.UnicodeType"/>.
+/// Default <see cref="ITextInjector"/>. Clipboard-paste runs the whole borrow, Ctrl+V, restore sequence
+/// on a dedicated STA thread, with small delays so the target app reads the clipboard before it is
+/// restored. Falls back to Unicode keystroke typing whenever no paste can have fired, and exposes typing
+/// directly via <see cref="InjectionMethod.UnicodeType"/>.
 /// </summary>
 public sealed class TextInjector : ITextInjector
 {
     // Let the target consume the paste before we restore the prior clipboard text.
-    private const int PasteSettleDelayMs = 130;
+    internal const int PasteSettleDelayMs = 130;
 
     // Brief pause so the clipboard is committed before Ctrl+V is delivered.
-    private const int ClipboardSettleDelayMs = 30;
+    internal const int ClipboardSettleDelayMs = 30;
 
     // Unicode typing is sent in small batches so a long dictation can't overrun the target's input
     // queue (which silently drops keystrokes). Each batch is UnicodeChunkChars code units; we pause
@@ -29,9 +29,21 @@ public sealed class TextInjector : ITextInjector
     private const int ChunkRetryDelayMs = 12;
     private const int MaxChunkRetries = 5;
 
-    private readonly ILogger<TextInjector> _logger;
+    private readonly ILogger _logger;
+    private readonly IInjectionPlatform _platform;
+    private readonly ClipboardBorrower _clipboard;
 
-    public TextInjector(ILogger<TextInjector> logger) => _logger = logger;
+    public TextInjector(ILogger<TextInjector> logger)
+        : this(logger, Win32InjectionPlatform.Instance, Win32Clipboard.Instance)
+    {
+    }
+
+    internal TextInjector(ILogger<TextInjector> logger, IInjectionPlatform platform, IClipboardNative clipboard)
+    {
+        _logger = new NonThrowingLogger(logger);
+        _platform = platform;
+        _clipboard = new ClipboardBorrower(clipboard, platform.Sleep);
+    }
 
     public InjectionResult Inject(
         string text,
@@ -44,9 +56,9 @@ public sealed class TextInjector : ITextInjector
             return InjectionResult.Empty;
         }
 
-        if (expectedForegroundWindow != 0 && GetForegroundWindow() != expectedForegroundWindow)
+        if (!IsExpectedForeground(expectedForegroundWindow))
         {
-            return new InjectionResult(false, "none", 0, text.Length, "The focused window changed while processing.");
+            return FocusChanged(text.Length);
         }
 
         // Capture the ambient dictation span on the calling thread; the STA worker is a fresh
@@ -55,58 +67,114 @@ public sealed class TextInjector : ITextInjector
 
         return RunOnStaThread(() =>
         {
-            using var activity = ScribeTelemetry.Source.StartActivity(
-                ScribeTelemetry.InjectActivity, ActivityKind.Internal, parent?.Context ?? default);
-            activity?.SetTag(ScribeTelemetry.TagInjectChars, text.Length);
-
-            if (!IsExpectedForeground(expectedForegroundWindow))
+            var activity = TryStartActivity(parent, text.Length);
+            try
             {
-                return FocusChanged(text.Length);
+                return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks);
             }
-
-            if (TryInsertIntoStandardEdit(text, expectedForegroundWindow))
+            finally
             {
-                ReportInjection(activity, "win32-edit", text.Length, text.Length, fallback: false);
-                return new InjectionResult(true, "win32-edit", text.Length, text.Length);
+                // Listeners run synchronously when the span stops, after the text may already have
+                // reached the target, so a faulting one must not turn that into a failed injection.
+                TryStop(activity);
             }
-
-            if (method == InjectionMethod.UnicodeType)
-            {
-                var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
-                ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback: false);
-                return new InjectionResult(
-                    typed.Sent == typed.Total, "unicode", typed.Sent, typed.Total,
-                    typed.Sent == typed.Total ? null : "Only part of the text was accepted by Windows.");
-            }
-
-            if (PasteViaClipboard(text, expectedForegroundWindow, out var ctrl, out var focusChanged))
-            {
-                ReportInjection(activity, "clipboard", ctrl.Sent, ctrl.Total, fallback: false);
-                return new InjectionResult(
-                    true, "clipboard", ctrl.Sent, ctrl.Total,
-                    ctrl.Sent == ctrl.Total ? null : "Paste completed, but modifier cleanup was partial.");
-            }
-
-            if (focusChanged)
-            {
-                return FocusChanged(text.Length);
-            }
-
-            _logger.LogWarning("Clipboard paste failed; falling back to Unicode typing.");
-            var fallback = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
-            ReportInjection(activity, "unicode", fallback.Sent, fallback.Total, fallback: true);
-            return new InjectionResult(
-                fallback.Sent == fallback.Total, "unicode", fallback.Sent, fallback.Total,
-                fallback.Sent == fallback.Total ? null : "Only part of the text was accepted by Windows.");
         });
     }
 
+    private InjectionResult InjectOnStaThread(
+        Activity? activity, string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks)
+    {
+        if (!IsExpectedForeground(expectedForegroundWindow))
+        {
+            return FocusChanged(text.Length);
+        }
+
+        if (_platform.TryInsertIntoStandardEdit(text, expectedForegroundWindow))
+        {
+            ReportInjection(activity, "win32-edit", text.Length, text.Length, fallback: false);
+            return new InjectionResult(true, "win32-edit", text.Length, text.Length);
+        }
+
+        if (method == InjectionMethod.UnicodeType)
+        {
+            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false);
+        }
+
+        var paste = PasteViaClipboard(text, expectedForegroundWindow);
+        ReportClipboard(activity, paste);
+        LogClipboard(paste);
+
+        if (paste.Delivery == PasteDelivery.ChordInserted)
+        {
+            // Delivered. Whatever became of the restore, typing now would insert the text twice.
+            ReportInjection(activity, "clipboard", paste.Sent, paste.Total, fallback: false);
+            return new InjectionResult(
+                true, "clipboard", paste.Sent, paste.Total,
+                paste.Sent == paste.Total ? null : "Paste completed, but modifier cleanup was partial.")
+            {
+                Paste = paste.Delivery,
+                ClipboardRestore = paste.Restore,
+            };
+        }
+
+        if (paste.Delivery == PasteDelivery.FocusChanged)
+        {
+            return FocusChanged(text.Length) with { Paste = paste.Delivery, ClipboardRestore = paste.Restore };
+        }
+
+        // No paste can have fired, so typing cannot duplicate anything.
+        return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: true) with
+        {
+            Paste = paste.Delivery,
+            ClipboardRestore = paste.Restore,
+        };
+    }
+
+    // Telemetry is optional and injection is not, so neither end of the span may throw into it.
+    private static Activity? TryStartActivity(Activity? parent, int chars)
+    {
+        try
+        {
+            var activity = ScribeTelemetry.Source.StartActivity(
+                ScribeTelemetry.InjectActivity, ActivityKind.Internal, parent?.Context ?? default);
+            activity?.SetTag(ScribeTelemetry.TagInjectChars, chars);
+            return activity;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void TryStop(Activity? activity)
+    {
+        try
+        {
+            activity?.Dispose();
+        }
+        catch (Exception)
+        {
+            // A trace listener's fault is not the dictation's.
+        }
+    }
+
+    private InjectionResult TypeAndReport(
+        Activity? activity, string text, nint expectedForegroundWindow, bool shiftEnterLineBreaks, bool fallback)
+    {
+        var typed = TypeUnicode(text, expectedForegroundWindow, shiftEnterLineBreaks);
+        ReportInjection(activity, "unicode", typed.Sent, typed.Total, fallback);
+        return new InjectionResult(
+            typed.Sent == typed.Total, "unicode", typed.Sent, typed.Total,
+            typed.Sent == typed.Total ? null : "Only part of the text was accepted by Windows.");
+    }
+
     private static InjectionResult FocusChanged(int total) =>
-        new(false, "none", 0, total, "The focused window changed while processing.");
+        new(false, "none", 0, total, InjectionResult.FocusChangedError);
 
-    private static bool IsExpectedForeground(nint expected) =>
-        expected == 0 || GetForegroundWindow() == expected;
+    private bool IsExpectedForeground(nint expected) =>
+        expected == 0 || _platform.GetForegroundWindow() == expected;
 
+    // Runs after text may already have reached the target, so it must not throw (see TryStop).
     private static void ReportInjection(Activity? activity, string method, int sent, int total, bool fallback)
     {
         if (activity is null)
@@ -114,71 +182,89 @@ public sealed class TextInjector : ITextInjector
             return;
         }
 
-        var complete = sent == total;
-        activity.SetTag(ScribeTelemetry.TagInjectMethod, method);
-        activity.SetTag(ScribeTelemetry.TagInjectSent, sent);
-        activity.SetTag(ScribeTelemetry.TagInjectTotal, total);
-        activity.SetTag(ScribeTelemetry.TagInjectComplete, complete);
-        activity.SetTag(ScribeTelemetry.TagInjectFallback, fallback);
-
-        // A partial SendInput is the smoking gun for "I spoke but nothing (or only part) appeared";
-        // mark the span as an error so it stands out in the log and any OTLP backend.
-        if (!complete)
+        try
         {
-            activity.SetStatus(ActivityStatusCode.Error, $"SendInput delivered {sent}/{total} events.");
+            var complete = sent == total;
+            activity.SetTag(ScribeTelemetry.TagInjectMethod, method);
+            activity.SetTag(ScribeTelemetry.TagInjectSent, sent);
+            activity.SetTag(ScribeTelemetry.TagInjectTotal, total);
+            activity.SetTag(ScribeTelemetry.TagInjectComplete, complete);
+            activity.SetTag(ScribeTelemetry.TagInjectFallback, fallback);
+
+            // A partial SendInput is the smoking gun for "I spoke but nothing (or only part) appeared";
+            // mark the span as an error so it stands out in the log and any OTLP backend.
+            if (!complete)
+            {
+                activity.SetStatus(ActivityStatusCode.Error, $"SendInput delivered {sent}/{total} events.");
+            }
+        }
+        catch (Exception)
+        {
+            // Telemetry is optional; the injection outcome is not.
         }
     }
 
-    private bool PasteViaClipboard(
-        string text,
-        nint expectedForegroundWindow,
-        out (int Sent, int Total) ctrlV,
-        out bool focusChanged)
+    private readonly record struct ClipboardPasteReport(
+        PasteDelivery Delivery,
+        ClipboardRestoreOutcome Restore,
+        int Sent,
+        int Total,
+        int OpenAttempts,
+        bool ConfirmOpened,
+        bool CloseMovedSequence);
+
+    private ClipboardPasteReport PasteViaClipboard(string text, nint expectedForegroundWindow)
     {
-        ctrlV = (0, 0);
-        focusChanged = false;
-
-        // An image, copied files or other non-text content can't be saved and restored by
-        // Win32Clipboard (text-only by design), so pasting would silently destroy it. Fall back to
-        // typing; slower, but the user's screenshot or file copy survives the dictation.
-        if (Win32Clipboard.HasNonTextContent())
+        // An image, copied files or other non-text content can't be saved and restored (text-only by
+        // design), so the borrow refuses it and the caller types instead; slower, but the user's
+        // screenshot or file copy survives the dictation. Every other refusal leaves nothing of
+        // Scribe's behind either: a text or receipt write that failed after emptying was rolled back in
+        // the same session.
+        var borrow = _clipboard.TryBorrow(text);
+        if (borrow.Lease is not { } lease)
         {
-            _logger.LogInformation("Clipboard holds non-text content; typing instead of pasting to preserve it.");
-            return false;
+            var refused = borrow.Status switch
+            {
+                ClipboardBorrowStatus.Busy => PasteDelivery.ClipboardBusy,
+                ClipboardBorrowStatus.NonTextContent => PasteDelivery.NonTextContent,
+                ClipboardBorrowStatus.SnapshotUnreadable => PasteDelivery.SnapshotUnreadable,
+                ClipboardBorrowStatus.ReceiptFailed => PasteDelivery.ReceiptFailed,
+                _ => PasteDelivery.WriteFailed,
+            };
+            return new(refused, borrow.Rollback, 0, 0, borrow.OpenAttempts, false, false);
         }
 
-        var wasEmpty = Win32Clipboard.FormatCount == 0;
-        string? previous = Win32Clipboard.TryGetText();
-        if (!wasEmpty && previous is null)
-        {
-            return false;
-        }
+        bool confirmOpened = false;
+        ClipboardPasteReport Report(PasteDelivery delivery, ClipboardRestoreOutcome restore, int sent = 0, int total = 0) =>
+            new(delivery, restore, sent, total, borrow.OpenAttempts, confirmOpened, lease.CloseMovedSequence);
 
-        if (!Win32Clipboard.SetText(text))
-        {
-            return false;
-        }
-
-        var injectedSequence = Win32Clipboard.SequenceNumber;
-
-        Thread.Sleep(ClipboardSettleDelayMs);
+        // The clipboard is closed during this wait and stays closed through the paste: the target has
+        // to open it to read, so holding it here would break every paste.
+        _platform.Sleep(ClipboardSettleDelayMs);
         if (!IsExpectedForeground(expectedForegroundWindow))
         {
-            focusChanged = true;
-            if (Win32Clipboard.SequenceNumber == injectedSequence)
-            {
-                RestoreClipboard(wasEmpty, previous);
-            }
-
-            return false;
+            return Report(PasteDelivery.FocusChanged, RestoreClipboard(lease));
         }
 
-        if (Win32Clipboard.SequenceNumber != injectedSequence)
+        // Another application may have copied at any moment since the borrow released the clipboard, and
+        // Ctrl+V would then paste its content. Nothing was sent yet, so typing instead cannot duplicate
+        // anything.
+        switch (_clipboard.Confirm(lease, out confirmOpened))
         {
-            return false;
+            case ClipboardCheck.Superseded:
+                return Report(PasteDelivery.Superseded, ClipboardRestoreOutcome.Superseded);
+            case ClipboardCheck.Busy:
+                return Report(PasteDelivery.Unconfirmed, RestoreClipboard(lease));
         }
 
-        ctrlV = SendCtrlV();
+        // Confirm can spend its open retries waiting on another process, and focus can move in that
+        // time (Alt+Tab, a toast), so the window is checked again right before the keystrokes.
+        if (!IsExpectedForeground(expectedForegroundWindow))
+        {
+            return Report(PasteDelivery.FocusChanged, RestoreClipboard(lease));
+        }
+
+        var ctrlV = SendCtrlV();
 
         // A short send can leave Ctrl (or V) logically held down; release both before anything
         // else so a typing fallback can't turn the dictation into accidental keyboard shortcuts.
@@ -187,72 +273,91 @@ public sealed class TextInjector : ITextInjector
             ReleaseCtrlV();
         }
 
-        // The paste fires on the V-down (the chord's second event). Fewer than two delivered means
-        // no paste happened at all: put the user's clipboard back and report failure so the caller
+        // The paste fires on the V-down (the chord's second event). Fewer than two inserted means
+        // no paste happened at all: put the user's clipboard back and report it so the caller
         // types the text instead of losing the dictation.
         if (ctrlV.Sent < 2)
         {
-            if (Win32Clipboard.SequenceNumber == injectedSequence)
-            {
-                RestoreClipboard(wasEmpty, previous);
-            }
-
-            return false;
+            return Report(PasteDelivery.ChordIncomplete, RestoreClipboard(lease), ctrlV.Sent, ctrlV.Total);
         }
 
-        Thread.Sleep(PasteSettleDelayMs);
-
-        if (Win32Clipboard.SequenceNumber == injectedSequence)
-        {
-            RestoreClipboard(wasEmpty, previous);
-        }
-
-        return true;
+        _platform.Sleep(PasteSettleDelayMs);
+        return Report(PasteDelivery.ChordInserted, RestoreClipboard(lease), ctrlV.Sent, ctrlV.Total);
     }
 
-    private static void RestoreClipboard(bool wasEmpty, string? previous)
+    // The restore can run after the paste was delivered, so a fault in it has to become a Failed
+    // outcome: escaping as an exception would report a delivered dictation as failed.
+    private ClipboardRestoreOutcome RestoreClipboard(ClipboardLease lease)
     {
-        if (wasEmpty)
+        try
         {
-            Win32Clipboard.Clear();
+            return _clipboard.Restore(lease);
         }
-        else if (previous is not null)
+        catch (Exception ex)
         {
-            Win32Clipboard.SetText(previous);
+            // The type only, never the message: Scribe's native layer does not put clipboard content in
+            // exceptions, but nothing guarantees that for every exception a restore could surface. The
+            // logger cannot throw here (NonThrowingLogger), so this catch cannot be escaped either.
+            _logger.LogWarning("Restoring the clipboard failed with {ExceptionType}.", ex.GetType().Name);
+            return ClipboardRestoreOutcome.Failed;
         }
     }
 
-    private static bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
+    // Runs after every delivered paste, so it must not throw (see TryStop).
+    private static void ReportClipboard(Activity? activity, ClipboardPasteReport paste)
     {
-        var foreground = GetForegroundWindow();
-        if (foreground == 0 || (expectedForegroundWindow != 0 && foreground != expectedForegroundWindow))
+        if (activity is null)
         {
-            return false;
+            return;
         }
 
-        var threadId = GetWindowThreadProcessId(foreground, out _);
-        var info = new GUITHREADINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
-        if (threadId == 0 || !GetGUIThreadInfo(threadId, ref info) || info.hwndFocus == 0)
+        try
         {
-            return false;
+            // Enum names only, never content.
+            activity.SetTag(ScribeTelemetry.TagPasteDelivery, paste.Delivery.ToString());
+            activity.SetTag(ScribeTelemetry.TagClipboardRestore, paste.Restore.ToString());
+        }
+        catch (Exception)
+        {
+            // Telemetry is optional; the injection outcome is not.
+        }
+    }
+
+    // One line per paste attempt, enum names, counts and booleans only. The clipboard can hold anything
+    // the user copied, so no content, length or format name of it may reach the log. The last two values
+    // make native behavior this code could not measure visible from field logs: whether releasing the
+    // clipboard moves the sequence number, and how often the number has moved by Ctrl+V so that Confirm
+    // has to open the clipboard. A receipt the NULL-owner session could not write shows as its own
+    // delivery, ReceiptFailed.
+    private void LogClipboard(ClipboardPasteReport paste)
+    {
+        bool typingInstead = paste.Delivery is not (PasteDelivery.ChordInserted or PasteDelivery.FocusChanged);
+        _logger.Log(
+            ClipboardLogLevel(paste.Delivery, paste.Restore),
+            "Clipboard paste {Delivery}; previous clipboard {Restore}; {OpenAttempts} open attempt(s); " +
+            "typing instead: {TypingInstead}; close moved sequence: {CloseMovedSequence}; " +
+            "confirm opened clipboard: {ConfirmOpened}.",
+            paste.Delivery, paste.Restore, paste.OpenAttempts, typingInstead, paste.CloseMovedSequence,
+            paste.ConfirmOpened);
+    }
+
+    internal static LogLevel ClipboardLogLevel(PasteDelivery delivery, ClipboardRestoreOutcome restore)
+    {
+        if (restore == ClipboardRestoreOutcome.Failed)
+        {
+            return LogLevel.Warning;
         }
 
-        var className = new char[128];
-        var length = GetClassName(info.hwndFocus, className, className.Length);
-        if (length == 0)
+        return delivery switch
         {
-            return false;
-        }
+            PasteDelivery.ChordInserted when restore == ClipboardRestoreOutcome.Restored => LogLevel.Debug,
 
-        var controlClass = new string(className, 0, length);
-        if (!string.Equals(controlClass, "Edit", StringComparison.OrdinalIgnoreCase) &&
-            !controlClass.StartsWith("RichEdit", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return SendMessageTimeout(
-            info.hwndFocus, EM_REPLACESEL, (nint)1, text, SMTO_ABORTIFHUNG, 1000, out _) != 0;
+            // Expected outcomes rather than faults: another application copied, the user switched
+            // windows, or the clipboard held content that typing preserves.
+            PasteDelivery.ChordInserted or PasteDelivery.Superseded or PasteDelivery.FocusChanged
+                or PasteDelivery.NonTextContent => LogLevel.Information,
+            _ => LogLevel.Warning,
+        };
     }
 
     // Best-effort key-up pair after a partial Ctrl+V send. Sending an up for a key that was never
@@ -280,7 +385,7 @@ public sealed class TextInjector : ITextInjector
             KeyUp(VK_CONTROL),
         ];
 
-        uint sent = SendInput((uint)inputs.Length, inputs, System.Runtime.InteropServices.Marshal.SizeOf<INPUT>());
+        uint sent = _platform.SendInput(inputs);
         if (sent != inputs.Length)
         {
             _logger.LogWarning("SendInput delivered {Sent}/{Total} Ctrl+V events.", sent, inputs.Length);
@@ -339,7 +444,7 @@ public sealed class TextInjector : ITextInjector
                 // Let the focused app process this batch's WM_CHAR messages before the next one arrives.
                 if (start < text.Length)
                 {
-                    Thread.Sleep(InterChunkSettleMs);
+                    _platform.Sleep(InterChunkSettleMs);
                 }
             }
         }
@@ -522,13 +627,12 @@ public sealed class TextInjector : ITextInjector
     // input stream was momentarily blocked by other input). Returns how many events were delivered.
     private int SendWithRetry(INPUT[] inputs)
     {
-        int size = System.Runtime.InteropServices.Marshal.SizeOf<INPUT>();
         int offset = 0;
         int attempts = 0;
         while (offset < inputs.Length)
         {
             var slice = offset == 0 ? inputs : inputs[offset..];
-            uint sent = SendInput((uint)slice.Length, slice, size);
+            uint sent = _platform.SendInput(slice);
             offset += (int)sent;
 
             if (sent == (uint)slice.Length)
@@ -543,7 +647,7 @@ public sealed class TextInjector : ITextInjector
                 break;
             }
 
-            Thread.Sleep(ChunkRetryDelayMs);
+            _platform.Sleep(ChunkRetryDelayMs);
         }
 
         return offset;
@@ -605,5 +709,52 @@ public sealed class TextInjector : ITextInjector
         }
 
         return result!;
+    }
+
+    /// <summary>
+    /// Wraps the injector's logger so that no log call can throw. Most of them run after text may
+    /// already have reached the target (a partial Ctrl+V, the restore, the per-paste line), where an
+    /// escaping exception would report a delivered dictation as failed. Wrapping the sink once keeps
+    /// that true for every call site, including ones added later.
+    /// </summary>
+    private sealed class NonThrowingLogger(ILogger inner) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+        {
+            try
+            {
+                return inner.BeginScope(state);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            try
+            {
+                return inner.IsEnabled(logLevel);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            try
+            {
+                inner.Log(logLevel, eventId, state, exception, formatter);
+            }
+            catch (Exception)
+            {
+                // Diagnostics must never turn a delivered paste into a failed one.
+            }
+        }
     }
 }

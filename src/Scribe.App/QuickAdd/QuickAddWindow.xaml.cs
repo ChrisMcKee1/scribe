@@ -425,8 +425,11 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             // The user gets a sentence they can act on; the detail goes to the log, which is the only
-            // place a broken write can actually be diagnosed from later.
-            _logger?.LogError(ex, "Quick add failed to save the dictionary entry.");
+            // place a broken write can actually be diagnosed from later. By shape and stack, never the
+            // message, which can quote the rule being saved.
+            _logger?.LogError(
+                "Quick add failed to save the dictionary entry: {Failure}",
+                Scribe.Core.Diagnostics.FailureShape.DescribeWithStack(ex));
             StatusText.Text = "Couldn't save that rule. Try again, or add it in Settings, Dictionary.";
             StatusText.SetResourceReference(
                 System.Windows.Controls.TextBlock.ForegroundProperty, "SystemFillColorCriticalBrush");

@@ -20,8 +20,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" />
-    <!-- Eval framework stays in this tool only (PrivateAssets=all): it must not flow into the
-         app or become a shipped dependency. -->
+    <!-- PrivateAssets=all keeps this project's own reference from flowing anywhere. The package still
+         ships with the app, because Microsoft.Agents.AI and Microsoft.Agents.AI.OpenAI depend on it,
+         so it moves with the Microsoft.Extensions.AI set in Directory.Packages.props. -->
     <PackageReference Include="Microsoft.Extensions.AI.Evaluation" PrivateAssets="all" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>

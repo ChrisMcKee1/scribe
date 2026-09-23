@@ -1,0 +1,82 @@
+{
+  "dict-azure-devops": {
+    "file": "dict-azure-devops.wav",
+    "text": "We track every bug in azure devops and review the board on Monday morning.",
+    "voice": "Microsoft Zira Desktop - English (United States)",
+    "role": "dictionary",
+    "asserted": true,
+    "seconds": 4.56
+  },
+  "dict-scribe": {
+    "file": "dict-scribe.wav",
+    "text": "Scribe types whatever I say into the window that has focus.",
+    "voice": "Microsoft Mark - English (United States)",
+    "role": "dictionary",
+    "asserted": true,
+    "seconds": 3.97
+  },
+  "dict-github-copilot": {
+    "file": "dict-github-copilot.wav",
+    "text": "Ask github copilot to explain why the build is failing.",
+    "voice": "Microsoft David Desktop - English (United States)",
+    "role": "dictionary",
+    "asserted": true,
+    "seconds": 3.99
+  },
+  "dict-kubernetes": {
+    "file": "dict-kubernetes.wav",
+    "text": "The kubernetes cluster restarted overnight after the upgrade.",
+    "voice": "Microsoft Zira Desktop - English (United States)",
+    "role": "dictionary",
+    "asserted": true,
+    "seconds": 4.15
+  },
+  "snippet-signature": {
+    "file": "snippet-signature.wav",
+    "text": "insert my signature",
+    "voice": "Microsoft Mark - English (United States)",
+    "role": "snippet",
+    "asserted": true,
+    "seconds": 1.93
+  },
+  "snippet-address": {
+    "file": "snippet-address.wav",
+    "text": "insert my address",
+    "voice": "Microsoft David Desktop - English (United States)",
+    "role": "snippet",
+    "asserted": true,
+    "seconds": 2.02
+  },
+  "question": {
+    "file": "question.wav",
+    "text": "Can you send me the latest version of the design document?",
+    "voice": "Microsoft Zira Desktop - English (United States)",
+    "role": "speech",
+    "asserted": true,
+    "seconds": 3.73
+  },
+  "list": {
+    "file": "list.wav",
+    "text": "We need milk, eggs, bread, coffee, and a bag of apples.",
+    "voice": "Microsoft Mark - English (United States)",
+    "role": "speech",
+    "asserted": true,
+    "seconds": 5.07
+  },
+  "numbers-time": {
+    "file": "numbers-time.wav",
+    "text": "The meeting moved to three thirty on Tuesday, and forty two people signed up for the workshop.",
+    "voice": "Microsoft David Desktop - English (United States)",
+    "role": "numbers",
+    "asserted": false,
+    "seconds": 6.1
+  },
+  "long-passage": {
+    "file": "long-passage.wav",
+    "text": "Good morning everyone. Before we start the planning meeting, I want to thank the whole team for the work on the release last week. The installer is smaller, dictation feels faster, and the support queue is finally quiet. Today we will walk through the open issues, agree on the priorities for the next sprint, and decide who will own the documentation updates.",
+    "voice": "Microsoft Zira Desktop - English (United States)",
+    "role": "speech",
+    "asserted": true,
+    "seconds": 23.26
+  }
+}

@@ -95,12 +95,16 @@ public sealed class ScribeDatabaseRecoveryTests : IDisposable
 
         Assert.True(db.RepairedAtStartup);
         Assert.True(db.SettingsLostInRepair, "nothing was salvageable, so settings were lost");
+        Assert.True(db.DictionaryLostInRepair, "nothing was salvageable, so the dictionary was lost");
         Assert.Single(CorruptAsideFiles());
 
-        // The rebuilt database is fully usable.
+        // The rebuilt database is fully usable, holds no settings document, and says the one it had was lost.
         using var connection = db.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM settings;";
-        Assert.Equal(0L, (long?)command.ExecuteScalar());
+        command.CommandText = "SELECT key FROM settings;";
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(SettingsRepository.LostMarkerKey, reader.GetString(0));
+        Assert.False(reader.Read());
     }
 }

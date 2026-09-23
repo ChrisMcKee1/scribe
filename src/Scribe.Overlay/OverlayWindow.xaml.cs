@@ -287,7 +287,7 @@ public sealed partial class OverlayWindow : Window
         _recordingWarningTimer ??= CreateRecordingWarningTimer();
         _recordingWarningTimer.Stop();
         _recordingWarningTimer.Start();
-        OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reason='{reason}'");
+        OverlayLog.Write($"OverlayWindow.ShowRecordingWarning hold={RecordingWarningHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
     });
 
     /// <summary>Processing: bouncing dots while transcribing / AI polishing.</summary>
@@ -312,8 +312,14 @@ public sealed partial class OverlayWindow : Window
         _failedTimer ??= CreateFailedTimer();
         _failedTimer.Stop();
         _failedTimer.Start();
-        OverlayLog.Write($"OverlayWindow.ShowFailed hold={FailedHold.TotalMilliseconds:0}ms reason='{reason}'");
+        OverlayLog.Write($"OverlayWindow.ShowFailed hold={FailedHold.TotalMilliseconds:0}ms reasonLength={ReasonLength(reason)}");
     });
+
+    // The reason is display text composed by the engine and can carry user configuration, such as a
+    // custom cleanup endpoint's host inside a failure detail. The pill shows it; the shared log only
+    // records how long it was. The wire protocol carries no fixed category to log instead.
+    private static int ReasonLength(string? reason) =>
+        string.IsNullOrWhiteSpace(reason) ? 0 : reason.Trim().Length;
 
     /// <summary>Hides the pill, unless the red failure flash is still holding on screen.</summary>
     public void Hide() => RunOnUi(() =>

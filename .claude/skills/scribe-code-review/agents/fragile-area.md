@@ -206,9 +206,11 @@ Fire here only when the diff would reproduce one of the named incidents above.
 - **`RemoveDwmFrame` is best effort.** It captures both HRESULTs and logs them; the comment records that
   both attributes fail harmlessly on Windows 10. A diff that starts throwing on a non-zero HRESULT there
   turns a cosmetic fallback into a dead pill.
-- **The anchor and the desired state are replayed on every reconnect.** `EnsureLaunched` writes
-  `POSITION <_position>` then `_desiredState` immediately after connecting, so a relaunched overlay comes
-  up where the user chose and in the state the engine is actually in.
+- **The anchor and the desired state are replayed on every reconnect.** The launch path writes
+  `POSITION <_position>` then `_desired.Line` immediately after connecting, so a relaunched overlay
+  comes up where the user chose and in the state the engine is actually in. `_desired` is one immutable
+  object (a command line and its demand), so the replay can never pair one state's command with
+  another state's demand.
 - **Orphan safety is belt and braces, and both halves must survive.** Engine side:
   `OverlayChildJob` creates a job object with `KILL_ON_JOB_CLOSE` and deliberately never closes the
   handle, so the OS kills the pill as the engine dies. Overlay side: `--parent <pid>` arms
@@ -245,9 +247,11 @@ have landed.
 
 **The failures this surface has already produced.**
 
-- **A `MissingMethodException` that compiled warning clean.** `AGENTS.md`: `OpenAI` is pinned at 2.12.0
-  because `Microsoft.Extensions.AI.OpenAI` declares `[2.12.0, 2.13.0)`. `ProjectResponsesClient` needs a
-  constructor that only exists in 2.13.0, so it throws at runtime while compiling perfectly.
+- **A `MissingMethodException` that compiled warning clean.** `OpenAI` is pinned at 2.12.0 because
+  `Microsoft.Extensions.AI.OpenAI` 10.9.0 declares `[2.12.0, 2.13.0)`, and the AI packages bind to the
+  `OpenAI` build they were compiled against, so they move together. `ProjectResponsesClient` needed a
+  constructor that only existed in 2.13.0 and threw at runtime while compiling perfectly; its package,
+  `Azure.AI.Projects`, was removed in 0.4.3 along with `Microsoft.Agents.AI.Foundry`.
 - **A readiness probe every Azure endpoint rejected.** `InitProbeMaxOutputTokens = 16` carries the
   reason: *"Azure rejects anything below 16 with `integer_below_min_value`, so the probe would have
   failed on every Azure endpoint and marked cleanup Unavailable."*
@@ -382,7 +386,8 @@ the specific incident **and** the owning lens did not fire; otherwise defer and 
   `%LOCALAPPDATA%\ScribeData\logs\scribe-<yyyyMMdd>.log`, so every writer opens with
   `FileShare.ReadWrite`, retries, and swallows. A throwing logger once tore down a healthy overlay (see
   F-3). Owner: `logging-discipline`, pattern P-4.
-- **Additive forward-only SQLite migration.** `ScribeDatabase.SchemaVersion` is 6 and
+- **Additive, idempotent SQLite schema.** `ScribeDatabase.SchemaVersion` stays 7 so older builds can
+  still open the file; new columns and indexes go into `EnsureAdditiveSchema`, which runs on every open.
   `ExpectedSqliteVersion` is `3.53.4`, asserted at runtime because `SQLitePCLRaw.bundle_e_sqlite3` is
   pinned directly to override a transitive bundle affected by CVE-2025-6965. A schema change is also an
   `AGENTS.md` **"Ask first"** item. Owner: `settings-and-persistence`, pattern P-11, guardrail G-5.

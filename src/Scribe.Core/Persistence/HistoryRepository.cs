@@ -1,11 +1,17 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
+using Microsoft.Data.Sqlite;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.Persistence;
 
 /// <inheritdoc cref="IHistoryRepository"/>
-public sealed class HistoryRepository : IHistoryRepository
+/// <remarks>
+/// New audio is stored as 16-bit PCM (<see cref="AudioBlobEncoding.Pcm16"/>) behind a header that
+/// identifies it even where the encoding column is missing; blobs written by earlier builds stay
+/// float32 and still decode. Every write takes the database write gate, so it waits for a
+/// maintenance VACUUM rather than failing on a busy database.
+/// </remarks>
+public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 {
     // Round-trips timestamps losslessly with offset, sortable as text for the timestamp index.
     private const string TimestampFormat = "O";
@@ -14,6 +20,13 @@ public sealed class HistoryRepository : IHistoryRepository
 
     public HistoryRepository(ScribeDatabase database) => _database = database;
 
+    /// <summary>
+    /// Largest encoded capture this repository stores. A capture that could never fit under the
+    /// stored-audio cap would only be evicted on the next maintenance pass, so it is not written at
+    /// all and its entry is saved as text only. Settable for tests, which cannot allocate 250 MB.
+    /// </summary>
+    internal long MaxAudioBlobBytes { get; init; } = StorageRetentionPolicy.MaxStoredAudioBytes;
+
     public HistoryEntry Add(HistoryEntry entry)
         => Add(entry, audio: null);
 
@@ -21,79 +34,122 @@ public sealed class HistoryRepository : IHistoryRepository
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        using var connection = _database.Open();
-        using var transaction = connection.BeginTransaction();
+        // A dictation's write is arriving: maintenance stops heavy work now, so the gate below is
+        // free within one short step instead of after a whole VACUUM.
+        _database.RequestYield();
 
-        long? blobId = entry.AudioBlobId;
-        if (audio is not null)
+        HistoryEntry saved;
+        var storedAudio = false;
+        using (_database.EnterWriteScope())
         {
-            using var audioCommand = connection.CreateCommand();
-            audioCommand.Transaction = transaction;
-            audioCommand.CommandText =
-                """
-                INSERT INTO audio_blobs (sample_rate, samples, created_utc)
-                VALUES ($rate, $samples, $created);
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
+
+            long? blobId = entry.AudioBlobId;
+            if (audio is not null && InsertAudioBlob(connection, audio) is { } newBlobId)
+            {
+                blobId = newBlobId;
+                storedAudio = true;
+            }
+
+            var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
+            var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
+            var optionalColumns =
+                (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
+                (hasModelColumn ? ", transcription_model_id" : string.Empty);
+            var optionalValues =
+                (hasCleanupColumn ? ", $cleanup_ms" : string.Empty) +
+                (hasModelColumn ? ", $model_id" : string.Empty);
+            using var historyCommand = connection.CreateCommand();
+            historyCommand.Transaction = transaction;
+            historyCommand.CommandText =
+                $"""
+                INSERT INTO history (timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id{optionalColumns})
+                VALUES ($ts, $text, $audio_ms, $decode_ms, $target_app, $blob_id{optionalValues});
                 SELECT last_insert_rowid();
                 """;
-            audioCommand.Parameters.AddWithValue("$rate", audio.SampleRate);
-            audioCommand.Parameters.AddWithValue("$samples", ToBytes(audio.Samples));
-            audioCommand.Parameters.AddWithValue("$created", DateTimeOffset.UtcNow.ToString(TimestampFormat, CultureInfo.InvariantCulture));
-            blobId = (long)(audioCommand.ExecuteScalar() ?? 0L);
+            historyCommand.Parameters.AddWithValue("$ts", entry.TimestampUtc.ToString(TimestampFormat, CultureInfo.InvariantCulture));
+            historyCommand.Parameters.AddWithValue("$text", entry.Text);
+            historyCommand.Parameters.AddWithValue("$audio_ms", entry.AudioMilliseconds);
+            historyCommand.Parameters.AddWithValue("$decode_ms", entry.DecodeMilliseconds);
+            if (hasCleanupColumn)
+            {
+                historyCommand.Parameters.AddWithValue("$cleanup_ms", (object?)entry.CleanupMilliseconds ?? DBNull.Value);
+            }
+
+            if (hasModelColumn)
+            {
+                historyCommand.Parameters.AddWithValue("$model_id", (object?)entry.TranscriptionModelId ?? DBNull.Value);
+            }
+
+            historyCommand.Parameters.AddWithValue("$target_app", (object?)entry.TargetApp ?? DBNull.Value);
+            historyCommand.Parameters.AddWithValue("$blob_id", (object?)blobId ?? DBNull.Value);
+
+            var id = (long)(historyCommand.ExecuteScalar() ?? 0L);
+            transaction.Commit();
+            saved = entry with { Id = id, AudioBlobId = blobId };
         }
 
-        var hasCleanupColumn = EnsureHistoryColumn(connection, "cleanup_ms", "INTEGER NULL");
-        var hasModelColumn = EnsureHistoryColumn(connection, "transcription_model_id", "TEXT NULL");
-        var optionalColumns =
-            (hasCleanupColumn ? ", cleanup_ms" : string.Empty) +
-            (hasModelColumn ? ", transcription_model_id" : string.Empty);
-        var optionalValues =
-            (hasCleanupColumn ? ", $cleanup_ms" : string.Empty) +
-            (hasModelColumn ? ", $model_id" : string.Empty);
-        using var historyCommand = connection.CreateCommand();
-        historyCommand.Transaction = transaction;
-        historyCommand.CommandText =
-            $"""
-            INSERT INTO history (timestamp_utc, text, audio_ms, decode_ms, target_app, audio_blob_id{optionalColumns})
-            VALUES ($ts, $text, $audio_ms, $decode_ms, $target_app, $blob_id{optionalValues});
-            SELECT last_insert_rowid();
-            """;
-        historyCommand.Parameters.AddWithValue("$ts", entry.TimestampUtc.ToString(TimestampFormat, CultureInfo.InvariantCulture));
-        historyCommand.Parameters.AddWithValue("$text", entry.Text);
-        historyCommand.Parameters.AddWithValue("$audio_ms", entry.AudioMilliseconds);
-        historyCommand.Parameters.AddWithValue("$decode_ms", entry.DecodeMilliseconds);
-        if (hasCleanupColumn)
+        if (storedAudio)
         {
-            historyCommand.Parameters.AddWithValue("$cleanup_ms", (object?)entry.CleanupMilliseconds ?? DBNull.Value);
+            _database.NotifyStorageChanged(StorageChange.AudioStored);
         }
 
-        if (hasModelColumn)
-        {
-            historyCommand.Parameters.AddWithValue("$model_id", (object?)entry.TranscriptionModelId ?? DBNull.Value);
-        }
-
-        historyCommand.Parameters.AddWithValue("$target_app", (object?)entry.TargetApp ?? DBNull.Value);
-        historyCommand.Parameters.AddWithValue("$blob_id", (object?)blobId ?? DBNull.Value);
-
-        var id = (long)(historyCommand.ExecuteScalar() ?? 0L);
-        transaction.Commit();
-        return entry with { Id = id, AudioBlobId = blobId };
+        return saved;
     }
 
+    /// <inheritdoc/>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// The capture is larger than the stored-audio cap, so it could never be kept.
+    /// </exception>
     public long AddAudioBlob(CapturedAudio audio)
     {
         ArgumentNullException.ThrowIfNull(audio);
 
-        using var connection = _database.Open();
+        long blobId;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            blobId = InsertAudioBlob(connection, audio)
+                ?? throw new ArgumentOutOfRangeException(
+                    nameof(audio), "The capture is larger than the stored audio limit.");
+        }
+
+        _database.NotifyStorageChanged(StorageChange.AudioStored);
+        return blobId;
+    }
+
+    // Writes one blob in the current format and returns its id, or null when the capture is too
+    // large to keep. The PCM16 header makes a blob readable even where the encoding column is
+    // missing, so the format no longer depends on the column; the column is still written wherever
+    // it exists, for anything that reads it.
+    private long? InsertAudioBlob(SqliteConnection connection, CapturedAudio audio)
+    {
+        if (AudioBlobCodec.EncodedLength(audio.Samples.Length, AudioBlobEncoding.Pcm16) > MaxAudioBlobBytes)
+        {
+            return null;
+        }
+
+        var hasEncoding = EnsureColumn(connection, "audio_blobs", "encoding", "INTEGER NOT NULL DEFAULT 0");
         using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            INSERT INTO audio_blobs (sample_rate, samples, created_utc)
-            VALUES ($rate, $samples, $created);
-            SELECT last_insert_rowid();
-            """;
+        command.CommandText = hasEncoding
+            ? """
+              INSERT INTO audio_blobs (sample_rate, samples, created_utc, encoding)
+              VALUES ($rate, $samples, $created, $encoding);
+              SELECT last_insert_rowid();
+              """
+            : """
+              INSERT INTO audio_blobs (sample_rate, samples, created_utc)
+              VALUES ($rate, $samples, $created);
+              SELECT last_insert_rowid();
+              """;
         command.Parameters.AddWithValue("$rate", audio.SampleRate);
-        command.Parameters.AddWithValue("$samples", ToBytes(audio.Samples));
-        command.Parameters.AddWithValue("$created", DateTimeOffset.UtcNow.ToString(TimestampFormat, CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$samples", AudioBlobCodec.EncodePcm16(audio.Samples));
+        command.Parameters.AddWithValue("$created", FormatTimestamp(DateTimeOffset.UtcNow));
+        if (hasEncoding)
+        {
+            command.Parameters.AddWithValue("$encoding", (int)AudioBlobEncoding.Pcm16);
+        }
 
         return (long)(command.ExecuteScalar() ?? 0L);
     }
@@ -141,8 +197,11 @@ public sealed class HistoryRepository : IHistoryRepository
     public CapturedAudio? GetAudio(long blobId)
     {
         using var connection = _database.Open();
+        var hasEncoding = HasColumn(connection, "audio_blobs", "encoding");
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT sample_rate, samples FROM audio_blobs WHERE id = $id;";
+        command.CommandText = hasEncoding
+            ? "SELECT sample_rate, samples, encoding FROM audio_blobs WHERE id = $id;"
+            : "SELECT sample_rate, samples FROM audio_blobs WHERE id = $id;";
         command.Parameters.AddWithValue("$id", blobId);
 
         using var reader = command.ExecuteReader();
@@ -150,7 +209,12 @@ public sealed class HistoryRepository : IHistoryRepository
 
         var sampleRate = reader.GetInt32(0);
         var bytes = (byte[])reader[1];
-        return new CapturedAudio(ToFloats(bytes), sampleRate);
+        var encoding = hasEncoding && !reader.IsDBNull(2)
+            ? (AudioBlobEncoding)reader.GetInt32(2)
+            : AudioBlobEncoding.Float32;
+        return AudioBlobCodec.Decode(bytes, encoding) is { } samples
+            ? new CapturedAudio(samples, sampleRate)
+            : null;
     }
 
     /// <summary>
@@ -165,6 +229,7 @@ public sealed class HistoryRepository : IHistoryRepository
     /// </remarks>
     public void SetAiRating(long id, AiRating rating)
     {
+        using var writeScope = _database.EnterWriteScope();
         using var connection = _database.Open();
         if (!EnsureHistoryColumn(connection, "ai_rating", "INTEGER NULL"))
         {
@@ -181,32 +246,50 @@ public sealed class HistoryRepository : IHistoryRepository
 
     public void Delete(long id)
     {
-        using var connection = _database.Open();
-        using var transaction = connection.BeginTransaction();
-        using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            """
-            DELETE FROM audio_blobs
-            WHERE id = (SELECT audio_blob_id FROM history WHERE id = $id)
-                AND NOT EXISTS (
-                    SELECT 1 FROM history
-                    WHERE audio_blob_id = (SELECT audio_blob_id FROM history WHERE id = $id)
-                        AND id <> $id
-                );
-            DELETE FROM history WHERE id = $id;
-            """;
-        command.Parameters.AddWithValue("$id", id);
-        command.ExecuteNonQuery();
-        transaction.Commit();
+        int changes;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                DELETE FROM audio_blobs
+                WHERE id = (SELECT audio_blob_id FROM history WHERE id = $id)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM history
+                        WHERE audio_blob_id = (SELECT audio_blob_id FROM history WHERE id = $id)
+                            AND id <> $id
+                    );
+                DELETE FROM history WHERE id = $id;
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            changes = command.ExecuteNonQuery();
+            transaction.Commit();
+        }
+
+        if (changes > 0)
+        {
+            _database.NotifyStorageChanged(StorageChange.HistoryEntryDeleted);
+        }
     }
 
     public void Clear()
     {
-        using var connection = _database.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM history; DELETE FROM audio_blobs;";
-        command.ExecuteNonQuery();
+        int changes;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM history; DELETE FROM audio_blobs;";
+            changes = command.ExecuteNonQuery();
+        }
+
+        if (changes > 0)
+        {
+            _database.NotifyStorageChanged(StorageChange.HistoryCleared);
+        }
     }
 
     public int PruneOlderThan(DateTimeOffset cutoffUtc)
@@ -217,27 +300,16 @@ public sealed class HistoryRepository : IHistoryRepository
         // (however old) must stay playable, mirroring the ownership rule in Delete().
         try
         {
-            var cutoff = cutoffUtc.ToString(TimestampFormat, CultureInfo.InvariantCulture);
+            using var writeScope = _database.EnterWriteScope();
             using var connection = _database.Open();
             using var transaction = connection.BeginTransaction();
 
-            using var rows = connection.CreateCommand();
-            rows.Transaction = transaction;
-            rows.CommandText = "DELETE FROM history WHERE timestamp_utc < $cutoff;";
-            rows.Parameters.AddWithValue("$cutoff", cutoff);
-            var removed = rows.ExecuteNonQuery();
-
-            using var blobs = connection.CreateCommand();
-            blobs.Transaction = transaction;
-            blobs.CommandText =
-                """
-                DELETE FROM audio_blobs
-                WHERE created_utc < $cutoff
-                    AND id NOT IN (
-                        SELECT audio_blob_id FROM history WHERE audio_blob_id IS NOT NULL);
-                """;
-            blobs.Parameters.AddWithValue("$cutoff", cutoff);
-            blobs.ExecuteNonQuery();
+            var removed = DeleteEntriesOlderThan(connection, cutoffUtc);
+            var unreferenced = ListStoredAudio(connection)
+                .Where(blob => !blob.Referenced)
+                .Select(blob => blob.Id)
+                .ToList();
+            DeleteUnreferencedAudio(connection, unreferenced, cutoffUtc);
 
             transaction.Commit();
             return removed;
@@ -249,32 +321,220 @@ public sealed class HistoryRepository : IHistoryRepository
         }
     }
 
-    internal static byte[] ToBytes(float[] samples) =>
-        MemoryMarshal.AsBytes(samples.AsSpan()).ToArray();
+    // --- IHistoryMaintenance --------------------------------------------------------------
 
-    internal static float[] ToFloats(byte[] bytes)
+    public int DeleteEntriesOlderThan(DateTimeOffset cutoffUtc)
     {
-        var floats = new float[bytes.Length / sizeof(float)];
-        Buffer.BlockCopy(bytes, 0, floats, 0, floats.Length * sizeof(float));
-        return floats;
+        using var writeScope = _database.EnterWriteScope();
+        using var connection = _database.Open();
+        return DeleteEntriesOlderThan(connection, cutoffUtc);
     }
 
+    public int ClearAudioOlderThan(DateTimeOffset cutoffUtc)
+    {
+        using var writeScope = _database.EnterWriteScope();
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE history SET audio_blob_id = NULL
+            WHERE audio_blob_id IS NOT NULL AND timestamp_utc < $cutoff;
+            """;
+        command.Parameters.AddWithValue("$cutoff", FormatTimestamp(cutoffUtc));
+        return command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<StoredAudioBlob> ListStoredAudio()
+    {
+        using var connection = _database.Open();
+        return ListStoredAudio(connection);
+    }
+
+    public AudioDeletion DeleteUnreferencedAudio(IReadOnlyCollection<long> blobIds, DateTimeOffset storedBeforeUtc)
+    {
+        ArgumentNullException.ThrowIfNull(blobIds);
+        if (blobIds.Count == 0)
+        {
+            return default;
+        }
+
+        using var writeScope = _database.EnterWriteScope();
+        using var connection = _database.Open();
+        using var transaction = connection.BeginTransaction();
+        var deleted = DeleteUnreferencedAudio(connection, blobIds, storedBeforeUtc);
+        transaction.Commit();
+        return deleted;
+    }
+
+    public AudioDeletion EvictAudio(IReadOnlyCollection<long> blobIds, long maxStoredBytes)
+    {
+        ArgumentNullException.ThrowIfNull(blobIds);
+        if (blobIds.Count == 0)
+        {
+            return default;
+        }
+
+        using var writeScope = _database.EnterWriteScope();
+        using var connection = _database.Open();
+        using var transaction = connection.BeginTransaction();
+
+        // What is stored now, read inside this write transaction (BEGIN IMMEDIATE, so nothing can
+        // commit between this read and the deletes): a user delete since the inventory may already
+        // have brought the total under the cap, and then nothing more has to go.
+        using var total = connection.CreateCommand();
+        total.CommandText = "SELECT COALESCE(SUM(length(samples)), 0) FROM audio_blobs;";
+        var stored = Convert.ToInt64(total.ExecuteScalar() ?? 0L, CultureInfo.InvariantCulture);
+
+        using var detach = connection.CreateCommand();
+        detach.CommandText = "UPDATE history SET audio_blob_id = NULL WHERE audio_blob_id = $id;";
+        var detachId = detach.Parameters.Add("$id", SqliteType.Integer);
+
+        using var size = connection.CreateCommand();
+        size.CommandText = "SELECT length(samples) FROM audio_blobs WHERE id = $id;";
+        var sizeId = size.Parameters.Add("$id", SqliteType.Integer);
+
+        using var delete = connection.CreateCommand();
+        delete.CommandText = "DELETE FROM audio_blobs WHERE id = $id;";
+        var deleteId = delete.Parameters.Add("$id", SqliteType.Integer);
+
+        var result = default(AudioDeletion);
+        foreach (var blobId in blobIds)
+        {
+            if (stored <= maxStoredBytes)
+            {
+                break;
+            }
+
+            detachId.Value = blobId;
+            var cleared = detach.ExecuteNonQuery();
+
+            sizeId.Value = blobId;
+            if (size.ExecuteScalar() is not long bytes)
+            {
+                result += new AudioDeletion(0, 0, cleared);
+                continue;
+            }
+
+            deleteId.Value = blobId;
+            result += new AudioDeletion(delete.ExecuteNonQuery(), bytes, cleared);
+            stored -= bytes;
+        }
+
+        transaction.Commit();
+        return result;
+    }
+
+    public StoredAudioUsage GetStoredAudioUsage()
+    {
+        using var connection = _database.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*), COALESCE(SUM(length(samples)), 0) FROM audio_blobs;";
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new StoredAudioUsage(reader.GetInt32(0), reader.GetInt64(1))
+            : default;
+    }
+
+    public void RequestYield() => _database.RequestYield();
+
+    private static int DeleteEntriesOlderThan(SqliteConnection connection, DateTimeOffset cutoffUtc)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM history WHERE timestamp_utc < $cutoff;";
+        command.Parameters.AddWithValue("$cutoff", FormatTimestamp(cutoffUtc));
+        return command.ExecuteNonQuery();
+    }
+
+    // length(samples) is answered from the record header without loading the blob, and the
+    // referenced check is an index lookup (ix_history_audio_blob), so this stays cheap however much
+    // audio is stored. Reading created_utc here instead would walk every blob's overflow pages,
+    // because it is stored after the samples in each record.
+    private static List<StoredAudioBlob> ListStoredAudio(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT b.id, length(b.samples),
+                   EXISTS (SELECT 1 FROM history AS h WHERE h.audio_blob_id = b.id)
+            FROM audio_blobs AS b
+            ORDER BY b.id;
+            """;
+        var blobs = new List<StoredAudioBlob>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            blobs.Add(new StoredAudioBlob(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2) != 0));
+        }
+
+        return blobs;
+    }
+
+    // Re-checks ownership per blob inside the caller's transaction, so a blob that picked up a
+    // reference since it was listed is never deleted. created_utc is only read for these few rows.
+    private static AudioDeletion DeleteUnreferencedAudio(
+        SqliteConnection connection,
+        IReadOnlyCollection<long> blobIds,
+        DateTimeOffset storedBeforeUtc)
+    {
+        using var size = connection.CreateCommand();
+        size.CommandText =
+            """
+            SELECT length(samples) FROM audio_blobs
+            WHERE id = $id
+                AND created_utc < $before
+                AND NOT EXISTS (SELECT 1 FROM history WHERE audio_blob_id = $id);
+            """;
+        var sizeId = size.Parameters.Add("$id", SqliteType.Integer);
+        size.Parameters.AddWithValue("$before", FormatTimestamp(storedBeforeUtc));
+
+        using var delete = connection.CreateCommand();
+        delete.CommandText = "DELETE FROM audio_blobs WHERE id = $id;";
+        var deleteId = delete.Parameters.Add("$id", SqliteType.Integer);
+
+        var result = default(AudioDeletion);
+        foreach (var blobId in blobIds)
+        {
+            sizeId.Value = blobId;
+            if (size.ExecuteScalar() is not long bytes)
+            {
+                continue;
+            }
+
+            deleteId.Value = blobId;
+            result += new AudioDeletion(delete.ExecuteNonQuery(), bytes, 0);
+        }
+
+        return result;
+    }
+
+    // Always UTC: the stored strings compare as text, which is only a time comparison when every
+    // value carries the same offset.
+    private static string FormatTimestamp(DateTimeOffset value) =>
+        value.ToUniversalTime().ToString(TimestampFormat, CultureInfo.InvariantCulture);
+
     private static bool EnsureHistoryColumn(
-        Microsoft.Data.Sqlite.SqliteConnection connection,
+        SqliteConnection connection,
+        string columnName,
+        string declaration) =>
+        EnsureColumn(connection, "history", columnName, declaration);
+
+    private static bool EnsureColumn(
+        SqliteConnection connection,
+        string table,
         string columnName,
         string declaration)
     {
-        if (HasHistoryColumn(connection, columnName))
+        if (HasColumn(connection, table, columnName))
         {
             return true;
         }
 
         // Upgrade older databases lazily the first time history is read/written in a newer build.
-        // If this fails, history still works without cleanup timings.
+        // If this fails, history still works without the newer column. Names are trusted constants.
         try
         {
             using var alter = connection.CreateCommand();
-            alter.CommandText = $"ALTER TABLE history ADD COLUMN {columnName} {declaration};";
+            alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {columnName} {declaration};";
             alter.ExecuteNonQuery();
         }
         catch
@@ -282,15 +542,16 @@ public sealed class HistoryRepository : IHistoryRepository
             return false;
         }
 
-        return HasHistoryColumn(connection, columnName);
+        return HasColumn(connection, table, columnName);
     }
 
-    private static bool HasHistoryColumn(
-        Microsoft.Data.Sqlite.SqliteConnection connection,
+    private static bool HasColumn(
+        SqliteConnection connection,
+        string table,
         string columnName)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA table_info(history);";
+        command.CommandText = $"PRAGMA table_info({table});";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {

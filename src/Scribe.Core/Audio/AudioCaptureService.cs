@@ -8,7 +8,8 @@ using Scribe.Core.Models;
 
 // WasapiCapture is obsoleted by NAudio 3 in favor of WasapiRecorder, and this file stays on it by
 // informed choice: the recorder produced two live capture regressions on real hardware (an
-// un-unwrapped extensible mix format and ~20 dB quieter capture). See the comment in Start().
+// un-unwrapped extensible mix format and ~20 dB quieter capture). See the comment in
+// WasapiCaptureDevices, where the capture is created.
 #pragma warning disable CS0618
 
 namespace Scribe.Core.Audio;
@@ -28,24 +29,57 @@ public sealed class AudioCaptureService : IAudioCaptureService
     internal const float SilentCapturePeak = 0.001f;
 
     private readonly ILogger<AudioCaptureService> _logger;
-    private readonly MMDeviceEnumerator _enumerator = new();
+    private readonly ICaptureDevices _devices;
+    private readonly TimeSpan _disposeOpenWait;
+    private readonly CaptureBufferPool _buffers = new();
     private readonly object _sync = new();
 
-    private WasapiCapture? _capture;
-    private MMDevice? _device;
-    private MemoryStream? _raw;
+    private IWaveIn? _capture;
+    private ICaptureDevice? _device;
+    private CaptureRecording? _raw;
     private WaveFormat? _captureFormat;
     private ManualResetEventSlim? _stopped;
     private Exception? _captureError;
     private bool _stopRequested;
 
+    // Under _sync. The recording the live capture belongs to (0 for none), and the highest recording whose stop has
+    // reached this service. Start refuses a recording at or below that mark, so a recording stopped before its microphone
+    // opened is never handed a capture nobody will stop; and a stop that names a recording touches only that recording's
+    // capture, so its processing receives every sample exactly once, whoever else is stopping.
+    private long _captureOwner;
+    private long _stoppedThrough;
+
+    // Set once disposal begins, before it waits for the lock, so a Start that reaches the lock afterwards is refused. An
+    // open already in progress finishes normally, and disposal stops what it opened once it has the lock.
+    private int _disposing;
+
     // Running peak across the whole capture. Written on the audio callback thread, read after the
     // stop handshake; float writes are atomic so no extra locking is needed.
     private float _capturePeak;
 
-    public AudioCaptureService(ILogger<AudioCaptureService> logger) => _logger = logger;
+    /// <summary>
+    /// How long disposal waits for a device open in progress. Opens have been measured at over five seconds on the first
+    /// press after launch; past this bound the device enumerator is left for the process to release at exit, rather than
+    /// released under the open that is still using it. It bounds only that wait, not the stop that follows it.
+    /// </summary>
+    internal static readonly TimeSpan DisposeOpenWait = TimeSpan.FromSeconds(10);
+
+    public AudioCaptureService(ILogger<AudioCaptureService> logger)
+        : this(logger, new WasapiCaptureDevices(logger), DisposeOpenWait)
+    {
+    }
+
+    /// <summary>Test seam: the capture endpoints, and the bound disposal waits for an open in progress.</summary>
+    internal AudioCaptureService(ILogger<AudioCaptureService> logger, ICaptureDevices devices, TimeSpan disposeOpenWait)
+    {
+        _logger = logger;
+        _devices = devices;
+        _disposeOpenWait = disposeOpenWait;
+    }
 
     public bool IsCapturing { get; private set; }
+
+    private bool Disposing => Volatile.Read(ref _disposing) != 0;
 
     public string? LastDeviceName { get; private set; }
 
@@ -66,58 +100,41 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public IReadOnlyList<AudioDevice> GetInputDevices()
     {
-        string? defaultId = TryGetDefaultCaptureId();
-        var devices = new List<AudioDevice>();
-
-        foreach (MMDevice device in _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
-        {
-            try
-            {
-                devices.Add(new AudioDevice(device.ID, device.FriendlyName, device.ID == defaultId));
-            }
-            finally
-            {
-                device.Dispose();
-            }
-        }
-
-        return devices;
+        ObjectDisposedException.ThrowIf(Disposing, this);
+        return _devices.GetInputDevices();
     }
 
-    public void Start(string? deviceId = null)
+    public bool Start(string? deviceId = null, long owner = 0)
     {
         lock (_sync)
         {
+            // Checked under the lock disposal waits for, so a Start that gets the lock once disposal began never reaches
+            // the enumerator disposal is about to release.
+            ObjectDisposedException.ThrowIf(Disposing, this);
+
+            // Under the same lock as every stop's claim, so this is exact: the stop for this recording either reached the
+            // service before this open, and then nothing opens, or it comes after it and finds this capture.
+            if (owner != 0 && owner <= _stoppedThrough)
+            {
+                return false;
+            }
+
             if (IsCapturing)
             {
                 _logger.LogWarning("Start called while already capturing; ignoring.");
-                return;
+                return false;
             }
 
             try
             {
                 _device = ResolveDevice(deviceId);
-
-                // Deliberately the obsoleted WasapiCapture, not NAudio 3's WasapiRecorder. The
-                // recorder was tried (0.3.16) and produced two live capture regressions in one
-                // day on the same microphone: the mix format arrived with its extensible header
-                // intact (blinding every Encoding-switch consumer), and captured speech came in
-                // roughly 20 dB quieter than WasapiCapture on the same endpoint (peaks that were
-                // -14 dBFS became -35 dBFS, so VAD rejected real dictations as silence - the
-                // recorder evidently taps the stream at a different point in the effects/AGC
-                // chain). Correct levels beat one saved buffer copy; do not swap this back
-                // without A/B-ing recorded peaks on real hardware.
-                _capture = new WasapiCapture(_device, useEventSync: true);
+                _capture = _device.CreateCapture();
                 _captureFormat = NormalizeFormat(_capture.WaveFormat);
 
-                // Pre-size for ~30 s at the device's native rate (typically ~11 MB at 48 kHz
-                // stereo float). MemoryStream grows by doubling, and every doubling of a large
-                // buffer momentarily holds old + new on the LOH; starting at a realistic capture
-                // length removes the churn for the common case without meaningfully overpaying
-                // for short presses.
-                var presizeBytes = Math.Clamp(
-                    _captureFormat.AverageBytesPerSecond * 30L, 64 * 1024, 32 * 1024 * 1024);
-                _raw = new MemoryStream((int)presizeBytes);
+                // The previous capture's working buffer when it is still retained, otherwise a
+                // fresh ~30 s reservation (see ReservationBytes). One capture runs at a time, so in
+                // steady state no press allocates this large object heap buffer again.
+                _raw = _buffers.Rent(ReservationBytes(_captureFormat));
                 _stopped = new ManualResetEventSlim(false);
                 _captureError = null;
                 _stopRequested = false;
@@ -146,22 +163,27 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     _captureFormat.Encoding);
 
                 _capture.StartRecording();
+                _captureOwner = owner;
                 IsCapturing = true;
+                return true;
             }
             catch
             {
-                Cleanup(_capture, _raw, _stopped);
+                // Cleanup disposes the capture, joining its thread, before the recording goes back,
+                // so nothing can still be writing to a buffer that is kept for the next capture.
+                Cleanup(_capture, _raw, _stopped, retainBuffer: true);
                 throw;
             }
         }
     }
 
-    public void RequestStop()
+    public void RequestStop(long owner = 0)
     {
-        WasapiCapture? capture;
+        IWaveIn? capture;
         lock (_sync)
         {
-            if (!IsCapturing || _stopRequested)
+            NoteStopArrived(owner);
+            if (!IsCapturing || _stopRequested || !OwnsCapture(owner))
             {
                 return;
             }
@@ -182,16 +204,18 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    public CapturedAudio Stop()
+    public CapturedAudio Stop(long owner = 0)
     {
-        WasapiCapture? capture;
-        MemoryStream? raw;
+        IWaveIn? capture;
+        CaptureRecording? raw;
         WaveFormat? format;
         ManualResetEventSlim? stopped;
+        bool stopAlreadyRequested;
 
         lock (_sync)
         {
-            if (!IsCapturing)
+            NoteStopArrived(owner);
+            if (!IsCapturing || !OwnsCapture(owner))
             {
                 return CapturedAudio.Empty;
             }
@@ -201,11 +225,17 @@ public sealed class AudioCaptureService : IAudioCaptureService
             raw = _raw;
             format = _captureFormat;
             stopped = _stopped;
+
+            // Claimed together with the stop, so the capture thread's end-of-stream callback reads this as the stop it
+            // was asked for (disposal stops a capture nobody requested a stop for), not as a stream that ended on its own.
+            stopAlreadyRequested = _stopRequested;
+            _stopRequested = true;
         }
 
+        var quiesced = false;
         try
         {
-            if (!_stopRequested)
+            if (!stopAlreadyRequested)
             {
                 capture?.StopRecording();
             }
@@ -214,6 +244,11 @@ public sealed class AudioCaptureService : IAudioCaptureService
             {
                 throw new TimeoutException("The microphone did not stop within three seconds.");
             }
+
+            // Only a stop that completed its handshake keeps the working buffer for the next capture;
+            // one that timed out drops it. Either way Cleanup disposes the capture, which joins its
+            // thread, before the buffer is zeroed and goes back.
+            quiesced = stopped is not null;
 
             if (_captureError is not null)
             {
@@ -225,13 +260,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 return CapturedAudio.Empty;
             }
 
-            // Measured on the RAW buffer, before the downmix, so per-channel levels are still
-            // visible. Once channels are averaged the evidence is gone, and "what was on the other
-            // channel" is the question a multi-channel headset or speakerphone always raises.
-            LastSignalReport = AnalyzeSafely(raw, format);
-
-            float[] samples = ResampleToTarget(raw.GetBuffer(), (int)raw.Length, format);
-            var captured = new CapturedAudio(samples, TargetSampleRate);
+            var captured = ConvertCapture(raw, format, report => LastSignalReport = report, _logger);
+            var signal = LastSignalReport!;
 
             // The signal shape is on this line deliberately. It separates failure modes that produce
             // an identical-looking capture: a stream that stopped delivering, a microphone that was
@@ -240,33 +270,86 @@ public sealed class AudioCaptureService : IAudioCaptureService
             _logger.LogInformation(
                 "Capture complete: {Seconds:F2}s ({Samples} samples @ {Rate} Hz) from {Signal}",
                 captured.Duration.TotalSeconds,
-                samples.Length,
+                captured.Samples.Length,
                 TargetSampleRate,
-                LastSignalReport.Describe());
+                signal.Describe());
 
-            WarnAboutSignalProblems(LastSignalReport);
+            WarnAboutSignalProblems(signal);
             return captured;
         }
         finally
         {
-            Cleanup(capture, raw, stopped);
+            Cleanup(capture, raw, stopped, retainBuffer: quiesced);
         }
+    }
+
+    /// <summary>
+    /// Drops the capture working buffer kept between captures, returning the bytes released. The
+    /// buffer is already zeroed; releasing it only lets the garbage collector reclaim the memory,
+    /// and the next capture reserves a fresh one. Takes only the pool's gate, never
+    /// <c>_sync</c>, and never touches the buffer of a capture that is starting, recording or
+    /// converting (see <see cref="CaptureBufferPool"/>), so the idle release may call it from any
+    /// thread at any time.
+    /// </summary>
+    public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained();
+
+    /// <summary>
+    /// About 30 s of the device's native format (11,520,000 bytes at 48 kHz stereo float), clamped
+    /// to 64 KiB..32 MiB. Starting at a realistic capture length means a normal dictation never grows
+    /// its buffer, and every growth of a buffer this size briefly holds old and new copies on the
+    /// large object heap.
+    /// </summary>
+    internal static int ReservationBytes(WaveFormat format) =>
+        (int)Math.Clamp(format.AverageBytesPerSecond * 30L, 64 * 1024, 32 * 1024 * 1024);
+
+    /// <summary>
+    /// One capture callback's worth of device-format audio: stored, then metered. The WASAPI
+    /// callback and the synthetic soak harness both go through here.
+    /// </summary>
+    internal static float AppendChunk(CaptureRecording recording, ReadOnlySpan<byte> chunk, WaveFormat format)
+    {
+        recording.Write(chunk);
+        return ComputePeak(chunk, format);
+    }
+
+    /// <summary>
+    /// The stop-time conversion shared by <see cref="Stop"/> and the soak harness: measures the raw
+    /// device-format signal (per channel, before the downmix) and reports it through
+    /// <paramref name="onSignal"/> before anything else can fail, then downmixes and resamples to the
+    /// 16 kHz mono the VAD and recognizer consume. The samples are a new array that never aliases
+    /// the recording, whose buffer the next capture reuses while history may still hold this one.
+    /// </summary>
+    internal static CapturedAudio ConvertCapture(
+        CaptureRecording recording,
+        WaveFormat format,
+        Action<CaptureSignalReport> onSignal,
+        ILogger? logger = null)
+    {
+        // Measured on the RAW buffer, before the downmix, so per-channel levels are still
+        // visible. Once channels are averaged the evidence is gone, and "what was on the other
+        // channel" is the question a multi-channel headset or speakerphone always raises.
+        onSignal(AnalyzeSafely(recording.Written, format, logger));
+        if (recording.Length == 0)
+        {
+            return CapturedAudio.Empty;
+        }
+
+        var samples = ResampleToTarget(recording.Buffer, recording.Length, format);
+        return new CapturedAudio(samples, TargetSampleRate);
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs e)
     {
-        MemoryStream? raw = _raw;
+        CaptureRecording? raw = _raw;
         WaveFormat? format = _captureFormat;
         if (raw is null || format is null || e.BytesRecorded == 0)
         {
             return;
         }
 
-        raw.Write(e.Buffer, 0, e.BytesRecorded);
-
         // Peak is computed unconditionally (not just for the level meter): the running maximum is
         // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".
-        float peak = ComputePeak(e.Buffer.AsSpan(0, e.BytesRecorded), format);
+        float peak = AppendChunk(raw, e.Buffer.AsSpan(0, e.BytesRecorded), format);
         if (peak > _capturePeak)
         {
             _capturePeak = peak;
@@ -305,17 +388,17 @@ public sealed class AudioCaptureService : IAudioCaptureService
             CapturedSecondsSoFar());
     }
 
-    private CaptureSignalReport AnalyzeSafely(MemoryStream raw, WaveFormat format)
+    private static CaptureSignalReport AnalyzeSafely(ReadOnlySpan<byte> raw, WaveFormat format, ILogger? logger)
     {
         try
         {
-            return CaptureSignalAnalyzer.Analyze(raw.GetBuffer().AsSpan(0, (int)raw.Length), format);
+            return CaptureSignalAnalyzer.Analyze(raw, format);
         }
         catch (Exception ex)
         {
             // Diagnostics never break a dictation: a capture the analyzer cannot describe is still
             // a capture the user wants transcribed.
-            _logger.LogDebug(ex, "Could not analyze the capture signal.");
+            logger?.LogDebug(ex, "Could not analyze the capture signal.");
             return new CaptureSignalReport(format.Channels, format.SampleRate, 0, 0, 0, 0, 0, []);
         }
     }
@@ -395,12 +478,11 @@ public sealed class AudioCaptureService : IAudioCaptureService
     // Endpoint-level mute (or a volume slider at zero) means WASAPI happily records zeros: the
     // classic "muted in a Teams meeting" case. Probed once per capture so the controller can warn
     // the user the moment recording starts instead of silently discarding the capture afterwards.
-    private bool ProbeEndpointMuted(MMDevice device)
+    private bool ProbeEndpointMuted(ICaptureDevice device)
     {
         try
         {
-            var volume = device.AudioEndpointVolume;
-            return volume.Mute || volume.MasterVolumeLevelScalar <= 0.0001f;
+            return device.IsMuted;
         }
         catch (Exception ex)
         {
@@ -504,7 +586,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
         (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
         || (format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample is 16 or 24 or 32);
 
-    private static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format)
+    internal static float[] ResampleToTarget(byte[] bytes, int length, WaveFormat format)
     {
         var rawStream = new RawSourceWaveStream(bytes, 0, length, format);
         ISampleProvider source = rawStream.ToSampleProvider();
@@ -520,9 +602,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
         return ReadAll(resampled);
     }
 
-    internal static float[] ReadAll(ISampleProvider provider)
+    internal static float[] ReadAll(ISampleProvider provider) => ReadAll(provider, ArrayPool<float>.Shared);
+
+    internal static float[] ReadAll(ISampleProvider provider, ArrayPool<float> pool)
     {
-        var samples = ArrayPool<float>.Shared.Rent(provider.WaveFormat.SampleRate);
+        // The shared pool keeps returned arrays for whoever rents next, and Return(clearArray) only
+        // clears an array the pool decides to keep, so this dictation's audio is wiped before each
+        // array goes back.
+        var samples = pool.Rent(provider.WaveFormat.SampleRate);
         var count = 0;
         try
         {
@@ -530,9 +617,10 @@ public sealed class AudioCaptureService : IAudioCaptureService
             {
                 if (count == samples.Length)
                 {
-                    var expanded = ArrayPool<float>.Shared.Rent(checked(samples.Length * 2));
+                    var expanded = pool.Rent(checked(samples.Length * 2));
                     samples.AsSpan(0, count).CopyTo(expanded);
-                    ArrayPool<float>.Shared.Return(samples);
+                    samples.AsSpan().Clear();
+                    pool.Return(samples);
                     samples = expanded;
                 }
 
@@ -547,17 +635,20 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
         finally
         {
-            ArrayPool<float>.Shared.Return(samples);
+            // The whole array, not just the counted part: a read that throws may already have
+            // written past it.
+            samples.AsSpan().Clear();
+            pool.Return(samples);
         }
     }
 
-    private MMDevice ResolveDevice(string? deviceId)
+    private ICaptureDevice ResolveDevice(string? deviceId)
     {
         if (!string.IsNullOrEmpty(deviceId))
         {
             try
             {
-                return _enumerator.GetDevice(deviceId);
+                return _devices.Open(deviceId);
             }
             catch (Exception ex)
             {
@@ -565,18 +656,212 @@ public sealed class AudioCaptureService : IAudioCaptureService
             }
         }
 
+        return _devices.OpenDefault()
+            ?? throw new InvalidOperationException("No active microphone (capture) device was found.");
+    }
+
+    private void Cleanup(
+        IWaveIn? capture,
+        CaptureRecording? raw,
+        ManualResetEventSlim? stopped,
+        bool retainBuffer)
+    {
+        if (capture is not null)
+        {
+            capture.DataAvailable -= OnDataAvailable;
+            capture.RecordingStopped -= OnRecordingStopped;
+
+            // NAudio's WasapiCapture.Dispose joins the capture thread, and that thread clears its
+            // own handle only after its last DataAvailable. Either way, once this returns nothing
+            // can still be writing to the recording that is about to be zeroed and reused.
+            capture.Dispose();
+        }
+
+        if (raw is not null)
+        {
+            _buffers.Return(raw, retainBuffer);
+        }
+
+        stopped?.Dispose();
+        _device?.Dispose();
+
+        lock (_sync)
+        {
+            _capture = null;
+            _raw = null;
+            _captureFormat = null;
+            _stopped = null;
+            _device = null;
+            _stopRequested = false;
+            _captureOwner = 0;
+        }
+    }
+
+    // Caller holds _sync. Stops arrive in recording order, so one mark covers every recording up to it.
+    private void NoteStopArrived(long owner)
+    {
+        if (owner > _stoppedThrough)
+        {
+            _stoppedThrough = owner;
+        }
+    }
+
+    // Caller holds _sync. A stop without an owner (disposal, shutdown) takes whatever is capturing.
+    private bool OwnsCapture(long owner) => owner == 0 || owner == _captureOwner;
+
+    /// <summary>
+    /// Stops a live capture and releases the device enumerator. Never throws, and only the first call does anything.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Start"/> holds the lock for the whole device open and uses the enumerator throughout it, and the host can
+    /// dispose this service while an open is still under way (the keyboard hook's thread outlives its bounded join at
+    /// shutdown). So disposal waits for the lock, with a bound, before it touches anything: no new open starts once it has
+    /// begun, and the capture an open in progress started is stopped once the lock is free. Past the bound the enumerator
+    /// is left for the process to release at exit, since releasing it under the open would be a use after release inside
+    /// the audio stack; the controller stops that capture itself when its open returns during shutdown. The bound covers
+    /// only that wait for the open: stopping a capture afterwards still ends in NAudio's disposal of it, which joins the
+    /// capture thread without a bound.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposing, 1) != 0)
+        {
+            return;
+        }
+
+        if (!Monitor.TryEnter(_sync, _disposeOpenWait))
+        {
+            // The retained buffer is safe to drop while an open runs (the pool never hands out a buffer in use); the
+            // enumerator is not.
+            _buffers.ReleaseRetained();
+            TryLog(log => log.LogWarning(
+                "A microphone was still opening {Seconds:F0} s into shutdown; the audio device enumerator was left for " +
+                "the process to release at exit instead of being released while in use.",
+                _disposeOpenWait.TotalSeconds));
+            return;
+        }
+
+        bool capturing;
+        try
+        {
+            capturing = IsCapturing;
+        }
+        finally
+        {
+            Monitor.Exit(_sync);
+        }
+
+        // Stopped outside the lock: the stop waits for the capture thread and joins it, and that thread's callbacks take
+        // the lock to request a stop of their own.
+        if (capturing)
+        {
+            try
+            {
+                Stop();
+            }
+            catch (Exception ex)
+            {
+                TryLog(log => log.LogWarning(ex, "Error while stopping capture during dispose."));
+            }
+        }
+
+        _buffers.ReleaseRetained();
+        try
+        {
+            _devices.Dispose();
+        }
+        catch (Exception ex)
+        {
+            TryLog(log => log.LogWarning(ex, "Releasing the audio device enumerator failed."));
+        }
+    }
+
+    // Disposal and the paths it can race: a log call that throws must never become the failure it describes.
+    private void TryLog(Action<ILogger> write)
+    {
+        try
+        {
+            write(_logger);
+        }
+        catch
+        {
+            // Nothing useful is left to do.
+        }
+    }
+}
+
+/// <summary>
+/// The capture endpoints behind <see cref="AudioCaptureService"/>: the one seam between it and the audio stack, so its
+/// locking and disposal can be tested without a microphone. The production implementation is
+/// <see cref="WasapiCaptureDevices"/>.
+/// </summary>
+internal interface ICaptureDevices : IDisposable
+{
+    /// <summary>Opens the endpoint with this id; throws when it is unavailable.</summary>
+    ICaptureDevice Open(string deviceId);
+
+    /// <summary>Opens the default capture endpoint, communications role first, then multimedia; null when there is none.</summary>
+    ICaptureDevice? OpenDefault();
+
+    /// <summary>Lists the active capture endpoints, flagging the default communications one.</summary>
+    IReadOnlyList<AudioDevice> GetInputDevices();
+}
+
+/// <summary>One opened capture endpoint. Disposing it releases the endpoint.</summary>
+internal interface ICaptureDevice : IDisposable
+{
+    string FriendlyName { get; }
+
+    /// <summary>True when the endpoint is muted or its volume is at zero. May throw for a driver with no endpoint volume.</summary>
+    bool IsMuted { get; }
+
+    /// <summary>A capture on this endpoint, not yet started.</summary>
+    IWaveIn CreateCapture();
+}
+
+/// <summary>The real endpoints, through NAudio's WASAPI wrappers.</summary>
+internal sealed class WasapiCaptureDevices(ILogger logger) : ICaptureDevices
+{
+    private readonly MMDeviceEnumerator _enumerator = new();
+
+    public ICaptureDevice Open(string deviceId) => new Endpoint(_enumerator.GetDevice(deviceId));
+
+    public ICaptureDevice? OpenDefault()
+    {
         if (_enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Communications))
         {
-            return _enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+            return new Endpoint(_enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications));
         }
 
         if (_enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia))
         {
-            return _enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia);
+            return new Endpoint(_enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia));
         }
 
-        throw new InvalidOperationException("No active microphone (capture) device was found.");
+        return null;
     }
+
+    public IReadOnlyList<AudioDevice> GetInputDevices()
+    {
+        string? defaultId = TryGetDefaultCaptureId();
+        var devices = new List<AudioDevice>();
+
+        foreach (MMDevice device in _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        {
+            try
+            {
+                devices.Add(new AudioDevice(device.ID, device.FriendlyName, device.ID == defaultId));
+            }
+            finally
+            {
+                device.Dispose();
+            }
+        }
+
+        return devices;
+    }
+
+    public void Dispose() => _enumerator.Dispose();
 
     private string? TryGetDefaultCaptureId()
     {
@@ -590,50 +875,36 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Unable to resolve default capture device.");
+            logger.LogDebug(ex, "Unable to resolve default capture device.");
         }
 
         return null;
     }
 
-    private void Cleanup(WasapiCapture? capture, MemoryStream? raw, ManualResetEventSlim? stopped)
+    private sealed class Endpoint(MMDevice device) : ICaptureDevice
     {
-        if (capture is not null)
-        {
-            capture.DataAvailable -= OnDataAvailable;
-            capture.RecordingStopped -= OnRecordingStopped;
-            capture.Dispose();
-        }
+        public string FriendlyName => device.FriendlyName;
 
-        raw?.Dispose();
-        stopped?.Dispose();
-        _device?.Dispose();
-
-        lock (_sync)
+        public bool IsMuted
         {
-            _capture = null;
-            _raw = null;
-            _captureFormat = null;
-            _stopped = null;
-            _device = null;
-            _stopRequested = false;
-        }
-    }
-
-    public void Dispose()
-    {
-        if (IsCapturing)
-        {
-            try
+            get
             {
-                Stop();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Error while stopping capture during dispose.");
+                var volume = device.AudioEndpointVolume;
+                return volume.Mute || volume.MasterVolumeLevelScalar <= 0.0001f;
             }
         }
 
-        _enumerator.Dispose();
+        // Deliberately the obsoleted WasapiCapture, not NAudio 3's WasapiRecorder. The
+        // recorder was tried (0.3.16) and produced two live capture regressions in one
+        // day on the same microphone: the mix format arrived with its extensible header
+        // intact (blinding every Encoding-switch consumer), and captured speech came in
+        // roughly 20 dB quieter than WasapiCapture on the same endpoint (peaks that were
+        // -14 dBFS became -35 dBFS, so VAD rejected real dictations as silence - the
+        // recorder evidently taps the stream at a different point in the effects/AGC
+        // chain). Correct levels beat one saved buffer copy; do not swap this back
+        // without A/B-ing recorded peaks on real hardware.
+        public IWaveIn CreateCapture() => new WasapiCapture(device, useEventSync: true);
+
+        public void Dispose() => device.Dispose();
     }
 }

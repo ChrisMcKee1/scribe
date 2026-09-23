@@ -42,7 +42,8 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 ## ✨ Why people switch
 
 - **🔒 Private by architecture, not by promise.** Audio is captured and transcribed locally, then
-  discarded unless you explicitly enable local audio history.
+  discarded unless you explicitly enable local audio history, which keeps a compact copy for at
+  most 7 days and 250 MB.
 - **⚡ Two keys, your choice.** Hold **Right Ctrl** (or any key), talk, release. Add an optional
   second hotkey when you want dictation that always skips AI cleanup. Prefer hands-free? Toggle
   mode ends the dictation by itself when you stop talking.
@@ -111,6 +112,11 @@ spoken self-corrections and repeated points *before* the text is inserted. The d
 **fully offline** through [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).
 If the model isn't ready, dictation just continues with the raw transcript.
 
+Browsing the model list downloads nothing. Setting up Foundry Local fetches the hardware runtime for
+your PC, which can be several GB, and loading a model downloads that model. Scribe keeps only the
+model you chose, and when you switch to another provider it removes what Foundry Local downloaded,
+with a tray notice saying how much space it freed.
+
 ![Scribe AI cleanup with Foundry Local: on-device model](docs/screenshots/ai-foundry-local.png)
 
 ### …or bring your own model
@@ -153,6 +159,11 @@ factor around **0.03×**, which is ~30× faster than the audio itself.
 ### Everything you said, on your disk
 History keeps your recent dictations reviewable and copyable, with per-entry audio if you opt in.
 Delete one entry or clear everything; it never leaves your PC either way.
+
+History storage stays bounded on its own: recordings are kept for 7 days and 250 MB at most, stored
+as 16-bit audio at about half the earlier size, and history text follows the retention setting.
+After upgrading, Scribe compacts an older database once in the background, only while you are not
+dictating and Settings is closed, and it stops the moment you start dictating.
 
 ![Scribe history: recent dictations with timing, target app and decode latency](docs/screenshots/history.png)
 
@@ -201,7 +212,8 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 
 Everything is configurable from the tray: microphone, hotkey (hold or toggle), silence auto-stop,
 the pill and where it appears, voice-activity detection, line-break handling, per-app profiles,
-snippets, post-processing, start-with-Windows, and how text is inserted.
+snippets, post-processing, start-with-Windows (applied the moment you flip it), and how text is
+inserted.
 
 ## 📚 The full feature catalog
 
@@ -210,7 +222,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 | Feature | What it does |
 |---|---|
 | Push-to-talk | Separate AI-capable and optional dictation-only hotkeys, each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
-| Silence auto-stop | Toggle-mode dictation ends itself when you go quiet |
+| Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
@@ -231,7 +243,7 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 
 | Feature | What it does |
 |---|---|
-| History | Retained dictations with optional audio, replayable and deletable, all local |
+| History | Retained dictations with optional audio (kept 7 days and 250 MB at most), copyable and deletable, all local |
 | Usage insights | Totals, speech time, active days, top apps, a trend chart, and recurring terminology with one-click add to dictionary |
 | Dictation recovery | Your last five dictations stay copyable from the tray, and a failed insertion notifies you instead of losing text |
 | Diagnostics | P50/P95 decode latency and real-time factor computed from your own history |
@@ -241,7 +253,8 @@ snippets, post-processing, start-with-Windows, and how text is inserted.
 
 | Feature | What it does |
 |---|---|
-| Tray quick actions | Pause, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
+| Tray quick actions | Pause (your push-to-talk key then works normally in other apps until you resume), AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
+| Start with Windows | Applies the moment you flip it, with nothing to save, and shows what Windows reports, including a choice made in Task Manager or Windows Settings |
 | Auto-updates | Microsoft Store installs are signed and updated by Microsoft; standalone GitHub installs use Velopack delta updates |
 | Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
 
@@ -268,7 +281,8 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
 ## 🔐 Your privacy, precisely
 
 - **Audio never leaves your machine. Ever.** It is captured and transcribed locally, then discarded
-  unless you explicitly enable local audio history.
+  unless you explicitly enable local audio history, which keeps a compact copy for at most 7 days
+  and 250 MB.
 - **Transcription is 100% local** (Parakeet via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on CPU).
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
   offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is

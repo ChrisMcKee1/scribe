@@ -47,7 +47,7 @@ public sealed class SessionDiagnostics(
         catch (Exception ex)
         {
             // A banner is the least important thing in the process. It must never cost a startup.
-            log.LogWarning(ex, "Could not write the session banner.");
+            log.LogWarning("Could not write the session banner ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -111,7 +111,7 @@ public sealed class SessionDiagnostics(
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Could not read settings for the session banner.");
+            log.LogWarning("Could not read settings for the session banner ({Failure}).", FailureShape.Describe(ex));
             return null;
         }
     }
@@ -127,7 +127,7 @@ public sealed class SessionDiagnostics(
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Could not enumerate audio inputs for the session banner.");
+            log.LogWarning("Could not enumerate audio inputs for the session banner ({Failure}).", FailureShape.Describe(ex));
             return null;
         }
     }
@@ -148,7 +148,7 @@ public sealed class SessionDiagnostics(
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Could not resolve the transcription model for the session banner.");
+            log.LogWarning("Could not resolve the transcription model for the session banner ({Failure}).", FailureShape.Describe(ex));
             return null;
         }
     }

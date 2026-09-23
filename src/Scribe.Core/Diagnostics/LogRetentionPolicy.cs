@@ -18,6 +18,14 @@ public sealed record LogFileEntry(string Path, DateOnly Day, long Bytes);
 /// take three days to get back to us with a bug report. Both together bound the folder while
 /// keeping the most recent days intact.
 /// </para>
+/// <para>
+/// <b>Both size figures are soft budgets, not hard caps.</b> The daily budget stops Debug and
+/// Information lines once today's file passes it, but warnings and errors keep being written, the
+/// overlay process appends without any budget of its own, and the size is re-read only every few
+/// hundred lines. The total budget is applied only when the log is opened and at each midnight
+/// rollover, and never to today's file, so the folder can sit above it until the next sweep. They bound
+/// a runaway; they do not promise a maximum size on disk.
+/// </para>
 /// </summary>
 public static class LogRetentionPolicy
 {
@@ -29,15 +37,16 @@ public static class LogRetentionPolicy
     public const int DefaultRetentionDays = 7;
 
     /// <summary>
-    /// Ceiling for the whole log folder. Files are dropped oldest-first until the folder fits.
+    /// Soft ceiling for the whole log folder. Files are dropped oldest-first until the folder fits.
     /// Sized from real usage: an ordinary heavy day is well under a megabyte, so this is a runaway
     /// backstop rather than a limit normal use will ever reach.
     /// </summary>
     public const long DefaultTotalBudgetBytes = 64L * 1024 * 1024;
 
     /// <summary>
-    /// Ceiling for a single day's file. Past this the writer keeps only warnings and errors for the
-    /// rest of that day (see the file logger), so one runaway loop cannot bury the whole week.
+    /// Soft ceiling for a single day's file. Past this the writer keeps only warnings and errors for
+    /// the rest of that day (see <see cref="DailyLogFile"/>), so one runaway loop cannot bury the whole
+    /// week.
     /// </summary>
     public const long DefaultDailyBudgetBytes = 16L * 1024 * 1024;
 

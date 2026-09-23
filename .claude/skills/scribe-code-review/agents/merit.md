@@ -92,9 +92,10 @@ Nothing in this section ever exceeds 🟡.
 
 `AGENTS.md:142-157` records three defects that shipped in **one** release, all warning clean:
 
-1. a `MissingMethodException` from a package version conflict (`AGENTS.md:73-76`: `OpenAI` is pinned
-   at 2.12.0 because `Microsoft.Extensions.AI.OpenAI` declares `[2.12.0, 2.13.0)`, and the type that
-   needed 2.13.0 compiled perfectly and threw at runtime),
+1. a `MissingMethodException` from a package version conflict (`AGENTS.md`, Dependency rules: `OpenAI`
+   is pinned at 2.12.0 because `Microsoft.Extensions.AI.OpenAI` declares `[2.12.0, 2.13.0)` and the AI
+   packages bind to the `OpenAI` build they were compiled against, and the type that needed 2.13.0
+   compiled perfectly and threw at runtime),
 2. a probe token limit Azure rejected (now `TextCleanupService.cs:65`,
    `InitProbeMaxOutputTokens = 16`, with the incident written into the comment above it: Azure
    rejects anything below 16 with `integer_below_min_value`, so the probe failed on every Azure
@@ -112,7 +113,7 @@ fee. Match the changed paths against this table.
 | Settings, onboarding, tray, any `*.xaml` or `*.xaml.cs`: `src/Scribe.App/Settings/**`, `Onboarding/**`, `Tray/**`, `QuickAdd/**` | a XAML parse error, a runtime binding failure | `dotnet run --project src/Scribe.App -- --settings`, then read the same log |
 | Startup: `src/Scribe.App/App.xaml.cs`, `src/Scribe.App/Program.cs` | a swallowed startup exception (this is exactly the theme-watcher defect) | run the app, read the session banner and the log |
 | Overlay: `src/Scribe.Overlay/**`, `src/Scribe.App/Overlay/**` | the pill silently not shown, or torn down after launch | the log shows `installer layout`, `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, the overlay PID stays alive, and there are **zero IOExceptions after launch** (`AGENTS.md:328-330`) |
-| Native speech: `src/Scribe.Core/Audio/**`, `Vad/**`, `Transcription/**`, `ScribeNativeRid` selection in `Scribe.Core.csproj` | the unit tests **deliberately never load sherpa-onnx** (`AGENTS.md:624-626`), so a wrongly packaged native passes every test and fails on the user's first dictation | `pwsh ./scripts/New-SpeechFixtures.ps1` then `dotnet run --project tools/Scribe.AsrCheck` |
+| Native speech: `src/Scribe.Core/Audio/**`, `Vad/**`, `Transcription/**`, `ScribeNativeRid` selection in `Scribe.Core.csproj` | the model-dependent unit tests **pass vacuously without models** (`AGENTS.md`, "Architecture support"), so a wrongly packaged native can pass every local test and fail on the user's first dictation | `pwsh ./scripts/New-SpeechFixtures.ps1` then `dotnet run --project tools/Scribe.AsrCheck` |
 | Prompt or cleanup model: `CleanupPrompt.cs`, `CleanupModel.cs`, `FoundryModelVariant.cs`, `FoundryExecutionProviders.cs`, or any edited prompt text | a prompt edit that compiles and quietly changes output quality | `dotnet run --project tools/Scribe.Evals`, plus `dotnet run --project tools/Scribe.Evals -- --suite auxiliary` when `UsageInsight` or `AiDictionarySuggester` is in scope |
 | ARM64 and packaging: `RuntimeIdentifiers`, `Platform`, `build/**`, `scripts/Payload-Architecture.ps1`, `.github/workflows/**` | Windows on Arm **silently emulates** a mispackaged x64 binary. It does not crash, it just runs slower (`AGENTS.md:602-605`) | cross-build, then let the `arm64` matrix job in `.github/workflows/ci.yml` (runner `windows-11-arm`, which also runs `tools/Scribe.AsrCheck` and `Payload-Architecture.ps1`) exercise it on real hardware. `AGENTS.md:156-157`: Arm64 cannot be validated on an x64 box, and opening a PR is the cheapest way to get that run |
 
@@ -146,9 +147,9 @@ findings that make it.
 3. **Adding a new third-party component.** It must be license compatible with MIT and credited in the
    README attribution section (`CONTRIBUTING.md:157-160`; the section is `README.md:309`,
    "Licenses & attribution").
-4. **A schema or migration change to the SQLite store.** Schema state is
-   `ScribeDatabase.SchemaVersion` with an `if (current < N)` block per step
-   (`src/Scribe.Core/Persistence/ScribeDatabase.cs:23,385-427`).
+4. **A schema or migration change to the SQLite store.** Schema state is `ScribeDatabase.SchemaVersion`,
+   held at 7, plus the additive steps in `EnsureAdditiveSchema` that run on every open
+   (`src/Scribe.Core/Persistence/ScribeDatabase.cs:30`, `:928`; pattern P-11).
 
 **Flag 🔴 Critical, tagged `[ask-first]`, only when both hold:**
 
@@ -251,8 +252,8 @@ green". Boundaries touched: `Directory.Packages.props` (not mentioned in the bod
 
 🔴 **`[ask-first]` A NuGet change rides along inside an unrelated fix.** The file list includes
 `Directory.Packages.props`, but the title is "fix cleanup timeout on slow endpoints" and the body
-never mentions a package. `AGENTS.md:719` puts anything touching that file behind Ask first, and
-`AGENTS.md:73-76` is why: an SDK version that restores and compiles can still throw
+never mentions a package. `AGENTS.md:719` puts anything touching that file behind Ask first, and the
+Dependency rules section of `AGENTS.md` is why: an SDK version that restores and compiles can still throw
 `MissingMethodException` at runtime. Resolves by the description naming the package, the old and new
 version, and why the move is needed, or by dropping the package change into its own PR.
 

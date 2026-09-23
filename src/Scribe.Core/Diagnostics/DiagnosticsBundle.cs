@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text;
 
 namespace Scribe.Core.Diagnostics;
 
@@ -7,7 +8,9 @@ namespace Scribe.Core.Diagnostics;
 /// <param name="Path">Where the zip was written.</param>
 /// <param name="LogFileCount">How many daily log files it contains.</param>
 /// <param name="Bytes">Size of the finished zip.</param>
-public sealed record DiagnosticsBundleResult(string Path, int LogFileCount, long Bytes);
+/// <param name="Redactions">Known sensitive spans removed from the copied logs (see <see cref="HistoricalLogRedaction"/>).</param>
+public sealed record DiagnosticsBundleResult(
+    string Path, int LogFileCount, long Bytes, LogRedactionCounts Redactions = default);
 
 /// <summary>
 /// Packs the diagnostic logs into a single zip the user can attach to a bug report.
@@ -21,6 +24,13 @@ public sealed record DiagnosticsBundleResult(string Path, int LogFileCount, long
 /// <b>The database is never included.</b> <c>scribe.db</c> holds every dictation the user has ever
 /// made and their saved API keys. A bundle is meant to be attached to a public issue, so the only
 /// things in it are the log files and a plain-text report the user can read before they send it.
+/// </para>
+/// <para>
+/// <b>The logs are copied through <see cref="HistoricalLogRedaction"/>, not byte for byte.</b> Earlier
+/// builds wrote dictation text, custom endpoint addresses, Azure resource names, dictionary and snippet
+/// text and provider failure text into lines of known formats, and a week of those files can still be on
+/// disk after an upgrade. The values in exactly those formats are replaced in the copy, and the report
+/// lists the formats, the versions and how many values of each kind were replaced; nothing else changes.
 /// </para>
 /// </summary>
 public static class DiagnosticsBundle
@@ -64,11 +74,10 @@ public static class DiagnosticsBundle
         }
 
         var copied = 0;
+        var redactions = default(LogRedactionCounts);
         using (var stream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None))
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
         {
-            WriteTextEntry(archive, "report.txt", report ?? string.Empty);
-
             foreach (var file in included)
             {
                 // Both Scribe processes hold this file open for append in bursts, so the copy has to
@@ -80,7 +89,7 @@ public static class DiagnosticsBundle
                     using var source = new FileStream(
                         file.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                     using var target = entry.Open();
-                    source.CopyTo(target);
+                    redactions += HistoricalLogRedaction.CopyRedacted(source, target);
                     copied++;
                 }
                 catch (Exception ex)
@@ -92,11 +101,57 @@ public static class DiagnosticsBundle
                         $"This log file could not be read when the bundle was created.{Environment.NewLine}{ex}");
                 }
             }
+
+            // Written last so it can say what the copy above redacted.
+            WriteTextEntry(archive, "report.txt", WithRedactionSummary(report ?? string.Empty, redactions));
         }
 
         var bytes = new FileInfo(destinationPath).Length;
-        return new DiagnosticsBundleResult(destinationPath, copied, bytes);
+        return new DiagnosticsBundleResult(destinationPath, copied, bytes, redactions);
     }
+
+    /// <summary>
+    /// Appends the redaction section to the report: how many values of each kind were replaced, and exactly
+    /// which line formats and versions the redaction recognizes. Counts only. It says plainly that nothing
+    /// outside those formats is recognized, so a reader never takes it for a general scan.
+    /// </summary>
+    internal static string WithRedactionSummary(string report, LogRedactionCounts redactions)
+    {
+        var builder = new StringBuilder(report);
+        if (builder.Length > 0 && !report.EndsWith('\n'))
+        {
+            builder.AppendLine();
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("--- privacy redaction ---");
+        builder.AppendLine("Earlier Scribe versions wrote some sensitive values into log lines of known formats.");
+        builder.AppendLine("In the copies of the logs in this zip, those values were replaced with a bracketed");
+        builder.AppendLine("placeholder. Only the formats listed below are recognized. This is not a general scan:");
+        builder.AppendLine("any other line, including anything written in a format not listed here, was copied");
+        builder.AppendLine("unchanged. Versions are the Scribe versions whose logs can contain each format.");
+        foreach (var kind in Enum.GetValues<LogRedactionKind>())
+        {
+            builder.AppendLine();
+            builder.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"{RedactionKindLabel(kind)} replaced: {redactions.Of(kind)}"));
+            foreach (var format in HistoricalLogRedaction.KnownFormats.Where(f => f.Kind == kind))
+            {
+                builder.AppendLine($"  - {format.Lines}, versions {format.Versions}");
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static string RedactionKindLabel(LogRedactionKind kind) => kind switch
+    {
+        LogRedactionKind.Transcript => "dictation text",
+        LogRedactionKind.EndpointAddress => "custom AI endpoint addresses",
+        LogRedactionKind.AzureResourceName => "Azure deployment, account and subscription names",
+        LogRedactionKind.UserContent => "dictionary, snippet, dictionary library and profile text",
+        _ => "AI provider and failure text",
+    };
 
     /// <summary>
     /// Builds the inventory section appended to the report: what is in the folder, how big, and how

@@ -8,6 +8,7 @@ using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -21,10 +22,11 @@ namespace Scribe.App.Dictation;
 /// <summary>
 /// Wires the dictation loop together: hotkey down starts microphone capture; hotkey up stops
 /// capture and, on a background thread, runs VAD trimming, transcription, dictionary
-/// post-processing and text injection, then records the result to history. A single state gate
-/// prevents overlapping sessions, and the heavy stop→decode→inject work is offloaded so the
-/// hotkey consumer thread is never blocked. Live settings are honored per capture and can be
-/// swapped at runtime via <see cref="ApplySettings"/>.
+/// post-processing and text injection, then queues the result for history, which commits in the
+/// background so the next dictation never waits on SQLite. A single state gate prevents
+/// overlapping sessions, and the heavy stop→decode→inject work is offloaded so the hotkey
+/// consumer thread is never blocked. Live settings are honored per capture and can be swapped at
+/// runtime via <see cref="ApplySettings"/>.
 /// </summary>
 internal sealed class DictationController : IDisposable
 {
@@ -35,7 +37,7 @@ internal sealed class DictationController : IDisposable
     private readonly ITextPostProcessor _postProcessor;
     private readonly ITextCleanupService _cleanup;
     private readonly ITextInjector _injector;
-    private readonly IHistoryRepository _history;
+    private readonly IHistoryWriter _historyWriter;
     private readonly IDictionaryRepository _dictionary;
     private readonly IDictionaryLibraryService _libraries;
     private readonly ICleanupFailureLog _failureLog;
@@ -43,28 +45,28 @@ internal sealed class DictationController : IDisposable
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<DictationController> _log;
 
-    // Failures shown in Settings are kept to a rolling one-week window; older rows are pruned on each
-    // successful cleanup (and at startup by the host) so the diagnostic log never grows unbounded.
-    private static readonly TimeSpan FailureRetention = TimeSpan.FromDays(7);
+    // Shutdown waits, bounded so quitting never hangs: long enough for the last dictation to reach a cancellation
+    // point (or finish the native call it is in), and for its history write to commit.
+    private static readonly TimeSpan ProcessingDrainTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan HistoryDrainTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly object _gate = new();
-    private readonly CancellationTokenSource _lifetimeCts = new();
-    private DictationState _state = DictationState.Idle;
+    // Every decision about whether something may start (a recording, processing, a timer schedule, an idle release, a
+    // duration-ceiling stop) and the shutdown order live here, in Core, where they are tested. It also issues the
+    // per-dictation ordinal stamped on every line of one capture's story: a busy log interleaves the controller, the
+    // audio service and the out-of-process overlay, and without an id the only way to tell two adjacent dictations apart
+    // is by reading timestamps and guessing.
+    //
+    // It owns the two timers as well. Idle model release: after ReleaseModelsAfterIdleMinutes without a dictation the
+    // recognizer and VAD are unloaded, returning their memory (model weights plus whatever high-water the ONNX Runtime
+    // arena accumulated) to the OS; re-armed on every return to idle, disarmed the moment a recording starts. Duration
+    // ceiling (MaxDictationMinutes): one-shot, armed per recording; a forgotten toggle or stuck key otherwise grows the
+    // raw capture ~23 MB/min without bound, and hitting the ceiling ends the dictation through the normal stop path so
+    // everything captured still transcribes.
+    private readonly DictationLifecycle<CaptureContext> _lifecycle;
+
+    // Replaced wholesale by ApplySettings and only ever read as a snapshot, so a volatile reference is enough.
     private AppSettings _settings = AppSettings.CreateDefault();
-    private AppSettings? _captureSettings;
-    private nint _captureTargetWindow;
-    private string? _captureTargetApp;
-    private long _captureStartedTimestamp;
-
-    // Per-dictation ordinal, stamped on every line of one capture's story. A busy log interleaves
-    // the controller, the audio service and the out-of-process overlay, and without an id the only
-    // way to tell two adjacent dictations apart is by reading timestamps and guessing.
-    private long _dictationSeq;
-    private long _dictationId;
-    private Task? _processingTask;
-    private bool _paused;
     private bool _started;
-    private bool _disposed;
 
     // The cleanup configuration most recently handed to the service, and the announcement waiting
     // for it to become Ready. Both are touched from the UI thread and from the service's status
@@ -72,22 +74,6 @@ internal sealed class DictationController : IDisposable
     private readonly object _announceGate = new();
     private CleanupOptions? _announcedCleanupOptions;
     private string? _pendingAnnouncement;
-
-    // Silence auto-stop (toggle mode, opt-in): tracks live input levels while recording and ends
-    // the dictation when the speaker goes quiet, so a forgotten toggle never leaves the mic hot.
-    private SilenceAutoStopTracker? _silenceTracker;
-    private bool _silenceSubscribed;
-
-    // Idle model release: after ReleaseModelsAfterIdleMinutes without a dictation the recognizer
-    // and VAD are unloaded, returning their memory (model weights plus whatever high-water the
-    // ONNX Runtime arena accumulated) to the OS. Re-armed on every return to idle; disarmed the
-    // moment a recording starts.
-    private System.Threading.Timer? _idleReleaseTimer;
-
-    // Duration ceiling (MaxDictationMinutes): one-shot, armed per recording. A forgotten toggle
-    // or stuck key otherwise grows the raw capture ~23 MB/min without bound; hitting the ceiling
-    // ends the dictation through the normal stop path so everything captured still transcribes.
-    private System.Threading.Timer? _durationLimitTimer;
 
     public DictationController(
         IHotkeyService hotkeys,
@@ -97,7 +83,7 @@ internal sealed class DictationController : IDisposable
         ITextPostProcessor postProcessor,
         ITextCleanupService cleanup,
         ITextInjector injector,
-        IHistoryRepository history,
+        IHistoryWriter historyWriter,
         IDictionaryRepository dictionary,
         IDictionaryLibraryService libraries,
         ICleanupFailureLog failureLog,
@@ -112,30 +98,43 @@ internal sealed class DictationController : IDisposable
         _postProcessor = postProcessor;
         _cleanup = cleanup;
         _injector = injector;
-        _history = history;
+        _historyWriter = historyWriter;
         _dictionary = dictionary;
         _libraries = libraries;
         _failureLog = failureLog;
         _lastTranscript = lastTranscript;
         _settingsRepository = settingsRepository;
         _log = log;
+        _lifecycle = new DictationLifecycle<CaptureContext>(ReleaseIdleModels, OnDurationLimitReached);
     }
 
-    /// <summary>Raised whenever the dictation state changes (on a background thread).</summary>
-    public event Action<DictationState>? StateChanged;
+    /// <summary>
+    /// Raised whenever what the shell shows for the dictation loop changes, on whichever background thread made the change
+    /// (the keyboard hook's dispatch thread, the audio capture thread, a timer, processing) or on the UI thread for a pause.
+    /// Handlers must never block: the UI thread waits for several of those threads at shutdown. Two changes can arrive in
+    /// the opposite order to the one they were made in, so a handler that shows them keeps only the one with the highest
+    /// <see cref="DictationStateChange.Revision"/> (see <see cref="PresentationRelay{T}"/>).
+    /// </summary>
+    public event Action<DictationStateChange>? StateChanged;
 
     /// <summary>
-    /// Raised (on a background thread) after the idle timeout unloaded the speech models, so the
-    /// shell can also drop other idle-only residents (the out-of-process overlay). Purely
-    /// informational; the models reload on demand at the next dictation.
+    /// Raised (on a background thread) after the idle timeout unloaded the speech models and compacted the heap.
+    /// Purely informational; the overlay helper owns its own idle lifetime and must not be suspended from here.
+    /// The models reload on demand at the next dictation. The event is skipped when a dictation began while the
+    /// release was running, but it can still race the very start of one, so no consumer may treat it as proof that
+    /// the controller is idle.
     /// </summary>
     public event Action? ModelsReleased;
 
     /// <summary>Raised when a capture or transcription step fails.</summary>
     public event Action<string>? Error;
 
-    /// <summary>Raised for a recoverable capture warning while recording continues.</summary>
-    public event Action<string>? Warning;
+    /// <summary>
+    /// Raised for a recoverable capture warning while recording continues. Carries the revision of the Recording change it
+    /// belongs to, taken under the lifecycle's gate, so the pill shows it only while that recording is still what it shows;
+    /// 0 when that recording was already over, when only the tray notice still applies.
+    /// </summary>
+    public event Action<DictationWarning>? Warning;
 
     /// <summary>Raised after a capture is dictated, with the final injected text.</summary>
     public event Action<string>? Dictated;
@@ -166,35 +165,33 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public event Action<string>? CleanupProviderChanged;
 
-    /// <summary>True while dictation is suspended (the hotkey is ignored).</summary>
-    public bool IsPaused
-    {
-        get { lock (_gate) { return _paused; } }
-    }
-
-    /// <summary>The settings currently driving the loop.</summary>
-    public AppSettings CurrentSettings
-    {
-        get { lock (_gate) { return _settings; } }
-    }
+    /// <summary>
+    /// True while dictation is suspended (the push-to-talk bindings pass through to other apps and never start a
+    /// dictation).
+    /// </summary>
+    public bool IsPaused => _lifecycle.IsPaused;
 
     /// <summary>
-    /// True when the active capture will run AI cleanup. This reflects the per-capture hotkey
-    /// override, not just the global setting, so UI state can distinguish the two processing paths.
+    /// True while a dictation is recording or processing. Read from the lifecycle itself rather than tracked from
+    /// <see cref="StateChanged"/>, whose handlers can run out of order when two threads raise it back to back.
     /// </summary>
-    public bool ActiveCaptureUsesAiCleanup
-    {
-        get { lock (_gate) { return _captureSettings?.EnableAiCleanup ?? false; } }
-    }
+    public bool IsDictationInFlight => _lifecycle.Phase != DictationPhase.Idle;
+
+    /// <summary>True once shutdown has begun (<see cref="BeginShutdown"/>); nothing new starts and no state is raised.</summary>
+    public bool IsClosing => _lifecycle.IsClosing;
+
+    /// <summary>The settings currently driving the loop.</summary>
+    public AppSettings CurrentSettings => Volatile.Read(ref _settings);
 
     /// <summary>Loads persisted settings, applies the hotkey binding and installs the hook.</summary>
     public void Start()
     {
         if (_started) return;
 
-        _settings = _settingsRepository.Load();
+        var settings = _settingsRepository.Load();
+        Volatile.Write(ref _settings, settings);
         _postProcessor.Reload();
-        var startupOptions = BuildCleanupOptions(_settings);
+        var startupOptions = BuildCleanupOptions(settings);
         lock (_announceGate)
         {
             // Seeded so the first save is measured against the startup configuration. Startup
@@ -206,79 +203,138 @@ internal sealed class DictationController : IDisposable
         _cleanup.StatusChanged += OnCleanupStatusChangedForAnnouncement;
         _cleanup.Configure(startupOptions);
 
-        _hotkeys.UpdateBindings(_settings.Hotkey, _settings.DictationOnlyHotkey);
+        // Subscribed for the controller's lifetime rather than per recording: silence auto-stop is decided per recording
+        // by the lifecycle, which feeds a tracker only while the recording it belongs to is live.
+        _audio.LevelChanged += OnLevelForSilence;
+
+        _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         _hotkeys.Activated += OnActivated;
         _hotkeys.Deactivated += OnDeactivated;
         _hotkeys.Start();
         _started = true;
-        _idleReleaseTimer = new System.Threading.Timer(
-            _ => ReleaseIdleModels(), null, Timeout.Infinite, Timeout.Infinite);
-        ScheduleIdleRelease();
-        _log.LogInformation("Dictation controller started; binding = {Binding}.", _settings.Hotkey.DisplayName);
+        _lifecycle.Start(IdleReleaseDelay(settings));
+
+        _log.LogInformation("Dictation controller started; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
 
     /// <summary>
-    /// (Re)arms the idle-release countdown from the live settings. A zero or negative setting
-    /// disarms it entirely, keeping the models resident forever.
+    /// (Re)arms the idle-release countdown from the live settings when the loop is idle. A zero or
+    /// negative setting disarms it entirely, keeping the models resident forever.
     /// </summary>
-    private void ScheduleIdleRelease()
-    {
-        var timer = _idleReleaseTimer;
-        if (timer is null) return;
+    private void RescheduleIdleRelease() => _lifecycle.RescheduleIdleRelease(IdleReleaseDelay(CurrentSettings));
 
-        var minutes = CurrentSettings.ReleaseModelsAfterIdleMinutes;
-        timer.Change(
-            minutes > 0 ? TimeSpan.FromMinutes(minutes) : Timeout.InfiniteTimeSpan,
-            Timeout.InfiniteTimeSpan);
-    }
+    private static TimeSpan IdleReleaseDelay(AppSettings settings) =>
+        settings.ReleaseModelsAfterIdleMinutes > 0
+            ? TimeSpan.FromMinutes(settings.ReleaseModelsAfterIdleMinutes)
+            : Timeout.InfiniteTimeSpan;
 
     /// <summary>
-    /// Unloads the recognizer and VAD if the controller is genuinely idle, then compacts the LOH
-    /// with the one blocking gen-2 collection that actually returns large buffers to the OS (a
-    /// background gen-2 never honors CompactOnce). Skips silently when a dictation is recording
-    /// or still processing; the timer re-arms when that work returns to idle.
+    /// Unloads the recognizer and VAD if the controller is genuinely idle, drops the capture service's
+    /// retained working buffer, then compacts the LOH with the one blocking gen-2 collection that
+    /// actually returns large buffers to the OS (a background gen-2 never honors CompactOnce). Skips
+    /// silently when a dictation is recording or still processing; the timer re-arms when that work
+    /// returns to idle.
     /// </summary>
+    /// <remarks>
+    /// The release is claimed by the lifecycle and every step runs outside its gate (see
+    /// <see cref="IdleModelRelease"/>). Unloading stays safe if a dictation starts meanwhile, because the
+    /// speech services load and use their models under their own gates, and so does dropping the capture
+    /// buffer, because the capture service never retains a buffer a capture is using. The buffer goes on
+    /// every claimed release, with or without resident models, and before the compaction so that collection
+    /// returns it too. The compaction and the announcement are skipped when a recording began after the
+    /// claim; what remains is activity that begins while the collection itself is running, which that
+    /// collection briefly pauses like every other managed thread.
+    /// </remarks>
     private void ReleaseIdleModels()
     {
         try
         {
-            lock (_gate)
-            {
-                if (_disposed || _state != DictationState.Idle || _processingTask is not null)
+            var outcome = _lifecycle.RunIdleRelease(
+                anythingResident: () => _transcription.IsReady || _vad.IsAvailable,
+                unload: () =>
                 {
-                    return;
-                }
-            }
+                    _transcription.Unload();
+                    _vad.Unload();
+                },
+                compact: () =>
+                {
+                    GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                },
+                announce: () =>
+                {
+                    try
+                    {
+                        ModelsReleased?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogWarning("A ModelsReleased handler failed: {Failure}", FailureShape.DescribeWithStack(ex));
+                    }
+                },
+                releaseRetained: () =>
+                {
+                    var bytes = _audio.ReleaseRetainedBuffers();
+                    if (bytes > 0)
+                    {
+                        TryLog(log => log.LogDebug("Released a {Bytes}-byte idle capture buffer.", bytes));
+                    }
+                });
 
-            if (!_transcription.IsReady && !_vad.IsAvailable)
+            switch (outcome)
             {
-                return; // nothing resident
-            }
+                case IdleReleaseOutcome.Released:
+                    _log.LogInformation(
+                        "Speech models released after {Minutes} idle minutes; they reload on the next dictation.",
+                        CurrentSettings.ReleaseModelsAfterIdleMinutes);
+                    break;
 
-            _transcription.Unload();
-            _vad.Unload();
+                // Closing also invalidates a claim; nothing is worth reporting or reloading then.
+                case IdleReleaseOutcome.UnloadedThenActivityResumed when !_lifecycle.IsClosing:
+                    // The dictation that interrupted the release may have found the models still resident when it
+                    // started, in which case nothing began reloading them. Reload now, overlapping its recording as
+                    // an activation would have; this is a no-op if the activation's own reload got there first.
+                    _log.LogInformation(
+                        "Speech models were unloaded as a dictation started; the heap compaction was skipped and the " +
+                        "models are reloading for it.");
+                    StartBackgroundModelReload();
+                    break;
 
-            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-
-            _log.LogInformation(
-                "Speech models released after {Minutes} idle minutes; they reload on the next dictation.",
-                CurrentSettings.ReleaseModelsAfterIdleMinutes);
-
-            try
-            {
-                ModelsReleased?.Invoke();
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "A ModelsReleased handler failed.");
+                case IdleReleaseOutcome.CompactedThenActivityResumed when !_lifecycle.IsClosing:
+                    _log.LogInformation(
+                        "Speech models released as a dictation started; the release was not announced.");
+                    break;
             }
         }
         catch (Exception ex)
         {
             // Releasing memory is an optimization; it must never destabilize dictation.
-            _log.LogWarning(ex, "Idle model release failed.");
+            TryLog(log => log.LogWarning("Idle model release failed: {Failure}", FailureShape.DescribeWithStack(ex)));
         }
+    }
+
+    // Best-effort model reload on a pool thread. Transcribe reports the real failure with full context and loads on
+    // demand anyway, so a failure here must never surface its own error path.
+    private void StartBackgroundModelReload()
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (_lifecycle.IsClosing)
+                {
+                    return;
+                }
+
+                _vad.Initialize();
+                _transcription.Initialize();
+            }
+            catch (Exception ex)
+            {
+                TryLog(log => log.LogDebug(
+                    "Background model reload failed; Transcribe will retry: {Failure}", FailureShape.DescribeWithStack(ex)));
+            }
+        });
     }
 
     /// <summary>
@@ -290,10 +346,7 @@ internal sealed class DictationController : IDisposable
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        lock (_gate)
-        {
-            _settings = settings.Clone();
-        }
+        Volatile.Write(ref _settings, settings.Clone());
 
         if (_hotkeys.Binding != settings.Hotkey ||
             _hotkeys.DictationOnlyBinding != settings.DictationOnlyHotkey)
@@ -306,7 +359,7 @@ internal sealed class DictationController : IDisposable
         var next = BuildCleanupOptions(settings);
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
-        ScheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
+        RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
         _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
     }
 
@@ -323,20 +376,18 @@ internal sealed class DictationController : IDisposable
     {
         // Value equality, not reference: every save builds a fresh record, so an unrelated save
         // (a hotkey change) while a swap is still initializing must not be read as a new
-        // configuration and cancel the announcement that is still pending.
-        var changed = previous is not null && previous != next;
+        // configuration and cancel the announcement that is still pending. A change confined to
+        // the prompt (a dictionary term, a library, the writing style) is not a new configuration
+        // either: the service rebuilds the agent in place, so there is no swap to announce.
+        var changed = previous is not null && !previous.MatchesIgnoringPrompt(next);
 
         lock (_announceGate)
         {
             _announcedCleanupOptions = next;
-            if (!changed || !next.Enabled || CleanupActivationMessage.ForReady(next) is null)
+            if (changed)
             {
-                // Nothing to announce on Ready. Drop any pending announcement so a superseded
-                // configuration cannot fire later.
-                _pendingAnnouncement = null;
-            }
-            else
-            {
+                // A new configuration replaces whatever was pending, with nothing when it has
+                // nothing to announce on Ready, so a superseded configuration cannot fire later.
                 _pendingAnnouncement = CleanupActivationMessage.ForReady(next);
             }
         }
@@ -479,7 +530,9 @@ internal sealed class DictationController : IDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Failed to build the AI glossary from the dictionary; continuing without it.");
+            _log.LogWarning(
+                "Failed to build the AI glossary from the dictionary; continuing without it: {Failure}",
+                FailureShape.DescribeWithStack(ex));
             return null;
         }
     }
@@ -487,15 +540,13 @@ internal sealed class DictationController : IDisposable
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
     {
-        bool stopRecording;
-        bool raiseState;
-        lock (_gate)
-        {
-            if (_paused == paused) return;
-            _paused = paused;
-            stopRecording = paused && _state == DictationState.Recording;
-            raiseState = _state == DictationState.Idle;
-        }
+        var change = _lifecycle.SetPaused(paused);
+        if (!change.Changed) return;
+
+        // Outside the lifecycle's gate, so two pause changes can reach the hook in the opposite order; the number the
+        // gate gave this change lets the hook keep whichever was made last.
+        _hotkeys.SetPaused(paused, change.Sequence);
+        var stopRecording = paused && change.WasRecording;
 
         _log.LogInformation("Dictation {State}.", paused ? "paused" : "resumed");
 
@@ -508,7 +559,7 @@ internal sealed class DictationController : IDisposable
         }
         else if (!paused)
         {
-            ScheduleIdleRelease();
+            RescheduleIdleRelease();
         }
 
         if (stopRecording)
@@ -516,96 +567,111 @@ internal sealed class DictationController : IDisposable
             _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.Paused);
         }
-        else if (raiseState)
+        else if (change.Presentation is { } shown)
         {
-            Raise(paused ? DictationState.Paused : DictationState.Idle);
+            // Only an idle loop shows the change now; one landing mid-dictation shows when that dictation returns to idle.
+            Raise(shown);
         }
     }
 
     private void OnActivated(object? sender, HotkeyTriggerEventArgs e)
     {
-        AppSettings settings;
-        lock (_gate)
+        // Resolved before the lifecycle's gate is taken; the factory below only reads cheap platform state under it,
+        // so the target window it records is the one focused at the exact moment the recording began.
+        var current = CurrentSettings;
+        var activation = _lifecycle.TryBeginRecording(() =>
         {
-            if (_paused)
+            var targetWindow = GetForegroundWindow();
+            return new CaptureContext(
+                DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
+                targetWindow,
+                ProcessNameForWindow(targetWindow),
+                Stopwatch.GetTimestamp());
+        });
+
+        if (activation.Capture is not { } capture)
+        {
+            // Logged outside the gate, so a slow log write never holds up the next hook decision.
+            switch (activation.Decision)
             {
-                _log.LogDebug("Hotkey activated while paused; ignoring.");
-                return;
+                case ActivationDecision.Paused:
+                    _log.LogDebug("Hotkey activated while paused; ignoring.");
+                    break;
+
+                case ActivationDecision.StillProcessing:
+                    _log.LogDebug(
+                        "#{Id} hotkey activated while processing; ignoring ({Count} rejected so far).",
+                        activation.DictationId, activation.RejectedWhileProcessing);
+                    break;
+
+                case ActivationDecision.AlreadyRecording:
+                    _log.LogDebug("Hotkey activated while {State}; ignoring.", DictationState.Recording);
+                    break;
             }
 
-            if (_state != DictationState.Idle)
-            {
-                _log.LogDebug("Hotkey activated while {State}; ignoring.", _state);
-                return;
-            }
-
-            _state = DictationState.Recording;
-            settings = DictationCaptureSettingsResolver.Resolve(_settings, e.Trigger);
-            _captureSettings = settings;
-            _captureTargetWindow = GetForegroundWindow();
-            _captureTargetApp = ProcessNameForWindow(_captureTargetWindow);
-            _captureStartedTimestamp = Stopwatch.GetTimestamp();
-            _dictationId = Interlocked.Increment(ref _dictationSeq);
+            return; // Closing needs no line: shutting down, nothing new starts
         }
 
-        _idleReleaseTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        var id = activation.DictationId;
+        var settings = capture.Settings;
 
         // If the idle release ran, start reloading the models NOW so the warm-up overlaps with the
         // recording instead of stacking onto decode latency after the key is released. Transcribe
         // falls back to a synchronous load if the user finishes speaking first.
         if (!_transcription.IsReady)
         {
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    _vad.Initialize();
-                    _transcription.Initialize();
-                }
-                catch (Exception ex)
-                {
-                    // Transcribe reports the real failure with full context; this warm-up is
-                    // best-effort and must never surface its own error path.
-                    _log.LogDebug(ex, "Background model reload failed; Transcribe will retry.");
-                }
-            });
+            StartBackgroundModelReload();
         }
 
         try
         {
             _audio.CaptureFaulted += OnCaptureFaulted;
-            var openTimer = Stopwatch.StartNew();
-            _audio.Start(settings.InputDeviceId);
-            openTimer.Stop();
+
+            // Hands the opened capture to its one owner: this recording while it is live; its processing when a stop (a
+            // pause, a fault) admitted it meanwhile; or, when shutdown began first, nobody, and the open stops it again. An
+            // open that comes after this recording's stop reached the capture service opens nothing at all (see
+            // RecordingCapture). The capture service also guards itself against its own disposal: that waits, with a bound,
+            // for an open in progress, and refuses a Start that reaches it once disposal began (handled below).
+            var open = RecordingCapture.Open(_lifecycle, _audio, id, settings.InputDeviceId);
 
             // Opening the endpoint blocks this path, and nothing is recorded until it returns. A
             // support log caught a USB speakerphone taking 5.19 s on the first press after launch:
             // the user held the key, saw no overlay, gave up, and the dictation came back as "no
             // audio from your microphone". The cold-open cost is invisible everywhere else.
-            if (openTimer.Elapsed.TotalMilliseconds > 400)
+            if (open.OpenDuration.TotalMilliseconds > 400)
             {
                 _log.LogWarning(
                     "#{Id} the microphone '{Device}' took {Ms} ms to start. Nothing spoken before it " +
                     "opened was recorded.",
-                    _dictationId, _audio.LastDeviceName ?? "unknown", (long)openTimer.Elapsed.TotalMilliseconds);
+                    id, _audio.LastDeviceName ?? "unknown", (long)open.OpenDuration.TotalMilliseconds);
+            }
+
+            if (open.Presentation is not { } shown)
+            {
+                _audio.CaptureFaulted -= OnCaptureFaulted;
+                LogOpenWithoutRecording(id, open);
+                return;
             }
 
             // Everything a "my dictation cut out" report needs to be answerable: which press, which
             // mode (a hold that ends early and a toggle that auto-stops look identical to the user
-            // but have completely different causes), and which app was focused.
+            // but have completely different causes), and which app was focused. The mode and key are
+            // the binding that fired: the dictation-only binding has a mode of its own.
+            var binding = CaptureTriggerBinding.For(settings, e.Trigger);
             _log.LogInformation(
                 "#{Id} recording started: trigger={Trigger} mode={Mode} key='{Key}' device='{Device}' " +
                 "target={App} autoStopOnSilence={AutoStop} vad={Vad} cleanup={Cleanup}",
-                _dictationId,
+                id,
                 e.Trigger,
-                settings.Hotkey.Mode,
-                settings.Hotkey.DisplayName ?? "custom",
+                (object?)binding?.Mode ?? "unknown",
+                binding?.DisplayName ?? "custom",
                 _audio.LastDeviceName ?? "unknown",
-                _captureTargetApp ?? "unknown",
+                capture.TargetApp ?? "unknown",
                 settings.AutoStopOnSilence,
                 settings.UseVoiceActivityDetection,
                 settings.EnableAiCleanup);
-            Raise(DictationState.Recording);
+
+            Raise(shown);
 
             // Muted endpoints (headset mute, Win11 taskbar mic mute during a meeting) still record,
             // they just record silence. Warn immediately so the user can unmute mid-dictation
@@ -613,33 +679,80 @@ internal sealed class DictationController : IDisposable
             if (_audio.LastDeviceMuted)
             {
                 _log.LogWarning("Recording started on a muted microphone.");
-                Warning?.Invoke("microphone is muted, unmute it to dictate");
+                RaiseWarning("microphone is muted, unmute it to dictate", id);
             }
 
-            if (settings.AutoStopOnSilence && settings.Hotkey.Mode == HotkeyMode.Toggle)
+            // Only for a toggle, judged by the binding that fired, and attached only while this recording is still the
+            // live one: a fault or a pause can end it between its microphone opening and here, and a tracker attached
+            // after that would be fed the next recording's levels. Whatever ends this recording drops its tracker.
+            if (CaptureTriggerBinding.StopsOnSilence(settings, e.Trigger))
             {
-                _silenceTracker = new SilenceAutoStopTracker(Environment.TickCount64);
-                if (!_silenceSubscribed)
-                {
-                    _audio.LevelChanged += OnLevelForSilence;
-                    _silenceSubscribed = true;
-                }
+                _lifecycle.TryAttachSilenceTracker(id, new SilenceAutoStopTracker(Environment.TickCount64));
             }
 
+            // Armed only if this recording is still the live one: a fault or an auto-stop can end it while
+            // this path is still opening the device.
             if (settings.MaxDictationMinutes > 0)
             {
-                _durationLimitTimer ??= new System.Threading.Timer(
-                    _ => OnDurationLimitReached(), null, Timeout.Infinite, Timeout.Infinite);
-                _durationLimitTimer.Change(
-                    TimeSpan.FromMinutes(settings.MaxDictationMinutes), Timeout.InfiniteTimeSpan);
+                _lifecycle.ArmDurationLimit(id, TimeSpan.FromMinutes(settings.MaxDictationMinutes));
             }
+        }
+        catch (ObjectDisposedException) when (_lifecycle.IsClosing)
+        {
+            // Shutdown had already disposed the capture service when this activation reached it, so nothing was opened.
+            // Nothing is left to report to anybody.
+            _audio.CaptureFaulted -= OnCaptureFaulted;
+            TryLog(log => log.LogInformation("#{Id} the microphone was not started: shutdown had already begun.", id));
+            AbandonRecording(id);
         }
         catch (Exception ex)
         {
             _audio.CaptureFaulted -= OnCaptureFaulted;
-            _log.LogError(ex, "Failed to start audio capture.");
-            ResetToIdle();
-            Error?.Invoke("microphone unavailable");
+
+            // Guarded: a log failure here would skip the reset and leave the controller Recording for good.
+            TryLog(log => log.LogError("Failed to start audio capture: {Failure}", FailureShape.DescribeWithStack(ex)));
+            AbandonRecording(id);
+            RaiseError("microphone unavailable");
+        }
+    }
+
+    // A recording that never got going goes back to idle, unless a pause already admitted it to processing while its
+    // device was opening: that processing owns the way back to idle, and returning here as well could end the next one.
+    private void AbandonRecording(long id)
+    {
+        if (_lifecycle.TryAbandonRecording(id, IdleReleaseDelay(CurrentSettings)) is { } idle)
+        {
+            Raise(idle.Presentation);
+        }
+    }
+
+    // Shape only: which of the owners took the capture, and how much audio a reclaim threw away.
+    private void LogOpenWithoutRecording(long id, RecordingOpen open)
+    {
+        switch (open.Outcome)
+        {
+            case RecordingOpenOutcome.LeftToProcessing:
+                TryLog(log => log.LogInformation(
+                    "#{Id} the recording was stopped as its microphone opened; its processing takes the capture.", id));
+                break;
+
+            case RecordingOpenOutcome.NotOpened:
+                TryLog(log => log.LogInformation(
+                    "#{Id} the recording was stopped before its microphone opened, so none was opened.", id));
+                break;
+
+            case RecordingOpenOutcome.Reclaimed when open.ReclaimFailure is { } failure:
+                TryLog(log => log.LogWarning(
+                    "#{Id} shutdown began as the microphone opened, and stopping it again failed ({Failure}).",
+                    id,
+                    FailureShape.Describe(failure)));
+                break;
+
+            case RecordingOpenOutcome.Reclaimed:
+                TryLog(log => log.LogInformation(
+                    "#{Id} shutdown began as the microphone opened; it was stopped again and {Ms} ms of audio discarded.",
+                    id, (long)open.Discarded.TotalMilliseconds));
+                break;
         }
     }
 
@@ -648,42 +761,52 @@ internal sealed class DictationController : IDisposable
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {
-        _log.LogError(error, "#{Id} the active microphone stopped unexpectedly.", _dictationId);
-        Error?.Invoke("microphone disconnected");
+        _log.LogError(
+            "#{Id} the active microphone stopped unexpectedly: {Failure}",
+            _lifecycle.CurrentDictationId,
+            FailureShape.DescribeWithStack(error));
+        RaiseError("microphone disconnected");
         StopAndProcess(DictationStopReason.MicrophoneFault);
     }
 
-    // Fired on the audio capture thread for every level sample while subscribed.
+    // Fired on the audio capture thread for every level sample of every capture. Only the live recording's own tracker is
+    // ever fed (see DictationLifecycle.UpdateSilence), and the stop it asks for names that recording, so it can never end
+    // a later one.
     private void OnLevelForSilence(object? sender, float level)
     {
-        var tracker = _silenceTracker;
-        if (tracker is null || !tracker.Update(level, Environment.TickCount64))
+        if (_lifecycle.UpdateSilence(level, Environment.TickCount64) is not { } stop)
         {
             return;
         }
 
+        var tracker = stop.Tracker;
+
         // Which of the tracker's two rules fired changes the advice completely: "you paused and it
         // ended" is working as designed, while "it never heard you at all" is a device or gain
-        // problem that reads to the user as an unexplained cut-off a few seconds in.
+        // problem that reads to the user as an unexplained cut-off a few seconds in. The noise floor
+        // and the voice threshold it implied say which: a floor that rose with the room, or a signal
+        // that never came near the threshold.
         if (tracker.HeardSpeech)
         {
             _log.LogInformation(
-                "#{Id} silence auto-stop: the speaker went quiet (peak level {Peak:F4}).",
-                _dictationId, tracker.PeakLevel);
+                "#{Id} silence auto-stop: the speaker went quiet (peak level {Peak:F4}; at the stop, noise floor " +
+                "{NoiseFloor:F4}, voice threshold {VoiceThreshold:F4}).",
+                stop.DictationId, tracker.PeakLevel, tracker.NoiseFloor, tracker.VoiceThreshold);
         }
         else
         {
             _log.LogWarning(
-                "#{Id} silence auto-stop: no speech was ever detected on '{Device}' (peak level " +
-                "{Peak:F4} never reached the threshold). Recording ended on the lead-in limit, not " +
-                "on anything the user did.",
-                _dictationId, _audio.LastDeviceName ?? "unknown", tracker.PeakLevel);
+                "#{Id} silence auto-stop: no speech was ever detected on '{Device}' (peak level {Peak:F4}; at the " +
+                "stop, noise floor {NoiseFloor:F4}, voice threshold {VoiceThreshold:F4}). Recording ended on the " +
+                "lead-in limit, not on anything the user did.",
+                stop.DictationId, _audio.LastDeviceName ?? "unknown", tracker.PeakLevel,
+                tracker.NoiseFloor, tracker.VoiceThreshold);
         }
 
         // Reset the hook's toggle flag so the next press starts a new dictation rather than being
         // swallowed as the "toggle off" for the dictation we just ended ourselves.
         _hotkeys.CancelToggle();
-        StopAndProcess(DictationStopReason.SilenceAutoStop);
+        StopAndProcess(DictationStopReason.SilenceAutoStop, stop.DictationId);
     }
 
     /// <summary>Why a recording ended. Written to the log on every stop, without exception.</summary>
@@ -710,23 +833,34 @@ internal sealed class DictationController : IDisposable
     // injected normally; only the trigger differs.
     private void OnDurationLimitReached()
     {
-        var minutes = CurrentSettings.MaxDictationMinutes;
-        _log.LogWarning(
-            "#{Id} recording reached the {Minutes}-minute ceiling; stopping and transcribing. " +
-            "A forgotten toggle looks exactly like this.",
-            _dictationId, minutes);
-
         try
         {
-            Warning?.Invoke($"dictation hit the {minutes} minute limit and was transcribed");
+            // A tick can arrive after shutdown began (a timer queues callbacks to the pool and disposal does not wait for
+            // them), after the recording it was armed for has ended, or queued for an earlier recording just as the next
+            // one armed the same ceiling. The lifecycle refuses all three, the last because the live recording has not
+            // run for its ceiling yet.
+            if (_lifecycle.TryAcceptDurationLimit() is not { } id)
+            {
+                return;
+            }
+
+            var minutes = _lifecycle.CurrentCapture?.Settings.MaxDictationMinutes ?? CurrentSettings.MaxDictationMinutes;
+            _log.LogWarning(
+                "#{Id} recording reached the {Minutes}-minute ceiling; stopping and transcribing. " +
+                "A forgotten toggle looks exactly like this.",
+                id, minutes);
+
+            RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id);
+
+            _hotkeys.CancelToggle();
+            StopAndProcess(DictationStopReason.DurationLimit, id);
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "A duration-limit warning handler failed.");
+            // An exception on a timer thread terminates the process.
+            TryLog(log => log.LogWarning(
+                "The dictation duration limit could not stop the recording ({Failure}).", FailureShape.Describe(ex)));
         }
-
-        _hotkeys.CancelToggle();
-        StopAndProcess(DictationStopReason.DurationLimit);
     }
 
     /// <summary>
@@ -735,65 +869,85 @@ internal sealed class DictationController : IDisposable
     /// seconds" is the single most common way a dictation problem gets reported and the four causes
     /// are indistinguishable from the outside.
     /// </summary>
-    private void StopAndProcess(DictationStopReason reason)
+    /// <param name="expectedId">When set, only this dictation may be stopped; a stop meant for an earlier one is ignored.</param>
+    private void StopAndProcess(DictationStopReason reason, long expectedId = 0)
     {
-        UnsubscribeSilence();
-        _durationLimitTimer?.Change(Timeout.Infinite, Timeout.Infinite);
-
-        DictationSession session;
-        TaskCompletionSource completion;
-        lock (_gate)
+        // Only the stop that actually ends the live recording is admitted, and only that one disarms its duration
+        // ceiling, so a late or redundant stop can never cancel the ceiling of a recording that started after it.
+        var stop = _lifecycle.TryBeginProcessing(expectedId);
+        if (stop.Admission is not { } admission)
         {
-            if (_state != DictationState.Recording)
-            {
-                // A redundant stop (both the hook release and a fault racing to end the same
-                // capture) is normal and harmless. Logged at Debug so the reason is still visible
-                // when chasing a double-stop, without a Recording line every user sees.
-                _log.LogDebug("#{Id} stop ignored while {State}: reason={Reason}", _dictationId, _state, reason);
-                return;
-            }
-
-            _state = DictationState.Processing;
-            session = new DictationSession(
-                _captureSettings ?? _settings.Clone(),
-                _captureTargetWindow,
-                _captureTargetApp,
-                _captureStartedTimestamp,
-                reason);
-            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            _processingTask = completion.Task;
+            // A redundant stop (both the hook release and a fault racing to end the same
+            // capture) is normal and harmless. Logged at Debug so the reason is still visible
+            // when chasing a double-stop, without a Recording line every user sees.
+            _log.LogDebug(
+                "#{Id} stop ignored while {State}: reason={Reason}", stop.CurrentDictationId, stop.ObservedPhase, reason);
+            return;
         }
 
-        _log.LogInformation(
-            "#{Id} recording stopped after {Held:F2}s of hold: reason={Reason}",
-            _dictationId,
-            Stopwatch.GetElapsedTime(session.StartedTimestamp).TotalSeconds,
+        var capture = admission.Capture;
+        var session = new DictationSession(
+            admission.DictationId,
+            capture.Settings,
+            capture.TargetWindow,
+            capture.TargetApp,
+            capture.StartedTimestamp,
             reason);
 
-        _audio.CaptureFaulted -= OnCaptureFaulted;
-        _audio.RequestStop();
-        Raise(DictationState.Processing);
-        _ = Task.Run(async () =>
+        // Everything from here to the hand-off is guarded: the admission is ended only by the processing task, so a
+        // throw before that task starts would leave the controller Processing for good.
+        TryLog(log => log.LogInformation(
+            "#{Id} recording stopped after {Held:F2}s of hold: reason={Reason}",
+            session.Id,
+            Stopwatch.GetElapsedTime(session.StartedTimestamp).TotalSeconds,
+            reason));
+
+        try
         {
-            try
-            {
-                await ProcessAsync(session, _lifetimeCts.Token).ConfigureAwait(false);
-                completion.TrySetResult();
-            }
-            catch (Exception ex)
-            {
-                completion.TrySetException(ex);
-            }
-        });
+            // The lifecycle dropped this recording's silence tracking with the admission, as it disarmed the ceiling:
+            // only the stop that ends a recording does either. Tagged with the recording, so it only ever stops that
+            // recording's capture, and an open for it that has not reached the capture service yet opens nothing.
+            _audio.CaptureFaulted -= OnCaptureFaulted;
+            _audio.RequestStop(session.Id);
+        }
+        catch (Exception ex)
+        {
+            // Processing still runs (its Stop call finishes the capture), so the admission is always ended.
+            TryLog(log => log.LogWarning(
+                "#{Id} the microphone did not accept the stop request ({Failure}).", session.Id, FailureShape.Describe(ex)));
+        }
+
+        // Announced before the processing starts, which can queue its failure flash at once: the shell's one queue then
+        // keeps Processing ahead of that flash, and showing Processing after it would clear the flash's hold (see
+        // ProcessingHandOff). Raising never waits for the UI thread, so the processing is never held up by it.
+        ProcessingHandOff.Run(
+            announce: () => Raise(stop.Presentation, capture.Settings.EnableAiCleanup),
+            start: () => _ = Task.Run(() => RunProcessingAsync(session, admission)));
     }
 
-    private void UnsubscribeSilence()
+    private async Task RunProcessingAsync(DictationSession session, ProcessingAdmission<CaptureContext> admission)
     {
-        _silenceTracker = null;
-        if (_silenceSubscribed)
+        var faulted = false;
+        try
         {
-            _audio.LevelChanged -= OnLevelForSilence;
-            _silenceSubscribed = false;
+            await ProcessAsync(session, admission.Lifetime).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // ProcessAsync handles every failure it expects, so anything arriving here is a defect. It is logged and
+            // counted, never rethrown: a faulted processing task once turned an ordinary quit into an exception inside
+            // the host's teardown.
+            faulted = true;
+            TryLog(log => log.LogError(
+                "#{Id} dictation processing ended with an unexpected fault: {Failure}",
+                session.Id,
+                FailureShape.DescribeWithStack(ex)));
+        }
+        finally
+        {
+            // The very last step, after ResetToIdle has published Idle and re-armed the idle timer, so shutdown keeps
+            // observing this dictation until its cleanup has genuinely finished.
+            _lifecycle.EndProcessing(admission, faulted);
         }
     }
 
@@ -808,10 +962,15 @@ internal sealed class DictationController : IDisposable
             settings.ApplyPostProcessing,
             session.StartedTimestamp);
         var currentStage = "Audio capture";
+        long insertedTimestamp = 0;
         try
         {
+            // This dictation owns the capture from its admission until the capture is stopped and released, so that
+            // happens first, even when shutdown has already canceled it. Left to the host's disposal instead, the stop
+            // and its unbounded join of the capture thread would run on the UI thread in the middle of the app's exit.
+            // Tagged with the dictation, so this receives its own capture, all of it, and nothing else.
+            var captured = _audio.Stop(session.Id);
             cancellationToken.ThrowIfCancellationRequested();
-            var captured = _audio.Stop();
             report.CaptureDuration = captured.Duration;
             activity?.SetTag(ScribeTelemetry.TagCaptureSeconds, Math.Round(captured.Duration.TotalSeconds, 2));
 
@@ -819,7 +978,7 @@ internal sealed class DictationController : IDisposable
             _log.LogInformation(
                 "#{Id} captured {Seconds:F2}s of audio from a {Held:F2}s hold (device='{Device}' " +
                 "silent={Silent} muted={Muted} stop={Reason}).",
-                _dictationId,
+                session.Id,
                 captured.Duration.TotalSeconds,
                 heldSeconds,
                 _audio.LastDeviceName ?? "unknown",
@@ -844,7 +1003,7 @@ internal sealed class DictationController : IDisposable
                     "#{Id} the microphone stream ended {Shortfall:F2}s before the key was released " +
                     "({Captured:F2}s captured of a {Held:F2}s hold on '{Device}'). Everything spoken " +
                     "after the stream stopped was lost.",
-                    _dictationId,
+                    session.Id,
                     shortfall,
                     captured.Duration.TotalSeconds,
                     heldSeconds,
@@ -862,7 +1021,7 @@ internal sealed class DictationController : IDisposable
                 var device = _audio.LastDeviceName;
                 _log.LogWarning(
                     "#{Id} capture from '{Device}' produced no audio after a {Held:F2}s hold.",
-                    _dictationId, device ?? "default device", heldSeconds);
+                    session.Id, device ?? "default device", heldSeconds);
                 report.Fail("Audio capture", "The microphone produced no audio.");
                 RaisePipelineReport(report);
 
@@ -870,7 +1029,7 @@ internal sealed class DictationController : IDisposable
                 // somebody to go and change devices over it sends them to fix the wrong thing. A
                 // support log showed this exact misdirection: the device took five seconds to open,
                 // the user let go, and Scribe blamed their hardware.
-                Error?.Invoke(heldSeconds < 1.0
+                RaiseError(heldSeconds < 1.0
                     ? "that was too quick, hold the key while you speak"
                     : device is null
                         ? "no audio captured. Check your microphone in Settings"
@@ -882,6 +1041,7 @@ internal sealed class DictationController : IDisposable
             activity?.SetTag(ScribeTelemetry.TagVadEnabled, settings.UseVoiceActivityDetection);
             if (settings.UseVoiceActivityDetection)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 currentStage = "Voice activity detection";
                 var vadTimer = Stopwatch.StartNew();
                 var trimmed = _vad.Trim(captured);
@@ -911,8 +1071,9 @@ internal sealed class DictationController : IDisposable
             // The recognizer warm-loads at startup, but a very fast first dictation can arrive
             // before that finishes. Rather than throwing the capture away, let Transcribe load the
             // model on demand (it is idempotent) so the user's first utterance is never lost.
-            activity?.SetTag(ScribeTelemetry.TagRecognizerReady, _transcription.IsReady);
-            if (!_transcription.IsReady)
+            var recognizerResident = _transcription.IsReady;
+            activity?.SetTag(ScribeTelemetry.TagRecognizerReady, recognizerResident);
+            if (!recognizerResident)
             {
                 _log.LogInformation("Recognizer still warming up; loading on demand for this capture.");
             }
@@ -929,7 +1090,9 @@ internal sealed class DictationController : IDisposable
             }
 
             currentStage = "Speech recognition";
-            var result = _transcription.Transcribe(audio);
+            var recognitionStarted = Stopwatch.GetTimestamp();
+            var result = _transcription.Transcribe(audio, cancellationToken);
+            LogRecognitionTiming(session.Id, recognizerResident, Stopwatch.GetElapsedTime(recognitionStarted), result);
             report.DecodeDuration = result.DecodeDuration;
             report.RealTimeFactor = result.RealTimeFactor;
             report.RawText = result.Text;
@@ -954,13 +1117,13 @@ internal sealed class DictationController : IDisposable
                 _log.LogWarning(
                     "#{Id} speech recognition returned no text for a {Seconds:F2}s capture that was " +
                     "not silent. The dictation was lost. Device='{Device}' signal: {Signal}",
-                    _dictationId,
+                    session.Id,
                     audio.Duration.TotalSeconds,
                     _audio.LastDeviceName ?? "unknown",
                     _audio.LastSignalReport?.Describe() ?? "unavailable");
                 report.Fail("Speech recognition", "No speech was recognized.");
                 RaisePipelineReport(report);
-                Error?.Invoke("nothing was recognised, try again");
+                RaiseError("nothing was recognised, try again");
                 return;
             }
 
@@ -1011,12 +1174,17 @@ internal sealed class DictationController : IDisposable
                 // Cleanup is switched on but the engine was not ready, so this dictation went out
                 // raw. Without this the only clue was a single startup warning, and every later
                 // dictation logged an unexplained "Skipped" while the user assumed cleanup ran.
+                // The log and the trace carry codes only (the provider and status names), which the
+                // live log redaction and the trace tag policy keep visible: the skip reason is a
+                // sentence, and its display detail can name the endpoint host.
                 if (cleanup.SkippedUnexpectedly)
                 {
+                    var status = _cleanup.Status;
                     _log.LogWarning(
-                        "AI cleanup was skipped for this dictation: {Reason} The raw transcription was used.",
-                        cleanup.SkipReason);
-                    activity?.SetTag(ScribeTelemetry.TagAiSkipReason, cleanup.SkipReason);
+                        "#{Id} AI cleanup was skipped for this dictation because {Provider} was {Status}. " +
+                        "The raw transcription was used.",
+                        session.Id, settings.AiCleanupProvider, status);
+                    activity?.SetTag(ScribeTelemetry.TagAiSkipReason, AiSkipReason.NotReady(status));
                 }
 
                 if (cleanup.Outcome == CleanupOutcome.Failed)
@@ -1027,10 +1195,17 @@ internal sealed class DictationController : IDisposable
                     // timeout there must never sit in front of raising the flash or injecting the raw
                     // text. Cleanup stays enabled; runtime failures can retry on the next dictation.
                     var reason = cleanup.FailureReason ?? "Intelligence failed.";
-                    _log.LogWarning("AI cleanup failed ({Reason}); using raw transcription.", reason);
+
+                    // The reason is diagnostics-safe and goes to the overlay. The display detail, which
+                    // can name the endpoint's host or quote its own error, goes only to the Settings
+                    // failure log in the local database. The log line keeps to codes, as above.
+                    var localDetail = cleanup.DisplayDetail ?? reason;
+                    _log.LogWarning(
+                        "#{Id} AI cleanup failed ({Provider}, status {Status}); using raw transcription.",
+                        session.Id, settings.AiCleanupProvider, _cleanup.Status);
                     RaiseCleanupFailed(reason);
                     var rawForLog = result.Text;
-                    _ = Task.Run(() => RecordCleanupFailure(settings, reason, rawForLog));
+                    _ = Task.Run(() => RecordCleanupFailure(settings, localDetail, rawForLog));
                 }
                 else
                 {
@@ -1047,15 +1222,9 @@ internal sealed class DictationController : IDisposable
                     // sits in front of text injection.
                     if (cleanup.FailureReason is not null)
                     {
-                        var partialReason = cleanup.FailureReason;
+                        var partialReason = cleanup.DisplayDetail ?? cleanup.FailureReason;
                         var rawForLog = result.Text;
                         _ = Task.Run(() => RecordCleanupFailure(settings, partialReason, rawForLog));
-                    }
-
-                    // A genuine cleanup run is a good moment to prune the one-week failure window.
-                    if (cleanup.Outcome is CleanupOutcome.Cleaned or CleanupOutcome.Unchanged)
-                    {
-                        _ = Task.Run(PruneOldFailures);
                     }
                 }
             }
@@ -1115,7 +1284,7 @@ internal sealed class DictationController : IDisposable
                 activity?.SetStatus(ActivityStatusCode.Error, injection.Error);
                 _log.LogWarning(
                     "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
-                Error?.Invoke(injection.Error == "The focused window changed while processing."
+                RaiseError(injection.Error == InjectionResult.FocusChangedError
                     ? "focus changed, so the dictation was not inserted"
                     : "text could not be inserted completely");
 
@@ -1127,40 +1296,76 @@ internal sealed class DictationController : IDisposable
                 return;
             }
 
+            insertedTimestamp = Stopwatch.GetTimestamp();
             _log.LogInformation("Text injected into {App} using {Method}.", targetApp ?? "the focused app", injection.Method);
 
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
-            RecordHistory(settings, audio, result, text, targetApp, cleanup, report.CleanupDuration);
+            EnqueueHistory(session.Id, settings, audio, result, text, targetApp, cleanup, report.CleanupDuration);
             RaisePipelineReport(report);
             Dictated?.Invoke(text);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
-            _log.LogInformation("Dictation processing canceled during shutdown.");
+            TryLog(log => log.LogInformation("#{Id} dictation processing canceled during shutdown.", session.Id));
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown outlived its wait for this dictation and the host disposed a service it was still using. The
+            // speech services refuse use after disposal rather than touching freed native memory, so this is the
+            // expected end of a dictation that was already canceled, not a processing failure.
+            activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
+            TryLog(log => log.LogInformation(
+                "#{Id} dictation processing stopped during shutdown: a service it used was already disposed.",
+                session.Id));
         }
         catch (FileNotFoundException ex)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            _log.LogInformation(ex, "Dictation skipped because no speech model is installed.");
+
+            // By shape here too: the trace bridge writes an error span's description into the shared log.
+            activity?.SetStatus(ActivityStatusCode.Error, FailureShape.Describe(ex));
+            _log.LogInformation("Dictation skipped because no speech model is installed ({Failure}).", FailureShape.Describe(ex));
             report.Fail(currentStage, ex.Message);
             RaisePipelineReport(report);
-            Error?.Invoke("choose a speech model in Settings");
+            RaiseError("choose a speech model in Settings");
         }
         catch (Exception ex)
         {
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
-            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            _log.LogError(ex, "Dictation processing failed.");
+            activity?.SetStatus(ActivityStatusCode.Error, FailureShape.Describe(ex));
+            _log.LogError("Dictation processing failed: {Failure}", FailureShape.DescribeWithStack(ex));
             report.Fail(currentStage, ex.Message);
             RaisePipelineReport(report);
-            Error?.Invoke("transcription failed");
+            RaiseError("transcription failed");
         }
         finally
         {
-            ResetToIdle();
+            ResetToIdle(session.Id, insertedTimestamp);
         }
+    }
+
+    // Cold load and decode are reported apart: a slow dictation after an idle release is the model
+    // loading, not the recognizer decoding slowly, and the two call for different fixes. Anything in
+    // the call that was not decoding is model load or waiting for the engine's gate. Guarded, because
+    // it runs mid-pipeline and a diagnostic must never cost the user their dictation.
+    private void LogRecognitionTiming(long id, bool recognizerResident, TimeSpan elapsed, TranscriptionResult result)
+    {
+        var loadOrWait = elapsed - result.DecodeDuration;
+        if (loadOrWait < TimeSpan.Zero)
+        {
+            loadOrWait = TimeSpan.Zero;
+        }
+
+        TryLog(log => log.Log(
+            recognizerResident ? LogLevel.Debug : LogLevel.Information,
+            "#{Id} speech recognition took {TotalMs} ms: decode {DecodeMs} ms, model load or wait {LoadMs} ms " +
+            "(recognizer resident at start: {Resident}).",
+            id,
+            (long)elapsed.TotalMilliseconds,
+            (long)result.DecodeDuration.TotalMilliseconds,
+            (long)loadOrWait.TotalMilliseconds,
+            recognizerResident));
     }
 
     // A "no speech" outcome from a capture that never rose above digital silence is not a quiet
@@ -1180,13 +1385,14 @@ internal sealed class DictationController : IDisposable
             device ?? "default device");
         report.Fail(stage, "The capture contained only silence. The microphone is likely muted.");
         RaisePipelineReport(report);
-        Error?.Invoke(device is null
+        RaiseError(device is null
             ? "no sound was captured, your microphone may be muted"
             : $"no sound from '{device}', it may be muted");
         return true;
     }
 
-    private void RecordHistory(
+    private void EnqueueHistory(
+        long id,
         AppSettings settings,
         CapturedAudio audio,
         TranscriptionResult result,
@@ -1200,7 +1406,10 @@ internal sealed class DictationController : IDisposable
             var cleanupMs = settings.EnableAiCleanup && cleanup.Outcome != CleanupOutcome.Skipped
                 ? (int?)Math.Max(0, (int)cleanupDuration.TotalMilliseconds)
                 : null;
-            _history.Add(new HistoryEntry(
+
+            // Every field is fixed here, the timestamp included, because the commit happens later on
+            // the writer. The writer owns the capture from this point: nothing below touches it again.
+            var entry = new HistoryEntry(
                 Id: 0,
                 TimestampUtc: DateTimeOffset.UtcNow,
                 Text: text,
@@ -1208,32 +1417,43 @@ internal sealed class DictationController : IDisposable
                 DecodeMilliseconds: (int)result.DecodeDuration.TotalMilliseconds,
                 CleanupMilliseconds: cleanupMs,
                 TargetApp: targetApp,
-                TranscriptionModelId: result.ModelId),
-                settings.StoreAudioHistory ? audio : null);
+                TranscriptionModelId: result.ModelId);
+            _historyWriter.Enqueue(entry, settings.StoreAudioHistory ? audio : null, id);
         }
         catch (Exception ex)
         {
             // History is best-effort; never fail a dictation because persistence hiccupped.
-            _log.LogWarning(ex, "Failed to record dictation history.");
+            _log.LogWarning("#{Id} failed to queue dictation history ({Failure}).", id, FailureShape.Describe(ex));
         }
     }
 
-    private void ResetToIdle()
+    private void ResetToIdle(long id, long insertedTimestamp)
     {
-        bool paused;
-        lock (_gate)
-        {
-            _state = DictationState.Idle;
-            _captureSettings = null;
-            _captureTargetWindow = 0;
-            _captureTargetApp = null;
-            _captureStartedTimestamp = 0;
-            _processingTask = null;
-            paused = _paused; // a pause requested mid-capture takes effect once processing finishes
-        }
+        // A pause requested mid-capture takes effect here, once processing finishes. This only publishes idle: the
+        // dictation calling it is still finishing, and only its own EndProcessing tells shutdown it is done.
+        var idle = _lifecycle.ReturnToIdle(IdleReleaseDelay(CurrentSettings));
 
-        ScheduleIdleRelease();
-        Raise(paused ? DictationState.Paused : DictationState.Idle);
+        // Stamped at the commit point itself: from here the next press is accepted, whatever the StateChanged handlers
+        // below still take to repaint the tray.
+        var idleTimestamp = Stopwatch.GetTimestamp();
+
+        Raise(idle.Presentation);
+
+        // Numbers only: how long a successful dictation kept the next one waiting after its text was
+        // in place, and how many presses were turned away while it processed.
+        var rejected = idle.RejectedWhileProcessing;
+        if (insertedTimestamp != 0)
+        {
+            TryLog(log => log.LogInformation(
+                "#{Id} accepting the next dictation {Ms} ms after insertion; {Rejected} activation(s) were " +
+                "rejected while it processed.",
+                id, (long)Stopwatch.GetElapsedTime(insertedTimestamp, idleTimestamp).TotalMilliseconds, rejected));
+        }
+        else if (rejected > 0)
+        {
+            TryLog(log => log.LogInformation(
+                "#{Id} {Rejected} activation(s) were rejected while this dictation processed.", id, rejected));
+        }
     }
 
     // Persists a cleanup failure (hard or partial) for the Settings log. Best-effort: a logging
@@ -1249,40 +1469,80 @@ internal sealed class DictationController : IDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Failed to record an AI cleanup failure.");
+            _log.LogWarning("Failed to record an AI cleanup failure ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
-    /// <summary>Prunes cleanup failures older than the rolling retention window. Safe to call anytime.</summary>
-    public void PruneFailureLog()
+    // Diagnostics near teardown and timer paths go through here: a log call that throws must never
+    // turn into the failure it was describing.
+    private void TryLog(Action<ILogger> write)
     {
         try
         {
-            var removed = _failureLog.PruneOlderThan(DateTimeOffset.UtcNow - FailureRetention);
-            if (removed > 0)
-            {
-                _log.LogDebug("Pruned {Count} AI cleanup failures older than a week.", removed);
-            }
+            write(_log);
         }
-        catch (Exception ex)
+        catch
         {
-            _log.LogWarning(ex, "Failed to prune AI cleanup failures.");
+            // Nothing useful is left to do.
         }
     }
-
-    private void PruneOldFailures() => PruneFailureLog();
 
     // Guarded raise: the recovery hint is best-effort UI sugar, so a throwing handler must never
     // propagate into the dictation processing path.
     private void RaiseInjectionFailed()
     {
+        if (_lifecycle.IsClosing)
+        {
+            return;
+        }
+
         try
         {
             InjectionFailed?.Invoke();
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "An InjectionFailed handler threw.");
+            _log.LogWarning("An InjectionFailed handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
+        }
+    }
+
+    // Once shutdown has begun nobody is left to read an error or a warning. The shell never waits for the UI thread to
+    // show one (it posts; see UiThreadDispatch), so standing down here is about not queuing notices for a closing app.
+    // Guarded as well, so a throwing handler is reported instead of re-entering the pipeline's own failure path.
+    private void RaiseError(string message)
+    {
+        if (_lifecycle.IsClosing)
+        {
+            return;
+        }
+
+        try
+        {
+            Error?.Invoke(message);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("An Error handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
+        }
+    }
+
+    // The revision is taken under the lifecycle's gate: a warning raised late for a recording that a pause or a stop has
+    // already ended carries 0, and one raised just before is dropped by the shell once a newer change has been shown.
+    private void RaiseWarning(string message, long dictationId)
+    {
+        if (_lifecycle.IsClosing)
+        {
+            return;
+        }
+
+        try
+        {
+            var revision = _lifecycle.TryGetRecordingPresentation(dictationId)?.Revision ?? 0;
+            Warning?.Invoke(new DictationWarning(message, revision));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("A Warning handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
     }
 
@@ -1295,7 +1555,7 @@ internal sealed class DictationController : IDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "A pipeline report handler threw.");
+            _log.LogWarning("A pipeline report handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
     }
 
@@ -1307,15 +1567,33 @@ internal sealed class DictationController : IDisposable
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "A CleanupFailed handler threw.");
+            _log.LogWarning("A CleanupFailed handler threw: {Failure}", FailureShape.DescribeWithStack(ex));
         }
     }
 
-    private void Raise(DictationState state) =>
+    // Raised on whichever thread made the change, after the lifecycle's gate is released, so it carries the revision the
+    // gate gave the change: the shell keeps the newest, whatever order two raises arrive in. The handlers never wait for the
+    // UI thread, which matters most on the audio capture thread: at shutdown the UI thread joins it. Once shutdown has begun
+    // nobody needs the state any more, so nothing is raised.
+    private void Raise(DictationPresentation shown, bool aiPolishing = false)
+    {
+        if (shown.Revision <= 0 || _lifecycle.IsClosing)
+        {
+            return;
+        }
+
+        var state = shown.Phase switch
+        {
+            DictationPhase.Recording => DictationState.Recording,
+            DictationPhase.Processing => DictationState.Processing,
+            _ => shown.Paused ? DictationState.Paused : DictationState.Idle,
+        };
+
         ResilientEvent.InvokeAll(
             StateChanged,
-            state,
-            ex => _log.LogWarning(ex, "A StateChanged handler threw."));
+            new DictationStateChange(state, shown.Revision, aiPolishing),
+            ex => TryLog(log => log.LogWarning("A StateChanged handler threw: {Failure}", FailureShape.DescribeWithStack(ex))));
+    }
 
     private static string? ProcessNameForWindow(nint handle)
     {
@@ -1335,52 +1613,117 @@ internal sealed class DictationController : IDisposable
         }
     }
 
+    /// <summary>
+    /// Begins shutdown without waiting for anything: from here no recording, processing, timer schedule or idle release
+    /// starts, and the controller stops raising state, error and warning events. The app calls this as the very first
+    /// step of its exit, so nothing raised while the UI thread works through the later teardown steps is queued for an
+    /// app that is closing. Idempotent; <see cref="Dispose"/> calls it too.
+    /// </summary>
+    public void BeginShutdown() => _lifecycle.BeginShutdown();
+
+    /// <summary>
+    /// Stops the dictation loop for good. Nothing new starts once this begins; a dictation still
+    /// processing is canceled and waited for with a bound, and its queued history is drained, so
+    /// the host can then dispose the core services. Never throws: every step is guarded and a
+    /// failure is logged, because this runs inside the app's own teardown.
+    /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
-
-        _disposed = true;
-        _lifetimeCts.Cancel();
-        _idleReleaseTimer?.Dispose();
-        _durationLimitTimer?.Dispose();
-        UnsubscribeSilence();
-        _audio.CaptureFaulted -= OnCaptureFaulted;
-        if (_audio.IsCapturing)
+        // The order (close admission, close the timers, cancel, stop the inputs below, wait for processing, then complete
+        // history, then release the token source) is the lifecycle's, where it is tested.
+        var stopInputs = new List<TeardownStep>
         {
-            _audio.RequestStop();
-        }
+            new("stop capture", () =>
+            {
+                _audio.LevelChanged -= OnLevelForSilence;
+                _audio.CaptureFaulted -= OnCaptureFaulted;
+
+                // Read without the capture service's lock on purpose: a device open in progress holds it for seconds, and
+                // this runs on the UI thread. That open is covered twice over: RecordingCapture.Open stops the microphone
+                // it opened when shutdown began before any stop admitted the recording (an admitted one is its processing's
+                // to stop), and the service's disposal waits, with a bound, for the open.
+                if (_audio.IsCapturing)
+                {
+                    _audio.RequestStop();
+                }
+            }),
+        };
+
         if (_started)
         {
-            _hotkeys.Activated -= OnActivated;
-            _hotkeys.Deactivated -= OnDeactivated;
-            _hotkeys.Stop();
-            _cleanup.StatusChanged -= OnCleanupStatusChangedForAnnouncement;
+            stopInputs.Add(new("stop the hotkey hook", () =>
+            {
+                _hotkeys.Activated -= OnActivated;
+                _hotkeys.Deactivated -= OnDeactivated;
+                _hotkeys.Stop();
+            }));
+            stopInputs.Add(new(
+                "cleanup status subscription",
+                () => _cleanup.StatusChanged -= OnCleanupStatusChangedForAnnouncement));
         }
 
-        Task? processing;
-        lock (_gate)
+        var shutdown = _lifecycle.Shutdown(
+            stopInputs,
+            _historyWriter,
+            ProcessingDrainTimeout,
+            HistoryDrainTimeout,
+            (step, ex) => TryLog(log => log.LogWarning(
+                "Dictation controller shutdown step '{Step}' failed; continuing: {Failure}",
+                step,
+                FailureShape.DescribeWithStack(ex))));
+        if (shutdown.AlreadyShutDown)
         {
-            processing = _processingTask;
+            return;
         }
 
-        try
+        if (!shutdown.Processing.Drained)
         {
-            processing?.Wait(TimeSpan.FromSeconds(5));
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException))
-        {
-            // Normal shutdown cancellation.
+            // The host disposes the core services next, and that stays safe for this dictation. The
+            // speech services take the same gate as a decode or a trim, so disposal waits out the
+            // native call in progress instead of freeing memory under it, and any later use is
+            // refused with ObjectDisposedException, which processing treats as the end of a canceled
+            // dictation. The canceled token stops the pipeline at its next checkpoint; the last one
+            // sits just before insertion, so nothing is typed after shutdown began unless insertion
+            // was already under way. History it queues after the writer completed is refused and
+            // logged, never written to a disposed database.
+            TryLog(log => log.LogWarning(
+                "#{Id} dictation processing was still running {Seconds:F0} s into shutdown; it was canceled " +
+                "and stops at its next cancellation point.",
+                shutdown.StillRunningDictationId ?? 0,
+                ProcessingDrainTimeout.TotalSeconds));
         }
 
-        _lifetimeCts.Dispose();
+        if (shutdown.Processing.Faulted > 0)
+        {
+            TryLog(log => log.LogWarning(
+                "{Count} dictation(s) ended with an unexpected fault this session; each was logged when it happened.",
+                shutdown.Processing.Faulted));
+        }
+
+        if (shutdown.History is { } history && (!history.Drained || history.Abandoned > 0))
+        {
+            TryLog(log => log.LogWarning(
+                "History writer stopped with {StillWriting} write still committing and {Abandoned} " +
+                "dictation(s) not recorded.",
+                history.StillWriting, history.Abandoned));
+        }
     }
 
     private sealed record DictationSession(
+        long Id,
         AppSettings Settings,
         nint TargetWindow,
         string? TargetApp,
         long StartedTimestamp,
         DictationStopReason StopReason);
+
+    // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
+    // atomically with the phase change. Settings already carry the per-trigger overrides.
+    private sealed record CaptureContext(
+        AppSettings Settings,
+        nint TargetWindow,
+        string? TargetApp,
+        long StartedTimestamp);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
@@ -1388,6 +1731,26 @@ internal sealed class DictationController : IDisposable
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
 }
+
+/// <summary>One change to what the shell shows for the dictation loop.</summary>
+/// <param name="State">What to show.</param>
+/// <param name="Revision">
+/// The number the lifecycle gave the change (see <see cref="DictationPresentation.Revision"/>). Show a change only when this
+/// is higher than the last one shown.
+/// </param>
+/// <param name="AiPolishing">
+/// For Processing: the capture runs AI cleanup, from that capture's own settings (the dictation-only hotkey overrides the
+/// global setting), taken when it was admitted rather than read later, when a newer capture may already be live.
+/// </param>
+internal readonly record struct DictationStateChange(DictationState State, long Revision, bool AiPolishing);
+
+/// <summary>A recoverable capture warning.</summary>
+/// <param name="Message">The notice for the tray.</param>
+/// <param name="RecordingRevision">
+/// The revision of the Recording change the warning belongs to (see <see cref="PresentationRelay{T}.PublishIfCurrent"/>),
+/// or 0 when that recording was already over when the warning was raised.
+/// </param>
+internal readonly record struct DictationWarning(string Message, long RecordingRevision);
 
 internal sealed class DictationPipelineReport(
     nint targetWindow,

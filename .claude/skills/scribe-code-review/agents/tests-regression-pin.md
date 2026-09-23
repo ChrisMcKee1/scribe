@@ -189,8 +189,9 @@ from `new AppSettings()`; the reasoning is recorded at lines 92-99.
   key, which is the only case the bug had.
 
 **A SQLite migration bug.** `ScribeDatabase.Migrate`
-(`src/Scribe.Core/Persistence/ScribeDatabase.cs:383`) is forward-only and additive, gated on
-`PRAGMA user_version`, with every step inside one transaction.
+(`src/Scribe.Core/Persistence/ScribeDatabase.cs:872`) is forward-only and additive up to v7, gated on
+`PRAGMA user_version`, with every step inside one transaction; newer columns come from
+`EnsureAdditiveSchema` on every open, with `user_version` held at 7 (pattern P-11).
 
 - **A pin must start from each prior `user_version` the fix claims to repair**, by creating a
   database at that schema and opening it through `ScribeDatabase`. Models:
@@ -387,8 +388,9 @@ Pin is solid:
 Do not flag any of these.
 
 - **A bug that is infeasible to pin in a unit test.** A genuine OS race, hardware-specific behavior,
-  or anything requiring the native speech engine, which the unit suite deliberately never loads
-  (`AGENTS.md`, "Architecture support", and the comment at `.github/workflows/ci.yml:78-81`). Raise a
+  or anything requiring the native speech engine, which the unit suite loads only when models are found
+  and otherwise skips silently (`AGENTS.md`, "Architecture support", and the comments at
+  `.github/workflows/ci.yml:76-78` and `:83-87`). Raise a
   **Question** plus a documented gap. Where the native engine is involved, the ask is to run
   `dotnet run --project tools/Scribe.AsrCheck` (after `pwsh ./scripts/New-SpeechFixtures.ps1`), which
   is the only thing that proves sherpa-onnx actually decodes; where the overlay is involved, the ask

@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Velopack;
 using Velopack.Sources;
@@ -63,7 +64,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not inspect local staged-update state.");
+            _log.LogDebug("Could not inspect local staged-update state ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -100,7 +101,8 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Update check failed; continuing on the current version.");
+            // By shape: a network failure's message names the host it tried, and behind a proxy, the proxy.
+            _log.LogDebug("Update check failed; continuing on the current version ({Failure}).", FailureShape.Describe(ex));
         }
     }
 
@@ -174,7 +176,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Update check failed.");
+            _log.LogWarning("Update check failed ({Failure}).", FailureShape.Describe(ex));
             return "Couldn't check for updates. Check your connection and try again.";
         }
         finally
@@ -209,7 +211,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "Could not apply the update immediately.");
+            _log.LogWarning("Could not apply the update immediately ({Failure}).", FailureShape.Describe(ex));
             return false;
         }
     }
@@ -239,7 +241,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Could not stage the update for apply-on-exit.");
+            _log.LogDebug("Could not stage the update for apply-on-exit ({Failure}).", FailureShape.Describe(ex));
         }
     }
 }

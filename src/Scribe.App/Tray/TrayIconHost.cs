@@ -4,6 +4,7 @@ using System.Windows.Media;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Scribe.App.Dictation;
+using Scribe.Core.Lifecycle;
 using Scribe.Core.PostProcessing;
 using Wpf.Ui.Appearance;
 
@@ -11,8 +12,10 @@ namespace Scribe.App.Tray;
 
 /// <summary>
 /// Owns the system-tray icon and its context menu, and reflects the current
-/// <see cref="DictationState"/> through the icon and tooltip. All UI mutations are marshalled
-/// to the WPF dispatcher because dictation state changes arrive on background threads.
+/// <see cref="DictationState"/> through the icon and tooltip. UI mutations requested from a background
+/// thread are posted to the WPF dispatcher, never invoked synchronously: dictation state, errors and
+/// warnings arrive on the audio capture thread and dictation processing, and the UI thread waits for
+/// both at shutdown, so a caller parked on the UI thread there would never be released.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
@@ -20,6 +23,10 @@ internal sealed class TrayIconHost : IDisposable
     private readonly TaskbarIcon _icon;
     private readonly MenuItem _pauseItem;
     private readonly MenuItem _aiItem;
+    private readonly UiThreadDispatch _ui;
+
+    // Set on the UI thread by Dispose; posted work runs there too and drops itself once this is set.
+    private bool _disposed;
 
     // The icon currently assigned to the tray. Held so its handle can be released once it has been
     // replaced; H.NotifyIcon owns nothing beyond the instance it is showing.
@@ -68,8 +75,18 @@ internal sealed class TrayIconHost : IDisposable
     /// <summary>Raised when the user toggles AI cleanup; the argument is the requested enabled state.</summary>
     public event Action<bool>? AiCleanupToggled;
 
-    public TrayIconHost()
+    /// <param name="onUpdateFailure">
+    /// Told about a tray update that threw. Updates are best effort and many run posted, where nobody else could see the
+    /// failure.
+    /// </param>
+    public TrayIconHost(Action<Exception>? onUpdateFailure = null)
     {
+        _ui = new UiThreadDispatch(
+            isOnUiThread: () => Application.Current?.Dispatcher.CheckAccess() ?? true,
+            post: work => Application.Current?.Dispatcher.BeginInvoke(work),
+            isClosed: () => _disposed,
+            onFailure: onUpdateFailure);
+
         _menu = new ContextMenu();
         var menu = _menu;
         ApplyMenuTheme();
@@ -273,21 +290,12 @@ internal sealed class TrayIconHost : IDisposable
         }
     }
 
-    private static void Dispatch(Action action)
-    {
-        var app = Application.Current;
-        if (app is null || app.Dispatcher.CheckAccess())
-        {
-            action();
-        }
-        else
-        {
-            app.Dispatcher.Invoke(action);
-        }
-    }
+    // Inline on the UI thread, posted from anywhere else (see UiThreadDispatch). Never Dispatcher.Invoke.
+    private void Dispatch(Action action) => _ui.Run(action);
 
     public void Dispose()
     {
+        _disposed = true;
         ApplicationThemeManager.Changed -= OnApplicationThemeChanged;
         _icon.Dispose();
         _retiredIcon?.Dispose();

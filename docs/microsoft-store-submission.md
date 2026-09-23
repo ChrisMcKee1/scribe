@@ -14,7 +14,7 @@ Last reviewed: July 27, 2026.
 | Privacy policy | Ready | Use the public `PRIVACY.md` URL listed below and answer **Yes** for personal information. |
 | Store-managed updates | Ready | Packaged Store installs now bypass the Velopack/GitHub updater. |
 | Package build | Ready | Store identity, reserved display name, and public publisher are recorded in `Directory.Build.props`. |
-| Restricted capability | Conditional | Explain `runFullTrust` and `unvirtualizedResources` in certification notes. Suggested copy is below. |
+| Restricted capability | Conditional | Explain `runFullTrust` in certification notes. Suggested copy is below. |
 | Generative AI declaration | Required | Select **This product incorporates generative AI features**. |
 | Automatic cloud backup | Required choice | Turn off automatic OneDrive backup because local history may contain sensitive dictated text. |
 | Screenshots | Refresh needed | Nine existing screenshots meet the Desktop size requirement, but they show an older build and navigation. Capture the final UI before upload. |
@@ -54,16 +54,24 @@ The MSIX manifest declares `windows.startupTask`, with task ID `ScribeStartup` a
 registry writes from a packaged app can be virtualized and are not a startup registration.
 The direct-download build retains the per-user Run entry.
 
+The General settings switch applies the moment it is flipped: there is nothing to save, and Save
+never changes it. Scribe records the preference first, then asks Windows, and the switch then shows
+what Windows reports. If Windows refuses, the switch goes back and says why. For a packaged desktop
+app, `RequestEnableAsync` shows no consent dialog.
+
 On the first launch after upgrading, an existing enabled Scribe preference enables the newly
-declared task. The General settings toggle then reads Windows' actual state. A task disabled in
-Windows Settings or Task Manager can only be re-enabled there; organization policy overrides are
-also respected. The in-app button opens **Windows Settings > Apps > Startup**.
+declared task. Beyond that, startup never changes the task: a task disabled in Windows Settings or
+Task Manager can only be re-enabled there, a task turned off from Scribe stays off, and
+organization policy overrides are also respected. The in-app button opens **Windows Settings >
+Apps > Startup**. For the direct-download build, Scribe reads Windows' own record of a Task Manager
+or Settings choice for its Run entry (`StartupApproved\Run`) and never writes it; when that record
+says off, the switch shows it and points to Windows Settings.
 
 Before submitting, confirm the task is present in both architecture manifests. On a packaged
-install, enable startup, save, and sign out and back in. Also test disabling it from Windows
-Settings, reopening Scribe, and saving an unrelated setting: startup must stay disabled.
-Building the code alone does not update the manifest of an already installed Store package;
-the fix needs a new Store package.
+install, turn the switch on (no Save needed), sign out and back in, and confirm Scribe starts. Also
+test disabling it from Windows Settings, reopening Scribe, and saving an unrelated setting: startup
+must stay disabled. Building the code alone does not update the manifest of an already installed
+Store package; the fix needs a new Store package.
 
 References: [StartupTask API](https://learn.microsoft.com/uwp/api/windows.applicationmodel.startuptask)
 and [packaged desktop startup extensions](https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions#start-an-executable-file-when-users-log-into-windows).
@@ -198,20 +206,17 @@ The package declares:
 
 - `microphone`, required to capture dictation audio
 - `runFullTrust`, required for the packaged WPF/Win32 application
-- `unvirtualizedResources`, required by the one folder exempted from AppData write virtualization
 
-### Why `unvirtualizedResources` is declared
+### Why no folder is exempted from AppData write virtualization
 
-The manifest exempts a single directory, `$(KnownFolder:LocalAppData)\ScribeData`, from AppData
-write virtualization. Without the exemption Windows redirects the folder Scribe creates into
-`%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\`, where File Explorer, running outside the
-package container, cannot see it. That is not a theoretical problem: a 0.3.10 Store user asked to
-send a diagnostic log correctly reported that the folder the app named did not exist, and the bug
-they were reporting could not be investigated. It also means a user cannot back up their own
-dictation history, and cannot move between the Store and direct-download builds without losing it.
-
-The exemption is scoped to that one directory. `desktop6:FileSystemWriteVirtualization`, which
-would unvirtualize the whole of AppData and HKCU, is deliberately not used.
+Releases 0.3.11 and 0.3.12 exempted `$(KnownFolder:LocalAppData)\ScribeData` from AppData write
+virtualization, which needs the `unvirtualizedResources` restricted capability. The Store denied that
+capability (policy 10.6.3, 2026-08-27), and 0.3.13 removed the exemption. Nothing is lost: Windows only
+redirects folders a packaged app newly creates, so every install that already has `ScribeData` keeps
+using the real path, and only a fresh Store-only install lands in
+`%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\`. Scribe probes where its files physically land
+(`AppPaths.EffectiveRootDir`) and shows that folder under Settings, About, with buttons to copy the path
+and open it, so a user can still find a log file or back up their history.
 
 ## Store listing
 
@@ -311,12 +316,6 @@ Paste and adjust the following text. Keep the date current:
 > push-to-talk hook, captures microphone input, inserts Unicode text into the foreground desktop
 > application, maintains a tray icon, and launches its separate recording-overlay process. It does
 > not request elevation or install a service or driver.
->
-> It declares unvirtualizedResources to exempt one directory, %LOCALAPPDATA%\ScribeData, from
-> AppData write virtualization. Scribe stores its dictation history, dictionary and diagnostic logs
-> there. Users need to open that folder in File Explorer to collect a log file when reporting a
-> problem and to back up their own data, and virtualization places it where they cannot find it. No
-> other location is unvirtualized, and no data is shared with any other application.
 >
 > To quit, open the tray menu and select Quit. Privacy policy:
 > https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md

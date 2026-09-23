@@ -156,7 +156,7 @@ down what they describe; P-5 STA thread plus `Join` for clipboard and injection;
 pipe commands with by-name enum twins; P-7 `AppSettings` growth (`CreateDefault`, deep copy in `Clone`,
 DPAPI for secrets); P-8 a privacy control that fails closed, pinned by a test; P-9 one owner for an
 identity with an explicit cache and `Invalidate`; P-10 a deterministic decider fed timestamps, never
-reading the clock; P-11 additive forward-only SQLite migration gated on `PRAGMA user_version`; P-12 one
+reading the clock; P-11 additive, idempotent schema on every open with `user_version` held at 7; P-12 one
 architecture-specific native asset selected by RID, with a build error for the rest.
 
 Every exemplar was verified against the tree when this skill was audited. Line numbers drift, so the

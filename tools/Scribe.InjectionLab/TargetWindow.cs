@@ -5,9 +5,9 @@ namespace Scribe.InjectionLab;
 
 /// <summary>
 /// A real, focusable Win32 target for injection measurements: a top-level window hosting a
-/// multiline EDIT (or RichEdit) control. The lab needs a genuine HWND with a running message pump
-/// because SendInput posts to the thread input queue; injecting into a control that never pumps
-/// measures nothing but SendInput's own return value.
+/// multiline EDIT (or RichEdit) control, or a custom sink that is neither. The lab needs a genuine
+/// HWND with a running message pump because SendInput posts to the thread input queue; injecting
+/// into a control that never pumps measures nothing but SendInput's own return value.
 /// </summary>
 internal sealed class TargetWindow : IDisposable
 {
@@ -24,9 +24,17 @@ internal sealed class TargetWindow : IDisposable
     private const uint WM_CLOSE = 0x0010;
     private const uint WM_CHAR = 0x0102;
     private const uint WM_KEYDOWN = 0x0100;
+    private const uint WM_PASTE = 0x0302;
     private const ushort VK_RETURN = 0x0D;
     private const ushort VK_SHIFT = 0x10;
+    private const ushort VK_CONTROL = 0x11;
+    private const ushort VK_V = 0x56;
     private const uint PM_REMOVE = 0x0001;
+    private const uint CF_UNICODETEXT = 13;
+
+    // A real editor retries a busy clipboard briefly, then gives up; so does this one.
+    private const int ClipboardOpenAttempts = 10;
+    private const int ClipboardRetryDelayMs = 5;
 
     private readonly IntPtr _host;
     private readonly IntPtr _edit;
@@ -34,6 +42,8 @@ internal sealed class TargetWindow : IDisposable
     private readonly StringBuilder _captured = new();
     private int _plainEnters;
     private int _shiftEnters;
+    private int _pastes;
+    private int _pasteFailures;
 
     public IntPtr Handle => _host;
 
@@ -48,6 +58,22 @@ internal sealed class TargetWindow : IDisposable
     /// <summary>Enters delivered with Shift held, which is the soft-newline chord.</summary>
     public int ShiftEnters => _shiftEnters;
 
+    /// <summary>Paste requests (Ctrl+V or WM_PASTE) the custom sink served from the clipboard.</summary>
+    public int Pastes => _pastes;
+
+    /// <summary>Paste requests it could not serve because the clipboard stayed busy or held no text.</summary>
+    public int PasteFailures => _pasteFailures;
+
+    /// <summary>
+    /// A read-only view of the clipboard, used to prove a paste put the operator's content back. It is
+    /// compared, never printed, so its text is kept out of <see cref="ToString"/>.
+    /// </summary>
+    public readonly record struct ClipboardView(bool Readable, bool Empty, string? Text)
+    {
+        public override string ToString() =>
+            $"ClipboardView {{ Readable = {Readable}, Empty = {Empty}, HasText = {Text is not null} }}";
+    }
+
     public TargetWindow(bool richEdit, bool custom = false)
     {
         if (richEdit && !custom)
@@ -56,7 +82,7 @@ internal sealed class TargetWindow : IDisposable
             _ = LoadLibrary("Msftedit.dll");
         }
 
-        ControlClass = custom ? "(custom WM_CHAR sink)" : richEdit ? "RICHEDIT50W" : "EDIT";
+        ControlClass = custom ? "(custom sink: WM_CHAR, Return, Ctrl+V)" : richEdit ? "RICHEDIT50W" : "EDIT";
 
         // A custom sink deliberately is NOT an Edit/RichEdit, so TryInsertIntoStandardEdit declines
         // and the configured injection method is the one actually exercised. This is the only way to
@@ -99,14 +125,18 @@ internal sealed class TargetWindow : IDisposable
 
     // Accumulates what actually arrived. WM_CHAR carries the printable text; Return is inspected at
     // WM_KEYDOWN because WM_CHAR reports 0x0D for both the plain and shifted chord, and the whole
-    // point of the measurement is telling those two apart.
+    // point of the measurement is telling those two apart. Ctrl+V is served from the clipboard the way
+    // a real editor serves it; without that the sink silently dropped every paste, so the clipboard
+    // path could never be measured.
     private IntPtr CaptureWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         switch (msg)
         {
             case WM_CHAR:
+                // Control characters are not text: Return is recorded at WM_KEYDOWN, and Ctrl+V also
+                // arrives here as 0x16, which an editor ignores.
                 var ch = (char)wParam;
-                if (ch != '\r' && ch != '\n')
+                if (!char.IsControl(ch))
                 {
                     lock (_captured)
                     {
@@ -132,9 +162,95 @@ internal sealed class TargetWindow : IDisposable
                 }
 
                 return IntPtr.Zero;
+
+            case WM_KEYDOWN when (ushort)wParam == VK_V && (GetKeyState(VK_CONTROL) & 0x8000) != 0:
+            case WM_PASTE:
+                PasteFromClipboard();
+                return IntPtr.Zero;
         }
 
         return DefWindowProc(hWnd, msg, wParam, lParam);
+    }
+
+    private void PasteFromClipboard()
+    {
+        var view = ReadClipboard();
+        lock (_captured)
+        {
+            if (view.Text is null)
+            {
+                _pasteFailures++;
+                return;
+            }
+
+            _captured.Append(view.Text);
+            _pastes++;
+        }
+    }
+
+    /// <summary>Reads the clipboard without changing it: no EmptyClipboard, no SetClipboardData.</summary>
+    public ClipboardView ReadClipboard()
+    {
+        for (var attempt = 0; attempt < ClipboardOpenAttempts; attempt++)
+        {
+            if (!OpenClipboard(_host))
+            {
+                Thread.Sleep(ClipboardRetryDelayMs);
+                continue;
+            }
+
+            try
+            {
+                if (CountClipboardFormats() == 0)
+                {
+                    return new ClipboardView(true, true, null);
+                }
+
+                return new ClipboardView(true, false, IsClipboardFormatAvailable(CF_UNICODETEXT) ? ReadUnicodeText() : null);
+            }
+            finally
+            {
+                CloseClipboard();
+            }
+        }
+
+        return new ClipboardView(false, false, null);
+    }
+
+    // Must be called while the clipboard is open. Bounded by the block size, because another
+    // application's data is not guaranteed to be terminated.
+    private static string? ReadUnicodeText()
+    {
+        var handle = GetClipboardData(CF_UNICODETEXT);
+        if (handle == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        var chars = (int)Math.Min((ulong)GlobalSize(handle) / sizeof(char), int.MaxValue);
+        if (chars == 0)
+        {
+            // GlobalSize failed: unreadable, which must not compare equal to an empty string.
+            return null;
+        }
+
+        var pointer = GlobalLock(handle);
+        if (pointer == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            var buffer = new char[chars];
+            Marshal.Copy(pointer, buffer, 0, chars);
+            var end = Array.IndexOf(buffer, '\0');
+            return new string(buffer, 0, end < 0 ? chars : end);
+        }
+        finally
+        {
+            GlobalUnlock(handle);
+        }
     }
 
     /// <summary>
@@ -199,6 +315,8 @@ internal sealed class TargetWindow : IDisposable
             _captured.Clear();
             _plainEnters = 0;
             _shiftEnters = 0;
+            _pastes = 0;
+            _pasteFailures = 0;
         }
 
         if (_edit != IntPtr.Zero)
@@ -240,29 +358,42 @@ internal sealed class TargetWindow : IDisposable
         var until = DateTime.UtcNow + duration;
         while (DateTime.UtcNow < until)
         {
-            while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, PM_REMOVE))
-            {
-                TranslateMessage(ref msg);
-                DispatchMessage(ref msg);
-            }
-
+            DrainQueue();
             Thread.Sleep(1);
         }
     }
 
-    /// <summary>Pumps until <paramref name="done"/> completes, so the target renders during injection.</summary>
-    public void PumpUntil(Task done, TimeSpan timeout)
+    /// <summary>
+    /// Pumps until <paramref name="done"/> completes, however long that takes. The injector's
+    /// EM_REPLACESEL fast path, the keystrokes it sends and this window's own clipboard read on Ctrl+V
+    /// all need this thread to keep pumping, so stopping at a timeout and then blocking on the task
+    /// would stall the very work being waited for. A slow run is reported once, and pumping continues.
+    /// </summary>
+    public void PumpUntil(Task done, TimeSpan reportAfter, Action onSlow)
     {
-        var until = DateTime.UtcNow + timeout;
-        while (!done.IsCompleted && DateTime.UtcNow < until)
+        var reportAt = DateTime.UtcNow + reportAfter;
+        var reported = false;
+        while (!done.IsCompleted)
         {
-            while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, PM_REMOVE))
+            DrainQueue();
+            if (!reported && DateTime.UtcNow >= reportAt)
             {
-                TranslateMessage(ref msg);
-                DispatchMessage(ref msg);
+                reported = true;
+                onSlow();
             }
 
             Thread.Sleep(1);
+        }
+
+        DrainQueue();
+    }
+
+    private static void DrainQueue()
+    {
+        while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(ref msg);
+            DispatchMessage(ref msg);
         }
     }
 
@@ -374,4 +505,32 @@ internal sealed class TargetWindow : IDisposable
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr LoadLibrary(string lpFileName);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseClipboard();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int CountClipboardFormats();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsClipboardFormatAvailable(uint format);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetClipboardData(uint uFormat);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GlobalLock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalUnlock(IntPtr hMem);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern UIntPtr GlobalSize(IntPtr hMem);
 }

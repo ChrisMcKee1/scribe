@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics;
-using System.Text;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
+using Scribe.Core.Diagnostics;
 
 namespace Scribe.App.Infrastructure;
 
@@ -11,11 +11,15 @@ namespace Scribe.App.Infrastructure;
 /// never run an OTLP collector, so this guarantees the lifecycle trace is visible in
 /// <c>%LOCALAPPDATA%\ScribeData\logs</c> with zero setup, turning an intermittent "the text didn't
 /// appear" into a single readable line that names the exact stage and its tags.
+/// <para>
+/// Only allowlisted tags are rendered, each checked against its expected value shape
+/// (<see cref="TraceTagPolicy"/>). The bridge used to append every tag value verbatim, which is how a
+/// custom endpoint's host name inside <c>ai_skip_reason</c> reached the file; unknown tags are now
+/// counted and left out, key and value.
+/// </para>
 /// </summary>
 internal sealed class LogTraceProcessor : BaseProcessor<Activity>
 {
-    private const string ScribeTagPrefix = "scribe.";
-
     private readonly ILogger _log;
 
     public LogTraceProcessor(ILoggerFactory loggerFactory) =>
@@ -23,26 +27,25 @@ internal sealed class LogTraceProcessor : BaseProcessor<Activity>
 
     public override void OnEnd(Activity activity)
     {
-        var builder = new StringBuilder(activity.OperationName);
-        foreach (var tag in activity.TagObjects)
+        // OnEnd runs inside Activity.Stop on the dictation path, so the bridge must never fail the span
+        // it is describing.
+        try
         {
-            var key = tag.Key.StartsWith(ScribeTagPrefix, StringComparison.Ordinal)
-                ? tag.Key[ScribeTagPrefix.Length..]
-                : tag.Key;
-            builder.Append(' ').Append(key).Append('=').Append(tag.Value);
-        }
+            var span = TraceTagPolicy.FormatSpan(activity.OperationName, activity.TagObjects, activity.Duration);
 
-        builder.Append(" (").Append((int)activity.Duration.TotalMilliseconds).Append("ms)");
-
-        // Surface error spans (e.g. a partial SendInput) at Warning so they're easy to spot.
-        if (activity.Status == ActivityStatusCode.Error)
-        {
-            var detail = string.IsNullOrEmpty(activity.StatusDescription) ? string.Empty : ": " + activity.StatusDescription;
-            _log.LogWarning("trace {Span}{Detail}", builder.ToString(), detail);
+            // Surface error spans (e.g. a partial SendInput) at Warning so they're easy to spot.
+            if (activity.Status == ActivityStatusCode.Error)
+            {
+                _log.LogWarning("trace {Span}{Detail}", span, TraceTagPolicy.FormatStatusDetail(activity.StatusDescription));
+            }
+            else
+            {
+                _log.LogInformation("trace {Span}", span);
+            }
         }
-        else
+        catch (Exception)
         {
-            _log.LogInformation("trace {Span}", builder.ToString());
+            // Diagnostics are best-effort.
         }
     }
 }

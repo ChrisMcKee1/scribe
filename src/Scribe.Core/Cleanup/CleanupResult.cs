@@ -31,15 +31,22 @@ public enum CleanupOutcome
 /// set on a successful <see cref="CleanupOutcome.Cleaned"/> result to flag a *partial* failure (some
 /// segments of a long, chunked dictation failed while others succeeded); in that case the text is still
 /// the best available cleaned output and no hard failure is signalled.
+/// <para>
+/// <see cref="FailureReason"/> and <see cref="SkipReason"/> are diagnostics-safe: fixed phrases that
+/// may name the provider, an HTTP status, an SDK error code and a model identifier, but never a URL,
+/// host, port, deployment or resource name, or text an endpoint returned. The dictation pipeline logs
+/// them, tags telemetry with them and sends them to the overlay, which logs them too. The richer,
+/// user-facing explanation lives only in <see cref="DisplayDetail"/>.
+/// </para>
 /// </summary>
 /// <param name="Text">The text to inject (cleaned, unchanged, or the raw fallback).</param>
 /// <param name="Outcome">How the call resolved.</param>
-/// <param name="FailureReason">Human-readable failure detail, or <c>null</c> when fully successful.</param>
+/// <param name="FailureReason">Diagnostics-safe failure detail, or <c>null</c> when fully successful.</param>
 /// <param name="SkipReason">
 /// Why a <see cref="CleanupOutcome.Skipped"/> result skipped. "Enabled but not ready" and "switched
 /// off" are indistinguishable in the outcome alone, which is exactly the ambiguity that let a
 /// misconfigured deployment silently disable cleanup for an entire session while every dictation
-/// logged a bland "Skipped". Null when cleanup was not skipped.
+/// logged a bland "Skipped". Null when cleanup was not skipped. Diagnostics-safe.
 /// </param>
 public sealed record CleanupResult(
     string Text,
@@ -47,6 +54,14 @@ public sealed record CleanupResult(
     string? FailureReason = null,
     string? SkipReason = null)
 {
+    /// <summary>
+    /// The same explanation as <see cref="FailureReason"/> or <see cref="SkipReason"/>, written for
+    /// the person at the keyboard: it may name the endpoint host they typed, the deployment, or
+    /// quote the endpoint's own error text. For display in the settings window only. Never log it,
+    /// tag telemetry with it, or send it to the overlay, whose log records what it is shown.
+    /// </summary>
+    public string? DisplayDetail { get; init; }
+
     /// <summary>A skip result that passes the input through untouched.</summary>
     public static CleanupResult Skip(string text, string? reason = null) =>
         new(text, CleanupOutcome.Skipped, SkipReason: reason);

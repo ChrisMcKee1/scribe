@@ -69,8 +69,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
         // header, regardless of what the source file looked like. Written UTF-8 without a BOM (the
         // File.WriteAllText default) so the '#' header is detected cleanly on the next read.
         File.WriteAllText(Path.Combine(_paths.LibrariesDir, id + ".csv"), DictionaryLibraryCsv.Export(library));
-        _logger.LogInformation("Imported dictionary library '{Name}' ({Count} entries) as {Id}.",
-            name, file.Entries.Count, id);
+
+        // The name is the user's own words and the id is a slug of it, so neither is logged.
+        _logger.LogInformation(
+            "Imported a custom dictionary library ({Count} entries, name of {NameLength} characters).",
+            file.Entries.Count, name.Length);
         return library;
     }
 
@@ -97,7 +100,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
         if (File.Exists(path))
         {
             File.Delete(path);
-            _logger.LogInformation("Removed custom dictionary library {Id}.", id);
+            _logger.LogInformation("Removed a custom dictionary library.");
         }
     }
 
@@ -147,7 +150,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Skipping unreadable custom dictionary library at {Path}.", path);
+                // The file name is a slug of the user's library name and an IO exception message
+                // repeats the path, so neither is logged; the type and HRESULT say why it failed.
+                _logger.LogWarning(
+                    "Skipping an unreadable custom dictionary library: {ExceptionType} (0x{HResult:X8}).",
+                    ex.GetType().Name, ex.HResult);
             }
         }
 

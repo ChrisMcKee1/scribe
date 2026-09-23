@@ -23,13 +23,15 @@ public interface IVadService : IDisposable
     /// </summary>
     double? LastSpeechSeconds { get; }
 
-    /// <summary>Loads the model if present. Idempotent; safe to call repeatedly.</summary>
+    /// <summary>Loads the model if present. Idempotent; safe to call repeatedly. Throws once disposed.</summary>
     void Initialize();
 
     /// <summary>
     /// Returns the speech span of <paramref name="audio"/> (leading/trailing silence removed),
     /// <see cref="CapturedAudio.Empty"/> when no speech is detected, or the input unchanged when
-    /// the model is unavailable or the audio is not 16 kHz.
+    /// the model is unavailable or the audio is not 16 kHz. Loads the model first if needed, in the same
+    /// step as the trim, so a concurrent <see cref="Unload"/> lands before (and this call reloads) or after,
+    /// never in between. Throws <see cref="ObjectDisposedException"/> once disposed.
     /// </summary>
     CapturedAudio Trim(CapturedAudio audio);
 

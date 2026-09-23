@@ -29,7 +29,7 @@ public class HotPathBenchmarks
             .Select(index => DictionaryEntry.New($"term{index:D3}", $"TERM{index:D3}"))
             .ToArray();
         _postProcessor = new TextPostProcessor(
-            new DictionaryStub(entries),
+            new RepresentativeWorkload.DictionaryStub(entries),
             NullLogger<TextPostProcessor>.Instance);
         _postProcessor.Reload();
     }
@@ -55,7 +55,7 @@ public class HotPathBenchmarks
     [Benchmark]
     [BenchmarkCategory("Persistence")]
     public float[] SerializeAudioRoundTrip() =>
-        HistoryRepository.ToFloats(HistoryRepository.ToBytes(_audioSamples));
+        AudioBlobCodec.DecodePcm16(AudioBlobCodec.EncodePcm16(_audioSamples));
 
     private static float[] BuildAudioSamples(int seconds)
     {
@@ -83,19 +83,5 @@ public class HotPathBenchmarks
         }
 
         public void Reset() => _position = 0;
-    }
-
-    private sealed class DictionaryStub(IReadOnlyList<DictionaryEntry> entries) : IDictionaryRepository
-    {
-        public IReadOnlyList<DictionaryEntry> GetAll() => entries;
-        public IReadOnlyList<DictionaryEntry> GetEnabled() => entries;
-        public DictionaryEntry Add(DictionaryEntry entry) => throw new NotSupportedException();
-        public IReadOnlyList<DictionaryEntry> AddRange(IReadOnlyList<DictionaryEntry> entries) =>
-            throw new NotSupportedException();
-        public void Update(DictionaryEntry entry) => throw new NotSupportedException();
-        public void Delete(long id) => throw new NotSupportedException();
-        public void SaveAll(IReadOnlyList<DictionaryEntry> updatedEntries) => throw new NotSupportedException();
-        public int SeedIfEmpty(IEnumerable<DictionaryEntry> seedEntries) => throw new NotSupportedException();
-        public int DisableUnmodifiedEntries(IEnumerable<DictionaryEntry> retiredEntries) => throw new NotSupportedException();
     }
 }

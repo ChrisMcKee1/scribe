@@ -1,285 +1,181 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
 namespace Scribe.Core.TextInjection;
 
 /// <summary>
-/// Minimal Win32 clipboard access for Unicode text (CF_UNICODETEXT). Preserving non-text
+/// Win32 implementation of <see cref="IClipboardNative"/>: Unicode text (CF_UNICODETEXT) plus the small
+/// registered-format blobs Scribe writes as privacy markers and borrow receipts. Preserving non-text
 /// formats (images, files) is intentionally out of scope for v1; only text is round-tripped.
-/// All methods must be called on an STA thread that owns a message queue.
+/// All members must be called on an STA thread that owns a message queue.
 /// </summary>
-internal static class Win32Clipboard
+/// <remarks>
+/// The clipboard is opened with a NULL owner, which is how Scribe has always opened it and the path its
+/// real-clipboard round trip (<c>Win32ClipboardTests</c>) exercises. Microsoft documents that
+/// EmptyClipboard after OpenClipboard(NULL) leaves the owner NULL and that this "causes SetClipboardData
+/// to fail". That conflict is not settled: an isolated measurement was not possible, and an owner window
+/// carries obligations of its own, because another application's EmptyClipboard sends the owner
+/// WM_DESTROYCLIPBOARD and whether that send waits on a thread that is not pumping was not measured
+/// either. The working behavior is kept rather than swapped for an unmeasured one.
+/// </remarks>
+internal sealed class Win32Clipboard : IClipboardNative
 {
-    private const int OpenRetries = 6;
-    private const int OpenRetryDelayMs = 15;
+    public static Win32Clipboard Instance { get; } = new();
 
-    /// <summary>
-    /// True when the clipboard holds content that is NOT representable as text: an image, copied
-    /// files, a spreadsheet range. Text-bearing content reports false even when rich companions
-    /// (HTML/RTF) accompany it, because the text round-trip preserves what matters. Non-text
-    /// content cannot be saved and restored by this class, so callers should avoid clobbering it.
-    /// Neither Win32 call requires opening the clipboard, so this never contends for the lock.
-    /// </summary>
-    public static bool HasNonTextContent()
+    private Win32Clipboard()
     {
-        var total = CountClipboardFormats();
-        if (total == 0)
+    }
+
+    public uint SequenceNumber => GetClipboardSequenceNumber();
+
+    public int FormatCount => CountClipboardFormats();
+
+    public bool IsFormatAvailable(uint format) => IsClipboardFormatAvailable(format);
+
+    public uint RegisterFormat(string name) => RegisterClipboardFormat(name);
+
+    public bool TryOpen() => OpenClipboard(nint.Zero);
+
+    public void Close() => CloseClipboard();
+
+    public bool Empty() => EmptyClipboard();
+
+    public bool TryReadText([NotNullWhen(true)] out string? text)
+    {
+        text = null;
+        nint handle = GetClipboardData(CF_UNICODETEXT);
+        if (handle == 0)
         {
             return false;
         }
 
-        if (!IsClipboardFormatAvailable(CF_UNICODETEXT))
+        // Bounded by the block size: another application's data is not guaranteed to be terminated.
+        int maxChars = (int)Math.Min((ulong)GlobalSize(handle) / sizeof(char), int.MaxValue);
+        if (maxChars == 0)
         {
-            return true;
+            return false;
         }
 
-        // Discount Scribe's own privacy markers before applying the companion-count heuristic.
-        // MarkPrivate adds three registered formats to every write this class performs, which on its
-        // own pushed a plain text item from 1 format to 4 and a rich one past the threshold, so
-        // Scribe's own clipboard content started reporting as unrestorable non-text and the paste
-        // path refused to use it.
-        return total - PrivateMarkerCount() > 4;
-    }
-
-    /// <summary>How many of <see cref="MarkPrivate"/>'s markers are currently on the clipboard.</summary>
-    private static int PrivateMarkerCount()
-    {
-        var count = 0;
-        foreach (var name in PrivateMarkerFormats)
-        {
-            var format = RegisterClipboardFormat(name);
-            if (format != 0 && IsClipboardFormatAvailable(format))
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    private static readonly string[] PrivateMarkerFormats =
-    [
-        "ExcludeClipboardContentFromMonitorProcessing",
-        "CanIncludeInClipboardHistory",
-        "CanUploadToCloudClipboard",
-    ];
-
-    public static int FormatCount => CountClipboardFormats();
-
-    public static uint SequenceNumber => GetClipboardSequenceNumber();
-
-    /// <summary>Returns the current clipboard text, or null if the clipboard holds no text.</summary>
-    public static string? TryGetText()
-    {
-        if (!IsClipboardFormatAvailable(CF_UNICODETEXT))
-        {
-            return null;
-        }
-
-        if (!TryOpen())
-        {
-            return null;
-        }
-
-        try
-        {
-            nint handle = GetClipboardData(CF_UNICODETEXT);
-            if (handle == 0)
-            {
-                return null;
-            }
-
-            nint pointer = GlobalLock(handle);
-            if (pointer == 0)
-            {
-                return null;
-            }
-
-            try
-            {
-                return Marshal.PtrToStringUni(pointer);
-            }
-            finally
-            {
-                GlobalUnlock(handle);
-            }
-        }
-        finally
-        {
-            CloseClipboard();
-        }
-    }
-
-    /// <summary>Replaces the clipboard contents with <paramref name="text"/>.</summary>
-    public static bool SetText(string text)
-    {
-        if (!TryOpen())
+        nint pointer = GlobalLock(handle);
+        if (pointer == 0)
         {
             return false;
         }
 
         try
         {
-            EmptyClipboard();
-
-            // Null-terminated UTF-16; GMEM_MOVEABLE memory is required for clipboard handles.
-            nuint bytes = (nuint)((text.Length + 1) * sizeof(char));
-            nint global = GlobalAlloc(GMEM_MOVEABLE, bytes);
-            if (global == 0)
-            {
-                return false;
-            }
-
-            nint target = GlobalLock(global);
-            if (target == 0)
-            {
-                GlobalFree(global);
-                return false;
-            }
-
-            try
-            {
-                Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
-                Marshal.WriteInt16(target, text.Length * sizeof(char), 0);
-            }
-            finally
-            {
-                GlobalUnlock(global);
-            }
-
-            if (SetClipboardData(CF_UNICODETEXT, global) == 0)
-            {
-                // Ownership only transfers to the system on success; free on failure.
-                GlobalFree(global);
-                return false;
-            }
-
-            MarkPrivate();
+            var buffer = new char[maxChars];
+            Marshal.Copy(pointer, buffer, 0, maxChars);
+            int end = Array.IndexOf(buffer, '\0');
+            text = new string(buffer, 0, end < 0 ? maxChars : end);
             return true;
         }
         finally
         {
-            CloseClipboard();
+            GlobalUnlock(handle);
         }
     }
 
-    /// <summary>
-    /// Opts this clipboard item out of Windows Clipboard History (Win+V) and out of cross-device
-    /// cloud clipboard sync.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Scribe uses the clipboard as a transport, not as a place to leave things: it borrows it to
-    /// paste a result, then puts the user's own content back. Without these markers every dictation
-    /// Scribe pastes is captured by Win+V and, when the user has cross-device
-    /// clipboard turned on, uploaded to Microsoft and synced to their other machines. That is a
-    /// straightforward violation of what this product promises.
-    /// </para>
-    /// <para>
-    /// Microsoft documents three registered formats for this. Both of the granular ones are written
-    /// as well as the blanket one, because the blanket format is the newer mechanism and the granular
-    /// pair is what older builds honour: <c>ExcludeClipboardContentFromMonitorProcessing</c> excludes
-    /// the item from history AND sync and from third-party clipboard monitors,
-    /// <c>CanIncludeInClipboardHistory</c> set to 0 blocks history only, and
-    /// <c>CanUploadToCloudClipboard</c> set to 0 blocks sync only.
-    /// See <see href="https://learn.microsoft.com/windows/win32/dataxchg/clipboard-formats"/>.
-    /// </para>
-    /// <para>
-    /// <b>This only protects clipboard writes Scribe performs itself.</b> An annotation can only be
-    /// attached by the process placing the data, so anything another application copies is captured
-    /// by clipboard history and Scribe cannot prevent it.
-    /// </para>
-    /// <para>
-    /// Best effort throughout: a failure to annotate must never fail the paste the user is waiting
-    /// for. The caller must already hold the clipboard open.
-    /// </para>
-    /// </remarks>
-    private static void MarkPrivate()
+    public bool SetText(string text)
     {
-        // A zero-length blob is enough for the blanket format: its presence is the signal.
-        TrySetMarker("ExcludeClipboardContentFromMonitorProcessing");
+        // Null-terminated UTF-16; GMEM_MOVEABLE memory is required for clipboard handles.
+        nuint bytes = (nuint)((text.Length + 1) * sizeof(char));
+        nint global = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (global == 0)
+        {
+            return false;
+        }
 
-        // The granular pair carry a serialized DWORD, and zero means "no".
-        TrySetMarker("CanIncludeInClipboardHistory");
-        TrySetMarker("CanUploadToCloudClipboard");
-    }
+        nint target = GlobalLock(global);
+        if (target == 0)
+        {
+            GlobalFree(global);
+            return false;
+        }
 
-    private static void TrySetMarker(string formatName)
-    {
         try
         {
-            var format = RegisterClipboardFormat(formatName);
-            if (format == 0)
-            {
-                return;
-            }
-
-            // Still a real allocation for the blanket format: SetClipboardData rejects a null handle
-            // for a registered format, so allocate the smallest block that can carry the marker.
-            nint handle = GlobalAlloc(GMEM_MOVEABLE, sizeof(uint));
-            if (handle == 0)
-            {
-                return;
-            }
-
-            nint pointer = GlobalLock(handle);
-            if (pointer == 0)
-            {
-                GlobalFree(handle);
-                return;
-            }
-
-            try
-            {
-                // Zero for the granular pair means "no". The blanket format ignores the payload, so
-                // zero is equally correct there and keeps one code path.
-                Marshal.WriteInt32(pointer, 0);
-            }
-            finally
-            {
-                GlobalUnlock(handle);
-            }
-
-            if (SetClipboardData(format, handle) == 0)
-            {
-                GlobalFree(handle);
-            }
+            Marshal.Copy(text.ToCharArray(), 0, target, text.Length);
+            Marshal.WriteInt16(target, text.Length * sizeof(char), 0);
         }
-        catch (Exception)
+        finally
         {
-            // Privacy hardening is not allowed to break the operation it is hardening.
+            GlobalUnlock(global);
         }
+
+        if (SetClipboardData(CF_UNICODETEXT, global) == 0)
+        {
+            // Ownership only transfers to the system on success; free on failure.
+            GlobalFree(global);
+            return false;
+        }
+
+        return true;
     }
 
-    public static bool Clear()
+    public bool SetData(uint format, ReadOnlySpan<byte> data)
     {
-        if (!TryOpen())
+        // Always a real allocation, even for an empty payload: SetClipboardData rejects a null handle
+        // for a registered format (a null handle means delayed rendering).
+        nint global = GlobalAlloc(GMEM_MOVEABLE, (nuint)Math.Max(data.Length, 1));
+        if (global == 0)
+        {
+            return false;
+        }
+
+        nint target = GlobalLock(global);
+        if (target == 0)
+        {
+            GlobalFree(global);
+            return false;
+        }
+
+        try
+        {
+            if (data.Length > 0)
+            {
+                Marshal.Copy(data.ToArray(), 0, target, data.Length);
+            }
+        }
+        finally
+        {
+            GlobalUnlock(global);
+        }
+
+        if (SetClipboardData(format, global) == 0)
+        {
+            GlobalFree(global);
+            return false;
+        }
+
+        return true;
+    }
+
+    public bool TryReadData(uint format, Span<byte> destination)
+    {
+        nint handle = GetClipboardData(format);
+        if (handle == 0 || GlobalSize(handle) < (nuint)destination.Length)
+        {
+            return false;
+        }
+
+        nint pointer = GlobalLock(handle);
+        if (pointer == 0)
         {
             return false;
         }
 
         try
         {
-            return EmptyClipboard();
+            var buffer = new byte[destination.Length];
+            Marshal.Copy(pointer, buffer, 0, buffer.Length);
+            buffer.CopyTo(destination);
+            return true;
         }
         finally
         {
-            CloseClipboard();
+            GlobalUnlock(handle);
         }
-    }
-
-    private static bool TryOpen()
-    {
-        for (int attempt = 0; attempt < OpenRetries; attempt++)
-        {
-            if (OpenClipboard(nint.Zero))
-            {
-                return true;
-            }
-
-            Thread.Sleep(OpenRetryDelayMs);
-        }
-
-        return false;
     }
 }

@@ -87,19 +87,22 @@ Verified facts, so the item can state a consequence rather than a worry.
 
 - **`dependency`.** `AGENTS.md:719` puts *anything* touching `Directory.Packages.props` behind Ask
   first, and the file itself records why in prose: `OpenAI` is held at `2.12.0`
-  (`Directory.Packages.props:49-52`) because `Microsoft.Extensions.AI.OpenAI` constrains the range, and
-  the type that needed the newer version compiled perfectly and threw `MissingMethodException` at
-  runtime. The SQLite entry is stricter still: `SQLitePCLRaw.bundle_e_sqlite3` at `3.0.5`
-  (`Directory.Packages.props:29`) is referenced directly to override a transitive bundle affected by
-  CVE-2025-6965, `AGENTS.md:727-730` lists removing that pin under **Never**, and
-  `ScribeDatabase.ExpectedSqliteVersion` (`ScribeDatabase.cs:20`, currently `"3.53.4"`) asserts the
-  exact native version at runtime, so it moves deliberately with the package or startup fails.
-- **`schema`.** `AGENTS.md:722`, and P-11 in `references/patterns.md`. `SchemaVersion` is `6`
-  (`ScribeDatabase.cs:23`), the migration runs forward only inside one transaction and sets
-  `PRAGMA user_version` at the end (`ScribeDatabase.cs:427`), and a database whose version is greater
-  than the build supports throws with a message telling the user to install a newer Scribe
-  (`ScribeDatabase.cs:386-391`). Once a user's `scribe.db` is at v7 it cannot go back, so the decision
-  lands on installed machines, not on a branch.
+  (`Directory.Packages.props:75`, with the reason in the comment above it) because
+  `Microsoft.Extensions.AI.OpenAI` constrains the range and the AI packages are compiled against one
+  `OpenAI` build, so they move together; the type that needed the newer version compiled perfectly and
+  threw `MissingMethodException` at runtime. The SQLite entry is stricter still:
+  `SQLitePCLRaw.bundle_e_sqlite3` at `3.0.5` (`Directory.Packages.props:46`) is referenced directly to
+  override a transitive bundle affected by CVE-2025-6965, `AGENTS.md` lists removing that pin under
+  **Never**, and `ScribeDatabase.ExpectedSqliteVersion` (`ScribeDatabase.cs:21`, currently
+  `"3.53.4"`) asserts the exact native version at runtime, so it moves deliberately with the package or
+  startup fails.
+- **`schema`.** `AGENTS.md:722`, and P-11 in `references/patterns.md`. `SchemaVersion` stays `7`
+  (`ScribeDatabase.cs:30`) so every older build can still open the file, and new columns and indexes
+  go into `EnsureAdditiveSchema`, which runs on every open. Builds up to 0.4.2 throw at startup on a
+  `user_version` above 7 and keep running invisibly with the single-instance mutex held; from 0.4.3 a
+  newer schema raises `NewerDatabaseSchemaException`, which the app turns into "install the latest
+  version" and an exit. Either way, raising the version lands on installed machines, not on a branch,
+  because the Store and direct-download builds share one data folder.
 - **`persisted-contract`.** Once a key is in a user's `settings.json`, a verb is on the wire, or a
   format is on disk, removing it is a compatibility event rather than an edit. This is the class
   `architecture-fit` §0.1 escalates on, and it is why the pipe verb question belongs here even though
@@ -306,30 +309,30 @@ The two candidates below are **illustrative shapes**, not live defects. `History
 
 **CANDIDATE `schema`** `finding_id: f-2` severity-sensitive: yes status: OPEN
 
-**Decision.** Whether the pinned-history flag ships as SQLite schema v7 in this change, or moves to
-`AppSettings` so no migration is needed at all.
+**Decision.** Whether the pinned-history flag ships as a new history column in this change, or moves
+to `AppSettings` so no schema change is needed at all.
 
 **Options.**
-- *Take the schema to v7.* Bump `SchemaVersion` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:23`),
-  add one additive `if (current < 7)` block, and let `PRAGMA user_version` move at the end of the same
-  transaction. Cost: every install that opens the new build is migrated forward and cannot be opened by
-  an older Scribe afterwards, because `Migrate` throws on a database newer than the build
-  (`ScribeDatabase.cs:386-391`). That is the designed behavior, not a bug, but it is one way.
-- *Store the flag in `AppSettings` instead.* No migration, no version move, and a first-run default in
+- *Add the column additively.* Put it in `ScribeDatabase.EnsureAdditiveSchema`
+  (`src/Scribe.Core/Persistence/ScribeDatabase.cs`): probe with `PRAGMA table_info`, then
+  `ALTER TABLE history ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`, with `SchemaVersion` left at 7 so
+  older builds still open the file. Cost: older builds never see the flag, and a repair by an older
+  build can drop the column, after which pinned rows read as unpinned.
+- *Store the flag in `AppSettings` instead.* No schema change, and a first-run default in
   `CreateDefault` rather than a property initializer. Cost: the flag lives beside the setting rather
   than beside the row it describes, so pinning becomes a settings concern rather than a history
   concern, and a future per-row feature would face this same decision again with more code behind it.
-- *Ship as is.* The column is added with `SchemaVersion` still at 6, so the `CREATE TABLE` never reruns
-  on an upgraded install and the column simply does not exist there. Fresh installs get it, existing
+- *Ship as is.* The column is added to a `CREATE TABLE` in a schema step that never reruns on an
+  upgraded install, so the column simply does not exist there. Fresh installs get it, existing
   installs do not, and the failure is silent.
 
-**Recommendation.** Take the schema to v7. The additive step is the shape P-11 already describes, the
-pin belongs with the row, and shipping as is is the only option with a silent failure mode.
+**Recommendation.** Add the column additively. That is the shape P-11 already describes, the pin
+belongs with the row, and shipping as is is the only option with a silent failure mode.
 
 **Why the maintainer, and what resolves it.** `AGENTS.md:722` puts schema and migration changes behind
-Ask first because the change lands on users' installed databases and is forward only; a reviewer cannot
-clear that and the author cannot undo it after ship. Resolves when the maintainer picks an option, or
-dismisses this as already agreed elsewhere.
+Ask first because the change lands on users' installed databases and cannot be taken back once it has
+shipped; a reviewer cannot clear that and the author cannot undo it after ship. Resolves when the
+maintainer picks an option, or dismisses this as already agreed elsewhere.
 
 **CANDIDATE `dependency`** `finding_id: f-5` severity-sensitive: no status: OPEN
 
@@ -340,9 +343,9 @@ pins `OpenAI` to 2.12.0.
 - *Move both together, in their own PR.* Keeps the range constraint satisfiable and keeps the version
   move reviewable on its own. Cost: this branch waits.
 - *Drop the package change from this branch.* The rest of the change is unrelated to it and lands now.
-- *Ship as is.* Cost: `Directory.Packages.props:49-52` records that these two versions are coupled and
-  that the mismatch is exactly the one that compiled clean and threw `MissingMethodException` at
-  runtime, so a green build here is not evidence.
+- *Ship as is.* Cost: the comment above the `OpenAI` entry in `Directory.Packages.props` records that
+  these versions are coupled and that the mismatch is exactly the one that compiled clean and threw
+  `MissingMethodException` at runtime, so a green build here is not evidence.
 
 **Recommendation.** Drop the package change from this branch. Nothing else in the diff needs it, and a
 dependency move is worth its own description.

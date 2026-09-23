@@ -48,8 +48,9 @@ wrong review happens here.
 a `TokenCredential`. `Create(AzureCredentialRequest)` (line 43) is the only entry point, and the only
 two credentials it ever returns are `ClientSecretCredential` (line 86) for service principal mode and
 `SerializedAzureCliCredential(new AzureCliCredential(options))` (line 109) for CLI mode. Both real
-consumers go through it: `TextCleanupService` at lines 2419 (Foundry project path) and 2457 (account
-path), and `AzureFoundryDiscovery` at lines 232 and 271.
+consumers go through it: `TextCleanupService` at lines 3302 (the Responses path, which serves both a
+project URL and an account URL through the account's `/openai/v1/` inference endpoint) and 2398 (the
+Chat Completions fallback), and `AzureFoundryDiscovery` at lines 231 and 273.
 
 **🔴 `DefaultAzureCredential` is banned in `src/**`, with or without `Exclude*` options.** It was tried
 and shipped a real bug: `ManagedIdentityCredential` probed a nonexistent IMDS endpoint on a desktop and
@@ -202,17 +203,23 @@ Hard rules, each a 🔴 when a diff breaks it:
 
 ## §7. The `OpenAI` 2.12.0 pin is part of this surface
 
-`Directory.Packages.props:49-52` pins `OpenAI` at `2.12.0` on purpose, because
-`Microsoft.Extensions.AI.OpenAI` 10.9.0 declares `[2.12.0, 2.13.0)` and taking 2.13.0 breaks restore
-with **NU1608**. The second half matters more, and it is the reason this rule lives in a credential
-lens rather than only in `build-packaging`: `ProjectResponsesClient` needs a constructor that exists
-only in 2.13.0, so calling it **compiles perfectly and throws `MissingMethodException` at runtime**
-(`AGENTS.md:73-76`). The Foundry project path at `TextCleanupService.cs:2414-2431` uses
-`AIProjectClient` and `AsAIAgent` instead, which is the workaround.
+`Directory.Packages.props` (the `OpenAI` entry, around line 75, and the comment above it) pins `OpenAI`
+at `2.12.0` on purpose. `Microsoft.Extensions.AI.OpenAI` 10.9.0 declares `[2.12.0, 2.13.0)`, so taking
+2.13.0 alone breaks restore with **NU1608**. The rule is stricter than the range, and it is the reason
+it lives in a credential lens rather than only in `build-packaging`: `Microsoft.Extensions.AI.OpenAI`
+and `Microsoft.Agents.AI.OpenAI` are compiled against one `OpenAI` build and bind to its members at
+runtime, so an `OpenAI` that merely satisfies a declared range can still **compile perfectly and throw
+`MissingMethodException` at runtime**. That happened once: `ProjectResponsesClient` (from
+`Azure.AI.Projects`, reached through `Microsoft.Agents.AI.Foundry`) needed a constructor that exists
+only in 2.13.0. Both packages were removed in 0.4.3. A Foundry project URL is now normalized to the
+account's `/openai/v1/` inference endpoint (`AzureOpenAIResponsesClientFactory.GetV1Endpoint`) and
+served by `TextCleanupService.CreateAzureResponsesAgent`, the same path as an account URL.
 
-Flag 🔴 when the diff bumps `OpenAI` off 2.12.0 without also widening
-`Microsoft.Extensions.AI.OpenAI`, or when it introduces a `ProjectResponsesClient` call. Do not write
-"this will fail the build" for the second case: it will not, which is the entire point.
+Flag 🔴 when the diff moves `OpenAI` without moving `Microsoft.Extensions.AI.*` and
+`Microsoft.Agents.AI.*` in the same change to the set built against it (2.13.0 with 10.10.0 and
+1.22.0; never 2.14.0 with `Microsoft.Extensions.AI.OpenAI` 10.10.0), or when it reintroduces
+`Azure.AI.Projects`, `Microsoft.Agents.AI.Foundry`, `AIProjectClient` or `ProjectResponsesClient`. Do
+not write "this will fail the build" for the second case: it will not, which is the entire point.
 
 ---
 
@@ -228,7 +235,8 @@ Flag 🔴 when the diff bumps `OpenAI` off 2.12.0 without also widening
 - a role named without its GUID, a `Cognitive Services *` or `Azure AI Developer` role pointed at a
   Foundry resource, one of the look-alike roles proposed for inference, or a scope moved off the account
 - a secret written anywhere other than DPAPI-protected settings
-- an `OpenAI` version move or a `ProjectResponsesClient` call
+- an `OpenAI` version move outside the lockstep set, or a reintroduced `Azure.AI.Projects`,
+  `AIProjectClient` or `ProjectResponsesClient`
 
 **Raise as a Question** when the shape is suspicious but the evidence is outside the diff:
 

@@ -51,7 +51,7 @@ usage-insight aggregation, or CSV import/export, assume a parallel Swift copy un
 check `macos/PORTING-PLAN.md` before you claim parity still holds.
 
 Where the macOS port lives: `macos/Scribe/Sources/Scribe/` currently contains 59 tracked source
-files on `origin/main`; `macos/Scribe/Tests/ScribeTests/` contains 27 tracked XCTest files, many
+files on `main`; `macos/Scribe/Tests/ScribeTests/` contains 27 tracked XCTest files, many
 ported 1:1 from the C# xUnit suites where applicable. Packaging scripts live in
 `macos/Scribe/scripts/` (`build-app.sh`, `make-dmg.sh`, `notarize.sh`, `setup-dev-signing.sh`).
 The top-level docs are `macos/README.md`, the user-facing build/run guide and current feature list;
@@ -81,8 +81,8 @@ If your Windows PR changes behavior that the Swift port mirrors, call out in you
 commit message that the matching row in `macos/PORTING-PLAN.md` may now be stale. There is no
 automation keeping the C# and Swift implementations in sync.
 
-`origin/feat/macos-apple-silicon` exists as an earlier, separate prototype that was not merged, and
-it is not the current macOS effort described here.
+An earlier, separate macOS prototype branch (`feat/macos-apple-silicon`) was never merged, and it is
+not the current macOS effort described here.
 
 ## Tech stack (be specific, versions matter)
 
@@ -92,17 +92,20 @@ it is not the current macOS effort described here.
   only, so do not lower `SupportedOSPlatformVersion` to "widen support". It buys nothing real and
   blocks Windows 11 APIs and WinML hardware acceleration.
 - **App shell:** **WPF** tray app (`src/Scribe.App`), **`win-x64` and `win-arm64`**, self-contained.
-- **Recording overlay:** **WinUI 3 / Windows App SDK 2.2.0** as a *separate* unpackaged,
+- **Recording overlay:** **WinUI 3 / Windows App SDK** (the WinUI, Foundation, InteractiveExperiences
+  and Base component packages at the 2.5.1 servicing level) as a *separate* unpackaged,
   self-contained process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`), built for the same
   architecture as the app. See
   [Overlay architecture](#overlay-architecture-read-before-touching-the-pill); it is not
   a normal window.
-- **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.4**
-  (Apache‑2.0) on CPU. **VAD:** Silero (MIT). Native runtime is per-architecture; see
-  [Architecture support](#architecture-support-x64-and-arm64).
+- **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.8**
+  (Apache‑2.0, bundling ONNX Runtime 1.28.2) on CPU. **VAD:** Silero (MIT). Native runtime is
+  per-architecture; see [Architecture support](#architecture-support-x64-and-arm64).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
   **Foundry Local** (`Microsoft.AI.Foundry.Local.WinML`) and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
+- **Hosting and platform libraries:** the .NET 10.0.12 servicing builds of `Microsoft.Extensions.*`,
+  `Microsoft.Data.Sqlite` and `System.Security.Cryptography.ProtectedData`.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
   in `Directory.Build.props`. Read `<VersionPrefix>` from that file rather than trusting a
   number quoted here; a version pinned in prose is stale the next time anyone ships.
@@ -115,18 +118,79 @@ it is not the current macOS effort described here.
 - **Query the NuGet feed for versions, never a web search.** `dotnet package search <id>
   --exact-match --format json` is authoritative; a search result claimed 1.17.0 when the feed had
   1.18.0.
-- **`OpenAI` is pinned at 2.12.0 on purpose.** `Microsoft.Extensions.AI.OpenAI` declares
-  `[2.12.0, 2.13.0)`, so 2.13.0 breaks restore with NU1608. This also forces the stored-output
-  workaround below: `ProjectResponsesClient` needs a constructor that only exists in 2.13.0, so it
-  throws `MissingMethodException` at runtime while compiling perfectly.
+- **`OpenAI` moves in lockstep with the AI packages, and is held at 2.12.0.**
+  `Microsoft.Extensions.AI.OpenAI` and `Microsoft.Agents.AI.OpenAI` are compiled against one `OpenAI`
+  build and bind to its members at runtime, so an `OpenAI` that merely satisfies a declared range can
+  still compile cleanly and throw `MissingMethodException`: `ProjectResponsesClient` (from
+  `Azure.AI.Projects`, removed in 0.4.3 together with `Microsoft.Agents.AI.Foundry`) did exactly that on
+  2.12.0. `Microsoft.Extensions.AI.OpenAI` 10.9.0 also constrains `OpenAI` to `[2.12.0, 2.13.0)`, so
+  2.13.0 alone breaks restore with NU1608. Move `OpenAI`, `Microsoft.Extensions.AI.*` and
+  `Microsoft.Agents.AI.*` together, to a set built against each other (2.13.0, 10.10.0 and 1.22.0 is
+  one), and never to `OpenAI` 2.14.0 with `Microsoft.Extensions.AI.OpenAI` 10.10.0, which still
+  references a type 2.14.0 renamed.
+- **The AI stack was held for 0.4.3 on purpose.** Nothing in the newer set fixes a security issue, and
+  two of its changes need live verification this release did not have: `OpenAI` 2.13 adds platform
+  headers (OS, runtime, CPU architecture) to every request, and the GitHub Copilot SDK 1.0.11 that
+  Agent Framework 1.22.0 resolves shuts its client down gracefully on dispose, which can add about 10 s
+  to an exit. Take them as their own change, with the Copilot provider exercised end to end.
+- **The overlay references Windows App SDK component packages, not the metapackage.** A
+  self-contained build ships every referenced component's runtime, and the pill needs only WinUI and
+  what WinUI depends on, so `Scribe.Overlay.csproj` references `Microsoft.WindowsAppSDK.WinUI`,
+  `.Foundation`, `.InteractiveExperiences` and `.Base` at the versions the 2.5.1 metapackage lists.
+  Dropping the AI, ML, Search, Widgets and DWriteCore components made the overlay payload about a
+  quarter smaller. Move the four together to the set the next metapackage lists. **Adding a Windows
+  App SDK feature means adding its component package**, or the feature is missing at runtime while
+  the build stays green.
+- **The sherpa-onnx packages move together, and they move on-device cleanup too.** The managed wrapper
+  and both natives come from one release, and the `onnxruntime.dll` they bundle is also the one
+  Foundry Local's GenAI runtime loads in-process, so a sherpa-onnx bump changes the ONNX Runtime that
+  on-device cleanup runs on.
+- **`Azure.Core`, not `Azure.Identity`, decides how the credentials behave.** `Azure.Identity`
+  type-forwards `AzureCliCredential` and `ClientSecretCredential` to `Azure.Core`, whose version the
+  `Azure.ResourceManager` packages lift transitively.
 
 ### Cloud cleanup stores nothing (keep it that way)
 
 The Azure **Responses API defaults to `store=true`**, which retains every cleaned dictation
-server-side. Scribe sets `StoredOutputEnabled = false` through `ChatOptions.RawRepresentationFactory`
-on both the project and account paths, and **fails closed** if it meets a raw representation it does
-not recognize. This is a privacy control, not a preference: if it silently stops applying, Scribe
-breaks its own promise. There is a test pinning the fail-closed behaviour; do not relax it.
+server-side. `TextCleanupService.WithStoredOutputDisabled` applies the control through
+`ChatOptions.RawRepresentationFactory`, and it is chosen **per surface**, by the client that asks
+(`IChatClient.GetService`), never by what an upstream factory returned:
+
+- **Responses**, the path for every Microsoft Foundry request (a project URL and an account URL both
+  go to the account's `/openai/v1/` inference endpoint), always gets `CreateResponseOptions` with
+  `StoredOutputEnabled = false`, even when an upstream factory asked for true.
+- **Chat Completions**, the fallback for deployments that reject Responses, never sets `store` and
+  never lets it be true. Azure stores a chat completion only when `store` is true
+  (<https://learn.microsoft.com/azure/foundry-classic/openai/how-to/stored-completions>), so leaving it
+  out is already the non-storing default, and some non-OpenAI deployments reject parameters they do
+  not know.
+- A client that names neither surface keeps the flag off on whatever options it was given, and an
+  object nobody recognizes **fails closed** to Responses options with the flag off.
+
+This is a privacy control, not a preference: if it silently stops applying, Scribe breaks its own
+promise. `CleanupStoredOutputWireTests` pins both surfaces from the actual request JSON over a fake
+transport; `StoredOutputWireContractTests` pins that the packages do not send `store=false` on their
+own, which is what makes those wire tests measure Scribe's control; and the fail-closed tests stay. Do
+not relax any of them. Only the Azure agents carry the control: custom OpenAI-compatible endpoints and
+Foundry Local send no `store` field.
+
+### GitHub Copilot provider (the parent environment is never touched)
+
+- **The model travels in `SessionConfig.Model`**, through Agent Framework's typed
+  `AsAIAgent(client, SessionConfig, ownsClient: false)` overload (`GitHubCopilotAgentFactory`), with the
+  instructions as an appended system message, no tools and no permission handler, so nothing in the
+  Copilot runtime's coding-agent toolset is approved. A blank model stays null and leaves the choice to
+  the CLI. `ownsClient` stays false: the client is released with the service, and an owning agent would
+  dispose it every time a setting changed.
+- **The runtime's child process gets its own environment.** `GitHubCopilotCli.BuildRuntimeEnvironment`
+  copies this process's environment, minus `GITHUB_COPILOT_MODEL`, plus the selected model when there
+  is one, into `CopilotClientOptions.Environment`, which replaces the child's environment wholesale. The
+  parent process is never mutated; the old approach set and restored a process-wide variable around
+  startup, which a concurrent reader could observe and a cancelled startup skipped restoring.
+- On any bump of `GitHub.Copilot.SDK` or `Microsoft.Agents.AI.GitHub.Copilot`, re-check in their source
+  that a non-null `Environment` still replaces the child environment, that `SessionConfig.Model` is still
+  forwarded to the create-session request, and that the agent still disposes the client only when
+  `ownsClient` is true.
 
 ## Commands (run these, including the flags)
 
@@ -143,7 +207,12 @@ dotnet run --project src/Scribe.App
 # Jump straight to the settings window (handy while iterating on UI)
 dotnet run --project src/Scribe.App -- --settings
 
-# Run the unit tests (must stay green; the count only ever grows, 878 as of 0.3.8)
+# Run the unit tests (must stay green; the count only ever grows: 2695 as of 0.4.3, 2690 with the filter below).
+# Win32ClipboardTests and HotkeyServiceTests.Start_ need an interactive desktop; on a locked or remote
+# session add --filter "FullyQualifiedName!~Win32ClipboardTests&FullyQualifiedName!~HotkeyServiceTests.Start_".
+# The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
+# or src/Scribe.App/models found from the test output); without models they pass vacuously. CI sets
+# SCRIBE_MODELS_DIR, so they run there.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -154,7 +223,7 @@ dotnet build src/Scribe.Overlay/Scribe.Overlay.csproj -c Debug -p:Platform=ARM64
 # Cross-build the whole app for the other architecture from either machine
 dotnet publish src/Scribe.App/Scribe.App.csproj -c Release -r win-arm64 --self-contained true
 
-# Prove the NATIVE speech engine actually decodes on this machine (unit tests never touch it).
+# Prove the NATIVE speech engine actually decodes on this machine, through the production service.
 # Generates real speech with the Windows TTS engine, then runs it through TranscriptionService.
 pwsh ./scripts/New-SpeechFixtures.ps1
 dotnet run --project tools/Scribe.AsrCheck
@@ -163,6 +232,22 @@ dotnet run --project tools/Scribe.AsrCheck
 dotnet run --project tools/Scribe.AsrCheck -- --long-audio    # duration sweep, 5 s to 90 s
 dotnet run --project tools/Scribe.AsrCheck -- --channel-mix   # what the multi-channel downmix costs
 dotnet run --project tools/Scribe.AsrCheck -- --degraded      # SNR and reverb against duration
+dotnet run --project tools/Scribe.AsrCheck -- --threads 1,2,4,6,8,0   # decode time per thread count (0 = auto)
+
+# The WAV scenario suite: device formats, levels, noise, long dictations and their chunk seams,
+# silence auto-stop, post-processing, engine lifecycle races and history storage, through the
+# production code paths. Exits non-zero on any failed check. --quick is the CI subset.
+dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios [--quick] [--report <file.json>]
+# Regenerates the scenario WAVs and scenario-fixtures.json locally (commit both); CI never runs it.
+pwsh ./scripts/New-ScenarioFixtures.ps1
+
+# BenchmarkDotNet hot paths (Release is required; run from inside the repository, and pass
+# --artifacts <folder> to put the output elsewhere). BenchmarkDotNet raises every benchmark process to
+# High priority, so these are not Normal-priority measurements, and this job leaves the machine's power
+# plan alone (DontEnforcePowerPlan). --soak repeats real capture, post-processing and history writes
+# at the priority it was started with.
+dotnet run -c Release --project tools/Scribe.Benchmarks
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak
 
 # Offline AI-cleanup quality eval (no network, no judge model)
 dotnet run --project tools/Scribe.Evals
@@ -206,13 +291,25 @@ a settings window, or startup:
 ```
 Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools)
   src/Scribe.Core/                  services + domain (UNIT-TESTABLE, no UI)
-    Audio/ Vad/ Transcription/      capture → 16 kHz mono, Silero VAD, Parakeet ASR
-    PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework)
+    Audio/ Vad/ Transcription/      capture → 16 kHz mono (pooled capture buffer), Silero VAD, Parakeet ASR
+                                    (TranscriptionChunker plans long-capture seams)
+    PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
+                                    Local storage policy and janitor
+    Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
+                                    ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
+                                    PresentationRelay, UiThreadDispatch, RecordingCapture,
+                                    CaptureTriggerBinding, StartupFailureNotice
+    Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
+                                    OverlayPreviewGate
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
-                                    SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested)
-    Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles)
-    TextInjection/ Hotkeys/         Unicode/clipboard injection; Right Ctrl push-to-talk
-    Persistence/ Security/ Infrastructure/ Models/ DependencyInjection/
+                                    SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
+                                    SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
+    Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
+                                    writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
+    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); Right Ctrl push-to-talk
+                                    (HotkeyEngine, HotkeyCommandRouter)
+    Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
+    Security/ Infrastructure/ Models/ DependencyInjection/
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
     Settings/                       the nav-rail settings window (adapters call Core builders)
     Onboarding/                     WelcomeWindow (one-time first-run intro)
@@ -222,13 +319,18 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
-  tests/Scribe.Core.Tests/          xUnit tests for Core
+  tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
+  tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
-  tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below)
-  tools/Scribe.Benchmarks/          BenchmarkDotNet hot paths (capture, cleanup, post-processing)
+  tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
+    Scenarios/                      the WAV scenario suite (--scenarios), production code reached by reflection
+  tools/Scribe.Benchmarks/          BenchmarkDotNet hot paths (capture, cleanup, post-processing, logging)
+                                    plus the --soak harness
   tools/Scribe.InjectionLab/        times each injection path into a real focused Win32 control
   scripts/Download-Models.ps1       fetches ASR + VAD models
+  scripts/New-ScenarioFixtures.ps1  regenerates the scenario WAVs (local only)
+  scripts/Velopack-Cli.ps1          keeps vpk at the Velopack package version (used by pack.ps1)
   build/pack.ps1                    Velopack installer + GitHub-release publisher
   build/pack-msix.ps1               Microsoft Store MSIX package (Store path; no MSI is built)
   Directory.Build.props             single source of version truth (<VersionPrefix>)
@@ -261,6 +363,16 @@ back into the code-behind; that is a recurring smell.
      output, never on dictionary entries or snippet templates, which are user-authored.
 - Add NuGet versions to `Directory.Packages.props` (central management is on). Prefer
   current **stable** releases; justify any prerelease in the PR.
+- **Prefer `[GeneratedRegex]` over `RegexOptions.Compiled` for a static pattern.** It is generated at
+  build time, so no dictation pays a compile and first match at runtime, and a pattern without a culture
+  name matches in the invariant culture, which is what fixed the AI cleanup guards' case-insensitive
+  matching under Turkish and Azeri. A pattern built at runtime from user data (such as one per phrase)
+  cannot be generated.
+- **Tests never call `SqliteConnection.ClearAllPools()`.** xUnit runs test classes in parallel, and the
+  process-wide clear can dispose a pooled connection another class is using. To release a database file
+  before moving, damaging, copying or deleting it, call `DatabasePools.Release(new AppPaths(root))` (or
+  `TempDatabaseFolder.ReleasePooledConnections()`) from `StorageTestSupport`, which clears only the pool
+  keyed by `ScribeDatabase.BuildFileConnectionString` for that file.
 - Example of the expected style (descriptive names, real error handling, `why` comment):
 
 ```csharp
@@ -291,11 +403,60 @@ cause of one.**
   `%LOCALAPPDATA%\ScribeData\logs\scribe-<yyyyMMdd>.log` (so dictation + overlay events
   interleave on one timeline).
 - All log writers open with **`FileShare.ReadWrite` + retry + swallow** and are
-  **fully non‑throwing** end to end (`FileLoggerProvider` on the app side, `OverlayLog` on
-  the overlay side). A throwing logger once tore down a healthy overlay (see below).
+  **fully non‑throwing** end to end (`DailyLogFile`, behind `FileLoggerProvider`'s queued writer, on
+  the app side; `OverlayLog` on the overlay side). A throwing logger once tore down a healthy overlay
+  (see below).
 - **Never** let a logging/diagnostics failure reach a destructive code path (e.g. a catch
   that kills a process). Route diagnostics in catch blocks through non‑throwing helpers
   (`TryLog`). When in doubt, log *more* lifecycle/state detail, not less.
+- **The app-side writer is queued.** `FileLoggerProvider` formats each entry into one string on the
+  caller's thread and hands it to `Scribe.Core.Diagnostics.BackgroundLogWriter`, a bounded queue
+  (8192 entries or 2M characters) drained by one writer thread into `DailyLogFile`, which appends
+  batches. Debug and Information calls never wait for the disk. Warning and above and the session
+  start and end markers wait to be written, and first for room when the queue is full, each for up to
+  250 ms (500 ms worst case). Overflow drops the newest entry; one "N log line(s) dropped" warning
+  marks the gap once space returns, or at the next flush or dispose. The queue drains when the host
+  disposes the provider (registered through a factory so the container disposes it; 2 s bound), at
+  ProcessExit and on an unhandled exception (1 s each); after disposal entries are written on the
+  caller's thread. The day file is chosen from the clock at write time, exactly as `OverlayLog` does.
+- **Trace tags are allowlisted.** `LogTraceProcessor` and, before any OTLP exporter,
+  `TraceTagScrubProcessor` apply `TraceTagPolicy`: only `ScribeTelemetry` tags with the expected value
+  shape (a number, a flag, a code of ASCII letters, digits, hyphen and underscore up to 48 characters,
+  or an app name) are shown, a wrong-shaped value shows as `(omitted)`, and unknown tags are counted as
+  `omitted_tags=N`, never rendered. Every `SetTag`/`AddTag` key must be a `ScribeTelemetry` constant
+  with a policy entry; `TelemetrySourceContractTests` scans the source and fails otherwise.
+- **Historical leak redaction.** `HistoricalLogRedaction` and `LogLineRedactor` replace sensitive
+  values in exactly the templates listed in `HistoricalLogRedaction.KnownFormats`, each anchored to its
+  category and message template: in the diagnostics bundle copy, once in place in past days' files
+  (never the day being written or the day just left; `redaction-ledger.txt` records files already
+  checked, by name, length and write time only), and in the live sink as defense in depth. Where a
+  template carried provider free text the whole value goes, and exception messages attached to those
+  entries go too; stack frames and type names stay. Never widen it into generic URL, host or name
+  scrubbing; bump `RulesVersion` when adding a format. `RulesVersion` 2 added the `SettingsWindow`
+  category: the messages of exceptions attached to the Settings warnings about Azure sign-in, listing
+  subscriptions and deployments, installing Azure CLI, and verifying a service principal or an API key
+  and its endpoint (0.2.4 to 0.4.2), and the one attached to the warning when no mail client could open
+  an AI result report, which quoted the report (0.3.14 to 0.4.2). New log lines must log shapes and not
+  rely on this.
+- **Failures are logged by their shape, never their text.** Exception messages are not safe near a
+  provider or the user's words: .NET 10 appends `(host:port)` to a connection failure, Azure and Entra
+  errors quote accounts, tenants and resource names, and a failed shell launch quotes the whole command
+  it was given. So a failure reaches the log as `FailureShape.Describe` (built on `CleanupFailureShape`):
+  the exception types, HTTP status, a sanitized service or Entra error code, and the codes .NET, Windows
+  and SQLite attach (socket and HTTP request errors, Win32 and COM codes, SQLite result codes).
+  `FailureShape.DescribeWithStack` adds the stack frames, frame lines only, for failures that point at
+  a defect, such as crashes, unhandled exceptions and handlers that threw.
+  `LogPrivacyGuardTests` runs `LogCallScanner`, a source-level guard, over all of `src/Scribe.App`, the
+  Core folders `Cleanup`, `Diagnostics`, `Feedback` and `Settings`, and
+  `PostProcessing/AiDictionarySuggester.cs` and `Transcription/TranscriptionModelInstaller.cs`. It fails on
+  a log call that passes an exception object (cast or not), reads an exception's `.Message`,
+  `.StackTrace`, inner exceptions or `.Data`, renders an object with `.ToString()`, interpolates an
+  exception, or does not start with a literal message template, and on a logging helper handed an
+  exception's text or `.Data`, or forwarding an exception as a value. `CleanupDiagnosticsPrivacyTests`
+  keeps its own scan of `Cleanup`. The rest of Core is not scanned, so keep to the same rule there by
+  hand. The one pass-through is `FoundrySdkLogger`, which relays the on-device Foundry Local SDK's own
+  diagnostics with the user-profile path folded to `%USERPROFILE%`, because they are the evidence for its
+  GPU and execution-provider failures.
 
 ### What the log has to contain (added 0.3.11)
 
@@ -314,14 +475,25 @@ matter are intermittent and hardware‑specific.
   and the hold duration. `DictationController` warns when the captured audio is shorter
   than the hold, because WASAPI ends a stream cleanly with **no exception** when the endpoint is
   reconfigured mid‑capture and nothing else in the pipeline can see it.
-- **Retention is bounded and enforced** (`LogRetentionPolicy`): 7 days, 16 MB per day, 64 MB total.
-  Swept at startup and at each midnight rollover. Today's file is never swept.
+- **Timing lines, shapes only.** The decode line is `Decoded {AudioMs} ms of audio in {DecodeMs} ms
+  (RTF {Rtf:F2}, {Chunks} chunk(s), {Chars} characters); model load {LoadMs} ms, waited {WaitMs} ms for
+  the engine.`, with no transcript text. Under `#<n>`, the controller logs `accepting the next dictation
+  N ms after insertion` with the count of activations rejected while it processed, and the history
+  writer logs `history committed N ms after it was queued`. Silence auto-stop lines carry the tracker's
+  `NoiseFloor` and `VoiceThreshold` as numbers. AI cleanup skip and failure lines carry the provider
+  and status names, codes the live redaction and `TraceTagPolicy` leave visible; the reasons stay out.
+- **Retention is bounded and enforced** (`LogRetentionPolicy`): 7 days, 16 MB per day, 64 MB total
+  (soft budgets: past its day budget a file takes only warnings and errors, and the total is enforced
+  by the sweep). Swept at startup and at each midnight rollover. Today's file is never swept.
 - **Privacy is a contract, not a habit.** No transcripts, dictionary entries, snippet bodies,
-  prompts, endpoints or keys. Report shapes instead: counts, enum names, `configured`/`unset`.
-  `SessionBannerTests.Banner_never_contains_a_secret` asserts it; keep it passing.
+  custom dictionary library names, prompts, endpoints or keys. Report shapes instead: counts, enum
+  names, `configured`/`unset`. Azure deployment, account and subscription names count as
+  configuration: report presence, never the name. `SessionBannerTests.Banner_never_contains_a_secret`
+  asserts it; keep it passing.
 - **Users export logs from Settings > About > "Save diagnostics…"** (`DiagnosticsBundle`), which
-  writes the retained logs plus `report.txt` to a zip wherever they choose. Never add `scribe.db`
-  to that bundle: it holds every dictation and the saved API keys.
+  writes the retained logs, redacted as described above, plus `report.txt` (what is inside, and the
+  recognized formats with their version ranges and replacement counts) to a zip wherever they choose.
+  Never add `scribe.db` to that bundle: it holds every dictation and the saved API keys.
 
 ## What the recogniser is NOT (measured, 0.3.11)
 
@@ -349,6 +521,216 @@ more than "not digital silence" (a -60 dBFS bar). `CaptureSignalAnalyzer` now re
 shape of every capture (peak/RMS in dBFS, clipping, DC offset, and **per-channel levels taken before
 the downmix**) so the next report of this arrives answerable. Statistics only, never audio.
 
+## Transcription engine (one gate, cancellation, chunk seams)
+
+- **Ensure-ready and decode are one step.** `TranscriptionService.Transcribe` loads the model, when an
+  idle release unloaded it, and decodes under the service's gate; `Dispose` takes the same gate and
+  waits out a running decode. An idle `Unload` therefore lands before a dictation (which reloads) or
+  after it, never in between. Checking readiness outside the gate is what failed dictations with
+  "Recognizer is not initialized." `VadService` follows the same rule for trimming, and both check
+  for disposal inside the gate before any load, so a call that lost the race with `Dispose` never
+  brings the engine back.
+- **Cancellation is cooperative.** `Transcribe(audio, CancellationToken)` checks before the gate, after
+  acquiring it and between chunks. The native `Decode` cannot be interrupted, so a chunk boundary is
+  the only safe place to stop, and stopping throws `OperationCanceledException`: a partial transcript
+  must never be mistaken for a complete one. The controller passes its lifetime token.
+- **Long captures decode in chunks of at most 30 s** (`TranscriptionChunker`), one at a time, because
+  the batch overload pads them into one encoder batch and multiplies the allocation chunking exists to
+  cap. Seams are planned jointly: a dynamic program places every seam within 5 s of its even cut on the
+  quietest audio the other seams allow, and one extra chunk is planned whenever the slack cannot cover
+  a seam's whole search window. Without that rule a capture of exactly N x 30 s pinned every seam to a
+  30 s multiple, whatever was being said there, which is how long dictations lost words at every seam.
+  The scenario suite's category F checks the seams on real speech.
+- **Thread defaults are unchanged in 0.4.3, on purpose.** Automatic is half the logical processors,
+  clamped to 1 to 8. Measured with `AsrCheck --threads`: 8 threads use about 30% more CPU than 6, while
+  capping at 6 costs nothing at push-to-talk lengths and is 11 to 14% slower at 20 to 45 s on a quiet
+  machine, and more than 8 never helped. Measure on an Arm64 runner and a hybrid-core laptop before
+  changing it.
+
+## Dictation lifecycle and shutdown (read before touching the controller or OnExit)
+
+- **`Scribe.Core.Lifecycle.DictationLifecycle` owns the controller's state.** One gate covers the
+  phase, pause, closing, dictation id, activity epoch and idle-release claim, the rejected-activation
+  count, the duration ceiling, processing admission, both timers and the lifetime token, and the type
+  owns the shutdown order (begin shutdown, close timers, cancel, stop input, drain processing, complete
+  the history writer, and dispose the token source only when processing drained). `DictationController`
+  is a thin shell with no lock of its own. A change to admission, pause, timers or shutdown needs a test
+  in `DictationLifecycleTests`; the controller itself has no tests.
+- **The shell never waits on the UI thread.** Everything the dictation path raises is posted, never
+  invoked. `UiThreadDispatch` runs tray updates inline when the caller is already on the UI thread and
+  posts them otherwise, checking again when the work runs that its owner is not disposed, and
+  `PresentationRelay` carries the state changes. Only tray-menu and other UI-initiated paths still call
+  `Dispatcher.Invoke`. A synchronous marshal from the dictation path could deadlock a quit during silence
+  auto-stop.
+- **Presentation is ordered by revision.** `DictationLifecycle` numbers every change the shell shows,
+  under its gate, and `PresentationRelay` renders a change only when it is newer than the last one
+  rendered, so a late notice from the previous dictation can never hide or kill a newer recording's pill.
+  A warning carries its recording's revision and goes through `PublishIfCurrent`, which runs it only while
+  that revision is still the last one rendered; the tray notice for it stays independent.
+  `ProcessingHandOff` announces Processing before it starts the processing, and raising only posts, so
+  it never blocks.
+- **Each capture belongs to one recording.** `IAudioCaptureService.Start`, `RequestStop` and `Stop` take
+  the recording's dictation id as owner (0 means none). The service records the highest recording whose
+  stop has arrived and opens nothing for a recording at or below it, an owner-tagged stop touches only
+  that recording's capture, and however many callers stop one capture, exactly one receives its samples.
+  `RecordingCapture.Open` pairs the owner-tagged start with `DictationLifecycle.HandOffOpenedCapture`,
+  which gives a capture that opened late to the live recording if it is still recording, otherwise to its
+  processing if a stop admitted it (that processing's stop then receives every sample), and otherwise,
+  which only happens when shutdown began before any stop, lets the opener reclaim it. A failed start
+  returns to Idle only if it still owns the recording.
+- **Silence auto-stop follows the binding that fired.** `CaptureTriggerBinding.For` picks the binding
+  for the trigger that started the recording, and `StopsOnSilence` applies auto-stop only when that
+  binding is a toggle, so a held key never auto-stops. `DictationLifecycle` owns the tracker, tagged
+  with its dictation id: it attaches only while that recording is live, whatever ends the recording
+  drops it, and a firing tracker detaches itself and its stop names its own recording. The controller
+  subscribes to level updates once, for its lifetime.
+- **`ClosableTimer` records each schedule's due time.** A tick with nothing armed is dropped, an early
+  tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
+  close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
+  duration ceiling armed for one recording could end the next.
+- **History is written behind the dictation.** The controller returns to Idle the moment text is
+  inserted and hands the entry to the ordered `HistoryWriter`: one entry committing plus one pending.
+  When both are taken, the next dictation's processing thread waits up to 5 s
+  (`HistoryWriter.ProducerWaitBound`), then drops only its own entry with a shape-only Warning.
+  `IHistoryRepository` resolves to `OrderedHistoryRepository`, whose `GetRecent` waits up to 1 s and
+  whose `Delete`, `Clear` and `PruneOlderThan` wait up to 10 s for writes accepted before the call.
+  Never call the decorator from inside `HistoryRepository.Add`: that runs on the writer thread and
+  would wait on itself.
+- **`App.OnExit` runs every step through `StagedTeardown`**, each guarded on its own, so one failure no
+  longer skips the rest. `BeginShutdown` is the first step: from there the controller starts nothing new
+  and raises no more state. `StorageMaintenance.Stop(3 s)` comes right after it, before anything is
+  disposed. Host disposal comes after the controller, the tray and the settings-write drain.
+- **Exit has no overall deadline; its worst case is the sum of bounded waits:** 3 s for storage
+  maintenance, 3 s for the overlay's command thread, 5 s for processing and 5 s for the history writer
+  in the controller, 2 s for tray settings writes, 2 s for host stop, then host disposal (the history
+  writer's 5 s disposal, the AI cleanup drain of 5 s, the log writer's 2 s, the database's 3 s write
+  gate plus its final checkpoint, and up to 10 s for a device open still in progress when the capture
+  service is disposed), plus a native decode chunk or model load already running. After that open wait,
+  stopping the capture it opened ends in NAudio's disposal, which joins the capture thread with no bound.
+
+## Hotkey hook threading (read before touching the hook)
+
+- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard hook that
+  answers too slowly. The callback takes no lock, logs nothing, queues nothing to the thread pool and
+  uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
+  those can take a lock shared with another thread. One hook thread owns all key state.
+- **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
+  during a reinstall never shares key state with its replacement. A replaced engine is retired: it
+  passes every key through, requests no leak check, applies no queued command, and exactly one side
+  sends the stop for a trigger it interrupted.
+- **Configuration reaches the hook through `HotkeyCommandRouter`.** `UpdateBindings`, `SetCaptureMode`,
+  `CancelToggle` and `SetPaused` go into a lock-free inbox applied at the start of the next key event,
+  plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
+  keep command order and epoch order in step. Other threads read published state lock-free.
+  Transitions leave through a lock-free queue woken by a kernel event, and the leaked-key check runs
+  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`.
+- **The hook thread creates its message queue first** (`NativeMethods.EnsureMessageQueue`, the
+  `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
+  other threads can only post the router's wake to a thread that already has a queue, and the
+  documentation is not consistent about whether `SetWindowsHookEx` creates one.
+- **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
+  never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
+  chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
+  epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
+  the lifecycle gate, and the router ignores a request older than the last one applied.
+
+## Clipboard paste (read before touching ClipboardBorrower)
+
+- **Only state read while Scribe holds the clipboard authorizes a paste or a restore.** OpenClipboard
+  keeps other applications out only while it is open, so a sequence number read after CloseClipboard may
+  already belong to another application's copy. `ClipboardBorrower` trusts the number it read while
+  holding the clipboard right after its own last write, or, once that number has moved, its receipt (16
+  random bytes in a registered format only Scribe writes) plus the exact text, both checked under the
+  lock. `Confirm` opens the clipboard to check the receipt whenever the number has moved, so a copy
+  another application makes before that check is caught: no Ctrl+V is sent and the dictation is typed
+  instead. A copy made after the check and before the target reads the clipboard cannot be seen;
+  closing that gap would mean holding the clipboard across Ctrl+V, which blocks the target's own read.
+  The number read right after the release is only logged, as "close moved sequence".
+- **Every lease has a receipt.** A borrow whose receipt cannot be written is undone in the same open
+  session (the snapshot is put back) and reported as `ClipboardBorrowStatus.ReceiptFailed`; the injector
+  reports `PasteDelivery.ReceiptFailed`, logged at Warning, and types the text instead. There is no
+  degraded mode that trusts sequence numbers alone.
+- The paste log line carries enum names, counts and booleans only: nothing of the clipboard's content,
+  length or format names.
+
+## Storage maintenance (read before touching history or the database)
+
+- **The schema stays at `user_version` 7; never raise it for an additive change** (pattern P-11 in the
+  review skill). New columns and indexes are additive and probed on every open in
+  `ScribeDatabase.EnsureAdditiveSchema`; builds up to 0.4.2 refuse a higher version at startup, users
+  roll back, and the two channels can share one data folder, so any build may open a file a newer one
+  wrote. A build that meets a newer `user_version` throws `NewerDatabaseSchemaException`, and the app
+  says so and exits instead of hanging.
+- **Opt-in recordings are stored as 16-bit PCM.** A PCM16 blob opens with a 4-byte header
+  (`AudioBlobCodec.Pcm16Magic`) and is marked in `audio_blobs.encoding` (0 is the legacy float32).
+  Size things with `AudioBlobCodec.EncodedLength`, which includes the header.
+- **`StorageMaintenance` owns all retention**: history text follows the retention setting (90 days by
+  default), recordings at most 7 days and 250 MB, oldest first, cleanup failure samples 7 days, and
+  damaged-copy files 14 days after they are first seen, except that the newest damaged copy is never
+  deleted. The cap is re-checked inside each deletion slice's transaction.
+- **When and how it runs:** 30 s after startup, hourly, and 10 s after audio is stored or history is
+  deleted. Deletions go in slices of at most 8 MB per transaction, and free pages come back through
+  `incremental_vacuum` in 4 MB steps and a closing `TRUNCATE` checkpoint. Other writers, settings
+  aside (below), take `ScribeDatabase.EnterWriteScope` (bounded at 2 minutes), never across an await,
+  and a writer waiting on the gate interrupts a preemptible `VACUUM` or incremental step.
+- **Settings writes never take the maintenance write gate.** They ask maintenance to yield instead, and
+  every read-modify-write goes through `ISettingsRepository.Update`. Yields are sticky, enforced by a
+  SQLite progress handler, and each consecutive yield doubles the wait before heavy work returns, from
+  2 minutes up to the hourly interval.
+- **The one-time compaction (conversion plus `VACUUM`) runs only when the app is idle** (no dictation in
+  flight, Settings and quick add closed), the database has been quiet for 2 minutes and no foreground
+  scope is open. Its free-space check is sized on live pages, not the file size.
+- UI-thread work that touches the database opens `StorageMaintenance.EnterForegroundWork()` for its
+  duration (History learning, quick add, Settings). A session that starts without the user's saved
+  settings calls `KeepAllTextThisSession()`, so it deletes no history text.
+
+## Settings document (read before touching SettingsRepository)
+
+- **A lost document stays lost until the user saves.** A repair records the loss (the
+  `app_settings_lost` row) before it recovers a single row, and withdraws it only once a readable
+  document is back, so no crash or failure can leave recovered history in a database whose next start
+  reads as a first run and applies the default retention. If the record cannot be written, the repair
+  recovers nothing and every row stays in the damaged copy. Loss is judged by the document itself, not
+  by how many settings rows came back.
+- **Until a full Save stores a readable document, `LastLoadFailed` stays true.**
+  `SettingsRepository.StartsWithoutSavedSettings` answers it at startup, before anything writes the
+  document. The session then runs on defaults and keeps all history text, startup skips the migrations
+  that save the whole document (each also checks the read it makes itself) and the Start with Windows
+  reconcile, `Update` refuses to change the document, and the tray AI toggle and the Start with Windows
+  switch are refused with `SavedSettingsNotice`. The tray says what a repair actually recovered
+  (`DatabaseRepairNotice`).
+- **One in-process lock orders every settings write.** `Save`, `SaveBundle` and both kinds of `Update`
+  each run whole under it: BEGIN IMMEDIATE, the reads they decide by, the write, COMMIT and the
+  bookkeeping after it. The IMMEDIATE transaction excludes other connections; the lock fixes the order
+  of this process's writers whatever SQLite does with its own lock. It does not merge documents: two
+  callers that each loaded the document and then save the whole of it still write last-wins for every
+  field, which is why read-modify-write callers go through `Update`, and why the AI switch has its own
+  intent ordering below. Settings writes still never take the maintenance write gate.
+- **The AI switch invariant.** The newest intent for the AI cleanup switch wins, ordered by when the
+  user made it, from the tray or in the Settings window, and a whole-document save never writes over a
+  stored value its window neither showed nor changed. A tray change takes a revision
+  (`ExternalSwitchSync.NextRevision`) and goes through the checked
+  `Update(mutate, revision, out superseded)`. A save passes its window's newest intent as
+  `SaveBundle(..., aiCleanupIntent)`, which supersedes every tray change up to it, and a save with none
+  keeps the stored value and hands it back to the window. Dictation and the tray always apply the
+  settings as stored, never the value the tray asked for.
+- **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
+  same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
+  about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+
+## Startup (read before touching OnStartup)
+
+- **Everything after the single-instance mutex is guarded.** `OnStartup` takes the mutex and awaits
+  `StartAsync`; any exception out of it goes to `AbandonStartup`, which logs it by shape and stack,
+  shows `StartupFailureNotice` (naming the log file when one is being written) and calls `Shutdown`,
+  which releases the mutex in `OnExit`. If `Shutdown` itself throws, the process exits anyway. A start
+  that failed partway used to leave an invisible process holding the mutex, so every relaunch reported
+  Scribe as already running.
+- **The deliberate exits keep their own messages.** A database written by a newer Scribe shows "This
+  data was created by a newer version of Scribe. Please install the latest version." (from `StartAsync`,
+  or from `AbandonStartup` if `NewerDatabaseSchemaException` surfaces anywhere else), and a data folder
+  that cannot be created shows its own notice. Both then shut down cleanly.
+
 ## Overlay architecture (read before touching the pill)
 
 The recording "pill" is a **separate WinUI 3 process**, not a WPF window. This is the
@@ -370,9 +752,38 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   walking the repo to `src\Scribe.Overlay\bin\...\Scribe.Overlay.exe`.
 - **Orphan safety:** the overlay is launched into an OS **Job Object** (kill‑on‑close) and
   also runs a parent‑PID watchdog (`--parent`), so the pill can never outlive the engine.
+- **The helper's lifetime is decided in Core, and only there.** `Scribe.Core.Overlay.OverlayHelperLifetime`
+  (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, suspend and
+  relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, kill) and has
+  no tests of its own, so a new rule lands in the Core type with a scripted fake-clock test
+  (`OverlayHelperLifetimeTests`). The rules:
+    - Every state command resets an idle deadline. After the keep-warm period with nothing on screen the
+      helper is suspended and the next show relaunches it. The app pushes the period with
+      `SetKeepWarm(ReleaseModelsAfterIdleMinutes)` at startup, with every state change and when Settings
+      saves; 0 keeps the helper resident.
+    - Pausing dictation hides the pill, then sends a stamped `ReleaseWhenIdle`, vetoed like the idle
+      suspend.
+    - Both are re-checked at the commit point: a command stamped after the deadline was armed, or a
+      recording or processing pill that must show, vetoes them. Stamps are taken when a command is
+      queued, never in the consumer.
+    - A failed launch starts a cooldown of 1 s doubling to 60 s. While it runs nothing relaunches the
+      helper; if a recording or processing pill must show, one retry at cooldown end replays only the
+      latest state and position. A helper lost within 10 s of launching, judged by its process exit
+      time, counts as a failed launch; a successful launch resets the backoff.
+- `OverlayPreviewGate` (Core) drops the commands of a superseded position preview and restores the
+  applied position on the first engine command after one.
+- **Never tie the helper to `DictationController.ModelsReleased`.** Releasing the speech models and
+  ending the pill are separate decisions; the old wiring could end a newer recording's pill.
+- **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
+  dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
-  `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, and that the overlay PID
-  stays alive (no teardown) with **zero IOExceptions** after launch.
+  `SystemBackdrop=TransparentBackdrop assigned`, `TransparentBackdrop.OnTargetConnected applied`,
+  `size=462x192`, `transparent=True` and `backdrop=TransparentBackdrop`, and that the overlay PID
+  stays alive (no teardown) with **zero IOExceptions** after launch (and no `0x80040154` or
+  `0x8007007E`, which point to a missing component). The failure and warning pills log
+  `reasonLength=<n>`, never the reason text. The client's lifetime lines are `Overlay helper suspended
+  after N idle minutes`, `Overlay helper released because dictation was paused`, `Overlay relaunch
+  retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
 
 ## Azure authentication (read before touching credentials)
 
@@ -440,6 +851,33 @@ builds the `TokenCredential`; everything else goes through it.
   on disk, and persistent `AZURE_CLIENT_*` variables would hijack every other Azure tool on the box.
 - User-facing setup lives in `docs/service-principal-setup.md` and is linked from Settings.
 
+## Start with Windows (read before touching the switch or the startup task)
+
+- **The switch applies the moment it is flipped.** `StartupToggle` saves the preference first, as a
+  one-field write (`StartupPreference.PersistAsync`, through `ISettingsRepository.Update` on a worker
+  thread), then asks Windows. The switch is disabled while it applies, a second flip is refused until the
+  first finishes, a failure reverts it, and it shows what Windows reports and why. Save never changes
+  Start with Windows and Cancel does not undo it; a flip is also refused while Save runs and while
+  Scribe runs on defaults because the saved settings could not be used (see Settings document).
+  Microsoft's toggle guidance says a toggle takes effect
+  immediately; the old switch applied only at Save, after validations that could stop Save, so a change
+  could be lost without a word.
+- **Windows' own choice always wins.** The package startup task is declared disabled, so a fresh
+  install stays opt-in; startup enables it only to migrate an existing opt-in and otherwise never
+  touches it, and `RequestEnableAsync` shows no consent dialog for a packaged desktop app and never
+  overrides a user's disable. For the direct download, the Run value alone does not say whether Windows
+  will launch it: Windows keeps the Task Manager and Settings choice under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`, which Scribe reads
+  (undocumented; the low bit of the first byte means turned off by the user) and **never writes**. When
+  Windows reports Scribe turned off there, the switch is locked and points to Windows Settings.
+- **Isolated mode never touches the installed app's registration.** With `SCRIBE_DATA_DIR` (or an
+  explicit root) the instance never reconciles Start with Windows at launch, because its preference
+  belongs to a scratch profile while the Run entry or package task belongs to the installed app; an
+  explicit flip of the Settings switch still applies. `AppPaths.CreateForStartup` probes an isolated
+  root and throws `IsolatedDataFolderException` instead of falling back under `%LOCALAPPDATA%`, and the
+  app says so and closes. `AppPaths.IsIsolatedRoot` is the one definition of isolated mode, used by
+  startup registration, the Foundry Local data directory and that probe.
+
 ## Releases & Velopack (gotchas)
 
 `build/pack.ps1` publishes a self-contained app for each requested architecture (`-Architecture
@@ -458,8 +896,18 @@ store, GitHub signing secrets, or a publisher trust bundle.
   `Scribe-win-<arch>-Setup.exe`, `Scribe-win-<arch>-Portable.zip`, and `releases.win-<arch>.json`
   but keep the older `*-full.nupkg`s so the delta can build.
 - One Velopack channel per architecture, `win-x64` and `win-arm64`, so an install only ever
-  receives updates built for its own silicon. The full nupkg is large (~650 MB, the overlay adds
-  ~90 MB self‑contained); the delta is small (~86 MB).
+  receives updates built for its own silicon. The full nupkg is large (about 650 MB when last
+  measured, with the overlay adding about 90 MB self‑contained; 0.4.3 cut the overlay's uncompressed
+  payload from 224 to 169 MiB on x64 by referencing only the Windows App SDK components it uses); the
+  delta is small (~86 MB).
+- **`vpk` is pinned to the Velopack package version**, as docs.velopack.io recommends. `pack.ps1` reads
+  the `Velopack` version from `Directory.Packages.props` and calls `Sync-ScribeVelopackCli` from
+  `scripts/Velopack-Cli.ps1` before anything else: the installed version is read with
+  `dotnet tool list`, which works offline, and the feed is contacted only when vpk is missing or at a
+  different version, so a machine that already has the right vpk can pack offline. Never go back to an
+  unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
+- Each release's notes live in `docs/release-notes-<version>.md` (this release:
+  `docs/release-notes-0.4.3.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -571,10 +1019,11 @@ Both installers are kept on purpose. The Store is the recommended path (Microsof
 there is no SmartScreen friction), but Store certification adds latency to a hotfix, a low-level
 keyboard hook plus microphone capture is the kind of profile that attracts policy review, and many
 managed corporate devices block the Store outright. The direct download is the escape hatch for all
-three. Both installs share `%LOCALAPPDATA%\ScribeData`, so a user can move between channels
-without losing settings, dictionary, or history.
+three. Where the real `%LOCALAPPDATA%\ScribeData` exists, both installs share it, so a user can move
+between channels without losing settings, dictionary, or history; a fresh Store-only install may have
+it redirected into the package instead (see AppData write virtualization below).
 
-### AppData write virtualization (this section was wrong until 0.3.11)
+### AppData write virtualization (this section was wrong until 0.3.11; updated for 0.3.13)
 
 Earlier revisions of this file claimed `Environment.GetFolderPath(LocalApplicationData)` "is not
 virtualized for a packaged Win32 app". **That is false.** On Windows 10 1903 and later, a folder a
@@ -598,17 +1047,22 @@ never reproduced on a dev machine because redirection only applies to **new** fo
 machine that has also run the Velopack build already has a real `ScribeData` for the package to
 write straight into.
 
-The fix is a `virtualization:ExcludedDirectory` for `$(KnownFolder:LocalAppData)\ScribeData` in
-`build/pack-msix.ps1`, which requires the `unvirtualizedResources` restricted capability, plus a
-one-time migration in `AppPaths` (`VirtualizedRootDir`) so existing Store users keep their data.
-**Do not remove either.**
+**No folder is exempted any more.** 0.3.11 and 0.3.12 excluded `$(KnownFolder:LocalAppData)\ScribeData`
+with `virtualization:ExcludedDirectory`, which needs the `unvirtualizedResources` restricted
+capability. The Store denied that capability (policy 10.6.3, 2026-08-27), so 0.3.13 removed the
+exclusion and `build/pack-msix.ps1` declares neither; do not add them back. Every install that already
+has a real `ScribeData` keeps using it, and a fresh Store-only install lands in the package's
+`LocalCache`. What makes that livable is **reporting the folder that really exists**, below. The
+one-time migration in `AppPaths` from `VirtualizedRootDir` (written for the exclusion) is still
+there; it copies a database only into a root that has none and library files only where the name is
+free, so it never overwrites anything.
 
 **Two families of path, and they are not interchangeable.** `AppPaths` exposes `RootDir`/`LogsDir`/
 `DatabasePath` alongside `EffectiveRootDir`/`EffectiveLogsDir`/`EffectiveDatabasePath`:
 
 - **Scribe's own file I/O uses the plain ones.** Inside the container the merged view resolves them
   correctly whether or not redirection is on. Pointing internal I/O at the package store would work
-  today and break the moment redirection is turned off.
+  on a redirected install and break on every install that is not redirected.
 - **Anything handed outside the process uses the `Effective` ones**: the About page text boxes, the
   Copy buttons, `OpenFolder`, and the session banner. Explorer and the clipboard live outside the
   container, so the plain path is the one that reads as "that folder isn't there".
@@ -671,10 +1125,12 @@ mechanically rather than by review.
   machine field directly (no `dumpbin`, which needs the C++ workload). Both installers call it.
   Verified working: it accepts a real ARM64 payload and rejects that same payload when claimed as
   x64.
-- **`tools/Scribe.AsrCheck` is the only thing that proves the native engine actually decodes.**
-  The unit tests deliberately never load sherpa-onnx, so a wrongly-packaged native passes every test
-  and fails on the user's first dictation. CI runs it on both architectures against speech generated
-  by `scripts/New-SpeechFixtures.ps1`.
+- **A decode through the real native engine is what proves it works.** `tools/Scribe.AsrCheck` decodes
+  generated speech through `TranscriptionService`, and CI runs it on both architectures against speech
+  from `scripts/New-SpeechFixtures.ps1`, followed by the quick scenario suite. The model-dependent unit
+  tests load sherpa-onnx and Silero too, but only when models are found (`SCRIBE_MODELS_DIR`, which CI
+  sets, or the repository's models folder); without them they pass vacuously, so a green local test run
+  on a machine without models says nothing about the native engine.
 - **Fixture phrases avoid numbers, dates and times on purpose.** Scribe's editorial rules correctly
   rewrite "three thirty" as "3.30", which scores as a mismatch and blunts the threshold that is
   meant to catch a broken native.
@@ -742,24 +1198,100 @@ WebGPU compute pipeline" failure reproduced on Snapdragon Adreno and on Intel Lu
 different models. Scribe demotes to the CPU build automatically, on both the shader failure at
 inference and the provider-unavailable failure at load, and remembers it.
 
+**Nothing downloads by browsing.** Opening the AI page or picking Foundry Local in the provider list
+starts nothing. Only Set up Foundry Local, Load, or saving with cleanup on may initialize the runtime,
+which fetches several GB of execution-provider runtimes the first time. Keep any new UI behind the
+same rule.
+
+**One app-data directory, resolved once.** `FoundryLocalStorage.ResolveAppDataDir(AppPaths)` returns
+`%USERPROFILE%\.Scribe`, the SDK's own `{home}/.{AppName}` default and where existing installs already
+keep their downloads, or `<data root>\foundry` in isolated mode (`AppPaths.IsIsolatedRoot`). That one
+value is both `AppDataDir` in the first configuration the process creates (the SDK manager is a
+process-wide singleton) and the only root reclaim may delete under. Models live in `cache\models`
+below it and execution-provider downloads in `ep` (observed on real installs, not documented by the
+SDK). Never move the default: every existing download would be orphaned and fetched again.
+
+**Scribe gives the disk back by rule.** `FoundryStoragePolicy` decides (pure, with a test of every
+combination) and `FoundryStorageJanitor` deletes:
+- Saving a provider other than Foundry Local unloads the models, stops the web service Scribe
+  started, removes the models Scribe downloaded and deletes the execution-provider downloads; any of
+  those loaded in this process are deleted at the next start instead.
+- Switching Foundry Local models deletes the other models once the new one is in use.
+- Switching AI cleanup off while Foundry Local stays selected, the tray toggle included, only unloads,
+  to free memory; the files stay so switching back is quick.
+- At startup with another provider saved, whatever earlier sessions left is reclaimed. With Foundry
+  Local saved, cleanup off and no model cached, the runtime came from browsing and is deleted (reason
+  `RuntimeWithoutModel`). With models cached, the selected alias's variants and the runtime stay, and
+  every other alias goes once the selected model is serving.
+- While another provider stays saved nothing is reclaimed mid-session, and queued reclaim, unload and
+  keep-only work drops out if the user explicitly loaded or listed models after it was scheduled.
+- The janitor renames a directory to a `.reclaim-` tombstone before deleting it, which Windows refuses
+  while a file inside is open. It refuses anything outside the root and any junction or symbolic link
+  on the way, and leaves whole a directory holding a module loaded in this process.
+
+**Disposal is a contract.** Every `TextCleanupService` entry point holds a `CleanupOperationTracker`
+lease. Disposal closes admission, cancels through the lifetime token and waits up to 5 s for every
+admitted operation, superseded initializations and storage work included, and only then releases
+shared resources, inside `Task.Run` so a blocked single-threaded synchronization context cannot
+deadlock it. Anything still running after 5 s keeps its resources until process exit
+(`LeftToProcessExit`, logged as counts) rather than having them disposed while in use.
+
+**Every reason has two forms.** `CleanupReason` builds a safe form (fixed phrases, provider or model
+id, HTTP status) for `FailureReason`, `SkipReason` and the status reason, which reach logs, trace tags
+and the overlay, and a form that may name the host or quote the endpoint, for `StatusDetail` and
+`CleanupResult.DisplayDetail` only. Settings shows the detail, and the controller records
+`DisplayDetail ?? reason` in the local failure log; neither is ever logged or exported.
+
+**Reclaimed space is announced.** `ITextCleanupService.FoundryStorageReclaimed` fires on a background
+thread, only when something was freed, with the reason (`ProviderIsNotFoundryLocal`, `ModelSwitched`
+or `RuntimeWithoutModel`), the bytes freed and counts. The app subscribes before `_controller.Start()`,
+because the startup reclaim runs with the first configuration, and marshals to the dispatcher to show
+the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the reason code only.
+
+## AI cleanup service state (read before touching TextCleanupService)
+
+- **One writer for the status, and only its owner lands.** `WriteStatusLocked` is the only place the
+  status is assigned. It accepts a write only on behalf of the current generation's owner, and never once
+  disposal has begun, so a writer that lost ownership (a superseded initialization failing late, a reload
+  after an eviction) cannot land anything, however late it runs. The four rules are written in the
+  comment at `_initGeneration` in `TextCleanupService.cs`; read them before adding any path that starts,
+  cancels or finishes an initialization. `ReserveInitializationLocked` is the only way to start one, and a
+  path that cancels a live initialization without taking ownership (`CancelPendingConfigure`) takes over
+  its outcome. The old `SetStatus` no longer exists, so a branch that still calls it fails to compile
+  instead of bypassing the rule.
+- **Notifications are raised outside `_gate`.** `StatusChanged` carries nothing and is raised after the
+  locks its decision was made under are released. An initialization still raises its progress, outcome
+  and Ready notifications before it releases `_initLock`, so a subscriber reached from them runs under that
+  lock.
+- **A failed or cancelled manual Load resumes cleanup.** A Load marks the live generation Interrupted
+  before cancelling it, and `RestartCancelledConfigure` restarts it ("Resuming AI cleanup setup…") unless
+  something newer took ownership meanwhile. An identical save is coalesced only while serving, or while an
+  initialization is truly live.
+- **A prompt-only change rebuilds in place.** When the new options differ only in what the prompt says
+  (`CleanupOptions.MatchesIgnoringPrompt`: the writing style, the glossary, the prompt style and either
+  guardrail prompt) while serving, the service rebuilds the default agent from its existing factory
+  under `_gate`, with no I/O, clears the per-style agents and stays Ready: no restart, reconnect, probe or
+  new generation. Outside Ready, or if the factory throws, it falls back to a full restart.
+  `DictationController.AnnounceCleanupChange` ignores the same fields, so a prompt edit announces nothing.
+
 ## Git workflow
 
 - Branch off `main`; keep PRs small and focused. Open an issue first for large changes.
-- This checkout is a fork workflow. `origin` is John's fork, `https://github.com/x3nc0n/scribe.git`,
-  and is the only remote this working tree should push to. `upstream` is Chris McKee's original
-  repo, `https://github.com/ChrisMcKee1/scribe.git`, and is the review and merge target. Never push
-  directly to `upstream`.
+- In this checkout `origin` is the maintainer's repository, `https://github.com/ChrisMcKee1/scribe.git`,
+  which is also the review and merge target. Run `git remote -v` before pushing anything: a
+  contributor's fork checkout is laid out differently.
+- **Contributor path (a fork).** John (`x3nc0n`) works from a fork. There `origin` is
+  `https://github.com/x3nc0n/scribe.git`, the only remote that working tree pushes to, and `upstream`
+  is the maintainer's repository. Push branches to the fork and open pull requests from them to
+  `upstream:main`; never push directly to `upstream`. To update an existing upstream pull request,
+  push more commits to the exact same fork branch the pull request already uses as its head branch.
 - John's ongoing split on this repo is: primary maintainer for the native macOS port under
   `macos/Scribe/`, secondary contributor for Windows bug fixes under `src/Scribe.*`,
   `tests/Scribe.Core.Tests/`, and related docs.
-- Normal contribution flow: create or update a branch on `origin`, push there, then open a pull
-  request from that fork branch to `upstream:main`. To update an existing upstream pull request,
-  push more commits to the exact same `origin` branch that the pull request already uses as its
-  head branch.
 - Current example: upstream PR #61 is `x3nc0n/scribe:main` into `ChrisMcKee1/scribe:main` and
-  carries the native macOS port. Because Chris can merge unrelated Windows work into
-  `upstream/main` at any time, `origin/main` must periodically catch up from `upstream/main`, then
-  be pushed back to `origin/main` so PR #61 stays mergeable.
+  carries the native macOS port. Because unrelated Windows work can land on the maintainer's `main` at
+  any time, the fork's `main` must periodically catch up from `upstream/main` and be pushed back to the
+  fork so PR #61 stays mergeable.
 - Commit message: what changed **and why**. Always append this trailer (per house rule):
 
 ```
@@ -804,6 +1336,11 @@ inference and the provider-unavailable failure at load, and remembers it.
 - Logs to read when debugging: `%LOCALAPPDATA%\ScribeData\logs\scribe-<date>.log`. Config +
   `scribe.db` live under `%LOCALAPPDATA%\ScribeData`. Installed app:
   `%LOCALAPPDATA%\Scribe\current\` (overlay at `current\Overlay\`, models at `current\models`).
+- **Run a dev or test instance on an isolated data folder** by setting `SCRIBE_DATA_DIR` to a scratch
+  folder. It then leaves the installed app's settings, history and Foundry Local downloads alone (its
+  own Foundry Local files go to `<SCRIBE_DATA_DIR>\foundry`) and never reconciles Start with Windows at
+  launch, though flipping the Settings switch still changes it. If the folder cannot be created, the
+  instance closes with a message instead of falling back to `%LOCALAPPDATA%\ScribeData`.
 - When killing Scribe processes here, query PIDs first and use **`Stop-Process -Id <literal-PID>`**
   (name/pipe kills and `-Id $_.Id` in a pipeline are blocked by the sandbox guard).
 - **`gh` has two accounts:** `chrismckee_microsoft` (an Enterprise Managed User, often active)

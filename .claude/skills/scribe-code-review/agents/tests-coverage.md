@@ -78,12 +78,12 @@ it is **untestable by construction**. When you find one:
 - Cross-reference `core-app-layering`, which owns the layering half. If that lens also fired, defer to
   it under the synthesis specificity order and keep your row in the matrix.
 
-**The unit tests deliberately never load sherpa-onnx.** `AGENTS.md` is explicit under Architecture
-support: *"The unit tests deliberately never load sherpa-onnx, so a wrongly-packaged native passes
-every test and fails on the user's first dictation."* `TranscriptionServiceTests` and
-`TranscriptionAccuracyTests` do construct the real recognizer, but both return early when the models
-are absent, which is the normal state on a machine or a CI leg that has not run
-`scripts/Download-Models.ps1`. Treat them as opportunistic, not as coverage you can count.
+**The unit tests are not coverage for the native engine.** `AGENTS.md` is explicit under Architecture
+support: the model-dependent tests *"load sherpa-onnx and Silero too, but only when models are found
+... without them they pass vacuously"*. `TranscriptionServiceTests` and `TranscriptionAccuracyTests` do
+construct the real recognizer, but both return early when the models are absent, which is the normal
+state on a machine that has not run `scripts/Download-Models.ps1` and has no `SCRIBE_MODELS_DIR`. CI
+sets it, so they run there. Treat them as opportunistic, not as coverage you can count.
 
 For anything that needs the native engine to decode, **"add a unit test" is the wrong ask**. Say
 "run AsrCheck" instead, and give the commands:
@@ -141,22 +141,27 @@ Three separate tests, because three separate things have gone wrong (see P-7 in
 
 If the property is a secret, the DPAPI converter is a fourth concern; see §3.5.
 
-### 3.2 A new SQLite migration step
+### 3.2 A new SQLite schema step
 
-`ScribeDatabase.Migrate` (`src/Scribe.Core/Persistence/ScribeDatabase.cs:383`) is a forward-only chain
-of `if (current < N)` blocks gated on `PRAGMA user_version`, with `SchemaVersion`
-(`ScribeDatabase.cs:23`) currently at 6. Two tests:
+The schema is additive and idempotent (pattern P-11): `ScribeDatabase.Migrate`
+(`src/Scribe.Core/Persistence/ScribeDatabase.cs:872`) keeps the historical `if (current < N)` chain up
+to v7, `SchemaVersion` (`ScribeDatabase.cs:30`) stays 7, and every newer column or index goes into
+`EnsureAdditiveSchema` (`:928`), which runs on every open. Three tests:
 
-- **Upgrade from each prior version that can still exist in the wild.** Build a database at the old
-  version, open it through the real `ScribeDatabase`, assert the new column or table is present and
-  that the old rows survived with their data intact. Siblings:
+- **Upgrade from each prior shape that can still exist in the wild.** Build a database at the old
+  shape, open it through the real `ScribeDatabase`, assert the new column or table is present and that
+  the old rows survived with their data intact. Siblings:
   `SnippetMigrationTests.V6_migration_adds_transcription_model_id_to_v5_history`
-  (`tests/Scribe.Core.Tests/SnippetMigrationTests.cs:13`) and
-  `V4_migration_reopens_v3_purges_exact_junk_and_advances_schema` (`SnippetMigrationTests.cs:58`).
+  (`tests/Scribe.Core.Tests/SnippetMigrationTests.cs:13`),
+  `V4_migration_reopens_v3_purges_exact_junk_and_advances_schema` (`SnippetMigrationTests.cs:58`), and
+  `AudioStorageSchemaTests` for an additive column on a v7 file.
+- **Older builds can still use the file.** A file this build wrote keeps `user_version` at or below 7
+  and still works for the SQL an older build runs. Sibling:
+  `AudioStorageSchemaTests.A_database_written_by_this_build_still_works_for_the_sql_an_older_build_runs`.
 - **Refuse to downgrade.** A database whose `user_version` is greater than this build supports must
-  throw with a message telling the user to install a newer Scribe, not silently open and lose data.
-  Sibling: `SnippetMigrationTests.Future_schema_is_rejected_without_retry_leaks`
-  (`SnippetMigrationTests.cs:106`).
+  throw `NewerDatabaseSchemaException`, which the app turns into an "install the latest version"
+  message, not silently open and lose data. Siblings:
+  `SnippetMigrationTests.Future_schema_is_rejected_without_retry_leaks` and `NewerDatabaseSchemaTests`.
 
 A schema or migration change is also an **"Ask first"** item in `AGENTS.md`, so note it for
 `maintainer-decision` rather than treating the missing test as the whole story.
