@@ -209,9 +209,12 @@ struct TranscriptionResult: Sendable, Equatable {
 ///
 /// Cancellation stops a recognizer that is still running and then throws `TranscriptionError.cancelled`; a run
 /// stopped that way never yields a transcript, however complete its output looks. A cancellation that arrives
-/// after the run has seen the recognizer exit on its own, for example while a process the recognizer left
-/// behind still holds its output open (up to `ProcessRunner.postExitDrainLimit`), does not discard its
-/// transcript: `transcribe` returns it, and the caller, which knows why it cancelled, decides whether to use it.
+/// after the runner observed the recognizer's exit, for example while a process the recognizer left behind still
+/// holds its output open (up to `ProcessRunner.postExitDrainLimit`), does not discard its transcript:
+/// `transcribe` returns it, and the caller, which knows why it cancelled, decides whether to use it. The runner
+/// observes the exit when it handles the kernel's exit notification, so one narrow window remains: a cancellation
+/// it handles first, even one delivered ahead of that notification in the same batch of kernel events, still
+/// counts as stopping the recognizer and discards the output.
 ///
 /// The recognizer is looked up again for every transcription, reusing a successful lookup for a few seconds,
 /// so installing Foundry Local while Scribe runs takes effect on the next dictation. Logs carry shapes only:
@@ -289,8 +292,9 @@ final class TranscriptionEngine: Sendable {
         }
     }
 
-    /// Transcribes 16 kHz (or `sampleRate`) mono samples. Throws `TranscriptionError`; see the type's notes on
-    /// cancellation, which does not discard a transcript from a recognizer that already exited on its own.
+    /// Transcribes 16 kHz (or `sampleRate`) mono samples. Throws `TranscriptionError`. A cancellation that arrives
+    /// after the runner observed the recognizer's exit does not discard its transcript; one the runner handles
+    /// before the kernel's exit notification, even in the same batch of events, still does (see the type's notes).
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }

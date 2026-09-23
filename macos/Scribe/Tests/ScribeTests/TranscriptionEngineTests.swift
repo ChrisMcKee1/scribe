@@ -320,23 +320,38 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertTrue(scratchFiles(scratch).isEmpty)
     }
 
-    /// Waits for `pid` to exit and then for the process runner, its parent, to reap it, which is when the run has
-    /// seen the exit. Bounded, so a regression fails the test instead of hanging it.
-    private func waitUntilReaped(_ pid: pid_t) async -> Bool {
-        guard ProcessResources.waitForExit(of: pid, timeout: .seconds(30)) else { return false }
-        for _ in 0..<1_000_000 {
-            if kill(pid, 0) == -1, errno == ESRCH {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
+    /// A `ProcessRunner.systemCalls` stand-in whose first read after the recognizer written to `leaderPath` has been
+    /// reaped (so the runner has observed its exit) waits on `release` until the test lets it go, after announcing
+    /// itself on `held`. The run cannot complete in between, so whatever the test does there happens after the
+    /// observed exit and before completion, however slowly the test is scheduled.
+    private func readsHeldAfterTheObservedExit(
+        of leaderPath: String, held: AudioTestSignalLatch, release: DispatchSemaphore
+    ) -> ProcessRunnerSystemCalls {
+        let holding = OSAllocatedUnfairLock(initialState: false)
+        return ProcessRunnerSystemCalls(
+            listProcessGroup: ProcessRunnerSystemCalls.live.listProcessGroup,
+            readPipe: { descriptor, buffer, count in
+                if !holding.withLock({ $0 }),
+                    let recorded = try? String(contentsOfFile: leaderPath, encoding: .utf8),
+                    let leader = pid_t(recorded.trimmingCharacters(in: .whitespacesAndNewlines)),
+                    kill(leader, 0) == -1, errno == ESRCH,
+                    holding.withLock({ claimed -> Bool in
+                        defer { claimed = true }
+                        return !claimed
+                    })
+                {
+                    held.signal()
+                    _ = release.wait(timeout: .now() + .seconds(30))
+                }
+                return ProcessRunnerSystemCalls.live.readPipe(descriptor, buffer, count)
+            })
     }
 
     /// The recognizer printed its transcript and exited on its own, and a process it left behind still holds its
-    /// output open while the run waits out the drain limit. A cancellation that arrives then must not discard the
-    /// finished transcript: the lifecycle decides what a cancelled dictation does with it.
-    func testACancellationAfterTheRecognizerExitedKeepsItsTranscript() async throws {
+    /// output open. The runner is held after it has observed that exit and before the run completes, and the
+    /// cancellation arrives then: it must not discard the finished transcript, because the lifecycle decides what a
+    /// cancelled dictation does with it.
+    func testACancellationAfterTheRunnerObservedTheExitKeepsTheTranscript() async throws {
         let directory = try makeTemporaryDirectory(label: "asr")
         let directoryPath = directory.path(percentEncoded: false)
         let gatePath = directory.appendingPathComponent("gate").path(percentEncoded: false)
@@ -359,17 +374,19 @@ final class TranscriptionEngineTests: XCTestCase {
         let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
         let engine = makeEngine(foundry: script, scratch: scratch)
         let samples = tone
+        let held = AudioTestSignalLatch()
+        let release = DispatchSemaphore(value: 0)
+        let systemCalls = readsHeldAfterTheObservedExit(of: leaderPath, held: held, release: release)
 
         let task = Task {
-            try await engine.transcribe(samples: samples, sampleRate: 16_000)
+            try await ProcessRunner.systemCalls.withValue(systemCalls) {
+                try await engine.transcribe(samples: samples, sampleRate: 16_000)
+            }
         }
-        let leaderReady = await FileGate.waitForFile(at: leader, timeout: .seconds(30))
-        XCTAssertTrue(leaderReady)
-        let recognizer = try XCTUnwrap(
-            pid_t(try String(contentsOf: leader, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
-        let reaped = await waitUntilReaped(recognizer)
-        XCTAssertTrue(reaped, "the run never reaped the recognizer")
+        let heldAfterExit = await held.wait()
+        XCTAssertTrue(heldAfterExit, "the runner never read after reaping the recognizer")
         task.cancel()
+        release.signal()
 
         let result = try await task.value
 

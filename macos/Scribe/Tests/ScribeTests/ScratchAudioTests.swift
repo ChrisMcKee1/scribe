@@ -121,17 +121,19 @@ final class ScratchAudioTests: XCTestCase {
             ScratchAudioDirectory.SweepResult(removed: 1, keptInUse: 2, keptRecent: 2, failed: 0, legacyRemoved: 1))
     }
 
-    func testTheSweepRemovesTheOldDirectoryOnceNothingIsLeftInIt() throws {
+    func testTheSweepNeverRemovesTheEarlierBuildsDirectory() throws {
         let root = try makeTemporaryDirectory(label: "scratch")
         let legacy = root.appendingPathComponent("asr-work", isDirectory: true)
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
         let now = Date()
-        _ = try makeFile(named: "captured-9.wav", in: legacy, age: 7_200, now: now)
+        let old = try makeFile(named: "captured-9.wav", in: legacy, age: 7_200, now: now)
 
-        ScratchAudioDirectory(url: root.appendingPathComponent("missing"), legacyDirectory: legacy)
+        let result = ScratchAudioDirectory(url: root.appendingPathComponent("missing"), legacyDirectory: legacy)
             .sweepAbandoned(now: now, isAnotherScribeRunning: { false })
 
-        XCTAssertFalse(exists(legacy))
+        XCTAssertEqual(result.legacyRemoved, 1)
+        XCTAssertFalse(exists(old))
+        XCTAssertTrue(exists(legacy))
     }
 
     /// Earlier builds name their recordings without a process id and wait on the recognizer without a limit, so
@@ -160,19 +162,40 @@ final class ScratchAudioTests: XCTestCase {
         XCTAssertEqual(later, ScratchAudioDirectory.SweepResult(keptRecent: 1, legacyRemoved: 1))
     }
 
-    /// An empty directory of an earlier build is not removed while another Scribe runs: that build creates it just
-    /// before writing each recording, and removing it in between would fail its dictation.
-    func testAnEmptyEarlierDirectoryIsKeptWhileAnotherCopyOfScribeRuns() throws {
+    /// The process check finds no other Scribe, and an older copy starts right after it. That build prepares
+    /// `asr-work` (which succeeds, the directory exists) and then writes its recording into it atomically, as a
+    /// separate step. The sweep removes the old recording in between, and the older copy's write must still
+    /// succeed, so the directory is never removed, even when the sweep has just emptied it.
+    func testAnOlderCopyThatStartsAfterTheProcessCheckStillWritesItsRecording() throws {
         let root = try makeTemporaryDirectory(label: "scratch")
         let legacy = root.appendingPathComponent("asr-work", isDirectory: true)
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let now = Date()
+        let old = try makeFile(named: "captured-1.wav", in: legacy, age: 7_200, now: now)
         let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("missing"), legacyDirectory: legacy)
+        var prepared = false
 
-        scratch.sweepAbandoned(isAnotherScribeRunning: { true })
+        let result = scratch.sweepAbandoned(
+            now: now,
+            isAnotherScribeRunning: {
+                let noOtherScribe = false
+                // The older copy starts after the snapshot above and prepares its directory.
+                do {
+                    try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+                    prepared = true
+                } catch {
+                    prepared = false
+                }
+                return noOtherScribe
+            })
+        let written = legacy.appendingPathComponent("captured-2.wav")
+        try Data([1, 2, 3]).write(to: written, options: .atomic)
+
+        XCTAssertTrue(prepared)
+        XCTAssertEqual(result.legacyRemoved, 1)
+        XCTAssertFalse(exists(old))
         XCTAssertTrue(exists(legacy))
-
-        scratch.sweepAbandoned(isAnotherScribeRunning: { false })
-        XCTAssertFalse(exists(legacy))
+        XCTAssertTrue(exists(written))
     }
 
     /// The check the sweep relies on, against a real process: a copy of `sleep` under a name no other process

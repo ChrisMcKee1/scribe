@@ -53,7 +53,8 @@ struct ScratchAudioDirectory: Sendable {
     static let scribeExecutableName = "Scribe"
 
     let url: URL
-    /// The directory earlier builds wrote to, swept once they stop being written; `nil` to skip it.
+    /// The directory earlier builds wrote to, whose old recordings are swept; the directory itself stays. `nil`
+    /// to skip it.
     let legacyDirectory: URL?
 
     init(url: URL, legacyDirectory: URL? = nil) {
@@ -143,9 +144,9 @@ struct ScratchAudioDirectory: Sendable {
 
     /// Removes scratch recordings that nothing can still be using: files whose process no longer exists and
     /// that are older than `abandonedAfter`, and old files of earlier builds while no other copy of Scribe runs
-    /// (age alone never removes one; they wait for a later launch instead). Files of a live process, this one
-    /// included, and anything Scribe did not name are left alone, as is a scratch path that is a link or
-    /// belongs to someone else. Run it off the main actor at launch.
+    /// (age alone never removes one; they wait for a later launch instead, and their directory is never
+    /// removed). Files of a live process, this one included, and anything Scribe did not name are left alone, as
+    /// is a scratch path that is a link or belongs to someone else. Run it off the main actor at launch.
     @discardableResult
     func sweepAbandoned(
         now: Date = Date(),
@@ -178,8 +179,10 @@ struct ScratchAudioDirectory: Sendable {
             let recordings = Self.entries(in: legacyDirectory).filter {
                 $0.name.hasPrefix("captured-") && $0.name.hasSuffix(".wav")
             }
-            // An earlier build names its recordings without a process id and creates this directory just before
-            // writing each one, so while any other Scribe runs neither a recording nor the directory may go.
+            // An earlier build names its recordings without a process id, so they go only while no other Scribe
+            // runs, and only old ones, which no copy that starts after this check can still be using. The directory
+            // itself is never removed: such a build prepares it and writes into it as two separate steps, sharing
+            // no lock with this process, so a copy that starts after the check could lose it in between.
             if isAnotherScribeRunning() {
                 result.legacyKeptWhileAnotherRuns = recordings.count
             } else {
@@ -194,8 +197,6 @@ struct ScratchAudioDirectory: Sendable {
                         result.failed += 1
                     }
                 }
-                // Succeeds only once the directory is empty.
-                rmdir(Self.fileSystemPath(legacyDirectory))
             }
         }
 
