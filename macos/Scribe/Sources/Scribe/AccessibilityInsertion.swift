@@ -17,6 +17,11 @@ protocol AccessibilityAttributeAccess {
 /// unanswered means nothing was written: `unresponsive`. A write that goes unanswered was still sent, and
 /// the application may apply it whenever it catches up: `unconfirmed`, which must never be followed by a
 /// paste or keystrokes, since those could insert the text a second time.
+///
+/// Each request can take up to the messaging timeout, so the calling task's cancellation is checked before
+/// every question and before the first write, returning `cancelled` with nothing written. Once any write
+/// has been sent there are no more checks: the insertion finishes the path it started, so a cancellation
+/// can never turn a write that may still land into a report that nothing was delivered.
 enum AccessibilityInsertion {
     @MainActor
     static func insert(
@@ -24,36 +29,55 @@ enum AccessibilityInsertion {
         into element: AXUIElement,
         using access: some AccessibilityAttributeAccess
     ) -> AccessibilityInsertionOutcome {
+        if Task.isCancelled {
+            return .cancelled
+        }
+
         let selectedText = kAXSelectedTextAttribute as CFString
         let settable = access.isSettable(selectedText, on: element)
         if settable.result == .cannotComplete {
             return .unresponsive
         }
 
-        if settable.result == .success, settable.settable {
-            let result = access.setValue(text as CFString, of: selectedText, on: element)
-            if result == .success {
-                return .inserted
-            }
-            if result == .cannotComplete {
-                return .unconfirmed
-            }
+        guard settable.result == .success, settable.settable else {
+            return spliceIntoValue(text, of: element, using: access, cancellable: true)
         }
 
-        return spliceIntoValue(text, of: element, using: access)
+        if Task.isCancelled {
+            return .cancelled
+        }
+
+        let result = access.setValue(text as CFString, of: selectedText, on: element)
+        if result == .success {
+            return .inserted
+        }
+        if result == .cannotComplete {
+            return .unconfirmed
+        }
+
+        // The application refused the write, so nothing was inserted, but a write has been sent: from here
+        // the path runs to its end without cancellation checks.
+        return spliceIntoValue(text, of: element, using: access, cancellable: false)
     }
 
     /// For elements whose selected text cannot be set: replaces the selection inside the whole value, then
-    /// puts the caret after the inserted text.
+    /// puts the caret after the inserted text. `cancellable` is false once a write has been sent.
     @MainActor
     private static func spliceIntoValue(
         _ text: String,
         of element: AXUIElement,
-        using access: some AccessibilityAttributeAccess
+        using access: some AccessibilityAttributeAccess,
+        cancellable: Bool
     ) -> AccessibilityInsertionOutcome {
         let valueAttribute = kAXValueAttribute as CFString
         let rangeAttribute = kAXSelectedTextRangeAttribute as CFString
+        func cancelled() -> Bool {
+            cancellable && Task.isCancelled
+        }
 
+        if cancelled() {
+            return .cancelled
+        }
         let settable = access.isSettable(valueAttribute, on: element)
         if settable.result == .cannotComplete {
             return .unresponsive
@@ -62,6 +86,9 @@ enum AccessibilityInsertion {
             return .notInserted
         }
 
+        if cancelled() {
+            return .cancelled
+        }
         let current = access.value(of: valueAttribute, on: element)
         if current.result == .cannotComplete {
             return .unresponsive
@@ -70,6 +97,9 @@ enum AccessibilityInsertion {
             return .notInserted
         }
 
+        if cancelled() {
+            return .cancelled
+        }
         let selection = access.value(of: rangeAttribute, on: element)
         if selection.result == .cannotComplete {
             return .unresponsive
@@ -93,6 +123,9 @@ enum AccessibilityInsertion {
         let length = max(0, min(range.length, value.length - location))
         let updated = value.replacingCharacters(in: NSRange(location: location, length: length), with: text)
 
+        if cancelled() {
+            return .cancelled
+        }
         let result = access.setValue(updated as CFString, of: valueAttribute, on: element)
         if result == .cannotComplete {
             return .unconfirmed
