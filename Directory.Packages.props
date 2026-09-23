@@ -4,35 +4,52 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- WinUI 3 / Windows App SDK 2.4.0 (latest stable) powers the standalone Scribe.Overlay
-         recording pill. 2.0 introduced SystemBackdropElement (clipped Acrylic/Mica anywhere in the
-         tree with a CornerRadius), the supported floating-glass-pill recipe. The pill runs as its
-         own kept-warm, unpackaged self-contained process driven by the WPF app over a named pipe,
+    <!-- WinUI 3 / Windows App SDK powers the standalone Scribe.Overlay recording pill. 2.0
+         introduced SystemBackdropElement (clipped Acrylic/Mica anywhere in the tree with a
+         CornerRadius), the supported floating-glass-pill recipe. The pill runs as its own
+         kept-warm, unpackaged self-contained process driven by the WPF app over a named pipe,
          which sidesteps the .NET 10 WPF AllowsTransparency/UpdateLayeredWindow "black box" failure
-         (dotnet/wpf #11321) by rendering through DWM composition instead of the legacy layered path. -->
-    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+         (dotnet/wpf #11321) by rendering through DWM composition instead of the legacy layered path.
+         Microsoft's servicing table lists the 2.x minors as patch versions of the 2.0 release and
+         conditions support on the latest patch, so stay on the newest 2.x rather than a fixed minor.
+         The overlay references component packages instead of the Microsoft.WindowsAppSDK
+         metapackage (supported since 1.8), because a self-contained build copies every referenced
+         component and the pill only needs WinUI and what WinUI depends on. These four are the
+         versions the Microsoft.WindowsAppSDK 2.5.1 metapackage lists, so the pill gets the same
+         bits the metapackage would resolve. Move them together to the set the next metapackage
+         lists, InteractiveExperiences included, because WinUI alone would resolve it one patch
+         lower. -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
 
     <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime. The native runtime is
          architecture-specific; Scribe.Core references both and selects by RuntimeIdentifier so
-         one source tree builds for Intel/AMD and for Snapdragon Copilot+ PCs. -->
-    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.5" />
-    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.5" />
-    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.5" />
+         one source tree builds for Intel/AMD and for Snapdragon Copilot+ PCs. All three move
+         together: the managed wrapper and the natives are built from the same release. The
+         bundled onnxruntime.dll is also the one Foundry Local's GenAI runtime loads in-process
+         (it wins the same-name native conflict on file version), so a sherpa-onnx bump changes the
+         ONNX Runtime that on-device cleanup runs on as well. -->
+    <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.8" />
+    <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.8" />
 
     <!-- Audio capture -->
     <PackageVersion Include="NAudio" Version="3.0.1" />
 
     <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 is pinned directly to pull a patched native
-         e_sqlite3 and override Microsoft.Data.Sqlite's transitive 2.1.11 bundle, which is flagged
-         by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). Keep this pin at or above 3.0.3. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+         e_sqlite3 and override Microsoft.Data.Sqlite's transitive 2.1.x bundle; the 2.1.11 bundle
+         is flagged by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). Keep this pin at or above 3.0.3, and move
+         ScribeDatabase.ExpectedSqliteVersion with it. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
 
     <!-- Hosting / DI / logging / options -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
 
     <!-- Tray UI -->
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
@@ -46,38 +63,49 @@
          which is what reaches NPUs (Qualcomm QNN, AMD Vitis) rather than only CPU and WebGPU. -->
     <PackageVersion Include="Microsoft.AI.Foundry.Local.WinML" Version="1.2.4" />
     <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
-    <!-- Held at 2.12.0 deliberately: Microsoft.Extensions.AI.OpenAI 10.9.0 constrains OpenAI to
-         >= 2.12.0 && < 2.13.0, so taking 2.13.0 breaks restore (NU1608). Revisit when
-         Microsoft.Extensions.AI.OpenAI widens the range. -->
+    <!-- OpenAI moves in lockstep with Microsoft.Extensions.AI.OpenAI and Microsoft.Agents.AI.OpenAI:
+         both are compiled against one OpenAI build and bind to its members at runtime, so an OpenAI
+         that merely satisfies a declared range can still compile cleanly and throw
+         MissingMethodException (Azure.AI.Extensions.OpenAI, since removed, did exactly that to the
+         ResponsesClient constructor on 2.12.0). Held at 2.12.0 because Microsoft.Extensions.AI.OpenAI
+         10.9.0 constrains OpenAI to >= 2.12.0 && < 2.13.0 (NU1608 otherwise). 10.10.0 widens that to
+         >= 2.13.0 and was built against 2.13.0: move OpenAI, Microsoft.Extensions.AI.* and
+         Microsoft.Agents.AI.* together, and not to 2.14.0, which renames the experimental
+         GlobalMcpToolCallApprovalPolicy type that 10.10.0 still references. -->
     <PackageVersion Include="OpenAI" Version="2.12.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
-    <!-- Microsoft.Extensions.AI.Evaluation powers the offline evals harness (tools/Scribe.Evals)
-         only; referenced with PrivateAssets=all so it never ships with the WPF app. -->
+    <!-- Microsoft.Extensions.AI.Evaluation is referenced directly only by the offline evals harness
+         (tools/Scribe.Evals, PrivateAssets=all), but it ships with the app anyway: Microsoft.Agents.AI
+         and Microsoft.Agents.AI.OpenAI both depend on it, so it is a runtime dependency of cleanup and
+         moves with the Microsoft.Extensions.AI set. -->
     <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.9.0" />
 
-    <!-- Microsoft Agent Framework (GA). Both cleanup providers are unified on its AIAgent primitive.
+    <!-- Microsoft Agent Framework (GA). Every cleanup provider is unified on its AIAgent primitive.
          Microsoft.Agents.AI.OpenAI supplies the .AsAIAgent(model, instructions, name) extension on the
-         OpenAI chat/Responses clients: the classic Azure OpenAI account path uses
-         GetResponsesClient().AsAIAgent (the Responses API), and Foundry Local uses
-         GetChatClient().AsAIAgent. A Microsoft Foundry *project* endpoint (…/api/projects/…) is turned
-         into an AIAgent directly via AIProjectClient.AsAIAgent (Microsoft.Agents.AI.Foundry) over
-         Azure.AI.Projects' AIProjectClient, the framework's native Foundry path, no server-side agent. -->
+         OpenAI chat/Responses clients: Microsoft Foundry (both a project URL and a classic account
+         URL, normalized to the account's /openai/v1/ inference endpoint) uses
+         GetResponsesClient().AsAIAgent with a Chat Completions fallback, and Foundry Local and
+         OpenAI-compatible endpoints use GetChatClient().AsAIAgent. -->
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.20.0" />
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.20.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.5.0" />
     <!-- The GitHub Copilot backend, so a user with a Copilot licence can bring their own model
          instead of standing up Azure. It drives the Copilot CLI rather than an HTTP endpoint, so
          Scribe detects that CLI before offering the provider (Cleanup/GitHubCopilotCli.cs), and
          every reference to its types stays inside one method so the .NET loader never loads the
-         assembly for a user who does not select it. -->
+         assembly for a user who does not select it. Its GitHub.Copilot.SDK dependency is transitive
+         and resolves to the lowest version the package allows. That matters: SDK 1.0.13 changed
+         session cleanup from session.destroy to session.detach, so review what the CLI keeps for a
+         detached per-dictation session before pinning the SDK any higher. -->
     <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.20.0" />
-    <PackageVersion Include="Azure.AI.Projects" Version="2.0.1" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
-         user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored). -->
+         user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored).
+         Azure.Identity type-forwards AzureCliCredential and ClientSecretCredential to Azure.Core,
+         so the transitive Azure.Core version (lifted here by the ResourceManager packages) is what
+         decides how both credentials behave, not the Azure.Identity version. -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
-    <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.5.2" />
+    <PackageVersion Include="Azure.ResourceManager.CognitiveServices" Version="1.6.0" />
     <!-- Azure Resource Graph powers a single tenant-wide KQL query to enumerate every chat
          deployment across all subscriptions at once, instead of an N×M per-subscription crawl
          (which times out on large corp tenants). CognitiveServices is kept as a fallback. -->
@@ -95,13 +123,14 @@
 
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
 
     <!-- Test -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageVersion Include="coverlet.collector" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
-    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <!-- 4.x still runs xUnit.net v2 test projects; the major version is for v3 4.0 support. -->
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
   </ItemGroup>
 </Project>

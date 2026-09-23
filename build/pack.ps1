@@ -88,8 +88,18 @@ if ([string]::IsNullOrWhiteSpace($packAuthors)) { throw "Authors missing from $p
 $brandIcon = Join-Path $repoRoot 'src/Scribe.App/Assets/scribe.ico'
 if (-not (Test-Path $brandIcon -PathType Leaf)) { throw "Brand icon missing: $brandIcon" }
 
+# vpk must match the Velopack package the app references (docs.velopack.io recommends the same
+# version for both), so the tool version is read from the same central package file as the library.
+$packageVersionsPath = Join-Path $repoRoot 'Directory.Packages.props'
+[xml]$packageVersions = Get-Content $packageVersionsPath
+$velopackVersion = [string]($packageVersions.Project.ItemGroup.PackageVersion |
+    Where-Object { $_.Include -eq 'Velopack' } |
+    Select-Object -First 1).Version
+if ([string]::IsNullOrWhiteSpace($velopackVersion)) { throw "Velopack PackageVersion missing from $packageVersionsPath" }
+
 . (Join-Path $repoRoot 'scripts/Model-Manifest.ps1')
 . (Join-Path $repoRoot 'scripts/Payload-Architecture.ps1')
+. (Join-Path $repoRoot 'scripts/Velopack-Cli.ps1')
 $sourceModels = Join-Path $repoRoot 'src/Scribe.App/models'
 Test-ScribeRuntimeModels -ModelsDir $sourceModels -VerifyHashes
 Write-Host "==> Runtime model preflight passed ($($ScribeRuntimeModelManifest.Count) files)." -ForegroundColor Green
@@ -101,11 +111,15 @@ if ($ValidateOnly) {
 
 Write-Host "==> Scribe $Version  ($Configuration)  architectures: $(($targets.Runtime) -join ', ')" -ForegroundColor Cyan
 
-# --- 0. Ensure the Velopack CLI (vpk) is available -------------------------------------------------
-if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
-    Write-Host '==> Installing Velopack CLI (vpk) as a global tool...' -ForegroundColor Yellow
-    dotnet tool install -g vpk
-    $env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
+# --- 0. Ensure the Velopack CLI (vpk) matches the Velopack package ---------------------------------
+# Reads the installed version offline and only contacts the feed when vpk is missing or differs
+# (scripts/Velopack-Cli.ps1), so a machine that already has the pinned vpk can pack offline.
+Sync-ScribeVelopackCli -Version $velopackVersion
+$env:PATH = "$env:PATH;$env:USERPROFILE\.dotnet\tools"
+$vpkOnPath = (Get-Command vpk -ErrorAction SilentlyContinue).Source
+$globalVpk = Join-Path $env:USERPROFILE '.dotnet\tools\vpk.exe'
+if ($vpkOnPath -and $vpkOnPath -ne $globalVpk) {
+    Write-Warning "vpk resolves to $vpkOnPath, not the global tool at $globalVpk, so it may not be version $velopackVersion."
 }
 
 # --- 1. Build one architecture end to end ----------------------------------------------------------

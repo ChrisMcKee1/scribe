@@ -38,8 +38,16 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
+  <!-- Windows App SDK component packages rather than the Microsoft.WindowsAppSDK metapackage: a
+       self-contained build ships every referenced component's runtime, and the pill loads only WinUI,
+       windowing/composition (InteractiveExperiences) and Foundation. The metapackage also brought the
+       AI, ML (ONNX Runtime, DirectML), Search, Widgets and DWriteCore components. Versions and the
+       reason for pinning all four live in Directory.Packages.props. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" />
   </ItemGroup>
 
 </Project>
