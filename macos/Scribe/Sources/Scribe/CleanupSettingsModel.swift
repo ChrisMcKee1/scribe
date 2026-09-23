@@ -183,9 +183,12 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
+    /// Removes the saved key, and with it anything typed into the field: Clear means no key, so a half-typed
+    /// replacement must not come back when Settings reopens. A failed removal keeps both.
     func clearOpenAIApiKey() {
         do {
             try access.setOpenAIApiKey(nil)
+            drafts.openAIApiKey = ""
             hasSavedOpenAIApiKey = false
             credentialsChanged()
             show(status: "API key removed.")
@@ -206,9 +209,12 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
+    /// Removes the saved secret for this client ID, and with it anything typed into the field, as Clear does for
+    /// the API key. A failed removal keeps both.
     func clearAzureClientSecret() {
         do {
             try access.setAzureClientSecret(nil, values.azureClientId)
+            drafts.azureClientSecret = ""
             hasSavedAzureClientSecret = false
             credentialsChanged()
             show(status: "Client secret removed.")
