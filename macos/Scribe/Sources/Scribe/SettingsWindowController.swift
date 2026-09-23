@@ -8,12 +8,14 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: @MainActor @Sendable (SettingsWindowController) -> Void
+    static var mutationKeepAlive: [NSWindow] = [] // MUTATION N7: closed windows are kept alive
 
     convenience init(
         rootView: some View,
         onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void
     ) {
         let window = NSWindow(contentViewController: NSHostingController(rootView: rootView))
+        Self.mutationKeepAlive.append(window)
         window.title = "Scribe Settings"
         window.setContentSize(NSSize(width: 720, height: 520))
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable])

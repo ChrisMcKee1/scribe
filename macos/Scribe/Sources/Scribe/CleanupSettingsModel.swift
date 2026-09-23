@@ -238,7 +238,7 @@ final class CleanupSettingsModel: ObservableObject {
 
     /// A stored key or secret changed: a connection test still running checked the credential that was replaced.
     private func credentialsChanged() {
-        revision += 1
+        // MUTATION N5: credential changes do not invalidate a running check
     }
 
     private func store(changesFrom old: CleanupSettingsValues) {

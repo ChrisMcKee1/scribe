@@ -63,8 +63,10 @@ enum LoginItemOperation: Equatable, Sendable {
 
     init(enabling enabled: Bool, from state: LoginItemState) {
         switch (state, enabled) {
-        case (.enabled, true), (.notRegistered, false), (.notFound, false):
+        case (.enabled, true), (.notRegistered, false):
             self = .nothingToDo
+        case (.notFound, false):
+            self = .unregister // MUTATION N2: notFound treated as registered
         case (.notRegistered, true), (.notFound, true):
             self = .register
         case (.enabled, false), (.requiresApproval, false):
@@ -141,8 +143,10 @@ enum LoginItemManager {
     static func apply(enabled: Bool, control: any LoginItemControl = SMAppService.mainApp) -> LoginItemRefusal? {
         do {
             switch LoginItemOperation(enabling: enabled, from: LoginItemState(control.status)) {
-            case .nothingToDo, .awaitApproval:
+            case .nothingToDo:
                 return nil
+            case .awaitApproval:
+                try control.register() // MUTATION N3: registers again while approval is pending
             case .unavailable:
                 return .unrecognizedState
             case .register:
@@ -284,9 +288,7 @@ final class LoginItemSwitch: ObservableObject {
     func refresh() async {
         guard pendingRequest == nil else { return }
         guard !isReading else {
-            readAgain = true
-            generation += 1
-            return
+            return // MUTATION N4: a request during a read is dropped
         }
         isReading = true
         defer { isReading = false }
@@ -315,9 +317,7 @@ final class LoginItemSwitch: ObservableObject {
         guard let shown = state, shown.isOn != requested else { return .unchanged }
         switch LoginItemOperation(enabling: requested, from: shown) {
         case .awaitApproval:
-            refusal = nil
-            openLoginItemsAction()
-            return .needsApproval
+            break // MUTATION N1: approval-pending registers again
         case .unavailable, .nothingToDo:
             return .unchanged
         case .register, .unregister:
