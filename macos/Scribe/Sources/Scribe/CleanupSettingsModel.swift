@@ -188,11 +188,11 @@ final class CleanupSettingsModel: ObservableObject {
     func clearOpenAIApiKey() {
         do {
             try access.setOpenAIApiKey(nil)
-            drafts.openAIApiKey = ""
             hasSavedOpenAIApiKey = false
             credentialsChanged()
             show(status: "API key removed.")
         } catch {
+            drafts.openAIApiKey = "" // MUTATION R1: typed key dropped only when removal fails
             show(error: "Failed to remove API key: \(error.localizedDescription)")
         }
     }
@@ -214,7 +214,7 @@ final class CleanupSettingsModel: ObservableObject {
     func clearAzureClientSecret() {
         do {
             try access.setAzureClientSecret(nil, values.azureClientId)
-            drafts.azureClientSecret = ""
+            // MUTATION R2: typed client secret kept after Clear
             hasSavedAzureClientSecret = false
             credentialsChanged()
             show(status: "Client secret removed.")
