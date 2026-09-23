@@ -19,6 +19,17 @@ enum CleanupProviderKind: String, CaseIterable, Identifiable, Sendable {
         case .microsoftFoundry: return "Microsoft Foundry (cloud)"
         }
     }
+
+    /// What the provider of this kind calls itself (`CleanupProvider.displayName`), for a message about a provider
+    /// that was not built.
+    var providerName: String {
+        switch self {
+        case .foundryLocal: return "Foundry Local"
+        case .ollama: return "Ollama"
+        case .openAICompatible: return "OpenAI-compatible endpoint"
+        case .microsoftFoundry: return "Microsoft Foundry"
+        }
+    }
 }
 
 /// The AI cleanup settings as stored at one moment. Secrets are not part of it: `secretRevision` changes whenever one

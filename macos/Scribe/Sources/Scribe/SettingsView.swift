@@ -910,6 +910,11 @@ private struct CleanupSettingsTab: View {
             model.reload()
             model.refreshSecretState()
         }
+        // Leaving the tab stops a Test Connection still running; closing the window does too, through
+        // `SettingsWindowController.willCloseNotification`, in case the window goes without this firing.
+        .onDisappear {
+            model.cancelConnectionTest()
+        }
     }
 
     @ViewBuilder

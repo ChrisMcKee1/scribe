@@ -7,7 +7,12 @@ import SwiftUI
 /// observers alive. Unsaved input survives because it lives in `SettingsDrafts`, which the owner keeps.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+    /// Posted on the controller's notification center as the Settings window starts to close, so work a tab started
+    /// and would otherwise leave running, such as a Test Connection, can stop (`CleanupSettingsModel`).
+    static let willCloseNotification = Notification.Name("ScribeSettingsWindowWillClose")
+
     private let onClose: @MainActor @Sendable (SettingsWindowController) -> Void
+    private let center: NotificationCenter
 
     convenience init(
         rootView: some View,
@@ -22,8 +27,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.init(window: window, onClose: onClose)
     }
 
-    init(window: NSWindow?, onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void) {
+    init(
+        window: NSWindow?,
+        onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void,
+        center: NotificationCenter = .default
+    ) {
         self.onClose = onClose
+        self.center = center
         super.init(window: window)
         shouldCascadeWindows = false
         window?.delegate = self
@@ -35,6 +45,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        center.post(name: Self.willCloseNotification, object: nil)
         // Released on the next turn of the main actor: AppKit is still inside the window's close when this runs,
         // and dropping the last reference to the window here could free it while AppKit is using it.
         let onClose = self.onClose

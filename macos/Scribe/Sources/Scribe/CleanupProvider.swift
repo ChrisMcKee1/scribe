@@ -29,6 +29,13 @@ struct CleanupRequest: Sendable {
         self.timeout = timeout
         self.maxOutputTokens = maxOutputTokens
     }
+
+    /// The same request with no output limit.
+    func withoutOutputLimit() -> CleanupRequest {
+        CleanupRequest(
+            transcript: transcript, writingStylePrompt: writingStylePrompt, singleLineMode: singleLineMode,
+            timeout: timeout, maxOutputTokens: nil)
+    }
 }
 
 struct CleanupResponse: Sendable {
@@ -321,6 +328,8 @@ enum CleanupResponseProblem: Error, Equatable, Sendable {
     case notHTTP
     case undecodable
     case emptyCompletion
+    /// The model stopped at the request's output limit (`finish_reason` `length`) before writing any text.
+    case outputLimitReachedBeforeText
 
     var message: String {
         switch self {
@@ -330,6 +339,8 @@ enum CleanupResponseProblem: Error, Equatable, Sendable {
             return "The cleanup endpoint's answer was not a chat completion."
         case .emptyCompletion:
             return "The model returned an empty answer."
+        case .outputLimitReachedBeforeText:
+            return "The model reached its output limit before writing any text."
         }
     }
 }

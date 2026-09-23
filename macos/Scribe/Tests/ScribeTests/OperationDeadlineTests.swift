@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 @testable import Scribe
@@ -117,5 +118,41 @@ final class CleanupSettingsModelCancelTests: XCTestCase {
 
         XCTAssertEqual(model.statusMessage, "Foundry Local cleaned a test phrase.")
         XCTAssertNil(model.errorMessage)
+    }
+
+    /// Closing Settings stops a Test Connection still running, although its task keeps the tab's model alive, and the
+    /// tab opened next runs a check of its own.
+    @MainActor
+    func testClosingSettingsCancelsARunningCheckAndTheReopenedTabRunsItsOwn() async {
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        let held = HeldWork()
+        var access = backing.access
+        access.checkConnection = {
+            do {
+                try await held.hold()
+            } catch {}
+            return CleanupConnectionCheck(reachable: false, message: "Foundry Local: The check was cancelled.")
+        }
+        let closing = CleanupSettingsModel(access: access, drafts: backing.drafts, center: backing.center)
+        let test = Task { await closing.testConnection() }
+        let started = await finishes(within: 30) { await held.waitUntilStarted() }
+        XCTAssertTrue(started, "the check did not start")
+
+        let window = SettingsWindowController(window: nil, onClose: { _ in }, center: backing.center)
+        window.windowWillClose(Notification(name: NSWindow.willCloseNotification))
+        let ended = await finishes(within: 30) { await test.value }
+
+        XCTAssertTrue(ended, "closing Settings did not stop the check")
+        XCTAssertTrue(held.sawCancellation)
+        XCTAssertFalse(closing.isTesting)
+
+        backing.connectionCheck = CleanupConnectionCheck(
+            reachable: true, message: "Foundry Local is connected: the model answered the test in 0.1 s.")
+        let reopened = CleanupSettingsModel(access: backing.access, drafts: backing.drafts, center: backing.center)
+        await reopened.testConnection()
+
+        XCTAssertEqual(reopened.statusMessage, "Foundry Local is connected: the model answered the test in 0.1 s.")
+        XCTAssertFalse(reopened.isTesting)
     }
 }

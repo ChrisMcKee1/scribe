@@ -119,6 +119,9 @@ final class CleanupSettingsModel: ObservableObject {
     private var runningCheck: Task<CleanupConnectionCheck, Never>?
     private var checkCancelledByUser = false
     private var observation: SettingsNotificationObservation?
+    /// Stops a running Test Connection when Settings closes. The task running it keeps this model alive, so waiting
+    /// for the model to be freed would wait for the check.
+    private var closeObservation: SettingsNotificationObservation?
 
     init(access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default) {
         self.access = access
@@ -127,6 +130,11 @@ final class CleanupSettingsModel: ObservableObject {
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
             self?.reload()
+        }
+        closeObservation = SettingsNotificationObservation(
+            SettingsWindowController.willCloseNotification, center: center
+        ) { [weak self] in
+            self?.cancelConnectionTest()
         }
     }
 

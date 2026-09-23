@@ -24,21 +24,26 @@ final class CleanupProviderCache: Sendable {
     private let environment: [String: String]
     private let factory: CleanupProviderFactory
     private let deadlineForCheck: @Sendable (CleanupProviderKind) -> Duration
+    private let checkTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
 
-    /// - Parameter checkDeadline: How long Test Connection may take for a provider kind; tests shorten it.
+    /// - Parameters:
+    ///   - checkDeadline: How long Test Connection may take for a provider kind; tests shorten it.
+    ///   - checkTimer: Waits out that deadline, `Task.sleep` by default; a test passes a timer it fires by hand.
     init(
         store: CleanupSettingsStore,
         environment: [String: String],
         factory: CleanupProviderFactory,
         checkDeadline: @escaping @Sendable (CleanupProviderKind) -> Duration = {
             CleanupProviderCache.checkDeadline(for: $0)
-        }
+        },
+        checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.store = store
         self.environment = environment
         self.factory = factory
         self.deadlineForCheck = checkDeadline
+        self.checkTimer = checkTimer
     }
 
     /// The provider for the configuration stored now: the cached one when the configuration matches, otherwise a new
@@ -46,7 +51,8 @@ final class CleanupProviderCache: Sendable {
     /// `.secretUnavailable` when a secret cannot be read. Reads the preferences on every call and the secret store only
     /// when it builds; it never starts a process or sends a request.
     func provider() throws -> any CleanupProvider {
-        try entry().provider
+        let connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+        return try entry(for: connection).provider
     }
 
     /// Drops the cached provider and credential, and with them any token or secret held in memory, in one step. No
@@ -57,52 +63,137 @@ final class CleanupProviderCache: Sendable {
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
     }
 
-    /// Test Connection: one real cleanup of a one-word transcript, with the default writing style, through the
-    /// provider dictation would use. A configuration that cannot clean (a wrong deployment or model, a missing role, a
-    /// model that was never pulled) fails here the way a dictation would, rather than passing a token fetch or a model
-    /// list.
+    /// Test Connection: one real cleanup request for a one-word transcript, with the default writing style, through the
+    /// provider dictation would use. A configuration that cannot serve a completion (a wrong deployment or model, a
+    /// missing role, a model that was never pulled) fails here the way a dictation would, rather than passing a token
+    /// fetch or a model list. As Windows' readiness probe does, it asks whether the model answers, not what it
+    /// answered, so any configuration that dictates passes (`probe`).
     ///
-    /// The whole check runs against one deadline (`checkDeadline(for:)`): the credential, Foundry Local's endpoint
-    /// lookup and the completion together. When it passes, the check's work is cancelled, which stops an `az` or
-    /// `foundry` child and the request, and the result says so; cancelling the calling task ends the check the same
-    /// way with its own message. Each request also keeps an idle timeout of the same length. The answer is capped as
-    /// Windows' readiness probe caps it (`checkOutputCeiling(for:)`).
+    /// The whole check, from the button to the result, runs against one deadline (`checkDeadline(for:)`): building
+    /// the provider with its Keychain read, the credential, Foundry Local's endpoint lookup and the completion. Only
+    /// reading the preferences comes first, since the deadline depends on the provider kind, and that reads no
+    /// Keychain item and starts nothing. When the deadline passes, the check's work is cancelled, which stops an `az`
+    /// or `foundry` child and the request, and the result says so; cancelling the calling task ends the check the
+    /// same way with its own message. Cancellation is cooperative (`OperationDeadline`): the check returns once
+    /// Scribe's own work has stopped, so a Keychain read already waiting on a prompt is let finish, and then nothing
+    /// more is sent. Each request also keeps an idle timeout of the same length.
     func checkConnection() async -> CleanupConnectionCheck {
-        let entry: CleanupProviderCacheState.Entry
+        let connection: CleanupConnection
         do {
-            entry = try self.entry()
+            connection = try CleanupProviderResolver.connection(store: store, environment: environment)
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
         }
 
-        let provider = entry.provider
-        let kind = entry.connection.kind
+        let kind = connection.kind
         let deadline = deadlineForCheck(kind)
+        do {
+            return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
+                try await self.check(connection)
+            }
+        } catch let error as OperationDeadlineError {
+            ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
+            return CleanupConnectionCheck(
+                reachable: false, message: Self.deadlineMessage(kind.providerName, kind: kind, deadline: deadline))
+        } catch {
+            ScribeLog.info(.cleanup, "Test Connection stopped", .name("provider", kind), .failure(error))
+            return CleanupConnectionCheck(
+                reachable: false, message: CleanupFailureText.forSettings(error, providerName: kind.providerName))
+        }
+    }
+
+    /// What answered Test Connection's request.
+    private enum ProbeAnswer: Sendable, Equatable {
+        /// The model wrote text.
+        case text
+        /// The model used the probe's whole output ceiling before writing any text, as a reasoning model does.
+        case outputLimit
+    }
+
+    /// Test Connection's request, as Windows' readiness probe makes it (`ProbeAgentAsync` awaits the answer and
+    /// discards it): the model served the request, or it did not.
+    ///
+    /// The request carries the probe's output ceiling (`checkOutputCeiling(for:)`), sent as `max_completion_tokens`.
+    /// Two answers that a dictation, which sends no ceiling, would not meet are no failure here. A reasoning model can
+    /// spend the whole ceiling thinking and stop at `length` with nothing visible: it answered. And a server that
+    /// refuses the field outright (vLLM 0.6.0 declares only `max_tokens` and forbids anything else) answers 400 or
+    /// 422: the request goes once more without any ceiling, inside the same deadline. Neither the older field nor both
+    /// fields together are sent.
+    private static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
         let request = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
             writingStylePrompt: CleanupPrompt.systemPrompt(
                 writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
-            timeout: ChatCompletionsTransport.seconds(Self.checkDeadline(for: kind)),
-            maxOutputTokens: Self.checkOutputCeiling(for: kind))
+            timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
+            maxOutputTokens: checkOutputCeiling(for: kind))
+        do {
+            return try await attempt(provider, request)
+        } catch let error as CleanupProviderError {
+            guard request.maxOutputTokens != nil, case .rejected(let status, _, _) = error,
+                status == 400 || status == 422
+            else {
+                throw error
+            }
+            ScribeLog.info(
+                .cleanup, "Test Connection retrying without an output limit", .name("provider", kind), .failure(error))
+            return try await attempt(provider, request.withoutOutputLimit())
+        }
+    }
+
+    /// One probe request. A `length` stop with nothing visible is an answer only when this request set the limit.
+    private static func attempt(_ provider: any CleanupProvider, _ request: CleanupRequest) async throws -> ProbeAnswer {
+        do {
+            _ = try await provider.clean(request)
+            return .text
+        } catch let error as CleanupProviderError {
+            guard request.maxOutputTokens != nil, error == .invalidResponse(.outputLimitReachedBeforeText) else {
+                throw error
+            }
+            return .outputLimit
+        }
+    }
+
+    /// Everything the deadline covers: building the provider, its Keychain read included, and the probe. Returns the
+    /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
+    private func check(_ connection: CleanupConnection) async throws -> CleanupConnectionCheck {
+        let kind = connection.kind
+        let provider: any CleanupProvider
+        do {
+            provider = try entry(for: connection).provider
+        } catch {
+            return CleanupConnectionCheck(
+                reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
+        }
+        // A build that outlasted the deadline, a Keychain read waiting on a prompt, sends nothing once it returns.
+        try Task.checkCancellation()
+
         let started = ContinuousClock.now
         do {
-            _ = try await OperationDeadline.run(within: deadline) {
-                try await provider.clean(request)
-            }
+            let answer = try await Self.probe(provider, kind: kind)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))
-            ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind))
+            ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind), .name("answer", answer))
             return CleanupConnectionCheck(
-                reachable: true,
-                message: "\(provider.displayName) cleaned a test phrase in \(String(format: "%.1f", seconds)) s.")
-        } catch let error as OperationDeadlineError {
-            ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
-            return CleanupConnectionCheck(
-                reachable: false, message: Self.deadlineMessage(provider.displayName, kind: kind, deadline: deadline))
+                reachable: true, message: Self.connectedMessage(provider.displayName, answer: answer, seconds: seconds))
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             ScribeLog.info(.cleanup, "Test Connection failed", .name("provider", kind), .failure(error))
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: provider.displayName))
+        }
+    }
+
+    private static func connectedMessage(_ providerName: String, answer: ProbeAnswer, seconds: TimeInterval) -> String {
+        let elapsed = String(format: "%.1f", seconds)
+        let connected = "\(providerName) is connected: the model answered the test in \(elapsed) s."
+        switch answer {
+        case .text:
+            return connected
+        case .outputLimit:
+            return connected
+                + " It spent the test's small output allowance thinking before writing any text; dictations have no such"
+                + " limit."
         }
     }
 
@@ -147,8 +238,7 @@ final class CleanupProviderCache: Sendable {
         }
     }
 
-    private func entry() throws -> CleanupProviderCacheState.Entry {
-        let connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+    private func entry(for connection: CleanupConnection) throws -> CleanupProviderCacheState.Entry {
         let snapshot = state.withLock { $0.snapshot(for: connection) }
         if let cached = snapshot.entry {
             return cached

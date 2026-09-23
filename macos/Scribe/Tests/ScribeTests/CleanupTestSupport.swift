@@ -194,6 +194,17 @@ enum StubReply {
         return json(request, String(decoding: body, as: UTF8.self))
     }
 
+    /// A chat completion that stopped for `finishReason`, with `content` (`null` when `nil`): what a reasoning model
+    /// that spent its whole output allowance thinking sends with `length`.
+    static func completion(
+        _ request: URLRequest, _ content: String?, finishReason: String
+    ) -> (HTTPURLResponse, Data) {
+        let message: [String: Any] = ["role": "assistant", "content": content.map { $0 as Any } ?? NSNull()]
+        let object: [String: Any] = ["choices": [["message": message, "finish_reason": finishReason]]]
+        let body = (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
+        return json(request, String(decoding: body, as: UTF8.self))
+    }
+
     /// An Entra token response.
     static func entraToken(_ request: URLRequest, _ token: String, expiresIn: Int = 3600) -> (HTTPURLResponse, Data) {
         json(request, #"{"token_type":"Bearer","expires_in":\#(expiresIn),"access_token":"\#(token)"}"#)
@@ -690,6 +701,63 @@ final class LockedValue<Value: Sendable>: Sendable {
 
     var value: Value? {
         stored.withLock { $0 }
+    }
+}
+
+/// A deadline timer a test fires by hand, for `OperationDeadline` and Test Connection's `checkTimer`. `sleep` suspends
+/// until `fire()`, or throws `CancellationError` when its task is cancelled first, as `Task.sleep` does, so a test
+/// decides exactly where in the work the deadline passes. `waitUntilStarted()` returns once something waits on it.
+final class ManualTimer: Sendable {
+    private struct State: Sendable {
+        var fired = false
+        var cancelled = false
+        var waiter: CheckedContinuation<Void, Never>?
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let started = FirstOutcome()
+
+    var sleep: @Sendable (Duration) async throws -> Void {
+        { _ in try await self.wait() }
+    }
+
+    func fire() {
+        let waiter = state.withLock { current -> CheckedContinuation<Void, Never>? in
+            current.fired = true
+            defer { current.waiter = nil }
+            return current.waiter
+        }
+        waiter?.resume()
+    }
+
+    func waitUntilStarted() async {
+        _ = await started.value
+    }
+
+    private func wait() async throws {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let resumeNow = state.withLock { current -> Bool in
+                    guard !current.fired, !current.cancelled else { return true }
+                    current.waiter = continuation
+                    return false
+                }
+                started.settle(true)
+                if resumeNow {
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            let waiter = state.withLock { current -> CheckedContinuation<Void, Never>? in
+                current.cancelled = true
+                defer { current.waiter = nil }
+                return current.waiter
+            }
+            waiter?.resume()
+        }
+        guard state.withLock({ $0.fired }) else {
+            throw CancellationError()
+        }
     }
 }
 

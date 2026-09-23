@@ -175,6 +175,33 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
             XCTAssertEqual(error, .invalidResponse(.emptyCompletion))
         }
     }
+
+    /// A dictation still has no text when the model stopped at its output limit, so that is a failure there too. It
+    /// is told apart from an empty answer only so Test Connection, which sends a limit, can see the model answered.
+    func testAnAnswerCutOffBeforeAnyTextIsStillNoAnswer() async throws {
+        let cutOff = makeProvider { request in StubReply.completion(request, nil, finishReason: "length") }
+        let cutOffBlank = makeProvider { request in StubReply.completion(request, " ", finishReason: "length") }
+        let stopped = makeProvider { request in StubReply.completion(request, "", finishReason: "stop") }
+        let filtered = makeProvider { request in StubReply.completion(request, nil, finishReason: "content_filter") }
+
+        for provider in [cutOff, cutOffBlank] {
+            let error = try await cleanupFailure(of: provider)
+            XCTAssertEqual(error, .invalidResponse(.outputLimitReachedBeforeText))
+        }
+        for provider in [stopped, filtered] {
+            let error = try await cleanupFailure(of: provider)
+            XCTAssertEqual(error, .invalidResponse(.emptyCompletion))
+        }
+    }
+
+    /// An answer that stopped at the limit after some text is text.
+    func testAnAnswerCutOffAfterSomeTextIsKept() async throws {
+        let provider = makeProvider { request in StubReply.completion(request, "Cleaned so f", finishReason: "length") }
+
+        let response = try await provider.clean(CleanupRequest(transcript: "raw text"))
+
+        XCTAssertEqual(response.cleanedText, "Cleaned so f")
+    }
 }
 
 final class ManagedOllamaCleanupProviderTests: XCTestCase {

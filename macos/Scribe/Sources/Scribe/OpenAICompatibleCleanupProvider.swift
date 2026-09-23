@@ -129,9 +129,14 @@ struct ChatCompletionsTransport: Sendable {
         guard let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data) else {
             throw CleanupProviderError.invalidResponse(.undecodable)
         }
-        let text = CleanupPrompt.stripTranscriptTags(decoded.choices.first?.message.content ?? "")
+        let choice = decoded.choices.first
+        let text = CleanupPrompt.stripTranscriptTags(choice?.message.content ?? "")
         guard !text.isEmpty else {
-            throw CleanupProviderError.invalidResponse(.emptyCompletion)
+            // `length` with nothing visible: the output limit ran out before any text, which a reasoning model does
+            // when a request caps its output tightly. Kept apart from an empty answer so Test Connection, which sends
+            // such a cap, can tell a model that answered from one that did not; either way there is no text.
+            throw CleanupProviderError.invalidResponse(
+                choice?.finishReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
         }
 
         let elapsed = started.duration(to: .now)
@@ -197,6 +202,13 @@ struct ChatCompletionResponse: Decodable {
             let content: String?
         }
         let message: Message
+        /// Why the model stopped: `stop`, `length` when the output limit ran out, or another value some servers send.
+        let finishReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message
+            case finishReason = "finish_reason"
+        }
     }
     let choices: [Choice]
 }
