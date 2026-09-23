@@ -107,27 +107,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     @objc private func openSettings(_ sender: Any?) {
         if settingsWindowController == nil {
-            let hostingController = NSHostingController(
+            settingsWindowController = SettingsWindowController(
                 rootView: SettingsView(
                     persistenceStore: persistenceStore,
                     overlayPanelController: overlayPanelController,
                     pipelineReportStore: pipelineReportStore,
                     dictionaryLibraryService: dictionaryLibraryService,
                     onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() },
-                    onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode }))
-            let window = NSWindow(contentViewController: hostingController)
-            window.title = "Scribe Settings"
-            window.setContentSize(NSSize(width: 720, height: 520))
-            window.styleMask.insert(.titled)
-            window.styleMask.insert(.closable)
-            window.styleMask.insert(.miniaturizable)
-            window.styleMask.insert(.resizable)
-            window.isReleasedWhenClosed = false
-            window.center()
-
-            let controller = NSWindowController(window: window)
-            controller.shouldCascadeWindows = false
-            settingsWindowController = controller
+                    onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode }),
+                onClose: { [weak self] closed in
+                    if self?.settingsWindowController === closed {
+                        self?.settingsWindowController = nil
+                    }
+                })
         }
 
         settingsWindowController?.showWindow(nil)
@@ -364,10 +356,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     @objc private func showWelcome(_ sender: Any?) {
         if welcomeWindowController == nil {
-            let hotkeyDisplayName = "Right Control"
             let hostingController = NSHostingController(
                 rootView: WelcomeView(
-                    hotkeyDisplayName: hotkeyDisplayName,
                     onOpenSettings: { [weak self] in
                         self?.openSettings(nil)
                         self?.welcomeWindowController?.close()

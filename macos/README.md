@@ -51,8 +51,9 @@ privacy/offline promise.
 - Global push-to-talk hotkey, real audio capture, and text injection into the focused app
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2` (`TranscriptionEngine.swift`)
 - Overlay pill with a 9-anchor position picker and live recording/processing state
-- Settings window with Overlay, Dictionary, Snippets, App Profiles, Playground, Diagnostics, Usage
-  Insights, and About tabs, each backed by a SQLite persistence store
+- Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
+  Playground, Diagnostics, Usage Insights, and About sections; a change made from the tray shows in an
+  open window, and Open at Login shows what macOS reports
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), voice
   snippets, and per-app profiles (writing style + newline mode by focused app)
 - AI cleanup across four providers: Foundry Local (default), managed Ollama, any
@@ -66,7 +67,6 @@ privacy/offline promise.
 ## Known gaps vs. Windows
 
 See `PORTING-PLAN.md` for the authoritative, row-by-row feature checklist. As of this writing the
-main outstanding gaps are: no Settings UI for AI cleanup provider/credentials (still
-env-var/CLI-configured), no ported Dictionary Libraries (Windows' curated glossary packs), an
-energy-threshold silence detector instead of a trained VAD, and no release packaging/notarization
-or auto-update story yet (dev builds are ad-hoc signed for local Accessibility persistence only).
+main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, and no
+release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
+Accessibility persistence only).
