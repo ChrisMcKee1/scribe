@@ -69,6 +69,10 @@ behave the same way every time.
 - A model load you cancel, or one that fails, no longer leaves AI cleanup stuck: Scribe resumes the
   cleanup setup you had.
 - Microsoft Foundry requests made through the Responses API always ask Azure not to store them.
+- Microsoft Foundry cleanup always calls your resource's own inference endpoint, even when you saved
+  a Foundry project URL, which fixes the HTTP 500 errors some newer models returned through the
+  project route. When AI cleanup is on but cannot start, each dictation now shows that it fell back
+  to raw text instead of skipping cleanup silently.
 - A GitHub Copilot model you choose is passed to Copilot directly, and checking the Copilot CLI's
   version can no longer hang.
 
