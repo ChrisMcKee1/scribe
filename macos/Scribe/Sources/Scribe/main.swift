@@ -783,9 +783,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         }
     }
 
+    /// Lines that predate `ScribeLog` and are not all shapes. New code logs through `ScribeLog`, which
+    /// only accepts shapes; this keeps the remaining callers on the same standard error sink.
     nonisolated private static func writeLogLine(_ message: String) {
-        let line = "\(message)\n"
-        fputs(line, stderr)
+        ScribeLog.legacyUnshapedLine(message)
     }
 
     private func transcribeAndInject(
