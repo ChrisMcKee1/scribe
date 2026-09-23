@@ -10,11 +10,14 @@ import Foundation
 /// URL error code and the errors it wraps) and never reads a message, a string payload or any user
 /// info except the wrapped errors. It mirrors Windows' `Scribe.Core.Diagnostics.FailureShape`.
 ///
-///     URLError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)
+///     NSError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)
 ///     KeychainError.unhandled values=-25299
 ///     ProcessRunnerError.launchFailed values=2
+///
+/// Foundation's error structs (`URLError`, `POSIXError`, `CocoaError`) travel inside `any Error` as the
+/// `NSError` they wrap, so they read as `NSError` with their domain, which names them just as well.
 struct FailureShape: Sendable, Equatable, CustomStringConvertible {
-    /// The error's Swift type and, for an enum, its case: `URLError`, `TranscriptionEngineError.processFailed`.
+    /// The error's Swift type and, for an enum, its case: `NSError`, `TranscriptionEngineError.processFailed`.
     let typeName: String
     /// The `NSError` domain; `nil` when it only repeats the Swift type (every Swift error's default),
     /// and `?` when it does not look like a framework constant, such as a host name or a URL.

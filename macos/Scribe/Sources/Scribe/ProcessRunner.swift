@@ -528,7 +528,9 @@ private struct ChildStreams {
             standardInputRead = input?.read
             standardInputWrite = input?.write
         } catch {
-            created.forEach { close($0) }
+            for descriptor in created {
+                close(descriptor)
+            }
             throw error
         }
     }

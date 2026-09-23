@@ -6,7 +6,7 @@ import XCTest
 final class FailureShapeTests: XCTestCase {
     /// Carries a privacy canary in every place an error can hold text: its payload, its description,
     /// its domain, its user info and the error it wraps.
-    private enum CanaryError: Error, LocalizedError, CustomNSError, CustomStringConvertible, FailureShapeDetailing {
+    private enum LeakingError: Error, LocalizedError, CustomNSError, CustomStringConvertible, FailureShapeDetailing {
         case leaked(secret: String, path: String, url: URL, status: Int32)
 
         static var errorDomain: String { PrivacyCanary.url }
@@ -45,18 +45,20 @@ final class FailureShapeTests: XCTestCase {
     }
 
     func testAnErrorCarryingCanariesEverywhereYieldsAShapeWithNoneOfThem() {
-        let error = CanaryError.leaked(
+        let error = LeakingError.leaked(
             secret: PrivacyCanary.secret, path: PrivacyCanary.path, url: URL(string: PrivacyCanary.url)!,
             status: -25299)
 
         let shape = FailureShape(error)
 
-        XCTAssertEqual(shape.description, "CanaryError.leaked(? 7) values=-25299 http=403 inner=NSError(? 2)")
+        XCTAssertEqual(shape.description, "LeakingError.leaked(? 7) values=-25299 http=403 inner=NSError(? 2)")
         PrivacyCanary.assertAbsent(from: shape.description)
         PrivacyCanary.assertAbsent(from: String(describing: shape))
         XCTAssertNil(shape.serviceCode)
     }
 
+    /// Foundation's error structs (`URLError`, `POSIXError`, `CocoaError`) travel inside `any Error` as
+    /// the `NSError` they wrap, so they read as `NSError` with their domain.
     func testAURLErrorKeepsItsDiagnosisAndLosesTheURL() {
         let underlying = NSError(
             domain: "kCFErrorDomainCFNetwork", code: -1001,
@@ -74,7 +76,7 @@ final class FailureShapeTests: XCTestCase {
 
         XCTAssertEqual(
             shape.description,
-            "URLError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)")
+            "NSError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)")
         XCTAssertEqual(shape.urlErrorCode, -1001)
         PrivacyCanary.assertAbsent(from: shape.description)
     }
@@ -87,7 +89,7 @@ final class FailureShapeTests: XCTestCase {
 
         XCTAssertEqual(FailureShape(status).description, "NSError(NSOSStatusErrorDomain -25299)")
         XCTAssertEqual(FailureShape(appleDomain).description, "NSError(com.apple.coreaudio.avfaudio -10868)")
-        XCTAssertEqual(FailureShape(posix).description, "POSIXError(NSPOSIXErrorDomain 13)")
+        XCTAssertEqual(FailureShape(posix).description, "NSError(NSPOSIXErrorDomain 13)")
     }
 
     func testADomainThatIsNotAFrameworkConstantIsHidden() {
@@ -123,7 +125,7 @@ final class FailureShapeTests: XCTestCase {
     func testErrorsCarriedInAPayloadJoinTheChain() {
         let error = PlainError.wrapping(POSIXError(.ENOENT, userInfo: [NSFilePathErrorKey: PrivacyCanary.path]))
 
-        XCTAssertEqual(FailureShape(error).description, "PlainError.wrapping inner=POSIXError(NSPOSIXErrorDomain 2)")
+        XCTAssertEqual(FailureShape(error).description, "PlainError.wrapping inner=NSError(NSPOSIXErrorDomain 2)")
     }
 
     func testADecodingErrorDoesNotRepeatTheBodyItFailedOn() throws {
