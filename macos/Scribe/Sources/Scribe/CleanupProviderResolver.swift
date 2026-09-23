@@ -47,6 +47,11 @@ enum CleanupSecretSource: Hashable, Sendable {
 /// What providers are built with. `live` sends requests through `cleanupSession`, runs the real `az` and `foundry`
 /// tools and reads the system clocks; tests pass stubs and fakes.
 struct CleanupProviderFactory: Sendable {
+    /// No one request through `cleanupSession` may take longer than this, whatever arrives meanwhile. It sits above
+    /// every operation's own deadline (Test Connection allows 180 seconds), and replaces the session default of seven
+    /// days, under which a response that trickles in could hold a request for that long.
+    static let requestCeiling: TimeInterval = 300
+
     /// One ephemeral session for every cleanup and token request, so no response, cookie or credential from a cleanup
     /// endpoint or from Entra is ever written to disk.
     static let cleanupSession: URLSession = {
@@ -54,6 +59,7 @@ struct CleanupProviderFactory: Sendable {
         configuration.urlCache = nil
         configuration.httpCookieAcceptPolicy = .never
         configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForResource = requestCeiling
         return URLSession(configuration: configuration)
     }()
 
@@ -107,14 +113,21 @@ enum CleanupProviderResolver {
         return try settingsConnection(store.snapshot())
     }
 
-    /// Builds the provider for `connection`, reading its secret, when it has one, from `store`. Microsoft Foundry
-    /// credentials come from `credentials`, so a provider rebuilt for the same identity keeps its token.
+    /// How `makeProvider` comes by the Microsoft Foundry credential for an identity. `make` builds a new one, reading
+    /// a service principal's secret; a caller that holds one for the identity may return that instead, as
+    /// `CleanupProviderCache` does, so a provider rebuilt for the same identity keeps its token.
+    typealias CredentialSource = (
+        _ identity: AzureIdentity, _ make: () throws -> any AzureCredentialProvider
+    ) throws -> any AzureCredentialProvider
+
+    /// Builds the provider for `connection`, reading its secret, when it has one, from `store`, and the Microsoft
+    /// Foundry credential through `credentialSource`.
     static func makeProvider(
         for connection: CleanupConnection,
         store: CleanupSettingsStore,
         environment: [String: String],
-        credentials: AzureCredentialCache,
-        factory: CleanupProviderFactory
+        factory: CleanupProviderFactory,
+        credentialSource: CredentialSource
     ) throws -> any CleanupProvider {
         switch connection.target {
         case .foundryLocal(let modelAlias):
@@ -134,7 +147,7 @@ enum CleanupProviderResolver {
             return OpenAICompatibleCleanupProvider(
                 model: model, apiKey: apiKey, completionsURL: completionsURL, session: factory.session)
         case .microsoftFoundry(let inferenceBase, let deployment, let identity):
-            let credential = try credentials.credential(for: identity) {
+            let credential = try credentialSource(identity) {
                 try makeCredential(for: identity, store: store, source: connection.source, factory: factory)
             }
             return MicrosoftFoundryCleanupProvider(
@@ -150,9 +163,9 @@ enum CleanupProviderResolver {
         factory: CleanupProviderFactory = .live
     ) throws -> any CleanupProvider {
         let connection = try connection(store: store, environment: environment)
-        return try makeProvider(
-            for: connection, store: store, environment: environment, credentials: AzureCredentialCache(),
-            factory: factory)
+        return try makeProvider(for: connection, store: store, environment: environment, factory: factory) { _, make in
+            try make()
+        }
     }
 
     /// For the command line verbs only (`--cleanup-text`), where a hard stop is the clearest answer to an incomplete

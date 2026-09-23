@@ -22,8 +22,15 @@ final class StubURLProtocol: URLProtocol {
 
     static let routeHeader = "X-Scribe-Test-Route"
 
+    /// Thrown by a handler to leave its request unanswered, as an endpoint that never replies would. `stopped` runs
+    /// when `URLSession` stops the load, which is how a test sees the request cancelled.
+    struct Hold: Error {
+        let stopped: @Sendable () -> Void
+    }
+
     private static let routes = OSAllocatedUnfairLock<[String: Handler]>(initialState: [:])
     private static let unrouted = OSAllocatedUnfairLock<Int>(initialState: 0)
+    private static let held = OSAllocatedUnfairLock<[ObjectIdentifier: @Sendable () -> Void]>(initialState: [:])
 
     static func register(_ handler: @escaping Handler) -> String {
         let route = UUID().uuidString
@@ -57,12 +64,19 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
+        } catch let hold as Hold {
+            let key = ObjectIdentifier(self)
+            Self.held.withLock { $0[key] = hold.stopped }
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        let key = ObjectIdentifier(self)
+        let stopped = Self.held.withLock { $0.removeValue(forKey: key) }
+        stopped?()
+    }
 }
 
 extension XCTestCase {
@@ -205,7 +219,8 @@ enum FormDecoding {
 
 // MARK: - Secrets and settings
 
-/// A `SecretStore` in memory, which counts its reads and writes and can be told to fail the next one.
+/// A `SecretStore` in memory, which counts its reads and writes and can be told to fail the next one, or to hold the
+/// next read until the test releases it.
 final class InMemorySecretStore: SecretStore {
     private struct State: Sendable {
         var secrets: [String: String]
@@ -213,6 +228,7 @@ final class InMemorySecretStore: SecretStore {
         var writes = 0
         var failNextRead: OSStatus?
         var failNextWrite: OSStatus?
+        var pauseNextRead: ReadPause?
     }
 
     private let state: OSAllocatedUnfairLock<State>
@@ -222,15 +238,26 @@ final class InMemorySecretStore: SecretStore {
     }
 
     func secret(for account: String) throws -> String? {
-        let result = state.withLock { current -> Result<String?, KeychainStore.KeychainError> in
+        let (result, pause) = state.withLock { current -> (Result<String?, KeychainStore.KeychainError>, ReadPause?) in
             current.reads += 1
+            let pause = current.pauseNextRead
+            current.pauseNextRead = nil
             if let status = current.failNextRead {
                 current.failNextRead = nil
-                return .failure(.unhandled(status))
+                return (.failure(.unhandled(status)), pause)
             }
-            return .success(current.secrets[account])
+            return (.success(current.secrets[account]), pause)
         }
+        // Outside the lock: the reading thread blocks here, and the test goes on meanwhile.
+        pause?.arrive()
         return try result.get()
+    }
+
+    /// Holds the next read after it has read, until `release()` on what this returns.
+    func pauseNextRead() -> ReadPause {
+        let pause = ReadPause()
+        state.withLock { $0.pauseNextRead = pause }
+        return pause
     }
 
     func save(_ secret: String, for account: String) throws {
@@ -579,19 +606,21 @@ final class FirstOutcome: Sendable {
 
 extension CleanupProviderFactory {
     /// A factory that reaches nothing outside the test: requests go to `session`, `az` is `azureCli` (a launch that
-    /// fails as not found when there is none), `foundry status` is `foundryStatus` and time is `clock`.
+    /// fails as not found when there is none) or `azureCliLaunch` when one is given, `foundry status` is
+    /// `foundryStatus` and time is `clock`.
     static func testing(
         session: URLSession,
         foundryStatus: FoundryLocalStatusSource = FoundryLocalStatusSource {
             throw CleanupProviderError.endpointUnavailable(.foundryLocalNotInstalled)
         },
         azureCli: FakeAzureCli? = nil,
+        azureCliLaunch: AzureCliCredentialProvider.Launch? = nil,
         azureCliSearchPath: [String] = [],
         lane: AsyncLane = AsyncLane(),
         clock: TestClock = TestClock()
     ) -> CleanupProviderFactory {
         let missing: AzureCliCredentialProvider.Launch = { _ in throw ProcessRunnerError.launchFailed(errno: ENOENT) }
-        let launch = azureCli?.launch ?? missing
+        let launch = azureCliLaunch ?? azureCli?.launch ?? missing
         return CleanupProviderFactory(
             session: session,
             foundryLocalStatus: foundryStatus,
@@ -600,5 +629,116 @@ extension CleanupProviderFactory {
             azureCliLaunch: launch,
             now: clock.now,
             monotonicNow: clock.monotonicNow)
+    }
+}
+
+// MARK: - Work that never finishes, and reads held in the middle
+
+/// Work that never finishes on its own: `hold()` suspends until its task is cancelled and then throws
+/// `CancellationError`, as a stalled `az`, a hung `foundry status` or a silent endpoint would, given that Scribe's
+/// real ones observe cancellation. It records that the work started and that the cancellation reached it.
+final class HeldWork: Sendable {
+    private struct State: Sendable {
+        var cancelled = false
+        var waiter: CheckedContinuation<Void, Never>?
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let started = FirstOutcome()
+
+    func hold() async throws {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let cancelledAlready = state.withLock { current -> Bool in
+                    guard !current.cancelled else { return true }
+                    current.waiter = continuation
+                    return false
+                }
+                started.settle(true)
+                if cancelledAlready {
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            let waiter = state.withLock { current -> CheckedContinuation<Void, Never>? in
+                current.cancelled = true
+                defer { current.waiter = nil }
+                return current.waiter
+            }
+            waiter?.resume()
+        }
+        throw CancellationError()
+    }
+
+    /// Returns once `hold()` has been reached.
+    func waitUntilStarted() async {
+        _ = await started.value
+    }
+
+    var sawCancellation: Bool {
+        state.withLock { $0.cancelled }
+    }
+}
+
+/// One value, set from any task and read afterwards.
+final class LockedValue<Value: Sendable>: Sendable {
+    private let stored = OSAllocatedUnfairLock<Value?>(initialState: nil)
+
+    func set(_ value: Value) {
+        stored.withLock { $0 = value }
+    }
+
+    var value: Value? {
+        stored.withLock { $0 }
+    }
+}
+
+/// Holds one secret read in the middle, on the thread doing it, so a test can act while a build is reading.
+final class ReadPause: Sendable {
+    private let reached = FirstOutcome()
+    private let gate = DispatchSemaphore(value: 0)
+
+    /// Called by the reading thread: reports the arrival, then blocks until `release()`.
+    func arrive() {
+        reached.settle(true)
+        gate.wait()
+    }
+
+    func waitUntilReached() async {
+        _ = await reached.value
+    }
+
+    func release() {
+        gate.signal()
+    }
+}
+
+/// Runs blocking work on a thread of its own, off the cooperative pool, and returns what it returns.
+func onBackgroundThread<Value: Sendable>(_ work: @escaping @Sendable () throws -> Value) async throws -> Value {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Value, any Error>) in
+        let thread = Thread {
+            continuation.resume(with: Result { try work() })
+        }
+        thread.name = "ScribeTests.background"
+        thread.start()
+    }
+}
+
+/// A provider that answers every request with its transcript, for tests of what holds providers rather than of what
+/// a provider does.
+final class StaticCleanupProvider: CleanupProvider {
+    let id = "static"
+    let displayName = "Static"
+
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        CleanupResponse(cleanedText: request.transcript, latency: 0, providerID: id, modelID: "static")
+    }
+}
+
+extension ScribeLogRecorder {
+    /// Every line, every public argument and every private one: the private part too must never hold what a user or
+    /// an endpoint wrote, since a private-data logging profile shows it in the clear.
+    var everyText: String {
+        renderings.flatMap { [$0.line, $0.publicText ?? "", $0.privateText ?? ""] }.joined(separator: "\n")
     }
 }

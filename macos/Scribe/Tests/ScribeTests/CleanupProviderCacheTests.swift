@@ -19,12 +19,17 @@ final class CleanupProviderCacheTests: XCTestCase {
     private static let entraHost = "login.microsoftonline.com"
 
     /// A cache over a store of this test's own, whose requests, `az` launches and `foundry status` lookups the test
-    /// sees. Entra token requests get a token; everything else gets `reply`.
+    /// sees. Entra token requests get a token; everything else gets `reply`, which a trailing closure sets.
+    /// `checkDeadline` replaces Test Connection's deadline, and `foundryStatus` and `azureCliLaunch` replace the fakes
+    /// for one test; they come after `reply`, so a trailing closure can only ever be `reply`.
     private func makeRig(
         environment: [String: String] = [:],
         apiKeys: InMemorySecretStore = InMemorySecretStore(),
         clientSecrets: InMemorySecretStore = InMemorySecretStore(),
-        reply: @escaping @Sendable (URLRequest) -> (HTTPURLResponse, Data) = { StubReply.completion($0, "Cleaned.") }
+        checkDeadline: Duration? = nil,
+        reply: @escaping @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) = { StubReply.completion($0, "Cleaned.") },
+        foundryStatus: FoundryLocalStatusSource? = nil,
+        azureCliLaunch: AzureCliCredentialProvider.Launch? = nil
     ) throws -> Rig {
         let requests = RequestLog()
         let entraHost = Self.entraHost
@@ -33,22 +38,28 @@ final class CleanupProviderCacheTests: XCTestCase {
             if request.url?.host(percentEncoded: false) == entraHost {
                 return StubReply.entraToken(request, "entra-token-\(requests.count(host: entraHost))")
             }
-            return reply(request)
+            return try reply(request)
         }
         let clock = TestClock()
         let azureCli = FakeAzureCli(outcomes: [
             .azToken("cli-token", expiresOn: Int(clock.date.timeIntervalSince1970) + 3600)
         ])
-        let foundryStatus = FakeFoundryStatus(endpoints: ["http://127.0.0.1:5001"])
+        let fakeFoundryStatus = FakeFoundryStatus(endpoints: ["http://127.0.0.1:5001"])
         let azDirectory = try makeScript(named: "az", body: "exit 1").deletingLastPathComponent()
         let fixture = makeCleanupStore(apiKeys: apiKeys, clientSecrets: clientSecrets)
         let factory = CleanupProviderFactory.testing(
-            session: session, foundryStatus: foundryStatus.source, azureCli: azureCli,
-            azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock)
+            session: session, foundryStatus: foundryStatus ?? fakeFoundryStatus.source, azureCli: azureCli,
+            azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock)
+        let cache: CleanupProviderCache
+        if let checkDeadline {
+            cache = CleanupProviderCache(
+                store: fixture.store, environment: environment, factory: factory, checkDeadline: { _ in checkDeadline })
+        } else {
+            cache = CleanupProviderCache(store: fixture.store, environment: environment, factory: factory)
+        }
         return Rig(
-            fixture: fixture,
-            cache: CleanupProviderCache(store: fixture.store, environment: environment, factory: factory),
-            requests: requests, azureCli: azureCli, foundryStatus: foundryStatus, clock: clock)
+            fixture: fixture, cache: cache, requests: requests, azureCli: azureCli, foundryStatus: fakeFoundryStatus,
+            clock: clock)
     }
 
     private func configureMicrosoftFoundry(_ store: CleanupSettingsStore, deployment: String = "gpt-5-mini") {
@@ -62,6 +73,17 @@ final class CleanupProviderCacheTests: XCTestCase {
         store.providerKind = .openAICompatible
         store.openAIBaseURL = "http://127.0.0.1:1234/v1"
         store.openAIModel = "local-model"
+    }
+
+    /// Test Connection, with a bound for the test itself: a check that never ends fails the test instead of hanging it.
+    private func boundedCheck(
+        _ cache: CleanupProviderCache, file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> CleanupConnectionCheck {
+        let result = LockedValue<CleanupConnectionCheck>()
+        await waitBounded("Test Connection to end", file: file, line: line) {
+            result.set(await cache.checkConnection())
+        }
+        return try XCTUnwrap(result.value, file: file, line: line)
     }
 
     private func clean(_ rig: Rig) async throws {
@@ -339,9 +361,163 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     func testTestConnectionGivesOnDeviceModelsTimeToLoad() {
-        XCTAssertEqual(CleanupProviderCache.checkTimeout(for: .foundryLocal), 180)
-        XCTAssertEqual(CleanupProviderCache.checkTimeout(for: .ollama), 180)
-        XCTAssertEqual(CleanupProviderCache.checkTimeout(for: .openAICompatible), 90)
-        XCTAssertEqual(CleanupProviderCache.checkTimeout(for: .microsoftFoundry), 90)
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .foundryLocal), .seconds(180))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .ollama), .seconds(180))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .openAICompatible), .seconds(90))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .microsoftFoundry), .seconds(90))
+    }
+
+    /// No request through the cleanup session may run for the session default of seven days, however slowly an
+    /// answer trickles in.
+    func testNoCleanupRequestCanRunForDays() {
+        XCTAssertEqual(CleanupProviderFactory.cleanupSession.configuration.timeoutIntervalForResource, 300)
+        XCTAssertGreaterThan(
+            CleanupProviderFactory.requestCeiling,
+            ChatCompletionsTransport.seconds(CleanupProviderCache.checkDeadline(for: .foundryLocal)))
+    }
+
+    // MARK: - Test Connection's deadline
+
+    /// The deadline covers getting the token as well as the completion: an `az` that never answers ends the check at
+    /// the deadline, and the launch sees the cancellation that stops a real `az`.
+    func testTheCheckEndsAtItsDeadlineWhileAzHasNotAnswered() async throws {
+        let held = HeldWork()
+        let rig = try makeRig(
+            checkDeadline: .milliseconds(200),
+            azureCliLaunch: { _ in
+                try await held.hold()
+                throw CancellationError()
+            })
+        configureMicrosoftFoundry(rig.store)
+
+        let started = ContinuousClock.now
+        let check = try await boundedCheck(rig.cache)
+
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.hasPrefix("Microsoft Foundry did not finish the test within"), check.message)
+        XCTAssertTrue(held.sawCancellation, "the az launch was cancelled")
+        XCTAssertGreaterThanOrEqual(started.duration(to: .now), .milliseconds(200))
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    /// Finding Foundry Local's endpoint is inside the deadline too.
+    func testTheCheckEndsAtItsDeadlineWhileFoundryLocalHasNotSaidWhereItIs() async throws {
+        let held = HeldWork()
+        let rig = try makeRig(
+            checkDeadline: .milliseconds(200),
+            foundryStatus: FoundryLocalStatusSource {
+                try await held.hold()
+                throw CancellationError()
+            })
+
+        let check = try await boundedCheck(rig.cache)
+
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.hasPrefix("Foundry Local did not finish the test within"), check.message)
+        XCTAssertTrue(check.message.hasSuffix("try again once it has loaded."), check.message)
+        XCTAssertTrue(held.sawCancellation, "the foundry status lookup was cancelled")
+    }
+
+    /// A completion that never arrives, which an idle timeout alone would wait out for as long as data keeps
+    /// trickling in, ends at the deadline, and `URLSession` stops the load.
+    func testTheCheckEndsAtItsDeadlineWhileTheCompletionHasNotArrived() async throws {
+        let stopped = FirstOutcome()
+        let rig = try makeRig(checkDeadline: .milliseconds(200)) { _ in
+            throw StubURLProtocol.Hold(stopped: { stopped.settle(true) })
+        }
+        configureOpenAICompatible(rig.store)
+
+        let check = try await boundedCheck(rig.cache)
+
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(
+            check.message.hasPrefix("OpenAI-compatible endpoint did not finish the test within"), check.message)
+        await waitBounded("URLSession to stop the held request") { _ = await stopped.value }
+    }
+
+    /// Cancelling the check is not a deadline, and says so.
+    func testACancelledCheckSaysItWasCancelled() async throws {
+        let held = HeldWork()
+        let rig = try makeRig(azureCliLaunch: { _ in
+            try await held.hold()
+            throw CancellationError()
+        })
+        configureMicrosoftFoundry(rig.store)
+        let cache = rig.cache
+
+        let checking = Task { await cache.checkConnection() }
+        await waitBounded("az to be launched") { await held.waitUntilStarted() }
+        checking.cancel()
+        let result = LockedValue<CleanupConnectionCheck>()
+        await waitBounded("the cancelled check to end") { result.set(await checking.value) }
+        let check = try XCTUnwrap(result.value)
+
+        XCTAssertFalse(check.reachable)
+        XCTAssertEqual(check.message, "Microsoft Foundry: The check was cancelled.")
+        XCTAssertTrue(held.sawCancellation)
+    }
+
+    // MARK: - Test Connection's output ceiling
+
+    /// Windows' readiness probe ceilings: 4096 for a Microsoft Foundry deployment, which may reason before it answers,
+    /// and 16 for the rest. A dictation carries no ceiling.
+    func testTheCheckCapsTheAnswerAsWindowsDoes() async throws {
+        let cases: [(kind: CleanupProviderKind, ceiling: Int)] = [
+            (.foundryLocal, 16), (.ollama, 16), (.openAICompatible, 16), (.microsoftFoundry, 4096),
+        ]
+        for (kind, ceiling) in cases {
+            let rig = try makeRig()
+            switch kind {
+            case .foundryLocal:
+                break
+            case .ollama:
+                rig.store.providerKind = .ollama
+            case .openAICompatible:
+                configureOpenAICompatible(rig.store)
+            case .microsoftFoundry:
+                configureMicrosoftFoundry(rig.store)
+            }
+
+            let check = await rig.cache.checkConnection()
+            try await clean(rig)
+
+            XCTAssertTrue(check.reachable, "\(kind): \(check.message)")
+            let bodies = rig.requests.all.filter { $0.host != Self.entraHost }.map(\.jsonBody)
+            XCTAssertEqual(bodies.count, 2, "\(kind)")
+            XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, ceiling, "\(kind)")
+            XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
+            XCTAssertNil(bodies.first?["max_tokens"], "\(kind)")
+        }
+    }
+
+    // MARK: - Invalidation across both tiers
+
+    /// A credential made while `invalidate()` ran belongs to the time before it. The build that made it hands its
+    /// provider to its caller once, but neither that provider nor the credential is kept, so the next provider reads
+    /// the secret again and makes a credential of its own.
+    func testACredentialMadeWhileInvalidatingIsNotKept() async throws {
+        let clientSecrets = InMemorySecretStore()
+        let rig = try makeRig(clientSecrets: clientSecrets)
+        configureMicrosoftFoundry(rig.store)
+        rig.store.azureAuthMode = .servicePrincipal
+        rig.store.azureTenantId = "tenant-1"
+        rig.store.azureClientId = "client-1"
+        try rig.store.setAzureClientSecret("secret-1", clientId: "client-1")
+        let cache = rig.cache
+        let pause = clientSecrets.pauseNextRead()
+
+        let building = Task { try await onBackgroundThread { try cache.provider() } }
+        await waitBounded("the build to read the client secret") { await pause.waitUntilReached() }
+        cache.invalidate()
+        pause.release()
+        let handedOut = try await building.value
+        let next = try cache.provider()
+
+        XCTAssertFalse(same(handedOut, next))
+        XCTAssertEqual(clientSecrets.reads, 2, "the next provider made a credential of its own")
+        _ = try await handedOut.clean(CleanupRequest(transcript: "raw text"))
+        _ = try await next.clean(CleanupRequest(transcript: "raw text"))
+        XCTAssertEqual(rig.requests.count(host: Self.entraHost), 2, "each credential asked Entra for its own token")
+        XCTAssertTrue(same(next, try cache.provider()), "a build after the invalidation is kept")
     }
 }

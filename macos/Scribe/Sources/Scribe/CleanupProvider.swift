@@ -12,17 +12,22 @@ struct CleanupRequest: Sendable {
     let singleLineMode: Bool
     /// How long this request may wait for an answer; `nil` keeps the provider's own limit.
     let timeout: TimeInterval?
+    /// The most output tokens the model may produce, sent as `max_completion_tokens`; `nil` sends no limit. Only Test
+    /// Connection sets one (`CleanupProviderCache.checkOutputCeiling(for:)`).
+    let maxOutputTokens: Int?
 
     init(
         transcript: String,
         writingStylePrompt: String = CleanupPrompt.defaultWritingStyle,
         singleLineMode: Bool = false,
-        timeout: TimeInterval? = nil
+        timeout: TimeInterval? = nil,
+        maxOutputTokens: Int? = nil
     ) {
         self.transcript = transcript
         self.writingStylePrompt = writingStylePrompt
         self.singleLineMode = singleLineMode
         self.timeout = timeout
+        self.maxOutputTokens = maxOutputTokens
     }
 }
 
@@ -362,7 +367,8 @@ struct CleanupServiceReply: Sendable, Equatable, CustomStringConvertible, Custom
     }
 }
 
-/// The words the Settings window shows for a failed Test Connection or usage summary.
+/// The words the Settings window shows for a failed Test Connection. The usage summary shows an error's own
+/// description instead (`UsageSummaryModel`), which never carries what an endpoint said.
 enum CleanupFailureText {
     /// Scribe's own description of the failure and, when the service explained it, what it said: an endpoint's
     /// message about a refused request, or an Entra code Scribe does not list.

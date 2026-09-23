@@ -115,6 +115,9 @@ final class CleanupSettingsModel: ObservableObject {
     /// Advances on every change to `values` and every stored credential change, so a connection test can tell its
     /// result is for a configuration the tab no longer shows.
     private var revision = 0
+    /// The Test Connection running now, for `cancelConnectionTest()`, and whether the user stopped it.
+    private var runningCheck: Task<CleanupConnectionCheck, Never>?
+    private var checkCancelledByUser = false
     private var observation: SettingsNotificationObservation?
 
     init(access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default) {
@@ -217,23 +220,42 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
-    /// Resolves the provider exactly as the pipeline would, environment overrides included, and runs its health
-    /// check. A result that arrives after the settings or a stored credential changed is dropped rather than shown
-    /// against them.
+    /// Runs Test Connection through the provider the pipeline would use, environment overrides included. A result that
+    /// arrives after the settings or a stored credential changed is dropped rather than shown against them.
+    /// `cancelConnectionTest()` stops it while it runs.
     func testConnection() async {
         guard !isDisabled(.connectionTest) else { return }
         let started = revision
         isTesting = true
         statusMessage = nil
         errorMessage = nil
-        let result = await access.checkConnection()
+        checkCancelledByUser = false
+        let checkConnection = access.checkConnection
+        let check = Task { await checkConnection() }
+        runningCheck = check
+        let result = await withTaskCancellationHandler {
+            await check.value
+        } onCancel: {
+            check.cancel()
+        }
+        runningCheck = nil
         isTesting = false
         guard started == revision else { return }
-        if result.reachable {
+        if checkCancelledByUser {
+            statusMessage = "Test Connection was cancelled."
+        } else if result.reachable {
             statusMessage = result.message
         } else {
             errorMessage = result.message
         }
+    }
+
+    /// Stops the Test Connection that is running, if one is: its request, and any `az` or `foundry` it started, are
+    /// cancelled, and the tab says it was cancelled rather than showing a failure.
+    func cancelConnectionTest() {
+        guard let runningCheck else { return }
+        checkCancelledByUser = true
+        runningCheck.cancel()
     }
 
     /// A stored key or secret changed: a connection test still running checked the credential that was replaced.

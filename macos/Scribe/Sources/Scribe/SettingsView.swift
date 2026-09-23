@@ -894,6 +894,7 @@ private struct CleanupSettingsTab: View {
                     .disabled(model.isDisabled(.connectionTest))
                     if model.isTesting {
                         ProgressView().controlSize(.small)
+                        Button("Cancel") { model.cancelConnectionTest() }
                     }
                     Spacer()
                 }

@@ -3,9 +3,10 @@ import XCTest
 @testable import Scribe
 
 /// Failing providers, driven through stubs and fakes with privacy canaries wherever a key, an endpoint, an identity or
-/// the user's words can hide, prove that no failure carries them into a standard error line, the unified log's public
-/// argument, an error description, a printed or dumped error, or a failure shape. Only the Settings text may repeat
-/// what an endpoint said about a refused request, and these tests pin that too, so the one exception stays visible.
+/// the user's words can hide, prove that no failure carries them into a standard error line, either of the unified
+/// log's arguments (the private one too, which a private-data logging profile shows in the clear), an error
+/// description, a printed or dumped error, or a failure shape. Only the Settings text may repeat what an endpoint said
+/// about a refused request, and these tests pin that too, so the one exception stays visible.
 final class CleanupPrivacyTests: XCTestCase {
     private let canaryHost = "https://canary-7f3a.openai.azure.com"
 
@@ -24,7 +25,7 @@ final class CleanupPrivacyTests: XCTestCase {
         ScribeLog.warning(.cleanup, "AI cleanup failed, using the text without it", .failure(error))
         recorder.stop()
         XCTAssertEqual(recorder.renderings.count, 1, file: file, line: line)
-        PrivacyCanary.assertAbsent(from: recorder.publicText, file: file, line: line)
+        PrivacyCanary.assertAbsent(from: recorder.everyText, file: file, line: line)
     }
 
     func testAnOpenAICompatibleRefusalLeaksNothingButTellsSettings() async throws {
@@ -41,7 +42,7 @@ final class CleanupPrivacyTests: XCTestCase {
         recorder.stop()
 
         assertNothingLeaks(from: error)
-        PrivacyCanary.assertAbsent(from: recorder.publicText)
+        PrivacyCanary.assertAbsent(from: recorder.everyText)
         XCTAssertEqual(FailureShape(error).description, "CleanupProviderError.rejected values=401 http=401 service=other")
         let settingsText = CleanupFailureText.forSettings(error, providerName: "OpenAI-compatible endpoint")
         XCTAssertTrue(settingsText.contains("is not valid for"), "the endpoint's own words reach Settings: \(settingsText)")
@@ -61,7 +62,7 @@ final class CleanupPrivacyTests: XCTestCase {
         XCTAssertEqual(response.cleanedText, PrivacyCanary.transcript)
         let finished = recorder.lines.filter { $0.contains("Cleanup request finished") }
         XCTAssertEqual(finished.count, 1, "\(recorder.lines)")
-        PrivacyCanary.assertAbsent(from: recorder.publicText)
+        PrivacyCanary.assertAbsent(from: recorder.everyText)
     }
 
     func testAMicrosoftFoundryRefusalLeaksNeitherTheEndpointNorTheDeployment() async throws {
@@ -157,7 +158,7 @@ final class CleanupPrivacyTests: XCTestCase {
         XCTAssertFalse(check.reachable)
         XCTAssertTrue(check.message.contains("is not enabled for this key"), check.message)
         XCTAssertTrue(recorder.lines.contains { $0.contains("Test Connection failed") }, "\(recorder.lines)")
-        PrivacyCanary.assertAbsent(from: recorder.publicText)
+        PrivacyCanary.assertAbsent(from: recorder.everyText)
     }
 
     /// The values that describe a configuration or an identity print without it.

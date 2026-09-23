@@ -273,8 +273,10 @@ protocol AzureCredentialProvider: Sendable {
 /// signed in to several tenants. An actor alone would not serialize them, because an actor takes its next call whenever
 /// the one it runs is suspended, and a launch is exactly such a suspension.
 ///
-/// A caller cancelled while it waits leaves the queue at once with `CancellationError`. The work holding the lane stops
-/// only through its own task, which `ProcessRunner` turns into stopping the child.
+/// A caller cancelled while it waits leaves the queue at once with `CancellationError`. A caller that `leave()` has
+/// already handed the lane to is no longer waiting: it runs its work even when its cancellation arrives a moment later,
+/// so that work has to observe cancellation itself. The `az` launch does, through `ProcessRunner`, which stops the
+/// child when the task is cancelled; anything else put through a lane must do the same.
 final class AsyncLane: Sendable {
     private struct Waiter: Sendable {
         let ticket: UInt64
@@ -794,8 +796,10 @@ actor AzureServicePrincipalCredentialProvider: AzureCredentialProvider {
 // MARK: - One credential per identity
 
 /// Who Scribe signs in to Microsoft Foundry as. Equal identities share one credential and its token, so the provider
-/// cache keys credentials by it. A service principal's secret is represented by the store's `secretRevision`, never
-/// by its value. Printing or dumping one shows only the auth mode, never the tenant or client id.
+/// cache keeps the credential for one identity beside its provider (`CleanupProviderCacheState`), the macOS side of
+/// Windows' `AzureCredentialFactory`: building a credential per dictation would ask `az` or Entra again every time. A
+/// service principal's secret is represented by the store's `secretRevision`, never by its value. Printing or dumping
+/// one shows only the auth mode, never the tenant or client id.
 enum AzureIdentity: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
     case azureCli(tenantId: String?)
     case servicePrincipal(tenantId: String, clientId: String, secretRevision: String)
@@ -808,40 +812,4 @@ enum AzureIdentity: Hashable, Sendable, CustomStringConvertible, CustomReflectab
     }
 
     var customMirror: Mirror { Mirror(self, children: [:]) }
-}
-
-/// Hands out one credential per identity, the macOS side of Windows' `AzureCredentialFactory`: a credential keeps its
-/// token, so building one per dictation would ask `az` or Entra again every time. A new identity replaces the old
-/// credential and drops its token with it, and `invalidate()` drops it on request.
-final class AzureCredentialCache: Sendable {
-    private struct Entry: Sendable {
-        let identity: AzureIdentity
-        let credential: any AzureCredentialProvider
-    }
-
-    private let entry = OSAllocatedUnfairLock<Entry?>(initialState: nil)
-
-    init() {}
-
-    /// The credential for `identity`. `make` runs only when the cache holds none for it, which is also the only time
-    /// a service principal's secret is read.
-    func credential(
-        for identity: AzureIdentity, make: () throws -> any AzureCredentialProvider
-    ) rethrows -> any AzureCredentialProvider {
-        if let cached = entry.withLock({ state in state?.identity == identity ? state?.credential : nil }) {
-            return cached
-        }
-        let made = try make()
-        return entry.withLock { state in
-            if let current = state, current.identity == identity {
-                return current.credential
-            }
-            state = Entry(identity: identity, credential: made)
-            return made
-        }
-    }
-
-    func invalidate() {
-        entry.withLock { $0 = nil }
-    }
 }

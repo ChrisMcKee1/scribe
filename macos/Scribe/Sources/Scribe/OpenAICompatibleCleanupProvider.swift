@@ -69,7 +69,8 @@ enum OpenAICompatibleEndpoint {
 
 /// One chat completions request and its answer, shared by every provider.
 ///
-/// The body is `model`, the system and user messages, `stream: false` and, for on-device models only, `temperature`.
+/// The body is `model`, the system and user messages, `stream: false`, for on-device models only `temperature`, and,
+/// for Test Connection only, `max_completion_tokens`.
 /// It never has a `store` field: Chat Completions keep nothing unless asked to with `store: true`, and some
 /// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). A Responses route, if one is
 /// ever added, has to send `store: false` and prove it with a wire test.
@@ -106,6 +107,7 @@ struct ChatCompletionsTransport: Sendable {
                     ChatCompletionRequest.Message(role: "user", content: cleanupRequest.transcript),
                 ],
                 temperature: temperature,
+                maxCompletionTokens: cleanupRequest.maxOutputTokens,
                 stream: false))
 
         let started = ContinuousClock.now
@@ -175,7 +177,18 @@ struct ChatCompletionRequest: Encodable, Sendable {
     let messages: [Message]
     /// Left out of the body when `nil`.
     let temperature: Double?
+    /// Left out of the body when `nil`. `max_completion_tokens` rather than the older `max_tokens`, which reasoning
+    /// deployments refuse; it is the field Windows' OpenAI client sends for the same limit.
+    let maxCompletionTokens: Int?
     let stream: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+        case maxCompletionTokens = "max_completion_tokens"
+        case stream
+    }
 }
 
 struct ChatCompletionResponse: Decodable {
