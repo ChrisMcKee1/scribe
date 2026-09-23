@@ -37,7 +37,9 @@ function Sync-ScribeVelopackCli {
         return
     }
 
-    $scope = if ($ToolPath) { @('--tool-path', $ToolPath) } else { @('-g') }
+    # Typed as an array on purpose: an if expression unrolls a one-element array to a plain string,
+    # and splatting a string passes it one character at a time ("-g" arrived as "-" and "g").
+    [string[]]$scope = if ($ToolPath) { '--tool-path', $ToolPath } else { '-g' }
     $action = if ($installed) { "Moving vpk $installed to $Version" } else { "Installing vpk $Version" }
     Write-Host "==> $action to match the Velopack package..." -ForegroundColor Yellow
 
