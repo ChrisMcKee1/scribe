@@ -134,7 +134,8 @@ final class ScribeLogRecorder: Sendable {
 }
 
 /// Values that must never reach a log line. Every one contains "canary", so one check catches a leak
-/// of any of them, whole or in part.
+/// of any of them, whole or in part. Keep the word out of the names of fixture types and cases, which a
+/// failure shape or an enum name field logs by design.
 enum PrivacyCanary {
     static let secret = "sk-canary-7f3a9e1b5c2d"
     static let path = "/Users/dana-canary/Library/Application Support/Scribe/asr-work/canary.wav"

@@ -67,6 +67,8 @@ enum ProcessRunner {
     struct Outcome: Sendable, Equatable {
         let terminationReason: TerminationReason
         /// The status the child passed to `exit`, when it exited rather than being killed by a signal.
+        /// Both this and `terminationSignal` are `nil` only when something else in Scribe reaped the
+        /// child first, so its status was never seen.
         let exitStatus: Int32?
         /// The signal that ended the child, when one did.
         let terminationSignal: Int32?
@@ -94,6 +96,13 @@ enum ProcessRunner {
     ///   reported, not thrown: the outcome says `.timedOut` or `.cancelled`.
     /// - Throws: `CancellationError` when the task was cancelled before a child started, and
     ///   `ProcessRunnerError` when the request is invalid or the child cannot be started.
+    ///
+    /// Cancelling the awaiting task sends `SIGTERM` to a running child's group before `cancel()`
+    /// returns (a child still being spawned gets it as soon as the spawn completes), so cancelling from
+    /// `applicationWillTerminate` reaches the child before Scribe exits. The `SIGKILL` that follows a
+    /// child ignoring `SIGTERM` needs Scribe to still be running `killGracePeriod` later.
+    /// Each run uses three or four threads (the exit, each output stream and standard input), which
+    /// end with the child and its streams.
     static func run(
         _ executableURL: URL,
         arguments: [String] = [],
