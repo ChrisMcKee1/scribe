@@ -364,27 +364,36 @@ struct CleanupServiceReply: Sendable, Equatable, CustomStringConvertible, Custom
 
 /// The words the Settings window shows for a failed Test Connection or usage summary.
 enum CleanupFailureText {
-    /// Scribe's own description of the failure and, when the endpoint explained a refusal, what it said.
+    /// Scribe's own description of the failure and, when the service explained it, what it said: an endpoint's
+    /// message about a refused request, or an Entra code Scribe does not list.
     ///
     /// For the screen only. Never log it: the endpoint's words are the endpoint's to choose and can repeat an
     /// address, a model name or anything else. Logs take `ScribeLog.Field.failure`, the shape.
     static func forSettings(_ error: any Error, providerName: String?) -> String {
         let prefix = providerName.map { "\($0): " } ?? ""
         let description: String
+        var detail: String?
         switch error {
         case let error as CleanupProviderError:
             description = error.errorDescription ?? "Cleanup failed."
             if let message = error.settingsDetail {
-                return prefix + description + " The endpoint said: " + message
+                detail = "The endpoint said: " + message
+            } else if case .credentialUnavailable(let credentialError) = error {
+                detail = entraNote(credentialError)
             }
         case let error as AzureCredentialError:
             description = error.errorDescription ?? "Signing in to Microsoft Foundry failed."
+            detail = entraNote(error)
         case is CancellationError:
             description = "The check was cancelled."
         default:
             description = "Cleanup failed."
         }
-        return prefix + description
+        return prefix + description + (detail.map { " " + $0 } ?? "")
+    }
+
+    private static func entraNote(_ error: AzureCredentialError) -> String? {
+        error.settingsDetail.map { "Microsoft Entra reported \($0)." }
     }
 }
 

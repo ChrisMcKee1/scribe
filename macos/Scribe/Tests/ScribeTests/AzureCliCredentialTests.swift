@@ -50,6 +50,67 @@ final class AzureCliCommandTests: XCTestCase {
     }
 }
 
+final class EntraErrorCodeTests: XCTestCase {
+    /// A number is read from what `az` printed only as Entra writes one, so it never turns into a different, listed
+    /// code: a leading zero, a longer run of digits or too few digits is no code at all.
+    func testOnlyACodeWrittenAsEntraWritesOneIsRead() {
+        XCTAssertEqual(AzureCliFailureReason.aadstsCode(in: "AADSTS70043: The refresh token has expired."), 70_043)
+        XCTAssertEqual(AzureCliFailureReason.aadstsCode(in: "first AADSTS50076, then AADSTS70043"), 50_076)
+        XCTAssertEqual(AzureCliFailureReason.aadstsCode(in: "(AADSTS7000215)"), 7_000_215)
+        for text in ["AADSTS070043: x", "AADSTS1234567890123", "AADSTS123", "AADSTS: x", "aadsts70043", "AADSTS7000x"] {
+            XCTAssertNil(AzureCliFailureReason.aadstsCode(in: text), text)
+        }
+        XCTAssertEqual(AzureCliFailureReason.classify(standardError: "AADSTS070043: x").reason, .other)
+    }
+
+    /// Printed, dumped or shaped, a code shows its digits only when `FailureShape` lists it.
+    func testACodePrintsItsDigitsOnlyWhenListed() {
+        let listed: EntraErrorCode = 7_000_215
+        let unlisted: EntraErrorCode = 1_234_567
+
+        XCTAssertTrue(listed.isListed)
+        XCTAssertFalse(unlisted.isListed)
+        XCTAssertEqual(listed.code, "AADSTS7000215")
+        XCTAssertEqual(unlisted.code, "AADSTS1234567")
+        for (code, expected) in [(listed, "AADSTS7000215"), (unlisted, "AADSTS")] {
+            var dumped = ""
+            dump(code, to: &dumped)
+            XCTAssertEqual(String(describing: code), expected)
+            XCTAssertEqual(String(reflecting: code), expected)
+            XCTAssertEqual(dumped, "- \(expected)\n")
+        }
+        let error = AzureCredentialError.cliFailed(exitStatus: 1, reason: .signInRejected, aadsts: unlisted)
+        let shape = FailureShape(error).description
+        XCTAssertTrue(shape.hasPrefix("AzureCredentialError.cliFailed "), shape)
+        XCTAssertTrue(shape.hasSuffix(" service=AADSTS inner=AzureCliFailureReason.signInRejected"), shape)
+        XCTAssertFalse(shape.contains("1234567"), shape)
+    }
+
+    /// The codes Scribe gives a hint of its own, as Windows' `AzureSignInDiagnostics` does, and whether each is
+    /// named in the description. A hinted code that is on Microsoft's error code reference is in `FailureShape`'s
+    /// list; AADSTS900023 is not on it, so it keeps its hint but stays unnamed outside Settings.
+    func testEachHintedCodeGetsItsOwnHint() throws {
+        let cases: [(number: Int, hint: String, listed: Bool)] = [
+            (7_000_215, "can take a moment to become active", true),
+            (7_000_222, "the client secret has expired", true),
+            (700_016, "the application was not found in this tenant", true),
+            (90_002, "the tenant was not found", true),
+            (50_034, "no service principal exists", true),
+            (900_023, "neither a directory (tenant) ID nor a domain name", false),
+        ]
+
+        for (number, hint, listed) in cases {
+            let code = EntraErrorCode(number)
+            XCTAssertEqual(code.isListed, listed, code.code)
+            let error = AzureCredentialError.tokenRejected(status: 400, aadsts: code, reply: .empty)
+            let description = try XCTUnwrap(error.errorDescription)
+            XCTAssertTrue(description.contains(hint), description)
+            XCTAssertEqual(description.contains(code.code), listed, description)
+            XCTAssertEqual(error.settingsDetail, listed ? nil : code.code)
+        }
+    }
+}
+
 final class AzureCliCredentialProviderTests: XCTestCase {
     private let scope = MicrosoftFoundryCleanupProvider.inferenceScope
 
@@ -126,6 +187,33 @@ final class AzureCliCredentialProviderTests: XCTestCase {
             XCTAssertEqual(error, .cliFailed(exitStatus: 1, reason: .signInRejected, aadsts: 70_043))
             XCTAssertEqual(error.failureServiceCode, "AADSTS70043")
             XCTAssertFalse(String(describing: error).contains("Trace"))
+            let description = try XCTUnwrap(error.errorDescription)
+            XCTAssertTrue(description.contains("(AADSTS70043)"), description)
+            XCTAssertNil(error.settingsDetail, "a listed code is in the description already")
+        }
+    }
+
+    /// An Entra code `FailureShape` does not list keeps its digits out of the shape and the description, as the digits
+    /// after `AADSTS` are the service's to choose; only the Settings text, which is never logged, shows the code.
+    func testAnUnlistedEntraCodeFromAzReachesOnlyTheSettingsText() async throws {
+        let fake = FakeAzureCli(outcomes: [.exited(1, standardError: "AADSTS1234567: Something new went wrong.")])
+        let path = try azDirectory()
+        let provider = AzureCliCredentialProvider(searchPath: [path], lane: AsyncLane(), launch: fake.launch)
+
+        do {
+            _ = try await provider.accessToken(scope: scope)
+            XCTFail("Expected az to fail")
+        } catch let error as AzureCredentialError {
+            XCTAssertEqual(error, .cliFailed(exitStatus: 1, reason: .signInRejected, aadsts: 1_234_567))
+            let shape = FailureShape(error).description
+            XCTAssertTrue(shape.contains("service=AADSTS"), shape)
+            let description = try XCTUnwrap(error.errorDescription)
+            XCTAssertTrue(description.contains("az login"), description)
+            for text in [shape, description, String(describing: error)] {
+                XCTAssertFalse(text.contains("1234567"), text)
+            }
+            XCTAssertTrue(
+                CleanupFailureText.forSettings(error, providerName: nil).hasSuffix("Microsoft Entra reported AADSTS1234567."))
         }
     }
 

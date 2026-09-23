@@ -345,6 +345,38 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
             XCTAssertFalse(description.contains("trace-7"), description)
             let shape = FailureShape(error).description
             XCTAssertTrue(shape.contains("http=401 service=AADSTS7000215"), shape)
+            XCTAssertFalse(shape.contains("values=401,"), "the number is the service code, never a value: \(shape)")
+            XCTAssertFalse(
+                CleanupFailureText.forSettings(error, providerName: nil).contains("Microsoft Entra reported"),
+                "a listed code is named once, in the description")
+        }
+    }
+
+    /// An Entra number `FailureShape` does not list stays out of the shape, its values, the description and every
+    /// printed form; the Settings text alone names it, so the user can look it up.
+    func testAnUnlistedEntraCodeReachesOnlyTheSettingsText() async throws {
+        let body = #"{"error":"invalid_request","error_description":"AADSTS9999999: New failure.","error_codes":[9999999]}"#
+        let provider = makeProvider { request in StubReply.json(request, status: 400, body) }
+
+        do {
+            _ = try await provider.accessToken(scope: scope)
+            XCTFail("Expected a refusal")
+        } catch let error as AzureCredentialError {
+            XCTAssertEqual(
+                error,
+                .tokenRejected(status: 400, aadsts: 9_999_999, reply: CleanupServiceReply(code: "invalid_request", message: nil)))
+            let shape = FailureShape(error).description
+            XCTAssertTrue(shape.contains("http=400 service=AADSTS"), shape)
+            let description = try XCTUnwrap(error.errorDescription)
+            XCTAssertTrue(description.contains("(invalid_request)"), description)
+            var dumped = ""
+            dump(error, to: &dumped)
+            for text in [shape, description, String(describing: error), String(reflecting: error), dumped] {
+                XCTAssertFalse(text.contains("9999999"), text)
+            }
+            XCTAssertEqual(
+                CleanupFailureText.forSettings(CleanupProviderError.credentialUnavailable(error), providerName: "Microsoft Foundry"),
+                "Microsoft Foundry: \(description) Microsoft Entra reported AADSTS9999999.")
         }
     }
 

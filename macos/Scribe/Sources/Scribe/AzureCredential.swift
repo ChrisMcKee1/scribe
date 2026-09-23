@@ -48,9 +48,41 @@ struct AzureAccessToken: Sendable, Equatable, CustomStringConvertible, CustomRef
     var customMirror: Mirror { Mirror(self, children: ["expiresAt": expiresAt]) }
 }
 
+/// An Entra `AADSTS` error number, as Entra or `az` reported it.
+///
+/// Printing, interpolating or dumping one shows the code only when `FailureShape` lists that exact code, and `AADSTS`
+/// alone otherwise, just as a failure shape does: the digits of an unlisted code are the service's to choose, so they
+/// reach nothing but the Settings text (`AzureCredentialError.settingsDetail`). Not an integer either, so a failure
+/// shape never writes it among an error's values.
+struct EntraErrorCode: Sendable, Hashable, ExpressibleByIntegerLiteral, CustomStringConvertible,
+    CustomDebugStringConvertible, CustomReflectable
+{
+    let number: Int
+
+    init(_ number: Int) {
+        self.number = number
+    }
+
+    init(integerLiteral value: Int) {
+        self.init(value)
+    }
+
+    /// `AADSTS` and the number, as Entra writes it.
+    var code: String { "AADSTS\(number)" }
+
+    /// Whether `FailureShape` lists this exact code, which is what makes it safe to write anywhere.
+    var isListed: Bool { FailureShape.knownServiceCodes.contains(code) }
+
+    var description: String { isListed ? code : "AADSTS" }
+    var debugDescription: String { description }
+    var customMirror: Mirror { Mirror(self, children: [:]) }
+}
+
 /// Why no access token could be had, in a form that is safe to log: no `az` output, no Entra response text, no tenant
 /// or client id. What `az` said is reduced to an `AzureCliFailureReason` and an Entra error number, and the rest is
-/// dropped unread.
+/// dropped unread. The number reaches this description, like a failure shape, only when `FailureShape` lists its
+/// `AADSTS` code; an unlisted code's digits are the service's to choose, so only the Settings text shows them
+/// (`settingsDetail`).
 enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatable {
     /// `az` is not in Homebrew's prefixes or on `PATH`.
     case cliNotFound
@@ -59,7 +91,7 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
     /// `az` did not answer within `AzureCliCredentialProvider.timeout` and was stopped.
     case cliTimedOut
     /// `az` exited without a token.
-    case cliFailed(exitStatus: Int32?, reason: AzureCliFailureReason, aadsts: Int?)
+    case cliFailed(exitStatus: Int32?, reason: AzureCliFailureReason, aadsts: EntraErrorCode?)
     /// `az` printed something other than a token.
     case cliOutputUnparseable
     /// The tenant id cannot name a tenant, so nothing was sent.
@@ -67,8 +99,8 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
     /// Entra's token endpoint could not be reached. The URL error carries only its code.
     case tokenEndpointUnreachable(URLError)
     case tokenEndpointTimedOut
-    /// Entra refused the service principal. `aadsts` is the number of its `AADSTS` code.
-    case tokenRejected(status: Int, aadsts: Int?, reply: CleanupServiceReply)
+    /// Entra refused the service principal, with its `AADSTS` code when it sent one.
+    case tokenRejected(status: Int, aadsts: EntraErrorCode?, reply: CleanupServiceReply)
     /// Entra answered with something other than a token.
     case tokenResponseUnparseable
 
@@ -77,12 +109,14 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
         return status
     }
 
+    /// The code as the service sent it; `FailureShape` writes it only when it lists it, and an unlisted Entra code as
+    /// `AADSTS` alone.
     var failureServiceCode: String? {
         switch self {
         case .cliFailed(_, _, let aadsts?):
-            return "AADSTS\(aadsts)"
+            return aadsts.code
         case .tokenRejected(_, let aadsts, let reply):
-            return aadsts.map { "AADSTS\($0)" } ?? reply.code
+            return aadsts?.code ?? reply.code
         default:
             return nil
         }
@@ -102,9 +136,9 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
             case .notSignedIn:
                 return "Azure CLI is not signed in. Run 'az login' in Terminal, then try again."
             case .signInRejected:
-                let code = aadsts.map { "AADSTS\($0)" } ?? "an Entra error"
-                return "Azure CLI's sign-in was refused (\(code)). Run 'az login' in Terminal to sign in again, then "
-                    + "try again."
+                let code = Self.listedCode(aadsts).map { " (\($0))" } ?? ""
+                return "Azure CLI's sign-in was refused by Microsoft Entra\(code). Run 'az login' in Terminal to sign "
+                    + "in again, then try again."
             case .other:
                 let status = exitStatus.map { " (exit status \($0))" } ?? ""
                 return "Azure CLI could not get an access token\(status). Run 'az account get-access-token "
@@ -127,10 +161,31 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
         }
     }
 
-    /// The Entra number when there is one, else the error code when Scribe lists it, else the HTTP status.
-    private static func codeText(status: Int, aadsts: Int?, reply: CleanupServiceReply) -> String {
-        if let aadsts {
-            return "AADSTS\(aadsts)"
+    /// An Entra code as Scribe may write it anywhere: the code when `FailureShape` lists it, otherwise nothing.
+    static func listedCode(_ aadsts: EntraErrorCode?) -> String? {
+        guard let aadsts, aadsts.isListed else { return nil }
+        return aadsts.code
+    }
+
+    /// The Entra code behind a refused sign-in when Scribe does not list it, such as `AADSTS1234567`, for
+    /// `CleanupFailureText.forSettings` and nothing else: the user can look it up, and the screen is not a log. A
+    /// listed code is in the description already.
+    var settingsDetail: String? {
+        let aadsts: EntraErrorCode?
+        switch self {
+        case .cliFailed(_, _, let code), .tokenRejected(_, let code, _):
+            aadsts = code
+        default:
+            aadsts = nil
+        }
+        guard let aadsts, !aadsts.isListed else { return nil }
+        return aadsts.code
+    }
+
+    /// The Entra code when Scribe lists it, else the OAuth error code when Scribe lists it, else the HTTP status.
+    private static func codeText(status: Int, aadsts: EntraErrorCode?, reply: CleanupServiceReply) -> String {
+        if let code = listedCode(aadsts) {
+            return code
         }
         if let code = reply.code, FailureShape.knownServiceCodes.contains(code) {
             return code
@@ -138,23 +193,36 @@ enum AzureCredentialError: Error, LocalizedError, FailureShapeDetailing, Equatab
         return "HTTP \(status)"
     }
 
-    private static func entraHint(aadsts: Int?, code: String?) -> String {
-        switch aadsts ?? 0 {
+    /// What to do about the refusal, chosen by its Entra number, following Windows' `AzureSignInDiagnostics`. The
+    /// words are Scribe's whichever number chose them. AADSTS900023 is not in Microsoft's error code reference, so
+    /// `FailureShape` does not list it, but Entra sends it for a tenant id that is neither a GUID nor a domain.
+    private static func entraHint(aadsts: EntraErrorCode?, code: String?) -> String {
+        switch aadsts?.number ?? 0 {
         case 7_000_215:
-            return "the client secret is not valid. Use the secret's Value, not its Secret ID."
+            // Windows saw a secret created seconds before fail with this code, then work about thirty seconds later.
+            return "the client secret was not accepted. A secret created in the last minute or two can take a "
+                + "moment to become active, so wait and try again; otherwise check that you saved the secret's "
+                + "Value, not its Secret ID."
         case 7_000_222:
-            return "the client secret has expired. Create a new one for the app registration."
+            return "the client secret has expired. Create a new one for the app registration and save its Value."
         case 700_016:
-            return "no application with this client ID exists in the tenant. Check the client ID and the tenant ID."
-        case 90_002, 900_023:
-            return "the tenant was not found. Check the tenant ID."
+            return "the application was not found in this tenant. Check the directory (tenant) ID and the "
+                + "application (client) ID, and that the app registration lives in that directory."
+        case 90_002:
+            return "the tenant was not found. Check the directory (tenant) ID."
+        case 900_023:
+            return "the tenant ID is neither a directory (tenant) ID nor a domain name. Copy the directory (tenant) "
+                + "ID from the app registration's overview page."
+        case 50_034:
+            return "no service principal exists for the application in this tenant. The app registration may have "
+                + "been created in a different directory."
         default:
             break
         }
         if code == "unauthorized_client" {
             return "the app registration is not allowed to use client credentials."
         }
-        return "check the tenant ID, client ID and client secret."
+        return "check the tenant ID, client ID and client secret, and that the secret has not expired."
     }
 }
 
@@ -168,9 +236,9 @@ enum AzureCliFailureReason: Error, Equatable, Sendable {
     case signInRejected
     case other
 
-    static func classify(standardError text: String) -> (reason: AzureCliFailureReason, aadsts: Int?) {
-        if let code = aadstsCode(in: text) {
-            return (.signInRejected, code)
+    static func classify(standardError text: String) -> (reason: AzureCliFailureReason, aadsts: EntraErrorCode?) {
+        if let number = aadstsCode(in: text) {
+            return (.signInRejected, EntraErrorCode(number))
         }
         if text.range(of: "az login", options: .caseInsensitive) != nil {
             return (.notSignedIn, nil)
@@ -178,9 +246,12 @@ enum AzureCliFailureReason: Error, Equatable, Sendable {
         return (.other, nil)
     }
 
-    /// The number of the first `AADSTS` code in `text`.
+    /// The number of the first `AADSTS` code in `text`, taken only as Entra writes one: a word of its own with no
+    /// leading zero, so a longer run of digits or letters is never cut down to a code it was not.
     static func aadstsCode(in text: String) -> Int? {
-        guard let range = text.range(of: "AADSTS[0-9]{4,9}", options: .regularExpression) else { return nil }
+        guard let range = text.range(of: "\\bAADSTS[1-9][0-9]{3,8}\\b", options: .regularExpression) else {
+            return nil
+        }
         return Int(text[range].dropFirst("AADSTS".count))
     }
 }
@@ -571,12 +642,12 @@ enum FormURLEncoding {
 /// "error_codes": [7000215]}`. Only the error code and the number are kept. The description repeats the app and
 /// tenant ids and carries trace ids, so it is dropped unread.
 struct EntraTokenError: Sendable {
-    let aadsts: Int?
+    let aadsts: EntraErrorCode?
     let reply: CleanupServiceReply
 
     init(body data: Data) {
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-        aadsts = (object?["error_codes"] as? [Int])?.first
+        aadsts = (object?["error_codes"] as? [Int])?.first.map { EntraErrorCode($0) }
         reply = CleanupServiceReply(code: object?["error"] as? String, message: nil)
     }
 }
