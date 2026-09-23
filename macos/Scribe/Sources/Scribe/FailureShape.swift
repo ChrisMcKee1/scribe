@@ -25,7 +25,7 @@ import Foundation
 /// Foundation's error structs (`URLError`, `POSIXError`, `CocoaError`) travel inside `any Error` as the
 /// `NSError` they wrap, so they read as `NSError` with their domain, which names them just as well.
 struct FailureShape: Sendable, Equatable, CustomStringConvertible {
-    /// The error's Swift type and, for an enum, its case: `NSError`, `TranscriptionEngineError.processFailed`.
+    /// The error's Swift type and, for an enum, its case: `NSError`, `TranscriptionError.exitCode`.
     let typeName: String
     /// The `NSError` domain when it is in `frameworkDomains`; `nil` when it only repeats the Swift type
     /// (every Swift error's default), and `other` for any other domain.

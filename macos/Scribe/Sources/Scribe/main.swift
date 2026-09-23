@@ -4,6 +4,7 @@ import AVFoundation
 import OSLog
 import SwiftUI
 @preconcurrency import UserNotifications
+import os
 
 if CommandLineTranscriptionTool.runIfRequested() {
     exit(EXIT_SUCCESS)
@@ -50,10 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// Quick Add wait for it. The lifecycle owner is expected to take this over.
     private let startupGate = StartupGate()
     private let audioCaptureEngine = AudioCaptureEngine()
-    private lazy var transcriptionEngine = try? TranscriptionEngine(
-        logSink: { message in AppDelegate.writeLogLine(message) })
+    /// Looks the recognizer up again for every dictation, so installing Foundry Local while Scribe runs
+    /// takes effect on the next one.
+    private let transcriptionEngine = TranscriptionEngine()
     private lazy var hotkeyManager = HotkeyManager(
-        audioCaptureEngine: audioCaptureEngine,
         logSink: { message in AppDelegate.writeLogLine(message) })
     private lazy var textInjector = TextInjector(
         logSink: { message in AppDelegate.writeLogLine(message) })
@@ -68,10 +69,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private var globalNewlineMode: NewlineInjectionMode = .smartFlatten
     private let overlayPanelController = OverlayPanelController()
     private var dictationMenuItem: NSMenuItem?
-    private var capturedSamples: [Float] = []
-    /// Only armed while capture was started via the menu (toggle mode); push-to-talk capture stops
-    /// on hotkey release and must never be preempted by a silence auto-stop.
-    private var silenceAutoStopDetector: SilenceAutoStopDetector?
+    /// The recording that holds the microphone and what started it. Every start and stop names it, so a late
+    /// event or a second stop can never act on another recording. The lifecycle owner is expected to take
+    /// this over.
+    private var activeRecording: (id: RecordingID, source: CaptureStopSource)?
+    /// Brings capture events to the main actor, with meter readings coalesced.
+    private lazy var captureEvents = CaptureEventRelay { [weak self] event in
+        self?.handleCaptureEvent(event)
+    }
     private static let hasCompletedFirstRunDefaultsKey = "ScribeHasCompletedFirstRun"
     private static let isPausedDefaultsKey = "ScribeIsPaused"
     private var pauseMenuItem: NSMenuItem?
@@ -90,11 +95,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        configureAudioCaptureEngine()
         // First, before anything can reach the store and before the hotkeys start: the storage queue runs
         // operations in order, so every storage call made after this meets the migrated schema.
         let preparation = persistenceStore.beginPreparing()
         Task { await prepareStorage(after: preparation) }
+        // A crash or forced quit during a decode can leave a scratch recording behind.
+        Task.detached(priority: .utility) {
+            _ = ScratchAudioDirectory.live.sweepAbandoned()
+        }
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
@@ -118,15 +126,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         // progress rolls back and frees the connection for the last history writes.
         storageMaintenance.stop(timeout: 2)
         historyWriter.complete(timeout: 3)
+        ScratchAudioDirectory.live.removeFilesOfThisProcess()
     }
 
     @objc private func startTestDictation(_ sender: Any?) {
-        if audioCaptureEngine.isCapturing {
+        if activeRecording != nil {
             stopActiveCapture(source: .menu)
         } else if hotkeyManager.isPaused {
             Self.writeLogLine("Ignoring Start Test Dictation while paused.")
         } else {
-            startCapture()
+            startCapture(source: .menu)
         }
     }
 
@@ -445,63 +454,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         }
     }
 
-    private func configureAudioCaptureEngine() {
-        audioCaptureEngine.onChunk = { chunk in
-            if
-                let channelData = chunk.buffer.floatChannelData?[0]
-            {
-                let frameCount = Int(chunk.buffer.frameLength)
-                self.capturedSamples.append(contentsOf: UnsafeBufferPointer(start: channelData, count: frameCount))
-            }
-
-            let message = String(
-                format: "Live capture meter: peak %.1f dBFS, rms %.1f dBFS, total chunk samples %u",
-                chunk.level.peakDbfs,
-                chunk.level.rmsDbfs,
-                chunk.buffer.frameLength)
-            Self.writeLogLine(message)
-            self.overlayPanelController.update(state: .listening(levelDbfs: chunk.level.rmsDbfs))
-
-            if let detector = self.silenceAutoStopDetector, detector.observe(level: chunk.level) {
-                let message = String(
-                    format: "Silence auto-stop triggered after %.1f s below %.0f dBFS.",
-                    detector.requiredSilenceDuration,
-                    detector.silenceThresholdDbfs)
-                Self.writeLogLine(message)
-                self.silenceAutoStopDetector = nil
-                Task { @MainActor [weak self] in
-                    self?.stopActiveCapture(source: .menu)
-                }
-            }
-        }
-
-        audioCaptureEngine.onCaptureError = { [weak self] error in
-            Task { @MainActor in
-                self?.captureActivityLease?.end()
-                self?.captureActivityLease = nil
-                self?.silenceAutoStopDetector = nil
-                self?.dictationMenuItem?.title = "Start Test Dictation"
-                self?.overlayPanelController.hide()
-                self?.presentErrorAlert(
-                    title: "Audio Capture Stopped",
-                    message: error.localizedDescription)
-            }
+    /// Events of a recording that no longer holds the microphone are ignored: its owner has moved on.
+    private func handleCaptureEvent(_ event: CaptureEvent) {
+        guard let recording = activeRecording, recording.id == event.owner else { return }
+        switch event.kind {
+        case .level(let level):
+            overlayPanelController.update(state: .listening(levelDbfs: level.rmsDbfs))
+        case .stopRequested:
+            // Silence, the duration ceiling or a device fault ended it; what it captured is still processed.
+            stopActiveCapture(source: recording.source)
         }
     }
 
     private func configureHotkeyManager() {
-        self.hotkeyManager.onCaptureStarted = { [weak self] in
-            self?.beginCaptureActivity()
-            self?.dictationMenuItem?.title = "Stop Test Dictation"
-            self?.overlayPanelController.show(state: .listening(levelDbfs: -120))
+        hotkeyManager.onPushToTalkPressed = { [weak self] in
+            self?.startCapture(source: .hotkey)
         }
 
-        self.hotkeyManager.onCaptureStopped = { [weak self] summary in
-            self?.handleCaptureStopped(summary, source: .hotkey)
-        }
-
-        self.hotkeyManager.onCaptureStartError = { [weak self] error in
-            self?.handleCaptureStartError(error)
+        hotkeyManager.onPushToTalkReleased = { [weak self] in
+            self?.stopActiveCapture(source: .hotkey)
         }
     }
 
@@ -572,7 +543,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         sender.state = paused ? .on : .off
         updateStatusIcon(paused: paused)
 
-        if paused, audioCaptureEngine.isCapturing {
+        if paused, activeRecording != nil {
             stopActiveCapture(source: .menu)
         }
 
@@ -624,29 +595,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             categoryIdentifier: nil)
     }
 
-    private func startCapture() {
-        do {
-            capturedSamples.removeAll(keepingCapacity: true)
-            try audioCaptureEngine.start()
-            beginCaptureActivity()
-            // Menu-triggered capture is toggle mode: there is no release gesture, so silence
-            // auto-stop is armed. Push-to-talk (hotkeyManager) never arms it; see
-            // configureHotkeyManager and HotkeyManager.startCaptureOnMainThread.
-            silenceAutoStopDetector = SilenceAutoStopDetector()
-            dictationMenuItem?.title = "Stop Test Dictation"
-            overlayPanelController.show(state: .listening(levelDbfs: -120))
+    /// Opens the microphone for a new recording. The menu's test dictation is a toggle, so it stops on silence;
+    /// the hotkey path is treated as held, which never stops on silence. Both stop at the ten-minute ceiling.
+    /// Choosing the policy from the binding that fired (Caps Lock is a toggle) belongs to the lifecycle owner.
+    private func startCapture(source: CaptureStopSource) {
+        guard activeRecording == nil else { return }
+        let id = RecordingID.next()
+        let policy: CaptureStopPolicy = source == .menu ? .toggle() : .hold()
+        activeRecording = (id, source)
+        beginCaptureActivity()
+        dictationMenuItem?.title = "Stop Test Dictation"
+        overlayPanelController.show(state: .listening(levelDbfs: -120))
+        if source == .menu {
             Self.writeLogLine("Started live test dictation capture (toggle mode, silence auto-stop armed).")
-        } catch let error as AudioCaptureEngineError {
-            handleCaptureStartError(error)
-        } catch {
-            handleCaptureStartError(.engineStartFailed(error.localizedDescription))
+        }
+
+        let events = captureEvents.sink
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await audioCaptureEngine.start(owner: id, policy: policy, events: events)
+            } catch {
+                if activeRecording?.id == id {
+                    // Never stopped, so its lease is still the current one and nothing will process it.
+                    activeRecording = nil
+                    captureActivityLease?.end()
+                    captureActivityLease = nil
+                }
+                // A newer recording owns the pill and the menu by now.
+                guard activeRecording == nil else { return }
+                handleCaptureStartError(error)
+            }
         }
     }
 
+    /// A stop with no recording (a release after the recording already ended itself) leaves the pill alone,
+    /// which may be showing the previous dictation's processing.
     private func stopActiveCapture(source: CaptureStopSource) {
-        silenceAutoStopDetector = nil
-        let summary = audioCaptureEngine.stop()
-        handleCaptureStopped(summary, source: source)
+        guard let recording = activeRecording else { return }
+        activeRecording = nil
+        handleCaptureStopped(audioCaptureEngine.stop(owner: recording.id), source: source)
     }
 
     /// A capture has started: storage housekeeping holds off until its dictation is fully processed.
@@ -655,20 +643,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     }
 
     private func handleCaptureStopped(
-        _ summary: AudioCaptureSummary?,
+        _ captured: CapturedAudio?,
         source: CaptureStopSource
     ) {
         // This capture's lease moves to its processing below and ends when that finishes.
         let activityLease = captureActivityLease
         captureActivityLease = nil
 
-        guard let summary else {
+        guard let captured else {
             activityLease?.end()
             dictationMenuItem?.title = "Start Test Dictation"
             overlayPanelController.hide()
             return
         }
 
+        let summary = captured.summary
         dictationMenuItem?.title = "Transcribing Test Dictation..."
         overlayPanelController.update(state: .processing)
         Self.writeLogLine(
@@ -677,9 +666,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 summary.durationSeconds,
                 summary.sampleCount))
 
-        let samples = capturedSamples
-        capturedSamples.removeAll(keepingCapacity: true)
-
+        let samples = captured.samples
         guard !samples.isEmpty else {
             dictationMenuItem?.title = "Start Test Dictation"
             overlayPanelController.hide()
@@ -719,16 +706,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 targetApp: targetApp))
     }
 
-    private func handleCaptureStartError(_ error: AudioCaptureEngineError) {
+    private func handleCaptureStartError(_ error: any Error) {
         dictationMenuItem?.title = "Start Test Dictation"
         overlayPanelController.hide()
 
-        switch error {
-        case .microphoneNotAuthorized(let status):
+        if let captureError = error as? AudioCaptureEngineError,
+            case .microphoneNotAuthorized(let status) = captureError
+        {
             let detail = "Microphone access is required before live capture can start. Current authorization status: \(status.rawValue)."
             Self.writeLogLine("Microphone capture blocked by authorization status \(status.rawValue).")
             presentErrorAlert(title: "Microphone Access Needed", message: detail)
-        default:
+        } else {
             Self.writeLogLine("Audio capture failed to start: \(error.localizedDescription)")
             presentErrorAlert(title: "Audio Capture Failed", message: error.localizedDescription)
         }
@@ -888,29 +876,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         summary: AudioCaptureSummary,
         source: CaptureStopSource
     ) async {
-        guard let transcriptionEngine else {
-            dictationMenuItem?.title = "Start Test Dictation"
-            showFailedThenHideOverlay()
-            let message = "ASR backend is not configured. Install Foundry Local (brew install microsoft/foundrylocal/foundrylocal) or whisper-cpp as a fallback."
-            Self.writeLogLine(message)
-            presentErrorAlert(title: "ASR Not Ready", message: message)
-            recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
-            pipelineReportStore.publish(.failure(
-                capturedAt: summary.startedAt,
-                source: source,
-                captureDuration: summary.durationSeconds,
-                stage: .decode,
-                reason: message))
-            return
-        }
-
         do {
             let decodeStart = DispatchTime.now()
-            let transcript = try transcriptionEngine.transcribe(
+            let transcript = try await transcriptionEngine.transcribe(
                 samples: samples,
-                sampleRate: AudioCaptureEngine.targetSampleRate)
+                sampleRate: AudioCaptureEngine.targetSampleRate
+            ).text
             let decodeMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - decodeStart.uptimeNanoseconds) / 1_000_000.0
-            Self.writeLogLine("Real transcript (\(source)): \(transcript)")
+            Self.writeLogLine("Real transcript (\(source)): \(transcript.count) characters")
 
             // Waits for startup's first rule load, so a dictation that finishes before the user's rules are in
             // place is never processed against the empty rule set; afterwards it returns at once (`StartupGate`).
@@ -1021,7 +994,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             dictationMenuItem?.title = "Start Test Dictation"
             showFailedThenHideOverlay()
             Self.writeLogLine("ASR transcription failed: \(error.localizedDescription)")
-            presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
+            if case TranscriptionError.backendMissing = error {
+                presentErrorAlert(title: "ASR Not Ready", message: error.localizedDescription)
+            } else {
+                presentErrorAlert(title: "Transcription Failed", message: error.localizedDescription)
+            }
             recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
             pipelineReportStore.publish(.failure(
                 capturedAt: summary.startedAt,
@@ -1102,14 +1079,37 @@ private enum CommandLineTranscriptionTool {
         let inputURL = URL(fileURLWithPath: arguments[1])
 
         do {
-            let engine = try TranscriptionEngine(logSink: { message in fputs("\(message)\n", stderr) })
-            let transcript = try engine.transcribeAudioFile(at: inputURL)
-            fputs("\(transcript)\n", stdout)
+            let result = try runBlocking {
+                try await TranscriptionEngine().transcribe(wavFileAt: inputURL)
+            }
+            fputs("\(result.text)\n", stdout)
             return true
         } catch {
             fputs("Transcription failed: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
+    }
+
+    /// Runs `operation` to completion for a verb, which has no run loop to return to. The main thread only
+    /// waits: the operation runs on the global executor, and nothing it awaits needs the main thread.
+    private static func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
+        let outcome = OSAllocatedUnfairLock<Result<T, any Error>?>(initialState: nil)
+        let finished = DispatchSemaphore(value: 0)
+        Task.detached {
+            let result: Result<T, any Error>
+            do {
+                result = .success(try await operation())
+            } catch {
+                result = .failure(error)
+            }
+            outcome.withLock { $0 = result }
+            finished.signal()
+        }
+        finished.wait()
+        guard let result = outcome.withLock({ $0 }) else {
+            preconditionFailure("The operation signalled before storing its result")
+        }
+        return try result.get()
     }
 
     private static func runCleanup(arguments: [String]) -> Bool {
@@ -1237,14 +1237,17 @@ private enum CommandLineTranscriptionTool {
     /// took effect rather than trusting log output alone.
     private static func runVerifySelectedMicrophone() -> Bool {
         let engine = AudioCaptureEngine()
+        let recording = RecordingID.next()
         do {
-            try engine.start()
+            _ = try runBlocking {
+                try await engine.start(owner: recording, policy: .hold(maximumDuration: nil), events: { _ in })
+            }
         } catch {
             fputs("Failed to start capture: \(error.localizedDescription)\n", stderr)
             exit(EXIT_FAILURE)
         }
 
-        defer { _ = engine.stop() }
+        defer { engine.stop(owner: recording) }
 
         guard let deviceID = engine.currentInputDeviceID() else {
             fputs("Could not read back the active input device.\n", stderr)

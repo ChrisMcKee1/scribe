@@ -3,7 +3,6 @@ import Foundation
 import OSLog
 
 final class HotkeyManager {
-    private let audioCaptureEngine: AudioCaptureEngine
     private let logger = Logger(subsystem: "com.scribe.macos", category: "Hotkey")
     private let logSink: (String) -> Void
 
@@ -25,16 +24,16 @@ final class HotkeyManager {
     /// never requires re-granting Input Monitoring.
     var isPaused = false
 
-    var onCaptureStarted: (() -> Void)?
-    var onCaptureStopped: ((AudioCaptureSummary?) -> Void)?
-    var onCaptureStartError: ((AudioCaptureEngineError) -> Void)?
+    /// Called on the main thread when the key goes down (Caps Lock: turns on). The owner of the recording
+    /// starts the capture; this class only reports the key.
+    var onPushToTalkPressed: (() -> Void)?
+    /// Called on the main thread when the key comes up (Caps Lock: turns off).
+    var onPushToTalkReleased: (() -> Void)?
 
     init(
-        audioCaptureEngine: AudioCaptureEngine,
         keyCode: CGKeyCode = HotkeySettingsStore.keyCode,
         logSink: @escaping (String) -> Void
     ) {
-        self.audioCaptureEngine = audioCaptureEngine
         self.keyCode = keyCode
         self.logSink = logSink
     }
@@ -256,27 +255,13 @@ final class HotkeyManager {
     }
 
     private func startCaptureOnMainThread() {
-        do {
-            try audioCaptureEngine.start()
-            onCaptureStarted?()
-            logSink("Push-to-talk pressed. Started live microphone capture from the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
-        } catch let error as AudioCaptureEngineError {
-            onCaptureStartError?(error)
-        } catch {
-            let wrappedError = AudioCaptureEngineError.engineStartFailed(error.localizedDescription)
-            onCaptureStartError?(wrappedError)
-        }
+        logSink("Push-to-talk pressed on the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
+        onPushToTalkPressed?()
     }
 
     private func stopCaptureOnMainThread() {
-        let summary = audioCaptureEngine.stop()
-        onCaptureStopped?(summary)
-        if summary == nil {
-            logSink("Push-to-talk released, but there was no active microphone capture to stop.")
-            return
-        }
-
-        logSink("Push-to-talk released. Stopped live microphone capture from the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
+        logSink("Push-to-talk released on the global \(HotkeyKeyCodeCatalog.displayName(for: keyCode)) hotkey.")
+        onPushToTalkReleased?()
     }
 
     private func logInputMonitoringDenied(_ message: String) {

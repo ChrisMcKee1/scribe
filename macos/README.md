@@ -54,7 +54,13 @@ privacy/offline promise.
   tools skip it, and puts your text back only if nothing replaced it in the meantime. With anything
   else on the clipboard it types the text instead. If focus moves to another app while the text is
   going in, Scribe stops and keeps the dictation for recovery
-- On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2` (`TranscriptionEngine.swift`)
+- On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
+  The recognizer runs off the main thread with a deadline and can be cancelled, and the recording it
+  reads is a private temporary file that is deleted as soon as it returns
+- Capture that belongs to one recording at a time: every input channel is mixed in, so a microphone on
+  any input of an interface is heard; a device change ends the recording and keeps what it captured;
+  the test dictation (a toggle) stops on silence the way Windows does; and every recording stops at ten
+  minutes
 - Overlay pill with a 9-anchor position picker and live recording/processing state
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
   Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
@@ -79,6 +85,6 @@ privacy/offline promise.
 ## Known gaps vs. Windows
 
 See `PORTING-PLAN.md` for the authoritative, row-by-row feature checklist. As of this writing the
-main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, and no
-release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
-Accessibility persistence only).
+main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in
+one call rather than split on pauses as Windows does; and there is no release packaging/notarization or
+auto-update story yet (dev builds are ad-hoc signed for local Accessibility persistence only).

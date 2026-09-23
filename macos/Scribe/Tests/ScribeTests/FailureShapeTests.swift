@@ -117,11 +117,9 @@ final class FailureShapeTests: XCTestCase {
 
     func testSwiftErrorsAreNamedByTheirCaseAndCarriedIntegers() {
         XCTAssertEqual(
-            FailureShape(TranscriptionEngineError.missingFoundryCli).description,
-            "TranscriptionEngineError.missingFoundryCli")
-        XCTAssertEqual(
-            FailureShape(TranscriptionEngineError.processFailed(PrivacyCanary.transcript)).description,
-            "TranscriptionEngineError.processFailed")
+            FailureShape(TranscriptionError.backendMissing(.foundryCliNotFound)).description,
+            "TranscriptionError.backendMissing")
+        XCTAssertEqual(FailureShape(TranscriptionError.exitCode(3)).description, "TranscriptionError.exitCode values=3")
         XCTAssertEqual(
             FailureShape(KeychainStore.KeychainError.unhandled(-25299)).description,
             "KeychainError.unhandled values=-25299")

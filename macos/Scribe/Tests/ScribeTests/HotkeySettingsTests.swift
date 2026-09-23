@@ -152,15 +152,13 @@ final class HotkeyManagerKeyCodeTests: XCTestCase {
         let store = HotkeySettingsStore(defaults: suite.defaults)
         store.keyCode = 61
 
-        let manager = HotkeyManager(
-            audioCaptureEngine: AudioCaptureEngine(), keyCode: store.keyCode, logSink: { _ in })
+        let manager = HotkeyManager(keyCode: store.keyCode, logSink: { _ in })
 
         XCTAssertEqual(manager.keyCode, 61)
     }
 
     func testKeyCodeCanBeReassignedLive() {
-        let manager = HotkeyManager(
-            audioCaptureEngine: AudioCaptureEngine(), keyCode: HotkeySettingsStore.defaultKeyCode, logSink: { _ in })
+        let manager = HotkeyManager(keyCode: HotkeySettingsStore.defaultKeyCode, logSink: { _ in })
         manager.keyCode = 105
         XCTAssertEqual(manager.keyCode, 105)
     }
