@@ -662,6 +662,61 @@ final class TextInjectorTests: XCTestCase {
         }
     }
 
+    func testEveryBorrowRefusalIsReportedUnderItsOwnName() {
+        let refusals: [PasteboardBorrowRefusal] = [.nonTextContent, .unreadable, .contended, .writeFailed, .superseded]
+
+        for refusal in refusals {
+            XCTAssertEqual(ClipboardPasteOutcome(refusal).rawValue, refusal.rawValue)
+        }
+    }
+
+    func testATargetBuiltFromARunningApplicationNamesThatApplication() {
+        let application = NSRunningApplication.current
+        let target = InjectionTarget(application: application)
+
+        XCTAssertEqual(target.bundleIdentifier, application.bundleIdentifier)
+        // The test runner is not a registered application and reports -1, which no element belongs to.
+        if application.processIdentifier > 0 {
+            XCTAssertEqual(target.processIdentifier, application.processIdentifier)
+        } else {
+            XCTAssertNil(target.processIdentifier)
+        }
+        XCTAssertFalse(target.hasFocusedElement)
+    }
+
+    func testAProcessNumberThatNoElementCanHaveIsDropped() {
+        XCTAssertNil(InjectionTarget(processIdentifier: -1, bundleIdentifier: "com.example.editor").processIdentifier)
+        XCTAssertNil(InjectionTarget(processIdentifier: 0, bundleIdentifier: nil).processIdentifier)
+        XCTAssertEqual(InjectionTarget(processIdentifier: 42, bundleIdentifier: nil).processIdentifier, 42)
+    }
+
+    @MainActor
+    func testATargetWithoutAUsableProcessStillMatchesByBundle() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.system.accessibilityOutcome = .inserted
+        let target = InjectionTarget(processIdentifier: -1, bundleIdentifier: InjectionHarness.editorBundle)
+
+        let result = await harness.injector.inject(text: dictation, into: target)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .accessibility))
+    }
+
+    @MainActor
+    func testACancelledDeliveryStillWaitsOutItsPause() async {
+        let pacing = SystemInjectionPacing(beforePaste: .zero, afterPaste: .milliseconds(30), betweenKeystrokes: .zero)
+        let clock = ContinuousClock()
+        let start = clock.now
+
+        let delivery = Task { @MainActor in
+            await pacing.pause(.afterPaste)
+        }
+        delivery.cancel()
+        await delivery.value
+
+        XCTAssertGreaterThanOrEqual(clock.now - start, .milliseconds(30))
+    }
+
     /// Yields the main actor until `condition` holds. Bounded by a count of yields rather than by time, so
     /// a broken ordering fails the test instead of hanging the run.
     @MainActor

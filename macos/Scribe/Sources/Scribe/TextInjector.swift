@@ -138,7 +138,10 @@ struct InjectionTarget: @unchecked Sendable {
     }
 
     fileprivate init(processIdentifier: pid_t?, bundleIdentifier: String?, focusedElement: AXUIElement?) {
-        self.processIdentifier = processIdentifier
+        // No focused element ever belongs to a process number of zero or below. `NSRunningApplication`
+        // reports -1 for an application without a process of its own, and matching on that would withhold
+        // every delivery, so such a target is identified by its bundle alone.
+        self.processIdentifier = processIdentifier.flatMap { $0 > 0 ? $0 : nil }
         self.bundleIdentifier = bundleIdentifier
         self.focusedElement = focusedElement
     }
@@ -428,7 +431,11 @@ final class TextInjector {
         shiftReturnLineBreaks: Bool
     ) async -> InjectionResult {
         func typeInstead() async -> InjectionDelivery {
-            await typeText(text, to: pinned, processIdentifier: processIdentifier, shiftReturnLineBreaks: shiftReturnLineBreaks)
+            await typeText(
+                text,
+                to: pinned,
+                processIdentifier: processIdentifier,
+                shiftReturnLineBreaks: shiftReturnLineBreaks)
         }
 
         let lease: PasteboardLease
