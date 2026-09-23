@@ -110,6 +110,30 @@ final class InjectionObservations {
     var events: [String] = []
     var pastedTexts: [String?] = []
     var pastedTypes: [[NSPasteboard.PasteboardType]] = []
+    /// The task running a delivery, so a hook inside that delivery can cancel it.
+    var task: Task<Void, Never>?
+}
+
+/// How many pasteboard writes still fail, for tests that make a write or its rollback fail.
+@MainActor
+final class InjectionWriteFailures {
+    var remaining: Int
+
+    init(_ remaining: Int) {
+        self.remaining = remaining
+    }
+
+    func operations() -> PasteboardOperations {
+        var operations = PasteboardOperations.live
+        operations.write = { pasteboard, items in
+            guard self.remaining <= 0 else {
+                self.remaining -= 1
+                return false
+            }
+            return pasteboard.writeObjects(items)
+        }
+        return operations
+    }
 }
 
 /// One injector wired to scripted focus, event posting and pacing, and a private pasteboard. The focused
@@ -131,7 +155,7 @@ final class InjectionHarness {
     let editorField: AXUIElement
     let otherField: AXUIElement
 
-    init() {
+    init(operations: PasteboardOperations = .live) {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("com.scribe.macos.tests.injector.\(UUID().uuidString)"))
         let editorField = AXUIElementCreateApplication(4_001)
@@ -156,7 +180,7 @@ final class InjectionHarness {
         self.injector = TextInjector(
             system: system,
             pacer: pacer,
-            pasteboard: pasteboard,
+            borrower: PasteboardBorrower(pasteboard: pasteboard, operations: operations),
             logSink: { line in log.lines.append(line) })
     }
 
@@ -311,7 +335,7 @@ final class TextInjectorTests: XCTestCase {
         let result = await harness.injector.inject(text: dictation, into: target)
 
         XCTAssertEqual(result, InjectionResult(delivery: .targetChanged))
-        XCTAssertFalse(result.textReachedTarget)
+        XCTAssertFalse(result.mayHaveReachedTarget)
         XCTAssertEqual(harness.system.accessibilityAttempts, 0)
         XCTAssertTrue(harness.system.posted.isEmpty)
         XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
@@ -422,7 +446,24 @@ final class TextInjectorTests: XCTestCase {
     }
 
     @MainActor
-    func testATimedOutAccessibilityWriteIsNeverFollowedByAPasteOrTyping() async {
+    func testATimedOutAccessibilityWriteMayHaveLandedAndIsNeverFollowedByAPasteOrTyping() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .unconfirmed
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .accessibilityUnconfirmed))
+        XCTAssertTrue(result.mayHaveReachedTarget, "The write was sent, so the text may already be there.")
+        XCTAssertFalse(result.isComplete)
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testATimedOutAccessibilityQuestionSendsNothingAndTriesNothingElse() async {
         let harness = InjectionHarness()
         defer { harness.releasePasteboard() }
         harness.copyAsAnotherApplication(usersText)
@@ -432,6 +473,7 @@ final class TextInjectorTests: XCTestCase {
         let result = await harness.injector.inject(text: dictation)
 
         XCTAssertEqual(result, InjectionResult(delivery: .targetUnresponsive))
+        XCTAssertFalse(result.mayHaveReachedTarget, "Nothing was written before the question timed out.")
         XCTAssertTrue(harness.system.posted.isEmpty)
         XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
     }
@@ -504,7 +546,7 @@ final class TextInjectorTests: XCTestCase {
         let result = await harness.injector.inject(text: dictation)
 
         XCTAssertEqual(result, InjectionResult(delivery: .typedPartially, clipboard: .nonTextContent))
-        XCTAssertTrue(result.textReachedTarget)
+        XCTAssertTrue(result.mayHaveReachedTarget)
         XCTAssertFalse(result.isComplete)
         XCTAssertEqual(harness.system.posted.count, 1)
     }
@@ -519,7 +561,7 @@ final class TextInjectorTests: XCTestCase {
         let result = await harness.injector.inject(text: dictation)
 
         XCTAssertEqual(result, InjectionResult(delivery: .failed, clipboard: .nonTextContent))
-        XCTAssertFalse(result.textReachedTarget)
+        XCTAssertFalse(result.mayHaveReachedTarget)
     }
 
     @MainActor
@@ -634,30 +676,35 @@ final class TextInjectorTests: XCTestCase {
 
     @MainActor
     func testOnlyUnexpectedOutcomesAreLoggedAsErrors() {
+        func level(_ result: InjectionResult) -> OSLogType {
+            TextInjector.logLevel(for: result)
+        }
         let delivered = InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored)
         let restoreFailed = InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .failed)
 
-        XCTAssertEqual(TextInjector.logLevel(for: delivered).rawValue, OSLogType.info.rawValue)
-        XCTAssertEqual(
-            TextInjector.logLevel(for: InjectionResult(delivery: .targetChanged)).rawValue,
-            OSLogType.default.rawValue)
-        XCTAssertEqual(
-            TextInjector.logLevel(for: InjectionResult(delivery: .typedPartially)).rawValue,
-            OSLogType.error.rawValue)
-        XCTAssertEqual(TextInjector.logLevel(for: restoreFailed).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(delivered).rawValue, OSLogType.info.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .targetChanged)).rawValue, OSLogType.default.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .cancelled)).rawValue, OSLogType.default.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .typedPartially)).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .accessibilityUnconfirmed)).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .targetUnknown)).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(restoreFailed).rawValue, OSLogType.error.rawValue)
     }
 
-    func testOnlyDeliveriesThatReachedTheTargetCountAsReachingIt() {
-        let reached: Set<InjectionDelivery> = [.accessibility, .pasted, .typed, .typedPartially]
+    func testOnlyDeliveriesThatMayHaveLandedCountAsReachingTheTarget() {
+        let reached: Set<InjectionDelivery> = [
+            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed,
+        ]
         let complete: Set<InjectionDelivery> = [.accessibility, .pasted, .typed, .nothingToInsert]
         let all: [InjectionDelivery] = [
-            .accessibility, .pasted, .typed, .typedPartially, .nothingToInsert, .targetChanged, .targetUnresponsive,
-            .noFocusedElement, .accessibilityDenied, .failed,
+            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed, .nothingToInsert,
+            .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .accessibilityDenied, .cancelled,
+            .failed,
         ]
 
         for delivery in all {
             let result = InjectionResult(delivery: delivery)
-            XCTAssertEqual(result.textReachedTarget, reached.contains(delivery), delivery.rawValue)
+            XCTAssertEqual(result.mayHaveReachedTarget, reached.contains(delivery), delivery.rawValue)
             XCTAssertEqual(result.isComplete, complete.contains(delivery), delivery.rawValue)
         }
     }
@@ -688,6 +735,212 @@ final class TextInjectorTests: XCTestCase {
         XCTAssertNil(InjectionTarget(processIdentifier: -1, bundleIdentifier: "com.example.editor").processIdentifier)
         XCTAssertNil(InjectionTarget(processIdentifier: 0, bundleIdentifier: nil).processIdentifier)
         XCTAssertEqual(InjectionTarget(processIdentifier: 42, bundleIdentifier: nil).processIdentifier, 42)
+        XCTAssertNil(InjectionTarget(processIdentifier: 42, bundleIdentifier: "").bundleIdentifier)
+    }
+
+    func testOnlyATargetWithAProcessOrABundleIdentifiesAnApplication() {
+        XCTAssertTrue(InjectionTarget(processIdentifier: 42, bundleIdentifier: nil).identifiesApplication)
+        let bundleOnly = InjectionTarget(processIdentifier: -1, bundleIdentifier: "com.example.editor")
+        XCTAssertTrue(bundleOnly.identifiesApplication)
+        XCTAssertFalse(InjectionTarget(processIdentifier: -1, bundleIdentifier: nil).identifiesApplication)
+        XCTAssertFalse(InjectionTarget(processIdentifier: nil, bundleIdentifier: nil).identifiesApplication)
+        XCTAssertFalse(InjectionTarget(processIdentifier: 0, bundleIdentifier: "").identifiesApplication)
+    }
+
+    @MainActor
+    func testATargetThatNamesNoApplicationIsRefusedRatherThanTakenAsNoTarget() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .inserted
+        let unidentifiable = [
+            InjectionTarget(processIdentifier: -1, bundleIdentifier: nil),
+            InjectionTarget(processIdentifier: nil, bundleIdentifier: nil),
+            InjectionTarget(processIdentifier: 0, bundleIdentifier: ""),
+        ]
+
+        for target in unidentifiable {
+            let result = await harness.injector.inject(text: dictation, into: target)
+            XCTAssertEqual(result, InjectionResult(delivery: .targetUnknown))
+            XCTAssertFalse(result.mayHaveReachedTarget)
+        }
+
+        XCTAssertEqual(harness.system.focusQueries, 0)
+        XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testCapturingWhenNothingIdentifiesTheApplicationGivesNoTarget() {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.system.focus = .unresponsive
+        harness.system.frontmost = InjectionApplication(processIdentifier: -1, bundleIdentifier: nil)
+
+        XCTAssertNil(harness.injector.captureTarget())
+    }
+
+    @MainActor
+    func testAFailedPasteboardReadIsNeverTakenForAnEmptyPasteboard() async {
+        var operations = PasteboardOperations.live
+        operations.itemTypes = { _ in nil }
+        let harness = InjectionHarness(operations: operations)
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .unreadable))
+        XCTAssertFalse(harness.system.postedKeystrokes.contains(.paste))
+        XCTAssertEqual(typedText(harness.system.postedKeystrokes), dictation)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount, "Nothing may be written after a failed read.")
+        XCTAssertNotNil(harness.pasteboard.data(forType: .html))
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testAFailedWriteWhoseRollbackAlsoFailsIsReportedAsLost() async {
+        let failures = InjectionWriteFailures(2)
+        let harness = InjectionHarness(operations: failures.operations())
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .writeFailed, restore: .failed))
+        XCTAssertEqual(
+            harness.log.lines,
+            ["Text injection finished: delivery=typed clipboard=writeFailed restore=failed."])
+        XCTAssertEqual(TextInjector.logLevel(for: result).rawValue, OSLogType.error.rawValue)
+        XCTAssertFalse(harness.system.postedKeystrokes.contains(.paste))
+        XCTAssertTrue((harness.pasteboard.pasteboardItems ?? []).isEmpty, "The clear took the user's content.")
+    }
+
+    @MainActor
+    func testAFailedWriteWhoseRollbackWorksPutsTheUsersTextBack() async {
+        let failures = InjectionWriteFailures(1)
+        let harness = InjectionHarness(operations: failures.operations())
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+
+        let result = await harness.injector.inject(text: dictation)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .writeFailed, restore: .restored))
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testADeliveryCancelledBeforeItStartsSendsNothing() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+        harness.system.accessibilityOutcome = .inserted
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        delivery.cancel()
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .cancelled))
+        XCTAssertEqual(harness.system.focusQueries, 0)
+        XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testCancellingBeforeCommandVUndoesTheBorrowAndSendsNothing() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.holdNext = .beforePaste
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await yieldUntil { harness.pacer.isHolding }
+        delivery.cancel()
+        harness.pacer.releaseHeldPause()
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .cancelled, clipboard: .withheld, restore: .restored))
+        XCTAssertTrue(harness.system.posted.isEmpty)
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testCancellingAfterCommandVStillSettlesAndRestores() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.holdNext = .afterPaste
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await yieldUntil { harness.pacer.isHolding }
+        delivery.cancel()
+        harness.pacer.releaseHeldPause()
+        await delivery.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pacer.pauses, [.beforePaste, .afterPaste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testCancellingWhileTypingStopsAtTheNextKeystroke() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        let observed = InjectionObservations()
+        harness.pacer.onPause = { pause in
+            if pause == .betweenKeystrokes {
+                observed.task?.cancel()
+            }
+        }
+
+        observed.task = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation)
+        }
+        await yieldUntil { observed.first != nil }
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .typedPartially, clipboard: .nonTextContent))
+        XCTAssertEqual(harness.system.posted.count, 1)
+    }
+
+    @MainActor
+    func testACancelledDeliveryWaitingItsTurnSendsNothing() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.holdNext = .beforePaste
+        let observed = InjectionObservations()
+
+        Task { @MainActor in
+            observed.first = await harness.injector.inject(text: "The first dictation.")
+        }
+        await yieldUntil { harness.pacer.isHolding }
+        let waiting = Task { @MainActor in
+            observed.second = await harness.injector.inject(text: "The second dictation.")
+        }
+        await yieldUntil { harness.injector.queuedDeliveryCount == 1 }
+        waiting.cancel()
+        harness.pacer.releaseHeldPause()
+        await waiting.value
+
+        XCTAssertEqual(observed.first, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(observed.second, InjectionResult(delivery: .cancelled))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
     }
 
     @MainActor
