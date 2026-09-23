@@ -288,7 +288,8 @@ final class LoginItemSwitch: ObservableObject {
     /// result.
     func refresh() async {
         guard pendingRequest == nil else {
-            return // MUTATION R3: a request during a flip is dropped
+            readAgainAfterFlip = true
+            return
         }
         guard !isReading else {
             readAgain = true
