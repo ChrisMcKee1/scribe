@@ -20,16 +20,18 @@ import os
 /// - starts the child in a new process group with only descriptors 0, 1 and 2, so a child started
 ///   concurrently elsewhere can never inherit this child's pipes and hold back its end of file;
 /// - does every blocking step on one supervisor thread per run, driven by a kqueue, so an awaiting
-///   caller, the main actor included, is only ever suspended.
+///   caller, the main actor included, is only ever suspended;
+/// - reads or writes at most one buffer each time the kqueue wakes it, so a child that never stops
+///   writing (or reading) can hold back neither its deadline, nor a stop request, nor its other stream.
 ///
 /// When `run` returns, the child has been reaped and the run has let go of everything it held: its
 /// supervisor thread has returned and been joined, and every pipe and queue it opened is closed.
 ///
 /// Signalling is by process group, not by walking the process tree. A descendant that leaves the
 /// group (`setsid`, `setpgid`, a daemon that double-forks) is not signalled, and if it keeps one of
-/// the pipes open, Scribe closes its own end at `postExitDrainLimit`, after which that descendant's
-/// writes fail with `EPIPE` or `SIGPIPE`. A tool that starts a daemon on purpose must redirect the
-/// daemon's streams.
+/// the pipes open, Scribe takes a bounded last read at `postExitDrainLimit` and closes its own end,
+/// after which that descendant's writes fail with `EPIPE` or `SIGPIPE`. A tool that starts a daemon on
+/// purpose must redirect the daemon's streams.
 ///
 /// It never logs. Captured output is content (an `az` access token, a transcript): callers must not
 /// log it, only its shape, such as byte counts, the exit status and the termination reason.
@@ -43,7 +45,8 @@ enum ProcessRunner {
 
     /// How long a stream may stay open after the child has been reaped. Everything the child wrote is
     /// in the pipes by then; this only bounds the wait on a descendant that kept a stream open. At the
-    /// limit Scribe takes what is buffered and closes its ends, standard input included.
+    /// limit Scribe takes what the pipes hold, in a read of bounded size however fast a descendant keeps
+    /// writing, and closes its ends, standard input included.
     static let postExitDrainLimit: Duration = .milliseconds(500)
 
     /// Why the child ended.
@@ -130,7 +133,11 @@ enum ProcessRunner {
             environment: environment ?? ProcessInfo.processInfo.environment)
         try Task.checkCancellation()
 
-        let child = ChildProcess(outputLimit: max(0, outputLimit), timeout: timeout, killGracePeriod: killGracePeriod)
+        let child = ChildProcess(
+            outputLimit: max(0, outputLimit),
+            timeout: timeout,
+            killGracePeriod: killGracePeriod,
+            systemCalls: systemCalls.get())
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 child.start(command, standardInput: standardInput, continuation: continuation)
@@ -176,6 +183,24 @@ enum ProcessRunner {
         }
         return directories
     }
+
+    /// The system calls the runs started from the current task make. Only tests change it, with
+    /// `ProcessRunner.systemCalls.withValue(_:operation:)`, to reproduce what real children cannot on
+    /// demand; each run keeps the value it saw when it started.
+    static let systemCalls = TaskLocal(wrappedValue: ProcessRunnerSystemCalls.live)
+}
+
+/// The kernel calls behind a run that a test can stand in for, each with its system call's contract.
+struct ProcessRunnerSystemCalls: Sendable {
+    /// `proc_listpgrppids`: fills `buffer` with the pids in the process group `group` and returns how
+    /// many it wrote, or returns 0 with `errno` set when the lookup fails.
+    var listProcessGroup: @Sendable (_ group: pid_t, _ buffer: UnsafeMutableRawPointer?, _ bufferSize: Int32) -> Int32
+    /// `read` on one of the run's output pipes.
+    var readPipe: @Sendable (_ descriptor: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> Int
+
+    static let live = ProcessRunnerSystemCalls(
+        listProcessGroup: { group, buffer, bufferSize in proc_listpgrppids(group, buffer, bufferSize) },
+        readPipe: { descriptor, buffer, count in Darwin.read(descriptor, buffer, count) })
 }
 
 enum ProcessRunnerError: Error, Equatable {
@@ -234,12 +259,14 @@ private final class ChildProcess: Sendable {
     let outputLimit: Int
     let timeout: Duration
     let killGracePeriod: Duration
+    let systemCalls: ProcessRunnerSystemCalls
     private let shared = OSAllocatedUnfairLock(initialState: Shared())
 
-    init(outputLimit: Int, timeout: Duration, killGracePeriod: Duration) {
+    init(outputLimit: Int, timeout: Duration, killGracePeriod: Duration, systemCalls: ProcessRunnerSystemCalls) {
         self.outputLimit = outputLimit
         self.timeout = timeout
         self.killGracePeriod = killGracePeriod
+        self.systemCalls = systemCalls
     }
 
     func start(
@@ -323,6 +350,9 @@ private final class Supervision {
 
     private static let readBufferSize = 64 * 1024
     private static let writeChunkSize = 64 * 1024
+    /// XNU grows a pipe's buffer to 64 KiB at most, so this takes everything a pipe held at the drain
+    /// limit, while a descendant that keeps refilling it cannot keep the supervisor reading.
+    private static let finalReadBudget = 4 * readBufferSize
 
     private let owner: ChildProcess
     private let command: SpawnCommand
@@ -463,9 +493,9 @@ private final class Supervision {
             // just been closed is ignored even if the number now belongs to something else.
             let descriptor = Int32(truncatingIfNeeded: event.ident)
             if descriptor == standardOutput.descriptor {
-                drain(standardOutput)
+                readReady(standardOutput)
             } else if descriptor == standardError.descriptor {
-                drain(standardError)
+                readReady(standardError)
             }
         case EVFILT_WRITE:
             if Int32(truncatingIfNeeded: event.ident) == inputDescriptor {
@@ -500,52 +530,67 @@ private final class Supervision {
 
     // MARK: - Streams
 
-    private func drain(_ stream: CapturedStream) {
-        while stream.isOpen {
-            let count = Darwin.read(stream.descriptor, readBuffer, Self.readBufferSize)
-            if count > 0 {
-                stream.append(UnsafeRawPointer(readBuffer), count: count)
-            } else if count == 0 {
-                stream.close(reachedEndOfFile: true)
-            } else if errno == EINTR {
-                continue
-            } else if errno == EAGAIN {
-                return
-            } else {
-                stream.close(reachedEndOfFile: false)
-            }
-        }
+    /// One read each time the kqueue reports the stream. Both pipe filters are level-triggered, so
+    /// whatever is still waiting is reported again by the next wait, together with any timer or stop
+    /// request that is due; returning here is what keeps a child that never lets its pipe run dry from
+    /// holding back its deadline, a stop, or its other stream.
+    private func readReady(_ stream: CapturedStream) {
+        read(stream, atMost: Self.readBufferSize)
         if outputStreamsClosed {
             reapIfGroupIsEmpty()
         }
     }
 
+    /// One `read` of at most `limit` bytes, repeated only when a signal interrupts it. Returns the number
+    /// of bytes read, or 0 when nothing was waiting or the stream ended or failed, which closes it.
+    @discardableResult
+    private func read(_ stream: CapturedStream, atMost limit: Int) -> Int {
+        while stream.isOpen {
+            let count = owner.systemCalls.readPipe(stream.descriptor, readBuffer, min(limit, Self.readBufferSize))
+            let failure = count < 0 ? errno : 0
+            if count > 0 {
+                stream.append(UnsafeRawPointer(readBuffer), count: count)
+                return count
+            }
+            if failure == EINTR {
+                continue
+            }
+            if count == 0 {
+                stream.close(reachedEndOfFile: true)
+            } else if failure != EAGAIN {
+                stream.close(reachedEndOfFile: false)
+            }
+            return 0
+        }
+        return 0
+    }
+
+    /// One chunk each time the kqueue reports the input pipe writable, for the same reason `readReady`
+    /// reads once.
     private func writeInput() {
-        guard inputDescriptor >= 0, let input = pendingInput else {
+        guard inputDescriptor >= 0, let input = pendingInput, inputOffset < input.count else {
             closeInput()
             return
         }
         let descriptor = inputDescriptor
-        var offset = inputOffset
-        let finished = input.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Bool in
-            guard let base = bytes.baseAddress else { return true }
-            while offset < bytes.count {
-                let written = Darwin.write(descriptor, base + offset, min(bytes.count - offset, Self.writeChunkSize))
-                if written > 0 {
-                    offset += written
-                } else if written < 0 && errno == EINTR {
-                    continue
-                } else if written < 0 && errno == EAGAIN {
-                    return false
-                } else {
-                    // EPIPE: the child closed its input or exited, so the rest is not wanted.
-                    return true
-                }
-            }
-            return true
+        let offset = inputOffset
+        let (written, failure) = input.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> (Int, Int32) in
+            guard let base = bytes.baseAddress else { return (0, 0) }
+            var result: Int
+            repeat {
+                result = Darwin.write(descriptor, base + offset, min(bytes.count - offset, Self.writeChunkSize))
+            } while result < 0 && errno == EINTR
+            return (result, result < 0 ? errno : 0)
         }
-        inputOffset = offset
-        if finished {
+        if written > 0 {
+            inputOffset += written
+            if inputOffset >= input.count {
+                closeInput()
+            }
+        } else if written < 0 && failure == EAGAIN {
+            return
+        } else {
+            // EPIPE: the child closed its input or exited, so the rest is not wanted.
             closeInput()
         }
     }
@@ -558,13 +603,19 @@ private final class Supervision {
         pendingInput = nil
     }
 
-    /// At the drain limit: take whatever is buffered, then let go of every end, standard input
-    /// included, so a descendant that keeps the pipes open holds nothing of Scribe's.
+    /// At the drain limit: take at most `finalReadBudget` more bytes from each output pipe, then let go
+    /// of every end, standard input included, so a descendant that keeps the pipes open, or keeps
+    /// filling them, holds nothing of Scribe's.
     private func letGoOfStreams() {
-        drain(standardOutput)
-        drain(standardError)
-        standardOutput.close(reachedEndOfFile: false)
-        standardError.close(reachedEndOfFile: false)
+        for stream in [standardOutput, standardError] {
+            var budget = Self.finalReadBudget
+            while budget > 0 {
+                let count = read(stream, atMost: budget)
+                guard count > 0 else { break }
+                budget -= count
+            }
+            stream.close(reachedEndOfFile: false)
+        }
         closeInput()
     }
 
@@ -605,7 +656,7 @@ private final class Supervision {
     /// Once the leader and every holder of the output pipes are gone, a stopped run need not wait out
     /// the grace period: reaping early is safe when no live process remains in the group.
     private func reapIfGroupIsEmpty() {
-        guard leaderExited, !reaped, outputStreamsClosed, !Self.groupHasLiveMembers(leader: pid) else { return }
+        guard leaderExited, !reaped, outputStreamsClosed, !groupHasLiveMembers() else { return }
         reap()
     }
 
@@ -710,17 +761,22 @@ private final class Supervision {
         }
     }
 
-    /// Whether any process other than `leader` in the process group `leader` leads is still alive.
-    /// Zombies do not count: an exited descendant waiting for launchd to reap it can no longer be
-    /// signalled or do anything. When the kernel cannot say, the answer is yes, which only means
-    /// waiting for the end of the grace period.
-    private static func groupHasLiveMembers(leader: pid_t) -> Bool {
+    /// Whether any process other than the leader is still alive in the leader's process group. Zombies
+    /// do not count: an exited descendant waiting for launchd to reap it can no longer be signalled or do
+    /// anything. When the kernel cannot say, the answer is yes, which only means waiting for the end of
+    /// the grace period. libproc reports a failed lookup as an empty list with `errno` set, so an empty
+    /// list means an empty group only when `errno` is still clear.
+    private func groupHasLiveMembers() -> Bool {
         var members = [pid_t](repeating: 0, count: 256)
+        errno = 0
         let reported = members.withUnsafeMutableBytes { buffer in
-            proc_listpgrppids(leader, buffer.baseAddress, Int32(buffer.count))
+            owner.systemCalls.listProcessGroup(pid, buffer.baseAddress, Int32(buffer.count))
         }
-        guard reported >= 0, Int(reported) < members.count else { return true }
-        for member in members.prefix(Int(reported)) where member > 0 && member != leader {
+        let lookupFailure = errno
+        guard reported > 0 || (reported == 0 && lookupFailure == 0), Int(reported) < members.count else {
+            return true
+        }
+        for member in members.prefix(Int(reported)) where member > 0 && member != pid {
             var info = proc_bsdinfo()
             let size = Int32(MemoryLayout<proc_bsdinfo>.size)
             errno = 0

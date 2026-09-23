@@ -164,15 +164,19 @@ final class FailureShapeTests: XCTestCase {
     /// A code comes from a response body, so looking like an identifier proves nothing: the fixture's API
     /// key does, and so does a phrase written in snake case.
     func testAServiceCodeIsWrittenOnlyWhenScribeListsIt() {
-        for code in ["invalid_api_key", "DeploymentNotFound", "content_filter", "invalid_client", "AADSTS7000215"] {
+        let listed = [
+            "invalid_api_key", "DeploymentNotFound", "content_filter", "invalid_client", "interaction_required",
+            "AADSTS7000215", "AADSTS7000218", "AADSTS50076", "AADSTS700016", "AADSTS530035",
+        ]
+        for code in listed {
             let shape = FailureShape(ServiceFailure(failureHTTPStatus: 401, failureServiceCode: code))
             XCTAssertEqual(shape.description, "ServiceFailure http=401 service=\(code)")
         }
 
         let unlisted = [
             PrivacyCanary.secret, "canary_private_dictation", "content-filter", "not a code", "https://example.invalid",
-            "contoso.openai.azure.com", "7starts-with-a-digit", "AADSTS12", "AADSTS7000215x", "aadsts7000215",
-            "AADSTS1234567890", String(repeating: "a", count: 65),
+            "contoso.openai.azure.com", "7starts-with-a-digit", "AADSTS", "AADSTS7000215x", "aadsts7000215",
+            "AADSTS-7000215", "AADSTS 7000215", String(repeating: "a", count: 65),
         ]
         for code in unlisted {
             let shape = FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: code))
@@ -184,6 +188,35 @@ final class FailureShapeTests: XCTestCase {
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: "")).serviceCode)
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: nil)).serviceCode)
     }
+
+    /// The digits after `AADSTS` can be a phone number or an identifier as easily as a code, and writing
+    /// them back from their value would change nothing about that. An Entra code Scribe does not list keeps
+    /// only the prefix, which still says where the failure came from.
+    func testAnEntraCodeScribeDoesNotListKeepsOnlyItsPrefix() {
+        let unlisted = [
+            "AADSTS5550123", "AADSTS123456789", "AADSTS000000000", "AADSTS07000215", "AADSTS70002150", "AADSTS12",
+            "AADSTS12345678901234567890",
+        ]
+        for code in unlisted {
+            let shape = FailureShape(ServiceFailure(failureHTTPStatus: 401, failureServiceCode: code))
+            XCTAssertEqual(shape.serviceCode, "AADSTS", code)
+            XCTAssertEqual(shape.description, "ServiceFailure http=401 service=AADSTS", code)
+        }
+    }
+
+    /// Each listed Entra code is written as Microsoft does, `AADSTS` and a number without a leading zero,
+    /// so a typo in the list cannot turn it into a pattern that matches nothing.
+    func testEveryListedEntraCodeIsWellFormed() {
+        let entraCodes = FailureShape.knownServiceCodes.filter { $0.hasPrefix("AADSTS") }
+        XCTAssertFalse(entraCodes.isEmpty)
+        for code in entraCodes {
+            let digits = code.dropFirst("AADSTS".count)
+            XCTAssertTrue((5...7).contains(digits.count), code)
+            XCTAssertTrue(digits.allSatisfy { $0.isASCII && $0.isNumber }, code)
+            XCTAssertNotEqual(digits.first, "0", code)
+        }
+    }
+
     func testAnHTTPStatusOutsideTheValidRangeIsDropped() {
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 0, failureServiceCode: nil)).httpStatus)
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 1000, failureServiceCode: nil)).httpStatus)

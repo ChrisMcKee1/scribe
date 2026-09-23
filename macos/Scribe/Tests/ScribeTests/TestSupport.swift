@@ -213,8 +213,8 @@ enum FileGate {
     }
 }
 
-/// What this test process holds right now, read from the kernel, for tests that prove a run lets go
-/// of everything it opened.
+/// What this test process holds right now, and whether the processes a test started are still running,
+/// read from the kernel, for tests that prove a run lets go of everything it opened or started.
 enum ProcessResources {
     /// Open pipe and kqueue descriptors, the two kinds a process runner creates.
     static func pipesAndQueues() -> (pipes: Int, queues: Int) {
@@ -255,5 +255,54 @@ enum ProcessResources {
             }
         }
         return count
+    }
+
+    /// Whether `pid` has ended within `timeout`. A process that is already gone, or is a zombie, has; for
+    /// one that is still running, a kqueue waits for the kernel to report its exit, so nothing polls.
+    static func waitForExit(of pid: pid_t, timeout: Duration) -> Bool {
+        let queue = kqueue()
+        guard queue >= 0 else { return !isAlive(pid) }
+        defer { close(queue) }
+
+        var change = kevent(
+            ident: UInt(pid),
+            filter: Int16(truncatingIfNeeded: EVFILT_PROC),
+            flags: UInt16(truncatingIfNeeded: EV_ADD | EV_ONESHOT),
+            fflags: UInt32(truncatingIfNeeded: NOTE_EXIT),
+            data: 0,
+            udata: nil)
+        guard kevent(queue, &change, 1, nil, 0, nil) == 0 else {
+            return errno == ESRCH || !isAlive(pid)
+        }
+        // Registered before this check, so an exit after it still wakes the wait below.
+        guard isAlive(pid) else { return true }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while true {
+            let remaining = clock.now.duration(to: deadline)
+            guard remaining > .zero else { return false }
+            let (seconds, attoseconds) = remaining.components
+            var wait = timespec(tv_sec: Int(seconds), tv_nsec: Int(attoseconds / 1_000_000_000))
+            var event = kevent()
+            let count = kevent(queue, nil, 0, &event, 1, &wait)
+            if count > 0 {
+                return true
+            }
+            if count < 0 && errno != EINTR {
+                return !isAlive(pid)
+            }
+        }
+    }
+
+    /// Whether `pid` is a running process: neither gone nor a zombie.
+    static func isAlive(_ pid: pid_t) -> Bool {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        errno = 0
+        if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size {
+            return info.pbi_status != UInt32(SZOMB)
+        }
+        return errno != ESRCH
     }
 }

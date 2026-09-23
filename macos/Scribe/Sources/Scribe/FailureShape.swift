@@ -11,11 +11,12 @@ import Foundation
 /// info except the wrapped errors. It mirrors Windows' `Scribe.Core.Diagnostics.FailureShape`.
 ///
 /// Every piece of text in a shape comes from Scribe or the compiler, never from the error: type and
-/// case names are the compiler's, a domain or a service code is written only when it matches an entry
-/// in a fixed list here, and numbers (codes, statuses, the number of an Entra `AADSTS` code) are
-/// written from their values. Matching a pattern would not be enough, because a string that merely
-/// looks like an identifier can still be a secret or a word the user dictated. Anything unlisted is
-/// written as `other`.
+/// case names are the compiler's, a domain or a service code (an Entra `AADSTS` code included) is
+/// written only when it matches an entry in a fixed list here, and numbers (codes and statuses) are
+/// written from their values. Matching a pattern would not be enough: a string that merely looks like
+/// an identifier can still be a secret or a word the user dictated, and the digits after `AADSTS` can be
+/// a phone number as easily as a code. Anything unlisted is written as `other`, and an unlisted Entra
+/// code as `AADSTS` alone.
 ///
 ///     NSError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)
 ///     KeychainError.unhandled values=-25299
@@ -38,8 +39,8 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
     /// From the first error in the chain that reports one through `FailureShapeDetailing`.
     let httpStatus: Int?
     /// From the first error in the chain that reports one through `FailureShapeDetailing`: the code
-    /// itself when it is in `knownServiceCodes`, an Entra `AADSTS` code rebuilt from its number, or
-    /// `other`.
+    /// itself when it is in `knownServiceCodes`, `AADSTS` for an Entra code that is not, and `other` for
+    /// anything else.
     let serviceCode: String?
     /// The code of the first `NSURLErrorDomain` error in the chain.
     let urlErrorCode: Int?
@@ -63,18 +64,42 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
         "UNErrorDomain",
     ]
 
-    /// Error codes the cleanup providers can return that Scribe writes as themselves: the OAuth 2.0
-    /// token errors, the OpenAI-style `error.code` and `error.type` values, and the Azure data plane
-    /// codes. Entra's `AADSTS` codes are handled by number instead of listed.
+    /// Error codes the cleanup providers and Entra sign-in can return that Scribe writes as themselves: the
+    /// OAuth 2.0 and OpenID Connect errors, the OpenAI-style `error.code` and `error.type` values, the
+    /// Azure data plane codes, and the Entra `AADSTS` codes a user or an administrator can act on, as
+    /// Microsoft documents them in "Microsoft Entra authentication and authorization error codes". An
+    /// Entra code is matched exactly as written, so a leading zero or an extra digit makes it unlisted.
     static let knownServiceCodes: Set<String> = [
         "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type",
-        "invalid_scope", "temporarily_unavailable",
+        "invalid_scope", "invalid_resource", "temporarily_unavailable", "interaction_required",
+        "consent_required", "login_required", "access_denied",
         "invalid_api_key", "invalid_request_error", "authentication_error", "permission_error",
         "not_found_error", "model_not_found", "context_length_exceeded", "content_filter",
         "rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "server_error",
         "unsupported_parameter", "unsupported_value",
         "DeploymentNotFound", "Unauthorized", "PermissionDenied", "AuthenticationTypeDisabled",
         "OperationNotSupported", "TooManyRequests", "InternalServerError", "ServiceUnavailable", "429",
+        // Entra: sign-in required, or a session or refresh token that expired or was revoked.
+        "AADSTS50058", "AADSTS50089", "AADSTS50132", "AADSTS50133", "AADSTS50173", "AADSTS70008",
+        "AADSTS70043", "AADSTS700020", "AADSTS700082",
+        // Entra: multifactor authentication, Conditional Access and security defaults.
+        "AADSTS50005", "AADSTS50072", "AADSTS50074", "AADSTS50076", "AADSTS50078", "AADSTS50079",
+        "AADSTS50097", "AADSTS50131", "AADSTS50158", "AADSTS53000", "AADSTS53001", "AADSTS53002",
+        "AADSTS53003", "AADSTS53004", "AADSTS530032", "AADSTS530035",
+        // Entra: consent and role assignment.
+        "AADSTS50105", "AADSTS65001", "AADSTS65004", "AADSTS90094", "AADSTS650057",
+        // Entra: the service principal's client secret is wrong, expired or missing.
+        "AADSTS70002", "AADSTS7000215", "AADSTS7000218", "AADSTS7000222",
+        // Entra: the application is not in the tenant, or is disabled.
+        "AADSTS70001", "AADSTS700011", "AADSTS700016", "AADSTS7000112",
+        // Entra: the wrong tenant, cloud, account or resource.
+        "AADSTS50001", "AADSTS50020", "AADSTS50034", "AADSTS50059", "AADSTS50128", "AADSTS50194",
+        "AADSTS70011", "AADSTS90002", "AADSTS90019", "AADSTS90038", "AADSTS90072", "AADSTS500011",
+        "AADSTS500014",
+        // Entra: the account is locked, disabled, or its password expired or was mistyped.
+        "AADSTS50053", "AADSTS50055", "AADSTS50057", "AADSTS50126",
+        // Entra: too many requests, from this app or from the tenant.
+        "AADSTS50196", "AADSTS90055",
     ]
 
     private static let maximumVisited = 32
@@ -204,18 +229,16 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
         frameworkDomains.contains(domain) ? domain : "other"
     }
 
-    /// A listed service code as itself; an Entra code, `AADSTS` and four to nine digits, rebuilt from
-    /// its number, so only the digits come from the service; anything else as `other`.
+    /// A listed service code as itself; `AADSTS` for any other Entra code (`AADSTS` and ASCII digits),
+    /// which keeps where the failure came from but none of its digits; anything else as `other`.
     static func serviceCodeIdentifier(_ candidate: String) -> String {
         if knownServiceCodes.contains(candidate) {
             return candidate
         }
         let prefix = "AADSTS"
         let digits = candidate.unicodeScalars.dropFirst(prefix.unicodeScalars.count)
-        if candidate.hasPrefix(prefix), (4...9).contains(digits.count), digits.allSatisfy(\.isASCIIDigit),
-            let number = Int(Substring(digits))
-        {
-            return prefix + String(number)
+        if candidate.hasPrefix(prefix), !digits.isEmpty, digits.allSatisfy(\.isASCIIDigit) {
+            return prefix
         }
         return "other"
     }
@@ -267,7 +290,8 @@ protocol FailureShapeDetailing: Error {
     var failureHTTPStatus: Int? { get }
     /// The service's own error code, as the response carried it, such as `DeploymentNotFound`,
     /// `invalid_api_key` or `AADSTS7000215`. The shape writes it only when Scribe lists it (see
-    /// `FailureShape.knownServiceCodes`); any other value, whatever it looks like, becomes `other`.
+    /// `FailureShape.knownServiceCodes`); an unlisted Entra code becomes `AADSTS`, and any other value,
+    /// whatever it looks like, `other`.
     var failureServiceCode: String? { get }
 }
 
