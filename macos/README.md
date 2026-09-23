@@ -68,10 +68,11 @@ privacy/offline promise.
   top apps, recurring terms with one-click dictionary add, opt-in AI summary)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
   from persisted history), plus an injection-failure recovery notification
-- Dictation history written in the background after the text is delivered, in dictation order. A new
-  install keeps 90 days of text, a history from an earlier build keeps everything until a limit is
-  chosen, and a missing or unreadable setting never deletes anything. Retention is swept at launch and
-  daily, and freed space is reclaimed while the app is idle
+- Dictation history written in the background after the text is delivered, in dictation order. It is
+  best-effort until committed: a crash in that moment loses the entry. A new install keeps 90 days of
+  text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
+  unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
+  reclaimed only while no dictation is running
 
 ## Known gaps vs. Windows
 

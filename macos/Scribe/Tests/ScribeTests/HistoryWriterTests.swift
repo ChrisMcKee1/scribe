@@ -13,6 +13,7 @@ final class StorageTestGatedRecorder: HistoryRecording, @unchecked Sendable {
     private var started = 0
     private var failing: Set<Int> = []
     private var texts: [String?] = []
+    private var clears = 0
 
     init(forwardingTo inner: PersistenceStore? = nil) {
         self.inner = inner
@@ -22,6 +23,13 @@ final class StorageTestGatedRecorder: HistoryRecording, @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         return texts
+    }
+
+    /// How many Clear steps have run.
+    var clearsRun: Int {
+        condition.lock()
+        defer { condition.unlock() }
+        return clears
     }
 
     func closeGate() {
@@ -58,6 +66,25 @@ final class StorageTestGatedRecorder: HistoryRecording, @unchecked Sendable {
     }
 
     func recordDictation(_ record: DictationHistoryRecord) throws {
+        try passGate()
+        try inner?.recordDictation(record)
+
+        condition.lock()
+        texts.append(record.transcriptText)
+        condition.unlock()
+    }
+
+    func clearHistory() throws -> Int {
+        try passGate()
+        let removed = try inner?.clearHistory() ?? 0
+
+        condition.lock()
+        clears += 1
+        condition.unlock()
+        return removed
+    }
+
+    private func passGate() throws {
         condition.lock()
         started += 1
         let number = started
@@ -71,11 +98,6 @@ final class StorageTestGatedRecorder: HistoryRecording, @unchecked Sendable {
         if shouldFail {
             throw InjectedFailure()
         }
-        try inner?.recordDictation(record)
-
-        condition.lock()
-        texts.append(record.transcriptText)
-        condition.unlock()
     }
 }
 
@@ -188,5 +210,90 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertTrue(writer.waitForAcceptedWrites(timeout: 10))
         XCTAssertEqual(recorder.recordedTexts, ["a", "c"])
         writer.complete(timeout: 5)
+    }
+
+    // MARK: - Clear in line
+
+    func testClearRunsAfterEveryWriteAcceptedBeforeItAndBeforeAnyAcceptedAfter() async throws {
+        let store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+        let recorder = StorageTestGatedRecorder(forwardingTo: store)
+        recorder.closeGate()
+        let clearQueued = StorageTestSignal()
+        let writer = HistoryWriter(recorder: recorder, hooks: .init(onClearQueued: { clearQueued.signal() }))
+
+        writer.enqueue(record("before one"))
+        XCTAssertTrue(recorder.waitUntilStarted(1))
+        writer.enqueue(record("before two"))
+        let clearing = Task { try await writer.clearHistory(timeout: 10) }
+        XCTAssertTrue(clearQueued.wait())
+        writer.enqueue(record("after"))
+        XCTAssertEqual(recorder.clearsRun, 0)
+
+        recorder.openGate()
+        let removed = try await clearing.value
+
+        XCTAssertEqual(removed, 2)
+        XCTAssertTrue(writer.waitForAcceptedWrites(timeout: 10))
+        // Nothing dictated before the Clear came back; the entry accepted after it stays.
+        XCTAssertEqual(try store.fetchDictationHistory().compactMap(\.transcriptText), ["after"])
+        writer.complete(timeout: 5)
+    }
+
+    func testAClearThatTimesOutIsWithdrawnAndNeverRunsLater() async throws {
+        let recorder = StorageTestGatedRecorder()
+        recorder.closeGate()
+        let writer = HistoryWriter(recorder: recorder)
+        writer.enqueue(record("held"))
+        XCTAssertTrue(recorder.waitUntilStarted(1))
+
+        do {
+            _ = try await writer.clearHistory(timeout: 0.05)
+            XCTFail("expected the Clear to time out")
+        } catch {
+            XCTAssertEqual(error as? HistoryWriterError, .clearTimedOut)
+        }
+
+        recorder.openGate()
+        XCTAssertTrue(writer.waitForAcceptedWrites(timeout: 10))
+        XCTAssertEqual(recorder.clearsRun, 0)
+        XCTAssertEqual(recorder.recordedTexts, ["held"])
+        writer.complete(timeout: 5)
+    }
+
+    func testAClearQueuedBehindAStuckWriteAtShutdownFailsInsteadOfRunning() async throws {
+        let recorder = StorageTestGatedRecorder()
+        recorder.closeGate()
+        let clearQueued = StorageTestSignal()
+        let writer = HistoryWriter(recorder: recorder, hooks: .init(onClearQueued: { clearQueued.signal() }))
+        writer.enqueue(record("stuck"))
+        XCTAssertTrue(recorder.waitUntilStarted(1))
+        let clearing = Task { try await writer.clearHistory(timeout: 30) }
+        XCTAssertTrue(clearQueued.wait())
+
+        XCTAssertEqual(writer.complete(timeout: 0.05), HistoryDrainResult(drained: false, stillWriting: 1, abandoned: 1))
+        recorder.openGate()
+
+        do {
+            _ = try await clearing.value
+            XCTFail("expected the abandoned Clear to fail")
+        } catch {
+            XCTAssertEqual(error as? HistoryWriterError, .closed)
+        }
+        XCTAssertEqual(recorder.clearsRun, 0)
+    }
+
+    func testAClearAfterTheWriterClosedFailsAndClearsNothing() async {
+        let recorder = StorageTestGatedRecorder()
+        let writer = HistoryWriter(recorder: recorder)
+        writer.complete(timeout: 1)
+
+        do {
+            _ = try await writer.clearHistory(timeout: 1)
+            XCTFail("expected the Clear to fail")
+        } catch {
+            XCTAssertEqual(error as? HistoryWriterError, .closed)
+        }
+        XCTAssertEqual(recorder.clearsRun, 0)
     }
 }

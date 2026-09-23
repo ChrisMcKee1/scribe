@@ -179,6 +179,36 @@ final class StorageTestSignal: Sendable {
     }
 }
 
+/// An event an async test awaits without holding its thread, so the actor it runs on stays free.
+final class StorageTestAsyncSignal: @unchecked Sendable {
+    // `@unchecked Sendable`: `fired` and `waiter` are only read or written while `lock` is held.
+    private let lock = NSLock()
+    private var fired = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func fire() {
+        lock.lock()
+        let pending = waiter
+        waiter = nil
+        fired = true
+        lock.unlock()
+        pending?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if fired {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+}
+
 /// A switch other threads read, for arming a test seam only for the part of a test that needs it.
 final class StorageTestSwitch: @unchecked Sendable {
     // `@unchecked Sendable`: `on` and `claimed` are only read or written while `lock` is held.
@@ -226,6 +256,20 @@ final class StorageTestBox<Value: Sendable>: @unchecked Sendable {
         lock.lock()
         stored = value
         lock.unlock()
+    }
+}
+
+/// A task executor with exactly one thread, so a test can tell whether an async call holds its
+/// caller's thread while it waits: if it does, nothing else scheduled on this executor can run.
+@available(macOS 15.0, *)
+final class StorageTestSerialTaskExecutor: TaskExecutor {
+    private let queue = DispatchQueue(label: "com.scribe.macos.tests.storage-executor")
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let unownedJob = UnownedJob(job)
+        queue.async { [self] in
+            unownedJob.runSynchronously(on: asUnownedTaskExecutor())
+        }
     }
 }
 

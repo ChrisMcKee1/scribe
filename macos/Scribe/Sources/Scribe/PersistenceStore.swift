@@ -81,8 +81,16 @@ enum YieldingStatementOutcome: Equatable, Sendable {
     case completed
     /// A foreground caller was waiting for the connection.
     case yieldedToForeground
-    /// The caller's `shouldStop` answered true (shutdown, Clear history, or its time budget).
+    /// The caller's `shouldStop` answered true (shutdown, Clear history, a dictation, or its budget).
     case stopped
+}
+
+/// What one retention batch did.
+enum RetentionBatchOutcome: Equatable, Sendable {
+    case deleted(Int)
+    /// The stored choice no longer authorizes the limit the sweep started with (it changed, went
+    /// missing or became unreadable), so nothing was deleted.
+    case authorizationChanged(HistoryRetentionSetting)
 }
 
 /// The app's one SQLite database: dictation history, the dictionary, snippets, app profiles and the
@@ -95,12 +103,17 @@ enum YieldingStatementOutcome: Equatable, Sendable {
 /// once. Every read steps its statement to `SQLITE_DONE`: an error midway is thrown, never returned as
 /// a short or empty result that a caller would take for the truth.
 ///
+/// The synchronous methods run on the caller's thread and wait for the storage queue, so a write
+/// waiting out another process's lock can hold them for up to the busy timeout. Main-actor code uses
+/// the asynchronous `load...` and `save...` forms instead: they hop to the storage queue and resume
+/// the caller when done, so the main actor is free while they wait.
+///
 /// Logs carry shapes only (counts, operations, SQLite result codes), never transcript text,
 /// dictionary patterns, snippet bodies, profile names or paths.
 final class PersistenceStore: Sendable {
     /// Newest dictations a history read returns by default. Windows reads `GetRecent(1000)` for the
     /// Diagnostics panel, learning from history and dictionary cleanup; the same bound keeps these
-    /// main-thread reads proportional to what a user asked for, not to a lifetime of history.
+    /// reads proportional to what a user asked for, not to a lifetime of history.
     static let defaultHistoryReadLimit = 1_000
 
     /// How long a statement waits for another process's lock before failing with `SQLITE_BUSY`.
@@ -112,21 +125,27 @@ final class PersistenceStore: Sendable {
 
     static let retentionSettingKey = "history_retention_days"
 
+    /// Test seams. The app uses the defaults.
+    struct TestHooks: Sendable {
+        /// A small database can finish a VACUUM in fewer steps than the default interval, so tests
+        /// that must see a check use 1.
+        var progressInterval: Int32 = PersistenceStore.defaultProgressInterval
+        /// Called on the calling thread when a foreground operation registers that it is waiting for
+        /// the storage queue, before it is queued.
+        var onForegroundWait: (@Sendable () -> Void)?
+        /// Called on the storage queue as each operation begins, before it touches the connection.
+        var onOperationBegin: (@Sendable (ConnectionPurpose) -> Void)?
+    }
+
     let databaseURL: URL
     private let owner: ConnectionOwner
     private let logger = Logger(subsystem: "com.scribe.macos", category: "Persistence")
 
-    /// - Parameters:
-    ///   - progressInterval: test seam. A small database can finish a VACUUM in fewer steps than the
-    ///     default, so tests that must see a check use 1.
-    ///   - onForegroundWait: test seam, called on the calling thread each time a foreground call
-    ///     registers that it is waiting for the connection, before it takes the connection lock.
     init(
         fileManager: FileManager = .default,
         databaseURL overrideDatabaseURL: URL? = nil,
         busyTimeoutMilliseconds: Int32 = PersistenceStore.defaultBusyTimeoutMilliseconds,
-        progressInterval: Int32 = PersistenceStore.defaultProgressInterval,
-        onForegroundWait: (@Sendable () -> Void)? = nil
+        testHooks: TestHooks = TestHooks()
     ) {
         let resolvedURL: URL
         if let overrideDatabaseURL {
@@ -141,8 +160,7 @@ final class PersistenceStore: Sendable {
         owner = ConnectionOwner(
             path: resolvedURL.path(percentEncoded: false),
             busyTimeoutMilliseconds: busyTimeoutMilliseconds,
-            progressInterval: max(1, progressInterval),
-            onForegroundWait: onForegroundWait)
+            hooks: testHooks)
     }
 
     // MARK: - Schema
@@ -314,44 +332,18 @@ final class PersistenceStore: Sendable {
         limit: Int = PersistenceStore.defaultHistoryReadLimit
     ) throws -> [DictationHistoryRecord] {
         try owner.withSession(.foreground) { session in
-            try session.withStatement(
-                """
-                SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text, target_app
-                FROM (
-                    SELECT id, started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text,
-                        target_app
-                    FROM dictation_history
-                    WHERE started_at >= ?1
-                    ORDER BY id DESC
-                    LIMIT ?2
-                )
-                ORDER BY id ASC;
-                """,
-                .read
-            ) { statement in
-                try statement.bind(since.map { session.timestamp($0) } ?? "", at: 1)
-                try statement.bind(Int64(max(0, limit)), at: 2)
+            try Self.readDictationHistory(session, since: since, limit: limit)
+        }
+    }
 
-                var records: [DictationHistoryRecord] = []
-                while try statement.step() {
-                    guard let startedAtText = statement.text(at: 0),
-                          let startedAt = session.date(from: startedAtText)
-                    else {
-                        continue
-                    }
-
-                    records.append(
-                        DictationHistoryRecord(
-                            startedAt: startedAt,
-                            durationSeconds: statement.double(at: 1) ?? 0,
-                            sampleCount: Int(statement.int64(at: 2) ?? 0),
-                            decodeMilliseconds: statement.double(at: 3),
-                            cleanupMilliseconds: statement.double(at: 4),
-                            transcriptText: statement.text(at: 5),
-                            targetApp: statement.text(at: 6)))
-                }
-                return records
-            }
+    /// `fetchDictationHistory(since:limit:)` for main-actor callers: the read waits on the storage
+    /// queue, not on the caller's thread.
+    func loadDictationHistory(
+        since: Date? = nil,
+        limit: Int = PersistenceStore.defaultHistoryReadLimit
+    ) async throws -> [DictationHistoryRecord] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readDictationHistory(session, since: since, limit: limit)
         }
     }
 
@@ -360,30 +352,86 @@ final class PersistenceStore: Sendable {
     /// never shown again; a missing or unreadable choice keeps everything, exactly as the sweep does.
     func fetchRecentTranscripts(limit: Int, now: Date = Date()) throws -> [String] {
         try owner.withSession(.foreground) { session in
-            let cutoff = (try? Self.readRetention(session))?.cutoff(before: now)
-            return try session.withStatement(
-                """
-                SELECT transcript_text
+            try Self.readRecentTranscripts(session, limit: limit, now: now)
+        }
+    }
+
+    /// `fetchRecentTranscripts(limit:now:)` for main-actor callers.
+    func loadRecentTranscripts(limit: Int, now: Date = Date()) async throws -> [String] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readRecentTranscripts(session, limit: limit, now: now)
+        }
+    }
+
+    private static func readDictationHistory(
+        _ session: SQLiteSession,
+        since: Date?,
+        limit: Int
+    ) throws -> [DictationHistoryRecord] {
+        try session.withStatement(
+            """
+            SELECT started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text, target_app
+            FROM (
+                SELECT id, started_at, duration_seconds, sample_count, decode_ms, cleanup_ms, transcript_text,
+                    target_app
                 FROM dictation_history
                 WHERE started_at >= ?1
-                    AND transcript_text IS NOT NULL
-                    AND trim(transcript_text, ' ' || char(9) || char(10) || char(13)) <> ''
                 ORDER BY id DESC
-                LIMIT ?2;
-                """,
-                .read
-            ) { statement in
-                try statement.bind(cutoff.map { session.timestamp($0) } ?? "", at: 1)
-                try statement.bind(Int64(max(0, limit)), at: 2)
+                LIMIT ?2
+            )
+            ORDER BY id ASC;
+            """,
+            .read
+        ) { statement in
+            try statement.bind(since.map { session.timestamp($0) } ?? "", at: 1)
+            try statement.bind(Int64(max(0, limit)), at: 2)
 
-                var transcripts: [String] = []
-                while try statement.step() {
-                    if let text = statement.text(at: 0) {
-                        transcripts.append(text)
-                    }
+            var records: [DictationHistoryRecord] = []
+            while try statement.step() {
+                guard let startedAtText = statement.text(at: 0),
+                      let startedAt = session.date(from: startedAtText)
+                else {
+                    continue
                 }
-                return transcripts
+
+                records.append(
+                    DictationHistoryRecord(
+                        startedAt: startedAt,
+                        durationSeconds: statement.double(at: 1) ?? 0,
+                        sampleCount: Int(statement.int64(at: 2) ?? 0),
+                        decodeMilliseconds: statement.double(at: 3),
+                        cleanupMilliseconds: statement.double(at: 4),
+                        transcriptText: statement.text(at: 5),
+                        targetApp: statement.text(at: 6)))
             }
+            return records
+        }
+    }
+
+    private static func readRecentTranscripts(_ session: SQLiteSession, limit: Int, now: Date) throws -> [String] {
+        let cutoff = (try? readRetention(session))?.cutoff(before: now)
+        return try session.withStatement(
+            """
+            SELECT transcript_text
+            FROM dictation_history
+            WHERE started_at >= ?1
+                AND transcript_text IS NOT NULL
+                AND trim(transcript_text, ' ' || char(9) || char(10) || char(13)) <> ''
+            ORDER BY id DESC
+            LIMIT ?2;
+            """,
+            .read
+        ) { statement in
+            try statement.bind(cutoff.map { session.timestamp($0) } ?? "", at: 1)
+            try statement.bind(Int64(max(0, limit)), at: 2)
+
+            var transcripts: [String] = []
+            while try statement.step() {
+                if let text = statement.text(at: 0) {
+                    transcripts.append(text)
+                }
+            }
+            return transcripts
         }
     }
 
@@ -393,9 +441,9 @@ final class PersistenceStore: Sendable {
         }
     }
 
-    /// Deletes every history row and returns how many went. With a background writer running, go
-    /// through `StorageMaintenance.clearHistory()`, which first waits for the writes accepted before
-    /// the request and then gives the freed space back.
+    /// Deletes every history row and returns how many went. This is not ordered against the
+    /// background history writer, so an entry it has not committed yet lands afterwards; the app
+    /// clears through `StorageMaintenance.clearHistory()`, which runs the clear in the writer's line.
     func clearHistory() throws -> Int {
         try owner.withSession(.foreground) { session in
             try session.execute("DELETE FROM dictation_history;", .write)
@@ -403,24 +451,34 @@ final class PersistenceStore: Sendable {
         }
     }
 
-    /// Deletes up to `limit` of the oldest rows that started before `cutoff`, in one short
-    /// transaction, and returns how many went. Batched so a first sweep of a long history never holds
-    /// the connection for long.
-    func deleteHistoryBatch(startedBefore cutoff: Date, limit: Int) throws -> Int {
+    /// Deletes up to `limit` of the oldest rows past a `days` limit, but only while the stored choice
+    /// still says exactly `days`. The check and the deletion are one `BEGIN IMMEDIATE` transaction,
+    /// so a choice changed, removed or made unreadable while a sweep runs stops the sweep at its next
+    /// batch instead of deleting further against the old limit.
+    func deleteExpiredHistoryBatch(authorizedDays days: Int, now: Date, limit: Int) throws -> RetentionBatchOutcome {
         try owner.withSession(.maintenance) { session in
-            try session.withStatement(
-                """
-                DELETE FROM dictation_history
-                WHERE id IN (
-                    SELECT id FROM dictation_history WHERE started_at < ?1 ORDER BY started_at LIMIT ?2
-                );
-                """,
-                .maintenance
-            ) { statement in
-                try statement.bind(session.timestamp(cutoff), at: 1)
-                try statement.bind(Int64(max(1, limit)), at: 2)
-                try statement.run()
-                return session.changes
+            try session.transaction(.maintenance) { () -> RetentionBatchOutcome in
+                let current = try Self.readRetention(session)
+                guard current == .chosen(HistoryRetention(days: days)),
+                      let cutoff = current.cutoff(before: now)
+                else {
+                    return .authorizationChanged(current)
+                }
+
+                return try session.withStatement(
+                    """
+                    DELETE FROM dictation_history
+                    WHERE id IN (
+                        SELECT id FROM dictation_history WHERE started_at < ?1 ORDER BY started_at LIMIT ?2
+                    );
+                    """,
+                    .maintenance
+                ) { statement -> RetentionBatchOutcome in
+                    try statement.bind(session.timestamp(cutoff), at: 1)
+                    try statement.bind(Int64(max(1, limit)), at: 2)
+                    try statement.run()
+                    return .deleted(session.changes)
+                }
             }
         }
     }
@@ -433,15 +491,26 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    /// `historyRetention()` for main-actor callers.
+    func loadHistoryRetention() async throws -> HistoryRetentionSetting {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readRetention(session)
+        }
+    }
+
     func setHistoryRetention(_ retention: HistoryRetention) throws {
         let normalized = HistoryRetention(days: retention.storedDays)
-        let upsert = "INSERT OR REPLACE INTO settings(key, value) VALUES (?1, ?2);"
         try owner.withSession(.foreground) { session in
-            try session.withStatement(upsert, .write) { statement in
-                try statement.bind(Self.retentionSettingKey, at: 1)
-                try statement.bind(String(normalized.storedDays), at: 2)
-                try statement.run()
-            }
+            try Self.writeRetention(normalized, session)
+        }
+        logger.info("History retention set to \(normalized.storedDays) day(s); 0 keeps text forever.")
+    }
+
+    /// `setHistoryRetention(_:)` for main-actor callers.
+    func saveHistoryRetention(_ retention: HistoryRetention) async throws {
+        let normalized = HistoryRetention(days: retention.storedDays)
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.writeRetention(normalized, session)
         }
         logger.info("History retention set to \(normalized.storedDays) day(s); 0 keeps text forever.")
     }
@@ -453,6 +522,15 @@ final class PersistenceStore: Sendable {
                 return .notChosen
             }
             return HistoryRetentionSetting(storedValue: statement.text(at: 0))
+        }
+    }
+
+    private static func writeRetention(_ retention: HistoryRetention, _ session: SQLiteSession) throws {
+        let upsert = "INSERT OR REPLACE INTO settings(key, value) VALUES (?1, ?2);"
+        try session.withStatement(upsert, .write) { statement in
+            try statement.bind(retentionSettingKey, at: 1)
+            try statement.bind(String(retention.storedDays), at: 2)
+            try statement.run()
         }
     }
 
@@ -573,40 +651,68 @@ final class PersistenceStore: Sendable {
         guard !inserts.isEmpty || !updates.isEmpty else {
             return
         }
-
         try owner.withSession(.foreground) { session in
-            try session.transaction(.write) {
-                for entry in inserts {
-                    _ = try Self.insertDictionaryEntry(entry, in: session)
-                }
-                for entry in updates {
-                    try Self.updateDictionaryEntry(entry, in: session)
-                    guard session.changes == 1 else {
-                        throw PersistenceError.rowMissing(operation: .write)
-                    }
+            try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+        }
+    }
+
+    /// `applyDictionaryChanges(inserts:updates:)` for main-actor callers.
+    func saveDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) async throws {
+        guard !inserts.isEmpty || !updates.isEmpty else {
+            return
+        }
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+        }
+    }
+
+    /// `fetchAllDictionaryEntries()` for main-actor callers.
+    func loadAllDictionaryEntries() async throws -> [DictionaryEntry] {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readDictionaryEntries(enabledOnly: false, session)
+        }
+    }
+
+    private static func writeDictionaryChanges(
+        inserts: [DictionaryEntry],
+        updates: [DictionaryEntry],
+        _ session: SQLiteSession
+    ) throws {
+        try session.transaction(.write) {
+            for entry in inserts {
+                _ = try insertDictionaryEntry(entry, in: session)
+            }
+            for entry in updates {
+                try updateDictionaryEntry(entry, in: session)
+                guard session.changes == 1 else {
+                    throw PersistenceError.rowMissing(operation: .write)
                 }
             }
         }
     }
 
     private func fetchDictionaryEntries(enabledOnly: Bool) throws -> [DictionaryEntry] {
+        try owner.withSession(.foreground) { session in
+            try Self.readDictionaryEntries(enabledOnly: enabledOnly, session)
+        }
+    }
+
+    private static func readDictionaryEntries(enabledOnly: Bool, _ session: SQLiteSession) throws -> [DictionaryEntry] {
         let sql = enabledOnly
             ? "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;"
             : "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries ORDER BY id;"
-        return try owner.withSession(.foreground) { session in
-            try session.withStatement(sql, .read) { statement in
-                var entries: [DictionaryEntry] = []
-                while try statement.step() {
-                    entries.append(
-                        DictionaryEntry(
-                            id: statement.int64(at: 0) ?? 0,
-                            pattern: statement.text(at: 1) ?? "",
-                            replacement: statement.text(at: 2) ?? "",
-                            wholeWord: statement.bool(at: 3),
-                            enabled: statement.bool(at: 4)))
-                }
-                return entries
+        return try session.withStatement(sql, .read) { statement in
+            var entries: [DictionaryEntry] = []
+            while try statement.step() {
+                entries.append(
+                    DictionaryEntry(
+                        id: statement.int64(at: 0) ?? 0,
+                        pattern: statement.text(at: 1) ?? "",
+                        replacement: statement.text(at: 2) ?? "",
+                        wholeWord: statement.bool(at: 3),
+                        enabled: statement.bool(at: 4)))
             }
+            return entries
         }
     }
 
@@ -769,17 +875,22 @@ final class PersistenceStore: Sendable {
 /// The one SQLite connection and the state that may only be touched while holding it.
 ///
 /// `@unchecked Sendable` because the compiler cannot see the confinement. `handle` and `timestamps`
-/// are only used inside `queue.sync`, a serial queue, so one caller at a time; it is FIFO, so a
+/// are only used on `queue`, a serial queue, so by one operation at a time. The queue is FIFO, so a
 /// foreground caller that arrives while housekeeping runs goes next rather than competing with the
-/// housekeeping's next step, and a re-entrant call traps in libdispatch instead of deadlocking quietly.
-/// `waiters` and `activity` are only used while `countersLock` is held; they have their own lock
-/// because a heavy housekeeping statement polls them from its progress handler inside `queue`.
+/// housekeeping's next step. `waiters` and `activity` are only used while `countersLock` is held; they
+/// have their own lock because a heavy housekeeping statement polls them from its progress handler
+/// while it runs on `queue`.
+///
+/// No re-entrancy: nothing that runs on `queue` (an operation's body, the progress handler, a test
+/// hook) may call back into `PersistenceStore` or this owner. The queue is serial, so a nested call
+/// would wait for itself; libdispatch traps on a nested `sync` rather than deadlocking quietly, and
+/// the helpers below take the `SQLiteSession` they need instead of reaching for the store.
 private final class ConnectionOwner: @unchecked Sendable {
     let path: String
     let busyTimeoutMilliseconds: Int32
     let progressInterval: Int32
 
-    private let onForegroundWait: (@Sendable () -> Void)?
+    private let hooks: PersistenceStore.TestHooks
     private let logger = Logger(subsystem: "com.scribe.macos", category: "Persistence")
     private let queue = DispatchQueue(label: "com.scribe.macos.persistence")
     private var handle: OpaquePointer?
@@ -793,16 +904,11 @@ private final class ConnectionOwner: @unchecked Sendable {
     private var waiters = 0
     private var activity: UInt64 = 0
 
-    init(
-        path: String,
-        busyTimeoutMilliseconds: Int32,
-        progressInterval: Int32,
-        onForegroundWait: (@Sendable () -> Void)?
-    ) {
+    init(path: String, busyTimeoutMilliseconds: Int32, hooks: PersistenceStore.TestHooks) {
         self.path = path
         self.busyTimeoutMilliseconds = busyTimeoutMilliseconds
-        self.progressInterval = progressInterval
-        self.onForegroundWait = onForegroundWait
+        self.progressInterval = max(1, hooks.progressInterval)
+        self.hooks = hooks
     }
 
     deinit {
@@ -823,24 +929,26 @@ private final class ConnectionOwner: @unchecked Sendable {
         return activity
     }
 
+    /// Runs `body` on the storage queue and waits for it on the calling thread.
     func withSession<T>(_ purpose: ConnectionPurpose, _ body: (SQLiteSession) throws -> T) throws -> T {
-        if purpose == .foreground {
-            countersLock.lock()
-            waiters += 1
-            countersLock.unlock()
-            onForegroundWait?()
-        }
-
+        registerWaiter(purpose)
         return try queue.sync {
-            if purpose == .foreground {
-                countersLock.lock()
-                waiters -= 1
-                activity &+= 1
-                countersLock.unlock()
-            }
+            try runSession(purpose, body)
+        }
+    }
 
-            let db = try openIfNeeded()
-            return try body(SQLiteSession(db: db, timestamps: timestamps))
+    /// Runs `body` on the storage queue without holding the calling thread: the caller suspends until
+    /// the queue gets to it and resumes on its own executor, so a main-actor caller never waits behind
+    /// a write that is waiting out another process's lock.
+    func withSessionAsync<T: Sendable>(
+        _ purpose: ConnectionPurpose,
+        _ body: @escaping @Sendable (SQLiteSession) throws -> T
+    ) async throws -> T {
+        registerWaiter(purpose)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            queue.async { [self] in
+                continuation.resume(with: Result { try runSession(purpose, body) })
+            }
         }
     }
 
@@ -853,7 +961,31 @@ private final class ConnectionOwner: @unchecked Sendable {
         }
     }
 
-    /// Runs inside `queue` (through `withSession`).
+    private func registerWaiter(_ purpose: ConnectionPurpose) {
+        guard purpose == .foreground else {
+            return
+        }
+        countersLock.lock()
+        waiters += 1
+        countersLock.unlock()
+        hooks.onForegroundWait?()
+    }
+
+    /// Runs on `queue`.
+    private func runSession<T>(_ purpose: ConnectionPurpose, _ body: (SQLiteSession) throws -> T) throws -> T {
+        if purpose == .foreground {
+            countersLock.lock()
+            waiters -= 1
+            activity &+= 1
+            countersLock.unlock()
+        }
+        hooks.onOperationBegin?(purpose)
+
+        let db = try openIfNeeded()
+        return try body(SQLiteSession(db: db, timestamps: timestamps))
+    }
+
+    /// Runs on `queue` (through `withSession`).
     func runYielding(
         _ sql: String,
         in session: SQLiteSession,

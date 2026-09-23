@@ -34,8 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private let persistenceStore = PersistenceStore()
     /// Commits history off the main actor, after the text is delivered, in dictation order.
     private lazy var historyWriter = HistoryWriter(recorder: persistenceStore)
+    /// Held from capture start until that dictation's pipeline finishes, so storage housekeeping
+    /// never competes with a dictation. The lifecycle owner is expected to take this over.
+    private let foregroundActivity = ForegroundActivity()
+    private var captureActivityLease: ForegroundActivity.Lease?
     /// Applies the history retention choice and reclaims space while the app is idle.
-    private lazy var storageMaintenance = StorageMaintenance(store: persistenceStore, historyWriter: historyWriter)
+    private lazy var storageMaintenance = StorageMaintenance(
+        store: persistenceStore, historyWriter: historyWriter, activity: foregroundActivity)
     private let audioCaptureEngine = AudioCaptureEngine()
     private lazy var transcriptionEngine = try? TranscriptionEngine(
         logSink: { message in AppDelegate.writeLogLine(message) })
@@ -79,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureAudioCaptureEngine()
         initializePersistenceStore()
-        seedLastTranscriptStoreFromHistory()
+        Task { await seedLastTranscriptStoreFromHistory() }
         loadOverlayAnchorPreference()
         loadQuickTogglePreferences()
         setUpStatusItem()
@@ -140,13 +145,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// Fills `lastTranscriptStore` from durable history on launch, so the "Recent Dictations" tray
     /// submenu and the Quick Add popup both survive an app restart instead of starting empty, the
     /// same as Windows' history-backed recovery fallback. `LastTranscriptStore.seed` only ever
-    /// fills an empty ring, so this is safe to call again defensively before Quick Add opens.
-    private func seedLastTranscriptStoreFromHistory() {
+    /// fills an empty ring, so this is safe to call again defensively before Quick Add opens. The read
+    /// waits on the storage queue, not the main actor, and covers only the newest few rows.
+    private func seedLastTranscriptStoreFromHistory() async {
         guard lastTranscriptStore.recent().isEmpty else {
             return
         }
-        // Reads only the newest few rows, however long the history is.
-        if let transcripts = try? persistenceStore.fetchRecentTranscripts(limit: LastTranscriptStore.capacity) {
+        if let transcripts = try? await persistenceStore.loadRecentTranscripts(limit: LastTranscriptStore.capacity) {
             lastTranscriptStore.seed(transcripts)
         }
     }
@@ -156,11 +161,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     /// after launch, before any dictation has happened this run), so the popup has real transcripts
     /// to pick a word from rather than an empty list.
     @objc private func openQuickAdd(_ sender: Any?) {
-        seedLastTranscriptStoreFromHistory()
+        Task { [weak self] in
+            guard let self else { return }
+            await seedLastTranscriptStoreFromHistory()
+            let recent = lastTranscriptStore.recent()
+            let existing = (try? await persistenceStore.loadAllDictionaryEntries()) ?? []
+            presentQuickAdd(recent: recent, existing: existing)
+        }
+    }
 
-        let recent = lastTranscriptStore.recent()
-        let existing = (try? persistenceStore.fetchAllDictionaryEntries()) ?? []
-
+    private func presentQuickAdd(recent: [String], existing: [DictionaryEntry]) {
         let hostingController = NSHostingController(
             rootView: QuickAddView(
                 recentTranscripts: recent,
@@ -446,6 +456,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
         audioCaptureEngine.onCaptureError = { [weak self] error in
             Task { @MainActor in
+                self?.captureActivityLease?.end()
+                self?.captureActivityLease = nil
                 self?.silenceAutoStopDetector = nil
                 self?.dictationMenuItem?.title = "Start Test Dictation"
                 self?.overlayPanelController.hide()
@@ -458,6 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     private func configureHotkeyManager() {
         self.hotkeyManager.onCaptureStarted = { [weak self] in
+            self?.beginCaptureActivity()
             self?.dictationMenuItem?.title = "Stop Test Dictation"
             self?.overlayPanelController.show(state: .listening(levelDbfs: -120))
         }
@@ -561,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         do {
             capturedSamples.removeAll(keepingCapacity: true)
             try audioCaptureEngine.start()
+            beginCaptureActivity()
             // Menu-triggered capture is toggle mode: there is no release gesture, so silence
             // auto-stop is armed. Push-to-talk (hotkeyManager) never arms it; see
             // configureHotkeyManager and HotkeyManager.startCaptureOnMainThread.
@@ -581,11 +595,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         handleCaptureStopped(summary, source: source)
     }
 
+    /// A capture has started: storage housekeeping holds off until its dictation is fully processed.
+    private func beginCaptureActivity() {
+        captureActivityLease = foregroundActivity.begin()
+    }
+
     private func handleCaptureStopped(
         _ summary: AudioCaptureSummary?,
         source: CaptureStopSource
     ) {
+        // This capture's lease moves to its processing below and ends when that finishes.
+        let activityLease = captureActivityLease
+        captureActivityLease = nil
+
         guard let summary else {
+            activityLease?.end()
             dictationMenuItem?.title = "Start Test Dictation"
             overlayPanelController.hide()
             return
@@ -607,10 +631,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             overlayPanelController.hide()
             Self.writeLogLine("Capture stopped without any resampled audio samples to transcribe.")
             recordDictationHistory(summary: summary, decodeMilliseconds: nil, cleanupMilliseconds: nil)
+            activityLease?.end()
             return
         }
 
         Task { @MainActor [weak self] in
+            defer { activityLease?.end() }
             guard let self else { return }
             await self.transcribeAndInject(samples: samples, summary: summary, source: source)
         }
@@ -893,7 +919,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             let injectionResult = await textInjector.inject(text: processedText)
             let injectionMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - injectionStart.uptimeNanoseconds) / 1_000_000.0
 
-            // After delivery, so storage never sits between speaking and typing.
+            // After delivery, so storage never sits between speaking and typing. From here until the
+            // writer commits, history is best-effort: a crash in that window loses the entry (the
+            // recovery ring above is memory-only), and the drain at quit is bounded.
             recordDictationHistory(
                 summary: summary,
                 decodeMilliseconds: decodeMilliseconds,

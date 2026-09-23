@@ -437,11 +437,15 @@ private struct DictionarySettingsTab: View {
     }
 
     private func reload() {
-        do {
-            entries = try persistenceStore.fetchAllDictionaryEntries()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+        // The read waits on the storage queue, not the main actor. That queue is FIFO, so when
+        // reloads overlap the later one's result still lands last.
+        Task {
+            do {
+                entries = try await persistenceStore.loadAllDictionaryEntries()
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -493,33 +497,41 @@ private struct DictionarySettingsTab: View {
             return
         }
 
+        let csv: String
         do {
-            let csv = try String(contentsOf: url, encoding: .utf8)
-            let result = DictionaryCsv.parse(csv)
-
-            let existingRows = entries.enumerated().map { index, entry in
-                DictionaryImportMerger.ExistingRow(
-                    index: index,
-                    id: entry.id,
-                    pattern: entry.pattern,
-                    replacement: entry.replacement,
-                    wholeWord: entry.wholeWord,
-                    enabled: entry.enabled)
-            }
-            let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
-            let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
-            try persistenceStore.applyDictionaryChanges(inserts: changes.inserts, updates: changes.updates)
-
-            reload()
-            onChanged()
-
-            var summary = "Imported: \(plan.added) added, \(plan.updated) updated, \(plan.unchanged) unchanged."
-            if !result.errors.isEmpty {
-                summary += " \(result.errors.count) row(s) skipped: \(result.errors.joined(separator: "; "))"
-            }
-            statusMessage = summary
+            csv = try String(contentsOf: url, encoding: .utf8)
         } catch {
             errorMessage = "Couldn't import that file: \(error.localizedDescription)"
+            return
+        }
+
+        let result = DictionaryCsv.parse(csv)
+        let existingRows = entries.enumerated().map { index, entry in
+            DictionaryImportMerger.ExistingRow(
+                index: index,
+                id: entry.id,
+                pattern: entry.pattern,
+                replacement: entry.replacement,
+                wholeWord: entry.wholeWord,
+                enabled: entry.enabled)
+        }
+        let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
+        let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
+
+        let skipped = result.errors.isEmpty
+            ? ""
+            : " \(result.errors.count) row(s) skipped: \(result.errors.joined(separator: "; "))"
+        let summary = "Imported: \(plan.added) added, \(plan.updated) updated, \(plan.unchanged) unchanged." + skipped
+
+        Task {
+            do {
+                try await persistenceStore.saveDictionaryChanges(inserts: changes.inserts, updates: changes.updates)
+                reload()
+                onChanged()
+                statusMessage = summary
+            } catch {
+                errorMessage = "Couldn't import that file: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -575,26 +587,29 @@ private struct DictionarySettingsTab: View {
         errorMessage = nil
         statusMessage = nil
 
-        defer { isLearning = false }
+        // The history read waits on the storage queue, not the main actor.
+        Task {
+            defer { isLearning = false }
 
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let learned = DictionaryHistoryLearner.buildEntries(history: history, existing: entries)
+            do {
+                let history = try await persistenceStore.loadDictationHistory()
+                let learned = DictionaryHistoryLearner.buildEntries(history: history, existing: entries)
 
-            guard !learned.isEmpty else {
-                statusMessage = "No new recurring terms found in your dictation history yet."
-                return
+                guard !learned.isEmpty else {
+                    statusMessage = "No new recurring terms found in your dictation history yet."
+                    return
+                }
+
+                for entry in learned {
+                    _ = try persistenceStore.insertDictionaryEntry(entry)
+                }
+
+                reload()
+                onChanged()
+                statusMessage = "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
+            } catch {
+                errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
             }
-
-            for entry in learned {
-                _ = try persistenceStore.insertDictionaryEntry(entry)
-            }
-
-            reload()
-            onChanged()
-            statusMessage = "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
-        } catch {
-            errorMessage = "Couldn't learn from history: \(error.localizedDescription)"
         }
     }
 
@@ -608,23 +623,27 @@ private struct DictionarySettingsTab: View {
         isCleaning = true
         errorMessage = nil
         statusMessage = nil
-        defer { isCleaning = false }
 
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let transcripts = history.compactMap { $0.transcriptText }
-            let report = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: entries)
+        // The history read waits on the storage queue, not the main actor.
+        Task {
+            defer { isCleaning = false }
 
-            guard report.hasFindings else {
-                statusMessage = report.hasEnoughEvidence
-                    ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
-                    : report.summary
-                return
+            do {
+                let history = try await persistenceStore.loadDictationHistory()
+                let transcripts = history.compactMap { $0.transcriptText }
+                let report = DictionaryUsageAnalyzer.analyze(transcripts: transcripts, baseEntries: entries)
+
+                guard report.hasFindings else {
+                    statusMessage = report.hasEnoughEvidence
+                        ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
+                        : report.summary
+                    return
+                }
+
+                cleanupReport = report
+            } catch {
+                errorMessage = "Couldn't check dictionary usage: \(error.localizedDescription)"
             }
-
-            cleanupReport = report
-        } catch {
-            errorMessage = "Couldn't check dictionary usage: \(error.localizedDescription)"
         }
     }
 
@@ -1417,13 +1436,15 @@ private struct DiagnosticsSettingsTab: View {
     }
 
     private func reload() {
-        do {
-            let history = try persistenceStore.fetchDictationHistory()
-            let since = Date().addingTimeInterval(-windowDays * 86400)
-            snapshot = DictationStats.compute(entries: history, since: since)
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+        let since = Date().addingTimeInterval(-windowDays * 86400)
+        Task {
+            do {
+                let history = try await persistenceStore.loadDictationHistory()
+                snapshot = DictationStats.compute(entries: history, since: since)
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -1646,18 +1667,20 @@ private struct UsageInsightsSettingsTab: View {
     }
 
     private func reload() {
-        do {
-            let knownTerms = try persistenceStore.fetchAllDictionaryEntries()
-            let now = Date()
-            let since = now.addingTimeInterval(-windowDays * 86400)
-            let records = try persistenceStore.fetchDictationHistory(
-                since: since, limit: UsageAnalyzer.historyLimit + 1)
-            snapshot = UsageAnalyzer.report(
-                records: records, knownTerms: knownTerms, sinceUtc: since, nowUtc: now
-            ).snapshot
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
+        let now = Date()
+        let since = now.addingTimeInterval(-windowDays * 86400)
+        Task {
+            do {
+                let knownTerms = try await persistenceStore.loadAllDictionaryEntries()
+                let records = try await persistenceStore.loadDictationHistory(
+                    since: since, limit: UsageAnalyzer.historyLimit + 1)
+                snapshot = UsageAnalyzer.report(
+                    records: records, knownTerms: knownTerms, sinceUtc: since, nowUtc: now
+                ).snapshot
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

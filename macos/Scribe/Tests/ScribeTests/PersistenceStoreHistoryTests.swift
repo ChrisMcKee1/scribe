@@ -218,17 +218,38 @@ final class PersistenceStoreHistoryTests: XCTestCase {
 
     func testRetentionBatchesDeleteOnlyOlderRowsUpToTheLimit() throws {
         let store = try makeStore()
+        try store.setHistoryRetention(.days(5))
         for day in 6...10 {
             try record(store, secondsAgo: Double(day) * 86_400, "old \(day)")
         }
         try record(store, secondsAgo: 86_400, "recent one")
         try record(store, secondsAgo: 60, "recent two")
-        let cutoff = now.addingTimeInterval(-5 * 86_400)
 
-        XCTAssertEqual(try store.deleteHistoryBatch(startedBefore: cutoff, limit: 3), 3)
-        XCTAssertEqual(try store.deleteHistoryBatch(startedBefore: cutoff, limit: 3), 2)
-        XCTAssertEqual(try store.deleteHistoryBatch(startedBefore: cutoff, limit: 3), 0)
+        XCTAssertEqual(try store.deleteExpiredHistoryBatch(authorizedDays: 5, now: now, limit: 3), .deleted(3))
+        XCTAssertEqual(try store.deleteExpiredHistoryBatch(authorizedDays: 5, now: now, limit: 3), .deleted(2))
+        XCTAssertEqual(try store.deleteExpiredHistoryBatch(authorizedDays: 5, now: now, limit: 3), .deleted(0))
         XCTAssertEqual(try store.fetchDictationHistory().compactMap(\.transcriptText), ["recent one", "recent two"])
+    }
+
+    func testARetentionBatchDeletesNothingUnlessTheStoredChoiceStillMatches() throws {
+        let store = try makeStore()
+        try store.setHistoryRetention(.days(5))
+        try record(store, secondsAgo: 40 * 86_400, "old")
+
+        XCTAssertEqual(
+            try store.deleteExpiredHistoryBatch(authorizedDays: 30, now: now, limit: 10),
+            .authorizationChanged(.chosen(.days(5))))
+        try store.setHistoryRetention(.keepForever)
+        XCTAssertEqual(
+            try store.deleteExpiredHistoryBatch(authorizedDays: 5, now: now, limit: 10),
+            .authorizationChanged(.chosen(.keepForever)))
+        let raw = try StorageTestSQLite(directory.databaseURL)
+        try raw.execute("DELETE FROM settings WHERE key = 'history_retention_days';")
+        raw.close()
+        XCTAssertEqual(
+            try store.deleteExpiredHistoryBatch(authorizedDays: 5, now: now, limit: 10),
+            .authorizationChanged(.notChosen))
+        XCTAssertEqual(try store.historyCount(), 1)
     }
 
     func testClearHistoryRemovesEveryRowAndReportsTheCount() throws {
@@ -281,5 +302,130 @@ final class PersistenceStoreHistoryTests: XCTestCase {
             XCTAssertEqual(error as? PersistenceError, .rowMissing(operation: .write))
         }
         XCTAssertTrue(try store.fetchAllDictionaryEntries().isEmpty)
+    }
+
+    // MARK: - Asynchronous forms
+
+    func testTheAsyncFormsReadAndWriteTheSameData() async throws {
+        let store = try makeStore()
+        try record(store, secondsAgo: 60, "first")
+        try record(store, secondsAgo: 30, "second")
+
+        let history = try await store.loadDictationHistory(limit: 10)
+        let recent = try await store.loadRecentTranscripts(limit: 5, now: now)
+        XCTAssertEqual(history, try store.fetchDictationHistory(limit: 10))
+        XCTAssertEqual(recent, ["second", "first"])
+
+        try await store.saveDictionaryChanges(inserts: [DictionaryEntry(pattern: "a", replacement: "A")], updates: [])
+        let entries = try await store.loadAllDictionaryEntries()
+        XCTAssertEqual(entries, try store.fetchAllDictionaryEntries())
+        XCTAssertEqual(entries.map(\.pattern), ["a"])
+
+        try await store.saveHistoryRetention(.days(30))
+        let retention = try await store.loadHistoryRetention()
+        XCTAssertEqual(retention, .chosen(.days(30)))
+    }
+
+    /// What `makeStoreWithAHeldWrite()` hands back.
+    private struct StorageTestHeldWrite {
+        let store: PersistenceStore
+        /// Fires when the next foreground caller registers that it is waiting for the storage queue.
+        let readQueued: StorageTestAsyncSignal
+        let releaseWrite: StorageTestSignal
+        let writeDone: StorageTestSignal
+    }
+
+    /// A store holding one dictionary entry, whose storage queue is then held by a background write
+    /// until `releaseWrite` fires, the way a write waiting out another process's lock holds it.
+    private func makeStoreWithAHeldWrite() throws -> StorageTestHeldWrite {
+        let holdNextOperation = StorageTestSwitch()
+        let writeInside = StorageTestSignal()
+        let releaseWrite = StorageTestSignal()
+        let watchForWaiters = StorageTestSwitch()
+        let readQueued = StorageTestAsyncSignal()
+        var hooks = PersistenceStore.TestHooks()
+        hooks.onOperationBegin = { _ in
+            if holdNextOperation.isOn, holdNextOperation.claimOnce() {
+                writeInside.signal()
+                _ = releaseWrite.wait()
+            }
+        }
+        hooks.onForegroundWait = {
+            if watchForWaiters.isOn {
+                readQueued.fire()
+            }
+        }
+        let store = PersistenceStore(databaseURL: directory.databaseURL, testHooks: hooks)
+        try store.initialize()
+        _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "kept", replacement: "Kept"))
+
+        holdNextOperation.turnOn()
+        let writeDone = StorageTestSignal()
+        DispatchQueue.global().async {
+            try? store.recordDictation(
+                startedAt: Date(), durationSeconds: 1, sampleCount: 16_000, transcriptText: "held write")
+            writeDone.signal()
+        }
+        XCTAssertTrue(writeInside.wait())
+        watchForWaiters.turnOn()
+        return StorageTestHeldWrite(
+            store: store, readQueued: readQueued, releaseWrite: releaseWrite, writeDone: writeDone)
+    }
+
+    @MainActor
+    func testAMainActorReadWaitsOnTheStorageQueueWithoutHoldingTheMainActor() async throws {
+        let held = try makeStoreWithAHeldWrite()
+        let store = held.store
+        let readFinished = StorageTestSwitch()
+        let read = Task { @MainActor in
+            let entries = try await store.loadAllDictionaryEntries()
+            readFinished.turnOn()
+            return entries
+        }
+        await held.readQueued.wait()
+
+        // The read is queued behind the held write, and the main actor is free meanwhile: this test
+        // runs on it, and so does another main-actor job started now.
+        XCTAssertTrue(store.hasForegroundWaiters)
+        XCTAssertFalse(readFinished.isOn)
+        let otherMainActorWork = Task { @MainActor in 42 }
+        let otherResult = await otherMainActorWork.value
+        XCTAssertEqual(otherResult, 42)
+        XCTAssertFalse(readFinished.isOn)
+
+        held.releaseWrite.signal()
+        let entries = try await read.value
+        XCTAssertEqual(entries.map(\.pattern), ["kept"])
+        XCTAssertTrue(held.writeDone.wait())
+        XCTAssertEqual(try store.historyCount(), 1)
+    }
+
+    /// Stronger than the main-actor test, which a hidden `queue.sync` would also pass (a nonisolated
+    /// async method already runs off the main actor): the read's own executor has one thread, and
+    /// another job on it still runs while the read waits, so the wait holds no thread at all.
+    func testAnAsyncReadHoldsNoThreadWhileItWaitsForTheStorageQueue() async throws {
+        guard #available(macOS 15.0, *) else {
+            throw XCTSkip("Task executor preferences need macOS 15.")
+        }
+        let held = try makeStoreWithAHeldWrite()
+        let store = held.store
+        let executor = StorageTestSerialTaskExecutor()
+        let readFinished = StorageTestSwitch()
+        let read = Task(executorPreference: executor) {
+            let entries = try await store.loadAllDictionaryEntries()
+            readFinished.turnOn()
+            return entries
+        }
+        await held.readQueued.wait()
+
+        let probe = Task(executorPreference: executor) { 42 }
+        let probeResult = await probe.value
+        XCTAssertEqual(probeResult, 42)
+        XCTAssertFalse(readFinished.isOn)
+
+        held.releaseWrite.signal()
+        let entries = try await read.value
+        XCTAssertEqual(entries.map(\.pattern), ["kept"])
+        XCTAssertTrue(held.writeDone.wait())
     }
 }
