@@ -1230,6 +1230,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void InitializeDictionaryGrid()
     {
         DictionaryGrid.ItemsSource = _rows;
+        DataGridCheckBoxClick.Attach(DictionaryGrid);
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
         DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
         SetDictionaryEditable(false);
@@ -1545,11 +1546,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void InitializeLibraryGrid()
     {
         LibraryGrid.ItemsSource = _libraryRows;
+        DataGridCheckBoxClick.Attach(LibraryGrid);
 
         // Switching a library on or off changes which dictionary entries are redundant, so the
-        // Library column on the dictionary page has to follow it rather than wait for a save. A click
-        // on the check box writes Enabled straight through its binding without an edit, so there is
-        // no CellEditEnding to wait for; the rows say when it changes instead.
+        // Library column on the dictionary page has to follow it rather than wait for a save. The
+        // rows say when it changes, which is the moment the box toggles; CellEditEnding would wait
+        // until the edit commits, and the dictionary cleanup switches libraries off without an edit.
         _libraryRows.CollectionChanged += LibraryRows_CollectionChanged;
 
         _libraryDetailEmptyText = LibraryDetailEmpty.Text;
@@ -6750,8 +6752,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     /// <summary>
     /// Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable. It notifies
-    /// because a click on the check box writes it through the binding with no edit to report it, and
-    /// because the dictionary cleanup switches libraries off from code.
+    /// so the dictionary page's library badges follow a toggle the moment it happens, and so the
+    /// dictionary cleanup's switches, made in code, reach the grid's check boxes.
     /// </summary>
     public sealed class LibraryRow : INotifyPropertyChanged
     {
