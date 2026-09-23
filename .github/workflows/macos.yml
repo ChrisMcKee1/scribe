@@ -1,0 +1,107 @@
+name: macOS
+
+# The native macOS port (macos/Scribe) is a separate Swift package with no shared code with the
+# Windows build, so it gets its own workflow. GitHub's arm64 macOS runners can build it, run its
+# XCTest suite and the sanitizers, and lint it. They cannot grant microphone, accessibility or
+# input-monitoring consent, so anything behind those permissions (the event tap, capture, paste,
+# the menu bar and overlay UI) still needs a real Mac.
+
+on:
+  push:
+    branches: ['macos/**']
+    paths:
+      - 'macos/**'
+      - '.github/workflows/macos.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'macos/**'
+      - '.github/workflows/macos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build (debug)
+        run: swift build --package-path macos/Scribe 2>&1 | tee build-debug.log
+
+      - name: Build (release)
+        run: swift build --package-path macos/Scribe -c release 2>&1 | tee build-release.log
+
+      - name: Count compiler warnings
+        if: always()
+        run: |
+          for log in build-debug.log build-release.log; do
+            [ -f "$log" ] || continue
+            count=$(grep -c ": warning:" "$log" || true)
+            echo "$log: $count warning line(s)"
+            grep ": warning:" "$log" | sort -u | head -n 50 || true
+          done
+
+      - name: Unit tests
+        run: swift test --package-path macos/Scribe --parallel
+
+  sanitizers:
+    name: tests under ${{ matrix.sanitizer }} sanitizer
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [thread, address]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Unit tests with the ${{ matrix.sanitizer }} sanitizer
+        run: swift test --package-path macos/Scribe --sanitize=${{ matrix.sanitizer }}
+
+  style:
+    name: style
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The repository bans U+2014 and U+2013 everywhere (AGENTS.md, Code style).
+      - name: No em or en dashes under macos/
+        run: |
+          if LC_ALL=C grep -rnIE $'\xe2\x80[\x93\x94]' macos/; then
+            echo "::error::Found an em or en dash under macos/. Rewrite with a comma, colon, period or 'to'."
+            exit 1
+          fi
+
+      - name: swift format lint
+        run: |
+          config=macos/Scribe/.swift-format
+          if [ -f "$config" ]; then
+            swift format lint --strict --recursive --configuration "$config" macos/Scribe/Sources macos/Scribe/Tests
+          else
+            echo "No macos/Scribe/.swift-format yet; reporting against the default style only."
+            swift format lint --recursive macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
+            echo "$(grep -c 'warning:' lint.log || true) lint warning(s)"
+          fi
