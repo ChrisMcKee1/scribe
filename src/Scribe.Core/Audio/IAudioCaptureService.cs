@@ -34,6 +34,13 @@ public interface IAudioCaptureService : IDisposable
     bool LastCaptureWasSilent { get; }
 
     /// <summary>
+    /// True when the most recent <see cref="Start"/> was asked for a specific microphone that could not be opened (it is
+    /// unplugged, disabled, not present or gone), so it recorded from the Windows default instead. False when the
+    /// requested microphone opened, or none was requested.
+    /// </summary>
+    bool LastRequestedDeviceUnavailable { get; }
+
+    /// <summary>
     /// Measured shape of the most recent completed capture: levels in dBFS, clipping, DC offset,
     /// and per-channel contributions taken before the downmix. Null until a capture completes.
     /// <para>
@@ -45,7 +52,10 @@ public interface IAudioCaptureService : IDisposable
     /// </summary>
     CaptureSignalReport? LastSignalReport { get; }
 
-    /// <summary>Enumerates active input devices, flagging the system default.</summary>
+    /// <summary>
+    /// Enumerates the active input devices as they are now, flagging the Windows default (the device Windows Settings
+    /// shows as the input) and the communications default.
+    /// </summary>
     IReadOnlyList<AudioDevice> GetInputDevices();
 
     /// <summary>
@@ -53,7 +63,9 @@ public interface IAudioCaptureService : IDisposable
     /// opened. <paramref name="owner"/> names the recording the capture is for: a positive number, higher for every later
     /// recording (the dictation id). When the stop for that recording, or for a later one, already reached this service,
     /// nothing is opened and false is returned: a recording stopped before its microphone opened must never be handed a
-    /// microphone that nothing would stop. Also false when a capture is already running. Zero means no owner.
+    /// microphone that nothing would stop. Also false when a capture is already running. Zero means no owner. The device
+    /// is resolved afresh on every call; a requested device that cannot be opened falls back to the Windows default (see
+    /// <see cref="LastRequestedDeviceUnavailable"/>).
     /// </summary>
     bool Start(string? deviceId = null, long owner = 0);
 
@@ -86,4 +98,11 @@ public interface IAudioCaptureService : IDisposable
 
     /// <summary>Raised when the active audio endpoint stops because of a device or driver failure.</summary>
     event EventHandler<Exception>? CaptureFaulted;
+
+    /// <summary>
+    /// Raised on a background thread, once a burst of Windows device notifications has gone quiet, when the active input
+    /// devices or the Windows default input have changed. Carries the new list. A capture already running is not touched:
+    /// it keeps the device it opened, and the next capture resolves its device afresh. Handlers must not block.
+    /// </summary>
+    event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged;
 }
