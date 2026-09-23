@@ -96,6 +96,7 @@ jobs:
           fi
 
       - name: swift format lint
+        if: always()
         run: |
           config=macos/Scribe/.swift-format
           if [ -f "$config" ]; then
