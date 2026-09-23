@@ -97,6 +97,45 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
 
+        <!-- Check boxes in the editable grids. The stock DataGridCheckBoxColumn draws a check box that
+             ignores the mouse until its cell is in edit mode, and a click only starts that edit when
+             the cell already has focus and is selected, so toggling took two clicks. These check boxes
+             take the click themselves and write through their two-way binding, while the cell still
+             takes focus and selects the row. They stay unfocusable, so keyboard focus remains on the
+             cell and Space still toggles through the column's edit mode, which shows the matching
+             Editing style. Based on the WPF-UI check box so they match the rest of the app. -->
+        <Style x:Key="GridCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="LibraryOnCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Use the {0} library'}"/>
+        </Style>
+        <Style x:Key="LibraryOnCheckBox" TargetType="CheckBox" BasedOn="{StaticResource LibraryOnCheckBoxEditing}">
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+        <Style x:Key="WholeWordCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Whole word for {0}'}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Pattern}" Value="">
+                    <Setter Property="AutomationProperties.Name" Value="Whole word for the new entry"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="WholeWordCheckBox" TargetType="CheckBox" BasedOn="{StaticResource WholeWordCheckBoxEditing}">
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+        <Style x:Key="EntryEnabledCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Enabled for {0}'}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Pattern}" Value="">
+                    <Setter Property="AutomationProperties.Name" Value="Enabled for the new entry"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="EntryEnabledCheckBox" TargetType="CheckBox" BasedOn="{StaticResource EntryEnabledCheckBoxEditing}">
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+
         <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
              ghost pill on hover and an accent-coloured pill when selected. -->
         <Style TargetType="RadioButton" x:Key="OverlayZone">
@@ -1182,8 +1221,12 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
-                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
+                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}"/>
+                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
+                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
                                     <DataGridTemplateColumn Header="" Width="44">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
@@ -1244,7 +1287,9 @@
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                           Background="Transparent" BorderThickness="0">
                                     <DataGrid.Columns>
-                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
+                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
                                         <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
