@@ -1,5 +1,5 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 /// One-time first-run welcome, mirroring Windows' `WelcomeWindow`. Scribe is a tray-only app with
 /// no main window, so a brand-new user has nothing on screen to teach them the push-to-talk
