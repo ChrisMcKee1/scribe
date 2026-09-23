@@ -115,6 +115,21 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertTrue(backing.stored.isEnabled)
     }
 
+    /// The re-read on appear goes through the same path as a tray change, and must not store back what it read.
+    @MainActor
+    func testReReadingOnAppearShowsStoredValuesWithoutWritingThemBack() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+        backing.stored.isEnabled = true
+        backing.stored.providerKind = .ollama
+
+        model.reload()
+
+        XCTAssertTrue(model.values.isEnabled)
+        XCTAssertEqual(model.values.providerKind, .ollama)
+        XCTAssertEqual(backing.saves.count, 0)
+    }
+
     @MainActor
     func testWhatIsTypedIntoASecretFieldSurvivesAReload() {
         let backing = CleanupSettingsBackingFake()
