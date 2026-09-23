@@ -381,6 +381,11 @@ The Microsoft Foundry provider authenticates one of two ways, chosen by
 **service principal**. `Scribe.Core/Cleanup/AzureCredentialFactory.cs` is the single place that
 builds the `TokenCredential`; everything else goes through it.
 
+- **Model inference uses the account's `/openai/v1/` endpoint for both saved URL shapes.** A Foundry
+  project URL is accepted, but normalized by `AzureOpenAIResponsesClientFactory`. The project
+  Responses route returned HTTP 500 for `gpt-6-astra` while the same credentials and model worked
+  through account inference. Keep `store=false` on every request and preserve the Chat Completions
+  fallback for deployments that reject Responses.
 - **Do not swap in `DefaultAzureCredential`, with or without `Exclude*` options.** This was tried
   and shipped a real bug: `ManagedIdentityCredential` probed a nonexistent IMDS endpoint on a
   desktop and blocked cleanup. Microsoft's own guidance agrees, saying the winning credential in a

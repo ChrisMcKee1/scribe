@@ -57,15 +57,17 @@ Two things to know before running it against a PR:
 
 ### Model paths
 
-Lenses dispatch two ways, and SKILL.md Step 3 has the literal invocations.
+Lenses use **Claude Opus 5**, **Claude Sonnet 5**, **GPT-6 Astra**, and **Grok 4.7**, the newest
+versions in this host's model catalog as of 2026-09-22. The [model roster](SKILL.md#model-roster) is the
+source of truth for exact IDs and role mappings. Every review checks all four families against the
+current dispatch tool catalog and reports the exact IDs used, without silent downgrades.
 
-- **Claude subagents via the Task tool.** The default. `opus` for the deep context lenses, `sonnet` for
-  breadth, `fable` (`claude-fable-5`) for adversarial work. Copilot offers no Claude model, so any panel
-  row naming `fable` has to run here.
-- **GitHub Copilot CLI for the GPT family.** Adds a non-Anthropic family to a panel, and takes the wide
-  cheap lenses when the Claude subscription is under pressure. The working invocation passes the prompt
-  from a file via `Get-Content -Raw`, and carries `--deny-tool 'write'` because every lens here is
-  review-only.
+- **Subagents via the Task tool.** The default, with an explicit `model` for every dispatch. Opus handles
+  deep-context lenses, Sonnet handles breadth, GPT adds independent panel confirmation, and Grok handles
+  adversarial work plus the overlay and fragile-area panels. Grok replaces the unavailable Fable slots.
+- **GitHub Copilot CLI.** An alternative process for the same assigned model when its catalog supports
+  that ID, including Claude, GPT, and Grok. The invocation passes the prompt from a file via
+  `Get-Content -Raw`, and carries `--deny-tool 'write'` because every lens here is review-only.
 
 Every lens ends with `[[agent-done:<lens> findings=<n> coverage=complete]]`. That line is the only
 evidence a lens actually ran, and coverage accounting keys off it.

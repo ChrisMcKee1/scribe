@@ -1021,11 +1021,11 @@ internal sealed class DictationController : IDisposable
 
                 if (cleanup.Outcome == CleanupOutcome.Failed)
                 {
-                    // Intelligence failed at runtime: keep the raw transcription, signal the UI FIRST
+                    // Cleanup is unavailable or failed: keep the raw transcription, signal the UI FIRST
                     // so the overlay flashes red immediately, then persist the failure on a background
                     // thread. The failure log opens its own SQLite connection per call, so a busy
                     // timeout there must never sit in front of raising the flash or injecting the raw
-                    // text. Cleanup stays enabled; the very next dictation tries again.
+                    // text. Cleanup stays enabled; runtime failures can retry on the next dictation.
                     var reason = cleanup.FailureReason ?? "Intelligence failed.";
                     _log.LogWarning("AI cleanup failed ({Reason}); using raw transcription.", reason);
                     RaiseCleanupFailed(reason);

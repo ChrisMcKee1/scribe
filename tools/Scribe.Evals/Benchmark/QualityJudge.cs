@@ -10,10 +10,10 @@ namespace Scribe.Evals.Benchmark;
 internal sealed record JudgeVerdict(int Overall, BenchDimensions Dims, string[] Flags, string Rationale);
 
 /// <summary>
-/// LLM-as-judge for cleanup quality. A fixed strong Azure model (default gpt-4.1, temperature 0,
-/// JSON-only output) grades each cleaned transcript against the editor's contract so the leaderboard
-/// has a consistent quality axis. It uses the same Azure OpenAI v1 Responses path as the app so it
-/// exercises the production client configuration.
+/// LLM-as-judge for cleanup quality. A fixed Azure model (default gpt-4.1, no temperature override,
+/// JSON-only output) grades each cleaned transcript against the editor's contract. The shared rubric
+/// standardizes the task, not the scores: repeat runs and inspect the rationales before ranking.
+/// It uses the same Azure OpenAI v1 Responses path as the app.
 /// </summary>
 internal sealed class QualityJudge
 {
@@ -65,7 +65,7 @@ internal sealed class QualityJudge
          "flags":[...],"rationale":"one or two sentences"}
         """;
 
-    public QualityJudge(string endpoint, string deployment, string? tenantId)
+    public QualityJudge(string endpoint, string deployment, string? tenantId, string? subscriptionId = null)
     {
         Endpoint = endpoint;
         Deployment = deployment;
@@ -86,7 +86,9 @@ internal sealed class QualityJudge
 #pragma warning disable OPENAI001
         var responses = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
             new Uri(endpoint),
-            new DefaultAzureCredential(options));
+            string.IsNullOrWhiteSpace(subscriptionId)
+                ? new DefaultAzureCredential(options)
+                : AzureCredentialFactory.Create(AzureCredentialRequest.Cli(tenantId, subscriptionId)));
         _agent = responses.AsAIAgent(model: deployment, instructions: Instructions, name: "ScribeJudge");
 #pragma warning restore OPENAI001
     }
@@ -96,8 +98,13 @@ internal sealed class QualityJudge
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(60));
-        _ = await _agent.RunAsync("Reply with the JSON: {\"ok\":true}", cancellationToken: cts.Token).ConfigureAwait(false);
+        _ = await _agent.RunAsync("Reply with the JSON: {\"ok\":true}",
+            options: new ChatClientAgentRunOptions(BuildChatOptions()),
+            cancellationToken: cts.Token).ConfigureAwait(false);
     }
+
+    internal static ChatOptions BuildChatOptions() =>
+        TextCleanupService.WithStoredOutputDisabled(new ChatOptions { ResponseFormat = ChatResponseFormat.Json });
 
     public async Task<JudgeVerdict?> JudgeAsync(
         string raw, string cleaned, string golden, string writingStyle, CancellationToken ct)
@@ -123,10 +130,10 @@ internal sealed class QualityJudge
          * cleanup path: an Azure reasoning model runs at a fixed internal
          * temperature and rejects or ignores an override, so it sets one only
          * for Foundry Local. The judge is always a cloud model and now follows
-         * the same rule. Determinism here comes from the JSON response format
-         * and the rubric in the instructions, not from a sampling knob.
+         * the same rule. JSON keeps grades parseable; neither the response
+         * format nor a shared rubric guarantees deterministic or correct grades.
          */
-        var chatOptions = new ChatOptions { ResponseFormat = ChatResponseFormat.Json };
+        var chatOptions = BuildChatOptions();
         var runOptions = new ChatClientAgentRunOptions(chatOptions);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

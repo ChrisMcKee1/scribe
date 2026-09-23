@@ -23,6 +23,7 @@ internal sealed class CliOptions
     public EvalSuite Suite { get; private set; } = EvalSuite.Style;
     public string? AzureEndpoint { get; private set; }
     public string? AzureTenantId { get; private set; }
+    public string? AzureSubscriptionId { get; private set; }
     public TimeSpan ReadyTimeout { get; private set; } = TimeSpan.FromSeconds(240);
     public bool ListScenarios { get; private set; }
     public bool ShowHelp { get; private set; }
@@ -42,6 +43,7 @@ internal sealed class CliOptions
     public string? JudgeEndpoint { get; private set; }
     public string? JudgeModel { get; private set; }
     public string? JudgeTenantId { get; private set; }
+    public string? JudgeSubscriptionId { get; private set; }
     public bool NoJudge { get; private set; }
     public bool NoWav { get; private set; }
     public CleanupPromptStyle PromptStyle { get; private set; } = CleanupPromptStyle.Auto;
@@ -76,11 +78,13 @@ internal sealed class CliOptions
             MaxLocal = MaxLocal,
             CloudEndpoint = AzureEndpoint,
             TenantId = AzureTenantId,
+            SubscriptionId = AzureSubscriptionId,
             JudgeEndpoint = string.IsNullOrWhiteSpace(JudgeEndpoint)
                 ? "https://mtech-project-resource.cognitiveservices.azure.com/"
                 : JudgeEndpoint!,
             JudgeModel = string.IsNullOrWhiteSpace(JudgeModel) ? "gpt-4.1" : JudgeModel!,
             JudgeTenantId = JudgeTenantId ?? AzureTenantId,
+            JudgeSubscriptionId = JudgeSubscriptionId ?? AzureSubscriptionId,
             UseJudge = !NoJudge,
             Synthesize = !NoWav,
             Force = Force,
@@ -112,6 +116,7 @@ internal sealed class CliOptions
             AzureEndpoint: AzureEndpoint,
             AzureDeployment: model,
             AzureTenantId: AzureTenantId,
+            AzureSubscriptionId: AzureSubscriptionId,
             WritingStyle: writingStyle),
         // The Copilot backend takes no endpoint and no key. The model slot is passed through, and a
         // blank one means "whatever this GitHub account defaults to", so `--model` stays optional.
@@ -183,6 +188,13 @@ internal sealed class CliOptions
                 case "--tenant":
                     o.AzureTenantId = Next();
                     break;
+                case "--subscription":
+                    o.AzureSubscriptionId = Next();
+                    if (string.IsNullOrWhiteSpace(o.AzureSubscriptionId) || o.AzureSubscriptionId.StartsWith("--"))
+                    {
+                        throw new ArgumentException("--subscription requires a subscription ID.");
+                    }
+                    break;
                 case "--ready-timeout":
                     if (int.TryParse(Next(), out var secs) && secs > 0)
                     {
@@ -239,6 +251,13 @@ internal sealed class CliOptions
                     break;
                 case "--judge-tenant":
                     o.JudgeTenantId = Next();
+                    break;
+                case "--judge-subscription":
+                    o.JudgeSubscriptionId = Next();
+                    if (string.IsNullOrWhiteSpace(o.JudgeSubscriptionId) || o.JudgeSubscriptionId.StartsWith("--"))
+                    {
+                        throw new ArgumentException("--judge-subscription requires a subscription ID.");
+                    }
                     break;
                 case "--no-judge":
                     o.NoJudge = true;
@@ -395,6 +414,8 @@ internal sealed class CliOptions
               --endpoint <url>                  Azure/Microsoft Foundry endpoint (azure provider,
                                                 or explicit benchmark deployment fallback).
               --tenant <id>                     Optional Azure tenant id override (azure provider).
+              --subscription <id>               Pin discovery and inference to a cached Azure CLI account.
+                                                Does not change the global Azure CLI subscription.
               --ready-timeout <seconds>         Max wait for a model to load (default: 240).
               --list                            List scenarios in the selected suite and exit.
               -v, --verbose                     Print service init/cleanup diagnostics to stderr.
@@ -413,6 +434,7 @@ internal sealed class CliOptions
               --judge-endpoint <url>            Azure endpoint for the quality judge.
               --judge-model <name>              Judge deployment (default: gpt-4.1).
               --judge-tenant <id>               Tenant override for the judge.
+              --judge-subscription <id>         Judge account override (defaults to --subscription).
               --no-judge                        Latency only (skip quality grading).
               --no-wav                          Use the authored transcript (skip TTS+ASR).
               --writing-style-file <path>       Benchmark-only writing-style override.

@@ -42,17 +42,16 @@ public sealed record AzureFoundryDeployment(
 
     /// <summary>
     /// The endpoint to configure for this deployment. Microsoft's recommended shape is the Foundry
-    /// <b>project</b> endpoint (…/api/projects/NAME), which <see cref="TextCleanupService"/> routes
-    /// natively through <c>AIProjectClient</c>; the classic account endpoint is the fallback when the
-    /// account exposes no project. Note the project data plane is AAD-only, so key auth must keep
-    /// using <see cref="Endpoint"/>; see <see cref="EndpointFor"/>.
+    /// <b>project</b> endpoint (…/api/projects/NAME). <see cref="TextCleanupService"/> normalizes either
+    /// shape to the account's unified v1 inference endpoint. The classic account endpoint is the
+    /// fallback when the account exposes no project; see <see cref="EndpointFor"/>.
     /// </summary>
     public string PreferredEndpoint =>
         string.IsNullOrWhiteSpace(ProjectEndpoint) ? Endpoint : ProjectEndpoint!;
 
     /// <summary>
-    /// The endpoint appropriate for the chosen auth. A Foundry project endpoint cannot be called with
-    /// an API key (its data plane requires an Entra token), so key auth always gets the account form.
+    /// Keeps the account form for API key configurations and the portal's preferred form for Entra.
+    /// Cleanup uses the account's inference endpoint for either form, not the project data plane.
     /// </summary>
     public string EndpointFor(bool usingApiKey) => usingApiKey ? Endpoint : PreferredEndpoint;
 }
@@ -784,7 +783,7 @@ public sealed class AzureFoundryDiscovery : IAzureFoundryDiscovery
 
     // The key on properties.endpoints that carries the Foundry project data-plane URL, i.e.
     // https://<account>.services.ai.azure.com/api/projects/<project>. This is the endpoint shape
-    // Microsoft documents for AIProjectClient, and the one TextCleanupService routes natively.
+    // Microsoft documents for AIProjectClient. Cleanup normalizes it to account-level inference.
     private const string FoundryApiEndpointKey = "AI Foundry API";
 
     /// <summary>

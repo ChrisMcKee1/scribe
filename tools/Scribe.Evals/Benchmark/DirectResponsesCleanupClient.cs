@@ -24,11 +24,14 @@ internal sealed class DirectResponsesCleanupClient
         ReasoningEffort? reasoningEffort,
         int? maxOutputTokens,
         TimeSpan networkTimeout,
-        bool disableRetries)
+        bool disableRetries,
+        string? subscriptionId = null)
     {
         _client = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
             new Uri(endpoint),
-            BuildDefaultCredential(tenantId),
+            string.IsNullOrWhiteSpace(subscriptionId)
+                ? BuildDefaultCredential(tenantId)
+                : AzureCredentialFactory.Create(AzureCredentialRequest.Cli(tenantId, subscriptionId)),
             networkTimeout + TimeSpan.FromSeconds(5),
             disableRetries);
         _deployment = deployment;
@@ -70,6 +73,7 @@ internal sealed class DirectResponsesCleanupClient
             Model = _deployment,
             Instructions = _instructions,
             MaxOutputTokenCount = _maxOutputTokens,
+            StoredOutputEnabled = false,
         };
 
         options.InputItems.Add(ResponseItem.CreateUserMessageItem(userMessage));

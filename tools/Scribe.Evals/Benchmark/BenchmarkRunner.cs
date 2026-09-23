@@ -19,9 +19,11 @@ internal sealed record BenchmarkConfig
     public int MaxLocal { get; init; }
     public string? CloudEndpoint { get; init; }
     public string? TenantId { get; init; }
+    public string? SubscriptionId { get; init; }
     public string JudgeEndpoint { get; init; } = "https://mtech-project-resource.cognitiveservices.azure.com/";
     public string JudgeModel { get; init; } = "gpt-4.1";
     public string? JudgeTenantId { get; init; }
+    public string? JudgeSubscriptionId { get; init; }
     public bool UseJudge { get; init; } = true;
     public bool Synthesize { get; init; } = true;
     public string? ModelsDir { get; init; }
@@ -124,7 +126,8 @@ internal sealed class BenchmarkRunner
             try
             {
                 var cloud = await BenchmarkModels.BuildCloudAsync(
-                    _cfg.TenantId, _cfg.CloudEndpoint, _cfg.CloudOnly, _cfg.MaxCloud, _log, ct)
+                    _cfg.TenantId, _cfg.CloudEndpoint, _cfg.CloudOnly, _cfg.MaxCloud, _log, ct,
+                    _cfg.SubscriptionId)
                     .ConfigureAwait(false);
                 roster.AddRange(cloud);
                 Console.WriteLine($"Cloud models ({cloud.Count}): {string.Join(", ", cloud.Select(m => m.Id))}");
@@ -145,13 +148,20 @@ internal sealed class BenchmarkRunner
 
         Console.WriteLine();
 
+        if (roster.Count == 0)
+        {
+            Console.WriteLine("No models available; the benchmark did not run.");
+            return 2;
+        }
+
         // Judge.
         QualityJudge? judge = null;
         if (_cfg.UseJudge)
         {
             try
             {
-                judge = new QualityJudge(_cfg.JudgeEndpoint, _cfg.JudgeModel, _cfg.JudgeTenantId);
+                judge = new QualityJudge(_cfg.JudgeEndpoint, _cfg.JudgeModel, _cfg.JudgeTenantId,
+                    _cfg.JudgeSubscriptionId);
                 await judge.ValidateAsync(ct).ConfigureAwait(false);
                 Console.WriteLine($"Judge ready: {_cfg.JudgeModel} @ {_cfg.JudgeEndpoint}");
             }
@@ -245,6 +255,7 @@ internal sealed class BenchmarkRunner
         var options = model.Provider == CleanupProvider.AzureFoundry
             ? new CleanupOptions(true, CleanupProvider.AzureFoundry, CleanupModelCatalog.DefaultAlias,
                 model.Endpoint, model.Target, AzureTenantId: _cfg.TenantId, WritingStyle: style,
+                AzureSubscriptionId: _cfg.SubscriptionId,
                 Glossary: _cfg.Glossary,
                 PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt)
             : new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
@@ -288,7 +299,8 @@ internal sealed class BenchmarkRunner
                 _cfg.ReasoningEffort,
                 _cfg.MaxOutputTokens,
                 TimeSpan.FromSeconds(_cfg.CleanTimeoutSeconds),
-                _cfg.DisableRetries);
+                _cfg.DisableRetries,
+                _cfg.SubscriptionId);
         }
         else
         {

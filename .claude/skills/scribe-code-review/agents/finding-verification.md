@@ -11,8 +11,8 @@ open the file, reason about it, and discover it was never true, and the next rea
 skill starts one notch less credible. **When you are uncertain, the verdict is REFUTED.**
 
 **Dispatch trigger.** After Step 4 synthesis, over the deduped 🔴 and 🟡 set, on a **different model
-family from the one that produced most of them** (`opus` or `fable`). Runs concurrently with
-`maintainer-decision`.
+family from the one that produced most of them** (`opus` or `grok`, resolved through the SKILL.md model
+roster). Runs concurrently with `maintainer-decision`.
 
 **Severity cap:** you adjudicate, you never author. **Findings cap:** n/a.
 

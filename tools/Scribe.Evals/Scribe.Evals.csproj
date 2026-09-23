@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
+    <InternalsVisibleTo Include="Scribe.Core.Tests" />
   </ItemGroup>
 
   <ItemGroup>

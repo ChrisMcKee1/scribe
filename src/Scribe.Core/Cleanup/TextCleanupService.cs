@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Azure.AI.Projects;
 using Azure.Identity;
 using Microsoft.AI.Foundry.Local;
 using Microsoft.Agents.AI;
@@ -30,9 +29,9 @@ namespace Scribe.Core.Cleanup;
 /// OpenAI-compatible web service, wrapped as an agent with <see cref="ChatClientAgent"/>. Everything
 /// stays offline; the ~1 to 2 GB model downloads on first use.</item>
 /// <item><b>Microsoft Foundry</b>: a model the user has already deployed in Azure. A Microsoft
-/// Foundry <i>project</i> endpoint (<c>…/api/projects/…</c>) is turned into an agent directly with
-/// the framework's native <c>AIProjectClient.AsAIAgent</c>; a classic Azure OpenAI account endpoint
-/// uses the unified OpenAI v1 endpoint and is wrapped with <see cref="ChatClientAgent"/>.
+/// Foundry <i>project</i> endpoint (<c>…/api/projects/…</c>) and a classic Azure OpenAI account
+/// endpoint both use the account's unified OpenAI v1 inference endpoint, wrapped with
+/// <see cref="ChatClientAgent"/>.
 /// Authentication reuses the user's Azure CLI sign-in (AAD token, optional tenant override) or an
 /// optional API key.</item>
 /// </list>
@@ -418,10 +417,15 @@ internal sealed class TextCleanupService : ITextCleanupService
         {
             if (!_options.Enabled || _status != CleanupStatus.Ready || _agent is null)
             {
-                // Distinguish "the user turned it off" from "the user turned it on and it is
-                // broken". The second case previously looked identical in the logs, so a bad
-                // endpoint or deployment name disabled cleanup for a whole session with no signal
-                // beyond one startup warning the user had long scrolled past.
+                // A failed initialization must use the same visible failure path as a failed call.
+                // Otherwise every later dictation silently skips a deployment that never became ready.
+                if (_options.Enabled && _status == CleanupStatus.Unavailable)
+                {
+                    return new CleanupResult(text, CleanupOutcome.Failed,
+                        _statusDetail ?? "AI cleanup is unavailable. Check AI cleanup settings and try again.");
+                }
+
+                // Loading is not a failure, but the log should still explain why cleanup was skipped.
                 var reason = !_options.Enabled
                     ? null
                     : $"AI cleanup is enabled but {_status} ({StatusDetail}).";
@@ -1914,7 +1918,7 @@ internal sealed class TextCleanupService : ITextCleanupService
                         options.AzureClientSecret)));
 
             var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
-            // Same stored-output assertion the two Responses paths make. This is outbound cloud
+            // Same stored-output assertion the Responses path makes. This is outbound cloud
             // egress, so it carries the same control; WithStoredOutputDisabled has a
             // ChatCompletionOptions arm precisely so this path is covered rather than fail-closed
             // into the wrong option type.
@@ -2690,6 +2694,7 @@ internal sealed class TextCleanupService : ITextCleanupService
 
     private Task<AIAgent?> InitAzureAsync(CleanupOptions options, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(options.AzureEndpoint) || string.IsNullOrWhiteSpace(options.AzureDeployment))
         {
             SetStatus(CleanupStatus.Unavailable, "Choose an Azure deployment to enable cleanup.");
@@ -2710,70 +2715,34 @@ internal sealed class TextCleanupService : ITextCleanupService
             ? timeout + TimeSpan.FromSeconds(5)
             : (TimeSpan?)null;
 
-        // A Microsoft Foundry *project* endpoint (…/api/projects/…) has a different shape from a
-        // classic Azure OpenAI account endpoint and needs the project Responses client.
-        var isProject = endpointUri.AbsolutePath.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase);
-
-        AIAgent agent;
-        if (isProject && !useKey)
-        {
-            // Native Foundry path: the project client uses the project data plane directly without
-            // creating a server-side agent resource.
-            // The project data-plane requires an AAD token, so this path is AAD-only.
-            var credential = AzureCredentialFactory.Create(new AzureCredentialRequest(
-                options.AzureAuthMode,
-                options.AzureTenantId,
-                options.AzureSubscriptionId,
-                options.AzureClientId,
-                options.AzureClientSecret));
-            var project = new AIProjectClient(endpointUri, credential);
-            _pendingFactory = i => project.AsAIAgent(
-                model: options.AzureDeployment!,
-                instructions: i,
-                name: AgentName,
-                clientFactory: DisableStoredOutput);
-            agent = _pendingFactory(instructions);
-        }
-        else
-        {
-            // Classic Azure OpenAI account endpoint, or a project endpoint paired with an API key
-            // (the project data-plane can't use keys, so fall back to the account host for key auth).
-            var accountHost = isProject
-                ? new Uri($"{endpointUri.Scheme}://{endpointUri.Authority}/")
-                : endpointUri;
-
-            // When the user supplies an API key, authenticate with it directly; otherwise reuse the
-            // existing Azure CLI sign-in, pinned to the selected subscription when one is saved.
-            // Route cleanup through the Azure OpenAI **Responses API** rather than Chat Completions.
-            // Responses is the forward-looking surface and is the only one that serves the newest
-            // reasoning models (e.g. gpt-5.x "pro"/o-series); Chat Completions returns HTTP 400
-            // "operation unsupported" for those. The unified v1 endpoint lets the current OpenAI
-            // client handle Azure directly while preserving API-key and Microsoft Entra auth.
+        // Cleanup needs model inference, not the project data plane. That route returned HTTP 500
+        // for gpt-6-astra while the same model, credentials and request worked on /openai/v1/.
+        // The factory normalizes either saved endpoint shape to the same resource's inference URL.
+        _log.LogDebug("Azure cleanup uses account-level Responses inference.");
 #pragma warning disable OPENAI001
-            var responses = useKey
-                ? AzureOpenAIResponsesClientFactory.CreateWithApiKey(
-                    accountHost,
-                    options.AzureApiKey!,
-                    networkTimeout,
-                    DisableRetries)
-                : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
-                    accountHost,
-                    AzureCredentialFactory.Create(new AzureCredentialRequest(
-                        options.AzureAuthMode,
-                        options.AzureTenantId,
-                        options.AzureSubscriptionId,
-                        options.AzureClientId,
-                        options.AzureClientSecret)),
-                    networkTimeout,
-                    DisableRetries);
-            _pendingFactory = i => responses.AsAIAgent(
-                model: options.AzureDeployment!,
-                instructions: i,
-                name: AgentName,
-                clientFactory: DisableStoredOutput);
+        var responses = useKey
+            ? AzureOpenAIResponsesClientFactory.CreateWithApiKey(
+                endpointUri,
+                options.AzureApiKey!,
+                networkTimeout,
+                DisableRetries)
+            : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
+                endpointUri,
+                AzureCredentialFactory.Create(new AzureCredentialRequest(
+                    options.AzureAuthMode,
+                    options.AzureTenantId,
+                    options.AzureSubscriptionId,
+                    options.AzureClientId,
+                    options.AzureClientSecret)),
+                networkTimeout,
+                DisableRetries);
+        _pendingFactory = i => responses.AsAIAgent(
+            model: options.AzureDeployment!,
+            instructions: i,
+            name: AgentName,
+            clientFactory: DisableStoredOutput);
 #pragma warning restore OPENAI001
-            agent = _pendingFactory(instructions);
-        }
+        var agent = _pendingFactory(instructions);
 
         return Task.FromResult<AIAgent?>(agent);
     }

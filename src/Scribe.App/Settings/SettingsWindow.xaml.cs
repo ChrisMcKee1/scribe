@@ -1997,9 +1997,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _selectedAzureDeployment = deployment;
 
-            // Prefer the Foundry project endpoint (Microsoft's recommended shape, routed natively
-            // through AIProjectClient). Its data plane is Entra-only, so a user working with an API
-            // key gets the classic account endpoint instead.
+            // Keep the portal's project URL for Entra and the account URL for API keys.
+            // Cleanup normalizes both to account-level inference.
             var usingApiKey = IsAzureApiKeySelected && !string.IsNullOrWhiteSpace(AzureApiKeyBox.Password);
             AzureEndpointBox.Text = deployment.EndpointFor(usingApiKey);
             AzureDeploymentBox.Text = deployment.DeploymentName;
@@ -3002,7 +3001,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             using var response = await client.SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             return response.IsSuccessStatusCode
-                ? AzureApiKeyProbeResult.Ok("API key verified. AI cleanup is ready to use.")
+                ? AzureApiKeyProbeResult.Ok("API key verified. Check Cleanup status below for model availability.")
                 : AzureApiKeyProbeResult.Fail(DescribeAzureApiKeyFailure(response.StatusCode, deployment, body));
         }
         catch (HttpRequestException ex)
@@ -3101,7 +3100,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var configured = !string.IsNullOrWhiteSpace(AzureEndpointBox?.Text)
             && !string.IsNullOrWhiteSpace(AzureDeploymentBox?.Text);
         return configured
-            ? $"{identity} AI cleanup is ready to use."
+            ? $"{identity} Check Cleanup status below for model availability."
             : $"{identity} Enter the endpoint and deployment name for your model.";
     }
 

@@ -1,5 +1,10 @@
 # GPT-5.6 Phonetic Cleanup Benchmark
 
+> **Newer comparison:** the [September 4 GPT-6-Astra benchmark](gpt6-astra-benchmark.md)
+> reruns Astra and the 5.6 trio on the same South Central tier using the current 25-case
+> suite and shipped prompts. Terra remains the responsive cloud recommendation. The data below
+> is preserved as historical evidence, not a directly comparable score baseline.
+
 Updated July 28, 2026.
 
 This report compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and

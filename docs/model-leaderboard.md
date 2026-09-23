@@ -1,5 +1,15 @@
 # Scribe AI Cleanup: Model Leaderboard (Golden Suite)
 
+> **September 4 update:** [GPT-6-Astra benchmark](gpt6-astra-benchmark.md) reruns the current
+> 25-case suite twice across Astra, the 5.6 trio and Mini, with 750 timed calls and a second
+> blinded judge. **Keep Terra as the responsive cloud recommendation:** Astra's 5.53 s median
+> versus Terra's 2.02 s is not offset by a reliable quality gain. The report includes direct
+> output review and important judge errors. The July tables below remain historical; do not
+> compare their absolute scores with the new run.
+>
+> This supersedes the cloud picks below for the deployments covered by the new comparison.
+> Offline models were not rerun.
+
 > **Prompt revision note (v0.3.5):** the numbers below were produced against the previous wording of
 > `DefaultWritingStyle` and `DefaultFrontierPrompt`. Those prompts have since had their own em/en
 > dashes rewritten as commas and colons, and gained one sentence asking the model not to join clauses
@@ -8,7 +18,7 @@
 > rankings here as valid for relative model comparison and re-run the suite before quoting absolute
 > scores against the shipped prompt.
 
-> **Latest focused benchmark:** [GPT-5.6 Phonetic Cleanup Benchmark](gpt56-phonetic-benchmark.md)
+> **Previous focused benchmark:** [GPT-5.6 Phonetic Cleanup Benchmark](gpt56-phonetic-benchmark.md)
 > compares `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.4`, and
 > `gpt-5.4-mini` across 11 WAV-backed cases, including three sound-alike transcript challenges.
 > A **July 28 rerun** in that report re-ranks the 5.6 trio on the candidate v4 prompt pair. On East
@@ -3396,5 +3406,4 @@ So basically the deploy it going out yesterday but the pipeline it keep failing 
 ```
 
 </details>
-
 

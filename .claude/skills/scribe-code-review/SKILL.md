@@ -246,26 +246,41 @@ comfortable command line and Path B needs a file anyway. Assemble in this order:
 The lens file already carries its own severity cap, findings cap, confidence bar, output format and
 completion marker, so the dispatch prompt does not restate them.
 
+### Model roster
+
+These are the newest versions advertised by this host's Task tool model catalog as of 2026-09-22.
+The short names in the inventory are role labels, not model IDs to pass to a tool.
+
+| Role | Exact model ID | Use it for |
+| --- | --- | --- |
+| `opus` | `claude-opus-5` | Architecture fit, the Win32 and overlay lenses, fragile-area, and finding verification. The lenses where reading twenty files of surrounding context is the job. |
+| `sonnet` | `claude-sonnet-5` | The Pass A default for every other lens. Breadth at reasonable cost. |
+| `gpt` | `gpt-6-astra` | Independent GPT confirmation on the architecture, Win32, privacy, and test-quality panels. |
+| `grok` | `grok-4.7` | Independent xAI confirmation on the overlay and fragile-area panels, plus adversarial finding verification and solution alternatives. |
+
+Before dispatch, check the selected tool's current model catalog for **every** role, not just the
+orchestrator's model. Use an advertised newer version of the same family consistently throughout that
+run, and record the exact IDs in the Summary. Never invent an ID, use `auto`, or silently fall back to an
+older version or a different family. If a required model is unavailable on both paths, report the
+affected lens as failed with `coverage=incomplete`. The former Fable slots now use Grok explicitly;
+Fable is not advertised by this host's catalog.
+
 ### Two dispatch paths
 
-**Path A: Claude subagents via the Task tool.** The default, and the only path that can reach a Claude
-model family. Pass the assembled prompt file. Available families:
+**Path A: subagents via the Task tool.** The default for all four roles. Pass the assembled prompt file
+and set `model` explicitly to the roster's exact ID, for example `model: "claude-opus-5"` or
+`model: "grok-4.7"`. Do not rely on the subagent's default model.
 
-| Model | Use it for |
-| --- | --- |
-| `opus` | Architecture fit, the Win32 and overlay lenses, fragile-area, and finding verification. The lenses where reading twenty files of surrounding context is the job. |
-| `sonnet` | The Pass A default for every other lens. Breadth at reasonable cost. |
-| `fable` (`claude-fable-5`) | A genuinely different Claude family. Best on adversarial work: finding verification and solution alternatives. GitHub Copilot does not offer it, so it is the diversity member no other path can supply. Any inventory or panel row naming `fable` must go through Path A. |
-
-**Path B: GitHub Copilot CLI, for the GPT family.** Use this to add a non-Anthropic family to a panel,
-and whenever the Claude subscription budget is a concern. Copilot offers **no Claude model**, so it can
-never substitute for an `opus`, `sonnet`, or `fable` row.
+**Path B: GitHub Copilot CLI.** Use this when a separate CLI process is needed and its model catalog
+advertises the required ID. Copilot supports multiple providers, including Claude; changing the
+dispatch path must not change the assigned model. For a Grok row, use `--model grok-4.7` in the
+invocation below instead of the GPT ID.
 
 This is the invocation that clears the permission classifier. Take it literally:
 
 ```powershell
 $prompt = Get-Content -Raw "$env:TEMP\scribe-code-review\<target-id>\prompts\<lens>.md"
-copilot -p $prompt --model gpt-5.6-sol -s --no-remote-export -C "C:\Users\chrismckee\GitHub\Scribe" `
+copilot -p $prompt --model gpt-6-astra -s --no-remote-export -C "C:\Users\chrismckee\GitHub\Scribe" `
   --allow-tool 'write' --allow-tool 'shell(dotnet:*)' --allow-tool 'shell(git:*)' `
   --deny-tool 'shell(git push)' `
   --deny-tool 'write'
@@ -290,10 +305,9 @@ Rules that make this work:
   spend and produces a second independent answer you then have to reconcile. If the resume also comes
   back empty, record the lens as failed and render `coverage=incomplete`. Do not substitute your own
   reading of that lens's surface and present it as the lens's result.
-- **Why both paths exist:** Claude subagents bill against a subscription that has hit its monthly limit
-  mid-task before, which strands a review halfway through. Copilot bills separately. When a long review
-  is planned, or when the subscription is already under pressure, push the wide, cheap lenses to Copilot
-  and keep Claude for the deep ones.
+- **Why both paths exist:** the Task tool provides in-session model selection; the CLI provides a
+  separate process with explicit read-only permissions. Availability and billing depend on the host
+  and account, not on a blanket Claude-versus-Copilot distinction.
 
 ### The completion marker
 
@@ -321,20 +335,21 @@ never appears in a posted comment.
 
 ### Model diversity policy
 
-**Pass A: coverage.** Every matched lens runs exactly once. Default `sonnet`; the lenses marked `opus` in
-the inventory run on `opus`.
+**Pass A: coverage.** Every matched lens runs exactly once on its inventory role's exact model ID from
+the roster. Default `sonnet`; the deep-context lenses use `opus`, and `solution-alternatives` uses
+`grok`.
 
 **Panel: independent confirmation on the surfaces that hurt.** Add a second and, on a high-risk change, a
 third model family to these lenses only:
 
 | Lens | Panel | Why |
 | --- | --- | --- |
-| `architecture-fit` | opus + gpt-5.6-sol | The verdict with the longest blast radius. |
-| `win32-interop` | opus + gpt-5.6-sol | Hook deadlines and `SendInput` short counts are exactly where one model's prior is not enough. |
-| `overlay-process-contract` | opus + fable | Two processes and two enums; the failure is silent. |
-| `privacy-egress` | opus + gpt-5.6-sol | A missed egress is the worst outcome this product can have. |
-| `fragile-area` | opus + fable | The surfaces with a documented regression history. |
-| `tests-quality` | sonnet + gpt-5.6-sol | Two families disagree usefully about whether a test can fail. |
+| `architecture-fit` | opus + gpt | The verdict with the longest blast radius. |
+| `win32-interop` | opus + gpt | Hook deadlines and `SendInput` short counts are exactly where one model's prior is not enough. |
+| `overlay-process-contract` | opus + grok | Two processes and two enums; the failure is silent. |
+| `privacy-egress` | opus + gpt | A missed egress is the worst outcome this product can have. |
+| `fragile-area` | opus + grok | The surfaces with a documented regression history. |
+| `tests-quality` | sonnet + gpt | Two families disagree usefully about whether a test can fail. |
 
 A panel is warranted when the diff touches a fragile path, changes a Win32 or overlay contract, changes
 what leaves the machine, or exceeds roughly 400 changed lines. Otherwise Pass A alone is the right
@@ -484,10 +499,10 @@ Lens prompts live in `agents/`. Group letters map to the dispatch order in Step 
 | `agents/build-packaging.md` | ζ | `*.csproj`, `Directory.Build.props`, `Directory.Packages.props`, `Scribe.slnx`, `build/**`, `scripts/**`, `.github/workflows/**`, `src/Scribe.App/app.manifest`, `src/Scribe.Overlay/app.manifest` | 🔴 Critical | 5 | sonnet |
 | `agents/ui-shell-quality.md` | η | `*.xaml`, `*.xaml.cs`, `src/Scribe.App/Tray/**`, `src/Scribe.App/Onboarding/**`, `src/Scribe.App/QuickAdd/**`, `src/Scribe.App/Settings/**` | 🟡 Important | 5 | sonnet |
 | `agents/fragile-area.md` | η | the diff touches a surface with a documented regression history (path list inside the lens file) | 🔴 Critical | 6 | opus |
-| `agents/solution-alternatives.md` | η | non-trivial change: over 50 changed lines, a linked issue, a new service or abstraction, a new dependency, or a bug fix whose mechanism is not obviously the root cause | verdict and questions only | 2 | fable |
+| `agents/solution-alternatives.md` | η | non-trivial change: over 50 changed lines, a linked issue, a new service or abstraction, a new dependency, or a bug fix whose mechanism is not obviously the root cause | verdict and questions only | 2 | grok |
 | `agents/docs-sync.md` | η | the diff edits `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `PRIVACY.md`, `PRODUCT.md`, or `docs/**`, **or** it changes a surface those documents assert (overlay architecture, Azure auth, packaging, logging, privacy, architecture support) | 🟡 Important | 3 | sonnet |
 | `agents/learned-patterns.md` | η | the changed paths overlap the paths declared by any `active` rule in `docs/derived-rules/` | 💡 Suggestion, 🟡 maximum | 3 | sonnet |
-| `agents/finding-verification.md` | θ | after synthesis, over the deduped 🔴 and 🟡 findings; runs on a different family from the one that produced most of them | adjudicates | n/a | opus or fable |
+| `agents/finding-verification.md` | θ | after synthesis, over the deduped 🔴 and 🟡 findings; runs on a different family from the one that produced most of them | adjudicates | n/a | opus or grok |
 | `agents/maintainer-decision.md` | θ | after synthesis, concurrently with verification | adjudicates | n/a | sonnet |
 
 Group meaning: α always on, β native and interop surfaces, γ data, privacy, and providers, δ persisted
@@ -513,11 +528,11 @@ resolves it. Close with `Recommended action: request changes`, naming the open i
 approval.
 
 **1. Summary.** One paragraph: what the change does, the overall assessment, the confidence level, the
-model families actually used, `Reviewed at <sha>`, and `Verified N findings; dropped M`. Follow with the
+exact model IDs actually used, `Reviewed at <sha>`, and `Verified N findings; dropped M`. Follow with the
 coverage line, for example:
 
 > **Lens coverage:** matched 11, dispatched 11, succeeded 11, results used 11. Panel: `architecture-fit`
-> (opus + gpt-5.6-sol), `win32-interop` (opus + gpt-5.6-sol). `coverage=complete`.
+> (claude-opus-5 + gpt-6-astra), `win32-interop` (claude-opus-5 + gpt-6-astra). `coverage=complete`.
 
 On a re-review, lead with `Round N: X resolved, Y still open, W new`.
 

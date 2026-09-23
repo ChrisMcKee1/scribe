@@ -185,9 +185,11 @@ public sealed class TextCleanupServiceTests
         svc.Configure(CleanupOptions.Disabled with { Enabled = true, Provider = CleanupProvider.AzureFoundry });
         Assert.NotEqual(CleanupStatus.Disabled, svc.Status);
 
-        // Not Ready, so dictation is never blocked: it passes through untouched while enabled-but-not-ready.
+        // Unavailable is a visible failure, not a silent skip, and never loses the dictation.
         var whileEnabling = await svc.CleanAsync("please book the demo room for thursday");
-        Assert.Equal(CleanupOutcome.Skipped, whileEnabling.Outcome);
+        Assert.Equal(CleanupOutcome.Failed, whileEnabling.Outcome);
+        Assert.Equal("please book the demo room for thursday", whileEnabling.Text);
+        Assert.Equal(svc.StatusDetail, whileEnabling.FailureReason);
 
         // "Uncheck" the box again: back to Disabled synchronously, still passing raw text through.
         svc.Configure(CleanupOptions.Disabled);
@@ -196,6 +198,59 @@ public sealed class TextCleanupServiceTests
         var afterDisable = await svc.CleanAsync("please book the demo room for thursday");
         Assert.Equal(CleanupOutcome.Skipped, afterDisable.Outcome);
         Assert.Equal("please book the demo room for thursday", afterDisable.Text);
+    }
+
+    [Fact]
+    public async Task Initialization_failure_remains_visible_on_subsequent_dictations()
+    {
+        await using var svc = new TextCleanupService(NullLogger<TextCleanupService>.Instance);
+        var unavailable = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<CleanupResult>? duringInitialization = null;
+        svc.StatusChanged += () =>
+        {
+            if (svc.Status == CleanupStatus.Initializing)
+            {
+                duringInitialization = svc.CleanAsync("while loading");
+            }
+
+            if (svc.Status == CleanupStatus.Unavailable)
+            {
+                unavailable.TrySetResult();
+            }
+        };
+        svc.Configure(CleanupOptions.Disabled with
+        {
+            Enabled = true,
+            Provider = CleanupProvider.AzureFoundry,
+            AzureEndpoint = "not a URL",
+            AzureDeployment = "gpt-6-astra",
+        });
+        await unavailable.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(duringInitialization);
+        Assert.Equal(CleanupOutcome.Skipped, (await duringInitialization).Outcome);
+
+        foreach (var text in new[] { "first dictation", "second dictation" })
+        {
+            var result = await svc.CleanAsync(text);
+
+            Assert.Equal(CleanupOutcome.Failed, result.Outcome);
+            Assert.Equal(text, result.Text);
+            Assert.Equal(svc.StatusDetail, result.FailureReason);
+            Assert.False(result.SkippedUnexpectedly);
+        }
+    }
+
+    [Fact]
+    public async Task Empty_input_does_not_report_an_unavailable_model_as_a_failed_dictation()
+    {
+        await using var svc = new TextCleanupService(NullLogger<TextCleanupService>.Instance);
+        svc.Configure(CleanupOptions.Disabled with { Enabled = true, Provider = CleanupProvider.AzureFoundry });
+
+        var result = await svc.CleanAsync(" ");
+
+        Assert.Equal(CleanupOutcome.Skipped, result.Outcome);
+        Assert.Null(result.FailureReason);
     }
 
     private sealed class StubChatClient : IChatClient

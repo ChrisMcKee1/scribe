@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scribe.Core\Scribe.Core.csproj" />
+    <ProjectReference Include="..\..\tools\Scribe.Evals\Scribe.Evals.csproj" />
   </ItemGroup>
 
 </Project>

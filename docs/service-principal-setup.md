@@ -240,13 +240,17 @@ but the cleanup call only requires an account with a deployed model:
 
 | Shape | Example | Notes |
 | --- | --- | --- |
-| Foundry **project** endpoint | `https://my-resource.services.ai.azure.com/api/projects/my-project` | Microsoft's recommended form in the Foundry portal. Scribe routes it natively with Entra auth. Do not use this with API keys. |
+| Foundry **project** endpoint | `https://my-resource.services.ai.azure.com/api/projects/my-project` | The form shown in the Foundry portal. Scribe uses the same account's `/openai/v1/` inference endpoint, not the project data plane. |
 | Account endpoint | `https://my-resource.services.ai.azure.com` or `https://my-resource.openai.azure.com` | Works with Entra. It is also the endpoint shape Scribe uses for API key auth. |
 
 The project endpoint is on the project's overview page in the Foundry portal; the account endpoint is
 on the resource's overview page in the Azure portal. Both are shown in Foundry, which is a common
 source of confusion, so copy the one whose page you are actually on. A project is useful in the
 portal, but Scribe's single-turn cleanup call is account plus deployment based.
+
+If an older Scribe build returns HTTP 500 for a working deployment with a project URL, enter the
+account endpoint from the same resource and save again. This avoids project-route failures observed
+with `gpt-6-astra`, without changing the deployment or credentials.
 
 The **deployment name** is the name you gave the model when you deployed it, not the model's own
 name. These match by default and often diverge later. If the same model is deployed on two resources

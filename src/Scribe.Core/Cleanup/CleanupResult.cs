@@ -2,12 +2,12 @@ namespace Scribe.Core.Cleanup;
 
 /// <summary>
 /// Why a cleanup call produced the text it did. Lets the dictation pipeline tell a genuine
-/// runtime failure (which should fall back to raw text and surface a visible warning) apart from
+/// failure (which should fall back to raw text and surface a visible warning) apart from
 /// a deliberate skip or an already-clean transcript.
 /// </summary>
 public enum CleanupOutcome
 {
-    /// <summary>Cleanup did not run (disabled, engine not ready, or empty input). Not a failure.</summary>
+    /// <summary>Cleanup did not run (disabled, still starting, or empty input). Not a failure.</summary>
     Skipped,
 
     /// <summary>The model ran and changed the text.</summary>
@@ -17,8 +17,8 @@ public enum CleanupOutcome
     Unchanged,
 
     /// <summary>
-    /// The model call failed at runtime (threw, timed out, or returned nothing usable) and the
-    /// pipeline fell back to the raw transcription. This is the state that drives the visible
+    /// Cleanup is unavailable, or the model call failed (threw, timed out, or returned nothing usable),
+    /// and the pipeline fell back to the raw transcription. This is the state that drives the visible
     /// "intelligence failed" feedback and is recorded to the failure log.
     /// </summary>
     Failed,

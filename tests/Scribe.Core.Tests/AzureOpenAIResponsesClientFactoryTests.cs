@@ -26,24 +26,28 @@ public sealed class AzureOpenAIResponsesClientFactoryTests
         Assert.Equal(new Uri(expected), AzureOpenAIResponsesClientFactory.GetV1Endpoint(new Uri(endpoint)));
     }
 
-    [Fact]
-    public void Current_openai_client_constructs_an_azure_responses_client()
+    [Theory]
+    [InlineData("https://example.openai.azure.com/", "https://example.openai.azure.com/openai/v1/")]
+    [InlineData("https://example.services.ai.azure.com/api/projects/sample", "https://example.services.ai.azure.com/openai/v1/")]
+    public void Api_key_client_uses_account_inference_for_either_endpoint_shape(string endpoint, string expected)
     {
         var client = AzureOpenAIResponsesClientFactory.CreateWithApiKey(
-            new Uri("https://example.openai.azure.com/"),
+            new Uri(endpoint),
             "test-key");
 
-        Assert.Equal(new Uri("https://example.openai.azure.com/openai/v1/"), client.Endpoint);
+        Assert.Equal(new Uri(expected), client.Endpoint);
     }
 
-    [Fact]
-    public void Token_credential_constructs_an_azure_responses_client()
+    [Theory]
+    [InlineData("https://example.openai.azure.com/", "https://example.openai.azure.com/openai/v1/")]
+    [InlineData("https://example.services.ai.azure.com/api/projects/sample", "https://example.services.ai.azure.com/openai/v1/")]
+    public void Token_client_uses_account_inference_for_either_endpoint_shape(string endpoint, string expected)
     {
         var client = AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
-            new Uri("https://example.openai.azure.com/"),
+            new Uri(endpoint),
             new StubTokenCredential());
 
-        Assert.Equal(new Uri("https://example.openai.azure.com/openai/v1/"), client.Endpoint);
+        Assert.Equal(new Uri(expected), client.Endpoint);
     }
 
     private sealed class StubTokenCredential : TokenCredential

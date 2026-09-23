@@ -30,7 +30,7 @@ public interface ITextCleanupService : IAsyncDisposable
     /// Cleans a single transcription. The returned <see cref="CleanupResult.Text"/> is always safe to
     /// inject; on a skip or a runtime failure it is the original input, and the
     /// <see cref="CleanupResult.Outcome"/> tells the caller whether the model ran, was skipped (disabled,
-    /// not ready, or empty input), or failed at runtime. Never throws.
+    /// still starting, or empty input), or failed (unavailable or a runtime failure). Never throws.
     /// <para>
     /// <paramref name="writingStyleOverride"/> swaps the writing-style portion of the system prompt
     /// for this call only (per-app profiles). Blank/null keeps the configured style; overrides reuse

@@ -48,11 +48,13 @@ internal static class BenchmarkModels
         IReadOnlyList<string>? only,
         int max,
         ILogger log,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? subscriptionId = null)
     {
         var discovery = new AzureFoundryDiscovery(new VerboseConsoleLogger<AzureFoundryDiscovery>());
         var deployments = await discovery.DiscoverAsync(
             tenantId,
+            subscriptionId: subscriptionId,
             cancellationToken: ct).ConfigureAwait(false);
         log.LogInformation("Azure discovery returned {Count} text-capable deployments.", deployments.Count);
 
