@@ -94,7 +94,8 @@ extension CleanupSettingsAccess {
 /// The AI Cleanup tab. Every field is stored the moment it changes, and the tab re-reads storage after any
 /// preference write elsewhere in the process (the tray's AI Cleanup item above all), so the switch and the fields
 /// always show what the pipeline will use. Only the provider controls depend on the switch, so cleanup can always
-/// be turned on from here.
+/// be turned on from here. What is typed into the two secret fields lives in `SettingsDrafts`, so it survives the
+/// window closing until it is saved or cleared.
 @MainActor
 final class CleanupSettingsModel: ObservableObject {
     enum Control {
@@ -107,23 +108,24 @@ final class CleanupSettingsModel: ObservableObject {
     @Published var values: CleanupSettingsValues {
         didSet { store(changesFrom: oldValue) }
     }
-    @Published var openAIApiKeyInput = ""
-    @Published var azureClientSecretInput = ""
     @Published private(set) var hasSavedOpenAIApiKey = false
     @Published private(set) var hasSavedAzureClientSecret = false
     @Published private(set) var isTesting = false
     @Published private(set) var statusMessage: String?
     @Published private(set) var errorMessage: String?
 
+    let drafts: SettingsDrafts
     private let access: CleanupSettingsAccess
     private var isReloading = false
     private var isSaving = false
-    /// Advances on every change to `values`, so a connection test can tell its result is for older settings.
+    /// Advances on every change to `values` and every stored credential change, so a connection test can tell its
+    /// result is for a configuration the tab no longer shows.
     private var revision = 0
     private var observation: SettingsNotificationObservation?
 
-    init(access: CleanupSettingsAccess, center: NotificationCenter = .default) {
+    init(access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default) {
         self.access = access
+        self.drafts = drafts
         values = access.load()
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
@@ -144,11 +146,11 @@ final class CleanupSettingsModel: ObservableObject {
     }
 
     var canSaveOpenAIApiKey: Bool {
-        !openAIApiKeyInput.isEmpty
+        !drafts.openAIApiKey.isEmpty
     }
 
     var canSaveAzureClientSecret: Bool {
-        !azureClientSecretInput.isEmpty && !values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
+        !drafts.azureClientSecret.isEmpty && !values.azureClientId.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     /// Re-reads stored settings. What is typed into a secret field is kept: it is not stored until Save.
@@ -171,9 +173,10 @@ final class CleanupSettingsModel: ObservableObject {
 
     func saveOpenAIApiKey() {
         do {
-            try access.setOpenAIApiKey(openAIApiKeyInput)
-            openAIApiKeyInput = ""
+            try access.setOpenAIApiKey(drafts.openAIApiKey)
+            drafts.openAIApiKey = ""
             hasSavedOpenAIApiKey = true
+            credentialsChanged()
             show(status: "API key saved to Keychain.")
         } catch {
             show(error: "Failed to save API key: \(error.localizedDescription)")
@@ -184,6 +187,7 @@ final class CleanupSettingsModel: ObservableObject {
         do {
             try access.setOpenAIApiKey(nil)
             hasSavedOpenAIApiKey = false
+            credentialsChanged()
             show(status: "API key removed.")
         } catch {
             show(error: "Failed to remove API key: \(error.localizedDescription)")
@@ -192,9 +196,10 @@ final class CleanupSettingsModel: ObservableObject {
 
     func saveAzureClientSecret() {
         do {
-            try access.setAzureClientSecret(azureClientSecretInput, values.azureClientId)
-            azureClientSecretInput = ""
+            try access.setAzureClientSecret(drafts.azureClientSecret, values.azureClientId)
+            drafts.azureClientSecret = ""
             hasSavedAzureClientSecret = true
+            credentialsChanged()
             show(status: "Client secret saved to Keychain.")
         } catch {
             show(error: "Failed to save client secret: \(error.localizedDescription)")
@@ -205,6 +210,7 @@ final class CleanupSettingsModel: ObservableObject {
         do {
             try access.setAzureClientSecret(nil, values.azureClientId)
             hasSavedAzureClientSecret = false
+            credentialsChanged()
             show(status: "Client secret removed.")
         } catch {
             show(error: "Failed to remove client secret: \(error.localizedDescription)")
@@ -212,7 +218,8 @@ final class CleanupSettingsModel: ObservableObject {
     }
 
     /// Resolves the provider exactly as the pipeline would, environment overrides included, and runs its health
-    /// check. A result that arrives after the settings changed is dropped rather than shown against them.
+    /// check. A result that arrives after the settings or a stored credential changed is dropped rather than shown
+    /// against them.
     func testConnection() async {
         guard !isDisabled(.connectionTest) else { return }
         let started = revision
@@ -227,6 +234,11 @@ final class CleanupSettingsModel: ObservableObject {
         } else {
             errorMessage = result.message
         }
+    }
+
+    /// A stored key or secret changed: a connection test still running checked the credential that was replaced.
+    private func credentialsChanged() {
+        revision += 1
     }
 
     private func store(changesFrom old: CleanupSettingsValues) {

@@ -80,3 +80,16 @@ final class SettingsTestSignal {
         expectation.fulfill()
     }
 }
+
+/// Fulfills an expectation when it is freed, so a test can wait for the object that owns it to be released.
+final class SettingsDeallocationWatcher {
+    private let expectation: XCTestExpectation
+
+    init(_ expectation: XCTestExpectation) {
+        self.expectation = expectation
+    }
+
+    deinit {
+        expectation.fulfill()
+    }
+}

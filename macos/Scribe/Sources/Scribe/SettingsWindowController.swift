@@ -4,13 +4,13 @@ import SwiftUI
 /// Hosts the Settings window and tells its owner when the window closes, so the owner can let go of it. The next
 /// open then builds every tab from what is stored at that moment (a dictionary rule added by Quick Add, new
 /// history for Diagnostics, a login item changed in System Settings), and a closed window keeps no view state or
-/// observers alive.
+/// observers alive. Unsaved input survives because it lives in `SettingsDrafts`, which the owner keeps.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: @MainActor @Sendable (SettingsWindowController) -> Void
 
     convenience init(
-        rootView: SettingsView,
+        rootView: some View,
         onClose: @escaping @MainActor @Sendable (SettingsWindowController) -> Void
     ) {
         let window = NSWindow(contentViewController: NSHostingController(rootView: rootView))

@@ -26,6 +26,8 @@ enum CaptureStopSource {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem?
     private var settingsWindowController: NSWindowController?
+    /// Outlives the Settings window, which is released on close, so unsaved entries survive a close and reopen.
+    private let settingsDrafts = SettingsDrafts()
     private var welcomeWindowController: NSWindowController?
     private var quickAddWindowController: NSWindowController?
     private let logger = Logger(subsystem: "com.scribe.macos", category: "App")
@@ -114,7 +116,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                     pipelineReportStore: pipelineReportStore,
                     dictionaryLibraryService: dictionaryLibraryService,
                     onProfilesOrRulesChanged: { [weak self] in self?.reloadPostProcessorRules() },
-                    onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode }),
+                    onHotkeyChanged: { [weak self] keyCode in self?.hotkeyManager.keyCode = keyCode },
+                    drafts: settingsDrafts),
                 onClose: { [weak self] closed in
                     if self?.settingsWindowController === closed {
                         self?.settingsWindowController = nil
