@@ -23,8 +23,8 @@ struct CleanupConnectionCheck: Equatable, Sendable {
 }
 
 /// How the AI Cleanup tab reaches stored settings, Keychain and the provider. `live` goes through
-/// `CleanupSettingsStore` and `CleanupProviderResolver`, the same store and resolver the tray and the dictation
-/// pipeline use, so the tab can never describe a configuration they would not run; tests pass their own.
+/// `CleanupSettingsStore.live` and `CleanupProviderCache.shared`, the same store and provider the tray and the
+/// dictation pipeline use, so the tab can never describe a configuration they would not run; tests pass their own.
 struct CleanupSettingsAccess {
     var load: @MainActor () -> CleanupSettingsValues
     /// Stores the fields that differ between `new` and `old`.
@@ -34,60 +34,54 @@ struct CleanupSettingsAccess {
     var setOpenAIApiKey: @MainActor (String?) throws -> Void
     var hasAzureClientSecret: @MainActor (_ clientId: String) -> Bool
     var setAzureClientSecret: @MainActor (_ secret: String?, _ clientId: String) throws -> Void
-    /// Resolves the provider the pipeline would use and runs its health check. Runs off the main actor.
+    /// Runs Test Connection through the provider the pipeline would use. Runs off the main actor.
     var checkConnection: @Sendable () async -> CleanupConnectionCheck
 }
 
 extension CleanupSettingsAccess {
     static var live: CleanupSettingsAccess {
+        backed(by: .live, providers: .shared)
+    }
+
+    /// The tab over `store`, with Test Connection through `providers`, which should read the same store.
+    static func backed(by store: CleanupSettingsStore, providers: CleanupProviderCache) -> CleanupSettingsAccess {
         CleanupSettingsAccess(
             load: {
-                CleanupSettingsValues(
-                    isEnabled: CleanupSettingsStore.isEnabled,
-                    providerKind: CleanupSettingsStore.providerKind,
-                    foundryLocalModelAlias: CleanupSettingsStore.foundryLocalModelAlias,
-                    ollamaModel: CleanupSettingsStore.ollamaModel,
-                    openAIBaseURL: CleanupSettingsStore.openAIBaseURL,
-                    openAIModel: CleanupSettingsStore.openAIModel,
-                    azureEndpoint: CleanupSettingsStore.azureEndpoint,
-                    azureDeployment: CleanupSettingsStore.azureDeployment,
-                    azureAuthMode: CleanupSettingsStore.azureAuthMode,
-                    azureTenantId: CleanupSettingsStore.azureTenantId,
-                    azureClientId: CleanupSettingsStore.azureClientId)
+                let stored = store.snapshot()
+                return CleanupSettingsValues(
+                    isEnabled: stored.isEnabled,
+                    providerKind: stored.providerKind,
+                    foundryLocalModelAlias: stored.foundryLocalModelAlias,
+                    ollamaModel: stored.ollamaModel,
+                    openAIBaseURL: stored.openAIBaseURL,
+                    openAIModel: stored.openAIModel,
+                    azureEndpoint: stored.azureEndpoint,
+                    azureDeployment: stored.azureDeployment,
+                    azureAuthMode: stored.azureAuthMode,
+                    azureTenantId: stored.azureTenantId,
+                    azureClientId: stored.azureClientId)
             },
             save: { new, old in
-                if new.isEnabled != old.isEnabled { CleanupSettingsStore.isEnabled = new.isEnabled }
-                if new.providerKind != old.providerKind { CleanupSettingsStore.providerKind = new.providerKind }
+                if new.isEnabled != old.isEnabled { store.isEnabled = new.isEnabled }
+                if new.providerKind != old.providerKind { store.providerKind = new.providerKind }
                 if new.foundryLocalModelAlias != old.foundryLocalModelAlias {
-                    CleanupSettingsStore.foundryLocalModelAlias = new.foundryLocalModelAlias
+                    store.foundryLocalModelAlias = new.foundryLocalModelAlias
                 }
-                if new.ollamaModel != old.ollamaModel { CleanupSettingsStore.ollamaModel = new.ollamaModel }
-                if new.openAIBaseURL != old.openAIBaseURL { CleanupSettingsStore.openAIBaseURL = new.openAIBaseURL }
-                if new.openAIModel != old.openAIModel { CleanupSettingsStore.openAIModel = new.openAIModel }
-                if new.azureEndpoint != old.azureEndpoint { CleanupSettingsStore.azureEndpoint = new.azureEndpoint }
-                if new.azureDeployment != old.azureDeployment {
-                    CleanupSettingsStore.azureDeployment = new.azureDeployment
-                }
-                if new.azureAuthMode != old.azureAuthMode { CleanupSettingsStore.azureAuthMode = new.azureAuthMode }
-                if new.azureTenantId != old.azureTenantId { CleanupSettingsStore.azureTenantId = new.azureTenantId }
-                if new.azureClientId != old.azureClientId { CleanupSettingsStore.azureClientId = new.azureClientId }
+                if new.ollamaModel != old.ollamaModel { store.ollamaModel = new.ollamaModel }
+                if new.openAIBaseURL != old.openAIBaseURL { store.openAIBaseURL = new.openAIBaseURL }
+                if new.openAIModel != old.openAIModel { store.openAIModel = new.openAIModel }
+                if new.azureEndpoint != old.azureEndpoint { store.azureEndpoint = new.azureEndpoint }
+                if new.azureDeployment != old.azureDeployment { store.azureDeployment = new.azureDeployment }
+                if new.azureAuthMode != old.azureAuthMode { store.azureAuthMode = new.azureAuthMode }
+                if new.azureTenantId != old.azureTenantId { store.azureTenantId = new.azureTenantId }
+                if new.azureClientId != old.azureClientId { store.azureClientId = new.azureClientId }
             },
-            isConfigured: { CleanupSettingsStore.isConfigured(for: $0) },
-            hasOpenAIApiKey: { CleanupSettingsStore.openAIApiKey() != nil },
-            setOpenAIApiKey: { try CleanupSettingsStore.setOpenAIApiKey($0) },
-            hasAzureClientSecret: { CleanupSettingsStore.azureClientSecret(clientId: $0) != nil },
-            setAzureClientSecret: { try CleanupSettingsStore.setAzureClientSecret($0, clientId: $1) },
-            checkConnection: {
-                do {
-                    let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
-                    let snapshot = await provider.healthSnapshot()
-                    return CleanupConnectionCheck(
-                        reachable: snapshot.reachable,
-                        message: "\(provider.displayName): \(snapshot.detail)")
-                } catch {
-                    return CleanupConnectionCheck(reachable: false, message: error.localizedDescription)
-                }
-            })
+            isConfigured: { store.isConfigured(for: $0) },
+            hasOpenAIApiKey: { store.openAIApiKey() != nil },
+            setOpenAIApiKey: { try store.setOpenAIApiKey($0) },
+            hasAzureClientSecret: { store.azureClientSecret(clientId: $0) != nil },
+            setAzureClientSecret: { try store.setAzureClientSecret($0, clientId: $1) },
+            checkConnection: { await providers.checkConnection() })
     }
 }
 

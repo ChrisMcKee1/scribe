@@ -1,187 +1,202 @@
+import Security
 import XCTest
+
 @testable import Scribe
 
-/// Exercises `CleanupSettingsStore` against the real `UserDefaults.standard` and real Keychain
-/// (there is no dependency-injected store to substitute, matching the rest of this port's
-/// stopgap-persistence tests). Every field's original value is captured in `setUp` and restored in
-/// `tearDown`, including deleting secrets that didn't exist beforehand, so running this suite can
-/// never permanently overwrite a developer's real saved AI cleanup configuration.
+/// `CleanupSettingsStore` over a defaults suite and secret stores of each test's own: nothing here reads, replaces or
+/// deletes the developer's AI cleanup settings or Keychain items, and the suites can run in parallel worker processes.
 final class CleanupSettingsStoreTests: XCTestCase {
-    private var originalIsEnabled = false
-    private var originalProviderKind = CleanupProviderKind.foundryLocal
-    private var originalFoundryLocalModelAlias = ""
-    private var originalOllamaModel = ""
-    private var originalOpenAIBaseURL = ""
-    private var originalOpenAIModel = ""
-    private var originalOpenAIApiKey: String?
-    private var originalAzureEndpoint = ""
-    private var originalAzureDeployment = ""
-    private var originalAzureAuthMode = AzureAuthMode.azureCli
-    private var originalAzureTenantId = ""
-    private var originalAzureClientId = ""
-    private var originalAzureClientSecret: String?
+    func testDefaultsWhenNothingIsSaved() {
+        let store = makeCleanupStore().store
 
-    override func setUp() {
-        super.setUp()
-        originalIsEnabled = CleanupSettingsStore.isEnabled
-        originalProviderKind = CleanupSettingsStore.providerKind
-        originalFoundryLocalModelAlias = CleanupSettingsStore.foundryLocalModelAlias
-        originalOllamaModel = CleanupSettingsStore.ollamaModel
-        originalOpenAIBaseURL = CleanupSettingsStore.openAIBaseURL
-        originalOpenAIModel = CleanupSettingsStore.openAIModel
-        originalOpenAIApiKey = CleanupSettingsStore.openAIApiKey()
-        originalAzureEndpoint = CleanupSettingsStore.azureEndpoint
-        originalAzureDeployment = CleanupSettingsStore.azureDeployment
-        originalAzureAuthMode = CleanupSettingsStore.azureAuthMode
-        originalAzureTenantId = CleanupSettingsStore.azureTenantId
-        originalAzureClientId = CleanupSettingsStore.azureClientId
-        originalAzureClientSecret = originalAzureClientId.isEmpty
-            ? nil
-            : CleanupSettingsStore.azureClientSecret(clientId: originalAzureClientId)
-    }
-
-    override func tearDown() {
-        CleanupSettingsStore.isEnabled = originalIsEnabled
-        CleanupSettingsStore.providerKind = originalProviderKind
-        CleanupSettingsStore.foundryLocalModelAlias = originalFoundryLocalModelAlias
-        CleanupSettingsStore.ollamaModel = originalOllamaModel
-        CleanupSettingsStore.openAIBaseURL = originalOpenAIBaseURL
-        CleanupSettingsStore.openAIModel = originalOpenAIModel
-        try? CleanupSettingsStore.setOpenAIApiKey(originalOpenAIApiKey)
-        CleanupSettingsStore.azureEndpoint = originalAzureEndpoint
-        CleanupSettingsStore.azureDeployment = originalAzureDeployment
-        CleanupSettingsStore.azureAuthMode = originalAzureAuthMode
-        CleanupSettingsStore.azureTenantId = originalAzureTenantId
-        // Clean up any test client id's secret before restoring the original client id, so a
-        // throwaway test id never leaves a Keychain entry of its own behind.
-        if CleanupSettingsStore.azureClientId != originalAzureClientId {
-            try? CleanupSettingsStore.setAzureClientSecret(nil, clientId: CleanupSettingsStore.azureClientId)
-        }
-        CleanupSettingsStore.azureClientId = originalAzureClientId
-        if !originalAzureClientId.isEmpty {
-            try? CleanupSettingsStore.setAzureClientSecret(originalAzureClientSecret, clientId: originalAzureClientId)
-        }
-        super.tearDown()
-    }
-
-    func testDefaultsMatchProviderDefaultsWhenNothingIsSaved() {
-        // Not a strict "unset" assertion (UserDefaults.standard is real and process-wide), but the
-        // getters' fallback values must match what FoundryLocalCleanupProvider/
-        // ManagedOllamaCleanupProvider themselves default to, so a first-run user gets a
-        // consistent provider whether or not Settings has ever been opened.
-        CleanupSettingsStore.providerKind = .foundryLocal
+        XCTAssertFalse(store.isEnabled)
+        XCTAssertEqual(store.providerKind, .foundryLocal)
+        XCTAssertEqual(store.foundryLocalModelAlias, "qwen2.5-1.5b")
+        XCTAssertEqual(store.ollamaModel, "qwen2.5:3b")
+        XCTAssertEqual(store.openAIBaseURL, "")
+        XCTAssertEqual(store.openAIModel, "")
+        XCTAssertEqual(store.azureEndpoint, "")
+        XCTAssertEqual(store.azureDeployment, "")
+        XCTAssertEqual(store.azureAuthMode, .azureCli)
+        XCTAssertEqual(store.azureTenantId, "")
+        XCTAssertEqual(store.azureClientId, "")
+        XCTAssertEqual(store.secretRevision, "")
+        XCTAssertNil(store.openAIApiKey())
         XCTAssertEqual(CleanupProviderKind.foundryLocal.displayName, "Foundry Local (recommended)")
     }
 
-    func testNonSecretFieldsRoundTripThroughUserDefaults() {
-        CleanupSettingsStore.isEnabled = true
-        XCTAssertTrue(CleanupSettingsStore.isEnabled)
+    func testEveryFieldRoundTripsThroughItsOwnSuiteAndNoOther() {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        let endpoint = "https://settings-probe-\(UUID().uuidString).example.com"
 
-        CleanupSettingsStore.providerKind = .microsoftFoundry
-        XCTAssertEqual(CleanupSettingsStore.providerKind, .microsoftFoundry)
+        store.isEnabled = true
+        store.providerKind = .microsoftFoundry
+        store.foundryLocalModelAlias = "qwen2.5-3b"
+        store.ollamaModel = "llama3.2:1b"
+        store.openAIBaseURL = "http://localhost:1234"
+        store.openAIModel = "local-model"
+        store.azureEndpoint = endpoint
+        store.azureDeployment = "gpt-5-mini"
+        store.azureAuthMode = .servicePrincipal
+        store.azureTenantId = "11111111-1111-1111-1111-111111111111"
+        store.azureClientId = "client-1"
 
-        CleanupSettingsStore.foundryLocalModelAlias = "qwen2.5-3b"
-        XCTAssertEqual(CleanupSettingsStore.foundryLocalModelAlias, "qwen2.5-3b")
-
-        CleanupSettingsStore.ollamaModel = "llama3.2:1b"
-        XCTAssertEqual(CleanupSettingsStore.ollamaModel, "llama3.2:1b")
-
-        CleanupSettingsStore.openAIBaseURL = "http://localhost:1234"
-        XCTAssertEqual(CleanupSettingsStore.openAIBaseURL, "http://localhost:1234")
-
-        CleanupSettingsStore.openAIModel = "local-model"
-        XCTAssertEqual(CleanupSettingsStore.openAIModel, "local-model")
-
-        CleanupSettingsStore.azureEndpoint = "https://example.cognitiveservices.azure.com"
-        XCTAssertEqual(CleanupSettingsStore.azureEndpoint, "https://example.cognitiveservices.azure.com")
-
-        CleanupSettingsStore.azureDeployment = "gpt-4o-mini"
-        XCTAssertEqual(CleanupSettingsStore.azureDeployment, "gpt-4o-mini")
-
-        CleanupSettingsStore.azureAuthMode = .servicePrincipal
-        XCTAssertEqual(CleanupSettingsStore.azureAuthMode, .servicePrincipal)
-
-        CleanupSettingsStore.azureTenantId = "11111111-1111-1111-1111-111111111111"
-        XCTAssertEqual(CleanupSettingsStore.azureTenantId, "11111111-1111-1111-1111-111111111111")
+        XCTAssertEqual(
+            store.snapshot(),
+            CleanupSettingsSnapshot(
+                isEnabled: true, providerKind: .microsoftFoundry, foundryLocalModelAlias: "qwen2.5-3b",
+                ollamaModel: "llama3.2:1b", openAIBaseURL: "http://localhost:1234", openAIModel: "local-model",
+                azureEndpoint: endpoint, azureDeployment: "gpt-5-mini", azureAuthMode: .servicePrincipal,
+                azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1", secretRevision: ""))
+        XCTAssertEqual(fixture.defaults.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
+        XCTAssertTrue(fixture.defaults.bool(forKey: "ScribeAiCleanupEnabled"))
+        XCTAssertNotEqual(UserDefaults.standard.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
     }
 
-    func testOpenAIApiKeyRoundTripsThroughKeychainAndClearsOnNil() throws {
-        try CleanupSettingsStore.setOpenAIApiKey("sk-test-key")
-        XCTAssertEqual(CleanupSettingsStore.openAIApiKey(), "sk-test-key")
+    /// Secrets go to the secret store and nowhere else: not one of them is written to the defaults.
+    func testTheAPIKeyGoesToTheSecretStoreAndClearsOnNilOrEmpty() throws {
+        let fixture = makeCleanupStore()
 
-        try CleanupSettingsStore.setOpenAIApiKey(nil)
-        XCTAssertNil(CleanupSettingsStore.openAIApiKey())
+        try fixture.store.setOpenAIApiKey("sk-test-key")
+        XCTAssertEqual(fixture.store.openAIApiKey(), "sk-test-key")
+        XCTAssertEqual(fixture.apiKeys.secrets, [CleanupSettingsStore.openAIApiKeyAccount: "sk-test-key"])
+        let stored = fixture.defaults.dictionaryRepresentation().values.compactMap { $0 as? String }
+        XCTAssertFalse(stored.contains("sk-test-key"))
+
+        try fixture.store.setOpenAIApiKey(nil)
+        XCTAssertNil(fixture.store.openAIApiKey())
+        try fixture.store.setOpenAIApiKey("sk-test-key")
+        try fixture.store.setOpenAIApiKey("")
+        XCTAssertNil(fixture.store.openAIApiKey())
+        XCTAssertEqual(fixture.apiKeys.secrets, [:])
     }
 
-    func testOpenAIApiKeySettingEmptyStringClearsIt() throws {
-        try CleanupSettingsStore.setOpenAIApiKey("sk-test-key")
-        try CleanupSettingsStore.setOpenAIApiKey("")
-        XCTAssertNil(CleanupSettingsStore.openAIApiKey())
+    /// Keyed by client id, so switching app registrations never reads a stale secret, and trimmed, so an id pasted
+    /// with a stray space still finds its own.
+    func testAClientSecretIsKeyedByItsTrimmedClientId() throws {
+        let fixture = makeCleanupStore()
+
+        try fixture.store.setAzureClientSecret("secret-a", clientId: "client-a")
+        try fixture.store.setAzureClientSecret("secret-b", clientId: " client-b ")
+
+        XCTAssertEqual(fixture.store.azureClientSecret(clientId: "client-a"), "secret-a")
+        XCTAssertEqual(fixture.store.azureClientSecret(clientId: "client-b"), "secret-b")
+        XCTAssertEqual(fixture.clientSecrets.secrets, ["client-a": "secret-a", "client-b": "secret-b"])
+
+        try fixture.store.setAzureClientSecret(nil, clientId: "client-a")
+        XCTAssertNil(fixture.store.azureClientSecret(clientId: "client-a"))
     }
 
-    func testAzureClientSecretRoundTripsKeyedByClientId() throws {
-        let clientId = "test-client-id-\(UUID().uuidString)"
-        defer { try? CleanupSettingsStore.setAzureClientSecret(nil, clientId: clientId) }
+    /// No item is ever keyed by an empty account, which every unconfigured install would share.
+    func testABlankClientIdStoresNoSecret() throws {
+        let fixture = makeCleanupStore()
 
-        XCTAssertNil(CleanupSettingsStore.azureClientSecret(clientId: clientId))
+        try fixture.store.setAzureClientSecret("orphaned-secret", clientId: "  ")
 
-        try CleanupSettingsStore.setAzureClientSecret("super-secret", clientId: clientId)
-        XCTAssertEqual(CleanupSettingsStore.azureClientSecret(clientId: clientId), "super-secret")
-
-        try CleanupSettingsStore.setAzureClientSecret(nil, clientId: clientId)
-        XCTAssertNil(CleanupSettingsStore.azureClientSecret(clientId: clientId))
+        XCTAssertNil(fixture.store.azureClientSecret(clientId: ""))
+        XCTAssertEqual(fixture.clientSecrets.writes, 0)
+        XCTAssertEqual(fixture.store.secretRevision, "")
     }
 
-    func testAzureClientSecretIsScopedPerClientId() throws {
-        let firstClientId = "test-client-a-\(UUID().uuidString)"
-        let secondClientId = "test-client-b-\(UUID().uuidString)"
-        defer {
-            try? CleanupSettingsStore.setAzureClientSecret(nil, clientId: firstClientId)
-            try? CleanupSettingsStore.setAzureClientSecret(nil, clientId: secondClientId)
+    /// The revision is what tells the provider cache a secret changed, without the secret becoming part of a key.
+    func testEverySecretChangeMovesTheRevisionAndNothingElseDoes() throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        var revisions: [String] = [store.secretRevision]
+
+        store.azureEndpoint = "https://my-res.openai.azure.com"
+        store.openAIModel = "local-model"
+        XCTAssertEqual(store.secretRevision, revisions.last)
+
+        try store.setOpenAIApiKey("sk-test")
+        revisions.append(store.secretRevision)
+        try store.setOpenAIApiKey(nil)
+        revisions.append(store.secretRevision)
+        try store.setAzureClientSecret("secret-1", clientId: "client-1")
+        revisions.append(store.secretRevision)
+        try store.setAzureClientSecret(nil, clientId: "client-1")
+        revisions.append(store.secretRevision)
+
+        XCTAssertEqual(Set(revisions).count, revisions.count, "\(revisions)")
+    }
+
+    func testAFailedSecretWriteKeepsTheRevisionAndSaysWhy() throws {
+        let fixture = makeCleanupStore()
+        try fixture.store.setOpenAIApiKey("sk-old")
+        let before = fixture.store.secretRevision
+        fixture.apiKeys.failNextWrite(with: errSecInteractionNotAllowed)
+
+        XCTAssertThrowsError(try fixture.store.setOpenAIApiKey("sk-new")) {
+            XCTAssertEqual($0 as? KeychainStore.KeychainError, .unhandled(errSecInteractionNotAllowed))
         }
-
-        try CleanupSettingsStore.setAzureClientSecret("secret-a", clientId: firstClientId)
-        try CleanupSettingsStore.setAzureClientSecret("secret-b", clientId: secondClientId)
-
-        XCTAssertEqual(CleanupSettingsStore.azureClientSecret(clientId: firstClientId), "secret-a")
-        XCTAssertEqual(CleanupSettingsStore.azureClientSecret(clientId: secondClientId), "secret-b")
+        XCTAssertEqual(fixture.store.secretRevision, before)
+        XCTAssertEqual(fixture.store.openAIApiKey(), "sk-old")
     }
 
-    func testAzureClientSecretWithBlankClientIdIsANoOp() throws {
-        // Guards against ever writing a Keychain item keyed by an empty account string, which
-        // would be shared/ambiguous across every not-yet-configured install.
-        try CleanupSettingsStore.setAzureClientSecret("orphaned-secret", clientId: "")
-        XCTAssertNil(CleanupSettingsStore.azureClientSecret(clientId: ""))
+    /// Settings shows a Keychain that cannot be read as no key; the resolver is told the difference.
+    func testAnUnreadableKeyReadsAsNoKeyInSettingsButThrowsForTheResolver() {
+        let fixture = makeCleanupStore(apiKeys: InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk"]))
+
+        fixture.apiKeys.failNextRead(with: errSecInteractionNotAllowed)
+        XCTAssertNil(fixture.store.openAIApiKey())
+        fixture.apiKeys.failNextRead(with: errSecInteractionNotAllowed)
+        XCTAssertThrowsError(try fixture.store.readOpenAIApiKey())
     }
 
-    func testIsConfiguredForFoundryLocalAndOllamaIsAlwaysTrue() {
-        XCTAssertTrue(CleanupSettingsStore.isConfigured(for: .foundryLocal))
-        XCTAssertTrue(CleanupSettingsStore.isConfigured(for: .ollama))
+    func testIsConfiguredNeedsTheFieldsThatCannotBeGuessed() {
+        let store = makeCleanupStore().store
+
+        XCTAssertTrue(store.isConfigured(for: .foundryLocal))
+        XCTAssertTrue(store.isConfigured(for: .ollama))
+        XCTAssertFalse(store.isConfigured(for: .openAICompatible))
+        XCTAssertFalse(store.isConfigured(for: .microsoftFoundry))
+
+        store.openAIBaseURL = "http://localhost:1234"
+        store.openAIModel = "  "
+        XCTAssertFalse(store.isConfigured(for: .openAICompatible))
+        store.openAIModel = "local-model"
+        XCTAssertTrue(store.isConfigured(for: .openAICompatible))
+
+        store.azureEndpoint = "https://my-res.openai.azure.com"
+        XCTAssertFalse(store.isConfigured(for: .microsoftFoundry))
+        store.azureDeployment = "gpt-5-mini"
+        XCTAssertTrue(store.isConfigured(for: .microsoftFoundry))
     }
 
-    func testIsConfiguredForOpenAICompatibleRequiresBaseURLAndModel() {
-        CleanupSettingsStore.openAIBaseURL = ""
-        CleanupSettingsStore.openAIModel = ""
-        XCTAssertFalse(CleanupSettingsStore.isConfigured(for: .openAICompatible))
+    /// The only place the production services and `UserDefaults.standard` appear; this reads nothing from either.
+    func testTheLiveStoreUsesTheProductionServicesAndStandardDefaults() {
+        let live = CleanupSettingsStore.live
 
-        CleanupSettingsStore.openAIBaseURL = "http://localhost:1234"
-        CleanupSettingsStore.openAIModel = ""
-        XCTAssertFalse(CleanupSettingsStore.isConfigured(for: .openAICompatible))
-
-        CleanupSettingsStore.openAIModel = "local-model"
-        XCTAssertTrue(CleanupSettingsStore.isConfigured(for: .openAICompatible))
+        XCTAssertEqual(live.domain, .standard)
+        XCTAssertEqual((live.apiKeys as? KeychainSecretStore)?.service, "com.scribe.macos.openai-compatible-api-key")
+        XCTAssertEqual((live.clientSecrets as? KeychainSecretStore)?.service, "com.scribe.macos.azure-client-secret")
     }
 
-    func testIsConfiguredForMicrosoftFoundryRequiresEndpointAndDeployment() {
-        CleanupSettingsStore.azureEndpoint = ""
-        CleanupSettingsStore.azureDeployment = ""
-        XCTAssertFalse(CleanupSettingsStore.isConfigured(for: .microsoftFoundry))
+    /// The AI Cleanup tab's own adapter, over a store of this test's: it reads and writes that store only, and its
+    /// Test Connection goes through the provider cache.
+    @MainActor
+    func testTheSettingsTabAdapterUsesOnlyTheStoreItIsGiven() async throws {
+        let fixture = makeCleanupStore()
+        let session = makeStubSession { request in StubReply.completion(request, "Ok.") }
+        let cache = CleanupProviderCache(store: fixture.store, environment: [:], factory: .testing(session: session))
+        let access = CleanupSettingsAccess.backed(by: fixture.store, providers: cache)
 
-        CleanupSettingsStore.azureEndpoint = "https://example.cognitiveservices.azure.com"
-        CleanupSettingsStore.azureDeployment = ""
-        XCTAssertFalse(CleanupSettingsStore.isConfigured(for: .microsoftFoundry))
+        var values = access.load()
+        let old = values
+        values.isEnabled = true
+        values.providerKind = .openAICompatible
+        values.openAIBaseURL = "http://127.0.0.1:1234"
+        values.openAIModel = "local-model"
+        access.save(values, old)
+        try access.setOpenAIApiKey("sk-tab")
 
-        CleanupSettingsStore.azureDeployment = "gpt-4o-mini"
-        XCTAssertTrue(CleanupSettingsStore.isConfigured(for: .microsoftFoundry))
+        XCTAssertEqual(access.load(), values)
+        XCTAssertTrue(fixture.store.isEnabled)
+        XCTAssertTrue(access.isConfigured(.openAICompatible))
+        XCTAssertTrue(access.hasOpenAIApiKey())
+        XCTAssertEqual(fixture.apiKeys.secrets, [CleanupSettingsStore.openAIApiKeyAccount: "sk-tab"])
+        let check = await access.checkConnection()
+        XCTAssertTrue(check.reachable, check.message)
     }
 }

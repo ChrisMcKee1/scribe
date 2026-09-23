@@ -1,8 +1,8 @@
 import Foundation
 
-/// User-facing identifier for which `CleanupProvider` Settings should build. Persisted as a plain
-/// string (not a secret) in `CleanupSettingsStore`.
-enum CleanupProviderKind: String, CaseIterable, Identifiable {
+/// User-facing identifier for which `CleanupProvider` Settings should build. Persisted as a plain string (not a
+/// secret) in `CleanupSettingsStore`.
+enum CleanupProviderKind: String, CaseIterable, Identifiable, Sendable {
     case foundryLocal
     case ollama
     case openAICompatible
@@ -21,24 +21,49 @@ enum CleanupProviderKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// Settings-window-backed configuration for AI cleanup, so a user can turn it on and pick/configure
-/// a provider entirely from the GUI instead of setting environment variables before launch.
+/// The AI cleanup settings as stored at one moment. Secrets are not part of it: `secretRevision` changes whenever one
+/// is saved or removed, which is all a provider cache needs to know about them.
+struct CleanupSettingsSnapshot: Sendable, Equatable {
+    var isEnabled: Bool
+    var providerKind: CleanupProviderKind
+    var foundryLocalModelAlias: String
+    var ollamaModel: String
+    var openAIBaseURL: String
+    var openAIModel: String
+    var azureEndpoint: String
+    var azureDeployment: String
+    var azureAuthMode: AzureAuthMode
+    var azureTenantId: String
+    var azureClientId: String
+    var secretRevision: String
+}
+
+/// Settings-window-backed configuration for AI cleanup, so a user can turn it on and pick and configure a provider
+/// entirely from the GUI instead of setting environment variables before launch.
 ///
-/// Non-secret fields are `UserDefaults`-backed, the same stopgap pattern already used for the
-/// overlay anchor and tray quick-toggle preferences (see `AppDelegate`'s doc comments); a general
-/// structured settings store doesn't exist yet on macOS. Secrets (the OpenAI-compatible API key and
-/// the Azure service-principal client secret) are Keychain-backed via `KeychainStore` and are never
-/// written to `UserDefaults`, a plist, or an environment variable, matching AGENTS.md's DPAPI-at-rest
-/// guarantee for the equivalent Windows settings.
+/// Non-secret fields live in `UserDefaults`, under the keys the tray's AI Cleanup item and the AI Cleanup tab share.
+/// Secrets (the OpenAI-compatible API key and the service principal's client secret) live in a `SecretStore`, the
+/// Keychain in production, and are never written to `UserDefaults`, a plist or an environment variable.
 ///
-/// `SCRIBE_CLEANUP_PROVIDER` and its related environment variables remain fully supported and take
-/// priority over these settings when present (see `CleanupProviderResolver`), so existing scripted
-/// usage (`--cleanup-text`, the offline eval harness) keeps working unchanged; Settings only applies
-/// once no such environment variable is set.
-enum CleanupSettingsStore {
+/// All of its storage is injected. A test builds a store over a defaults suite and secret stores of its own, so it
+/// never reads or replaces the developer's settings or credentials, and suites run in parallel without sharing
+/// anything; `live` is the production store. The defaults are named by `Domain` rather than held, because
+/// `UserDefaults` is not `Sendable` and this store travels with the provider cache, which any task may use.
+///
+/// `SCRIBE_CLEANUP_PROVIDER` and its related environment variables take priority over these settings when present
+/// (see `CleanupProviderResolver`), so scripted use (`--cleanup-text`, the offline eval harness) keeps working.
+struct CleanupSettingsStore: Sendable {
+    /// Which defaults the non-secret fields live in.
+    enum Domain: Sendable, Equatable {
+        /// `UserDefaults.standard`, the app's own preferences.
+        case standard
+        /// `UserDefaults(suiteName:)`, for tests.
+        case suite(String)
+    }
+
     private enum Key {
-        // Shared with AppDelegate's tray "AI Cleanup" checkbox, which pre-dates this store, so the
-        // tray toggle and the Settings tab always read and write the exact same flag.
+        // Shared with AppDelegate's tray "AI Cleanup" checkbox, which pre-dates this store, so the tray toggle and the
+        // Settings tab always read and write the exact same flag.
         static let isEnabled = "ScribeAiCleanupEnabled"
         static let providerKind = "ScribeCleanupProviderKind"
         static let foundryLocalModelAlias = "ScribeCleanupFoundryLocalModelAlias"
@@ -50,113 +75,220 @@ enum CleanupSettingsStore {
         static let azureAuthMode = "ScribeCleanupAzureAuthMode"
         static let azureTenantId = "ScribeCleanupAzureTenantId"
         static let azureClientId = "ScribeCleanupAzureClientId"
+        static let secretRevision = "ScribeCleanupSecretRevision"
     }
 
     static let openAIApiKeyKeychainService = "com.scribe.macos.openai-compatible-api-key"
-    private static let openAIApiKeyKeychainAccount = "default"
+    /// The account is the client id itself, so switching Entra app registrations never reads a stale secret.
+    static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
+    /// One OpenAI-compatible key per Mac, under one fixed account.
+    static let openAIApiKeyAccount = "default"
+    /// The benchmarked recommendations (see CLEANUP-MODEL-BENCHMARK.md), shared with the providers' own defaults.
+    static let defaultFoundryLocalModelAlias = "qwen2.5-1.5b"
+    static let defaultOllamaModel = "qwen2.5:3b"
+
+    /// The app's own store: `UserDefaults.standard` and the production Keychain services. No test uses it.
+    static var live: CleanupSettingsStore {
+        CleanupSettingsStore(
+            domain: .standard,
+            apiKeys: KeychainSecretStore(service: openAIApiKeyKeychainService),
+            clientSecrets: KeychainSecretStore(service: azureClientSecretKeychainService))
+    }
+
+    let domain: Domain
+    /// Holds the OpenAI-compatible API key, under `openAIApiKeyAccount`.
+    let apiKeys: any SecretStore
+    /// Holds each service principal's client secret, under its client id.
+    let clientSecrets: any SecretStore
+
+    init(domain: Domain, apiKeys: any SecretStore, clientSecrets: any SecretStore) {
+        self.domain = domain
+        self.apiKeys = apiKeys
+        self.clientSecrets = clientSecrets
+    }
+
+    private var defaults: UserDefaults {
+        switch domain {
+        case .standard:
+            return .standard
+        case .suite(let name):
+            guard let suite = UserDefaults(suiteName: name) else {
+                preconditionFailure("UserDefaults rejected a test suite name")
+            }
+            return suite
+        }
+    }
+
+    // MARK: - Settings
 
     /// Whether AI cleanup is turned on at all. Mirrors the tray "AI Cleanup" checkbox
-    /// (`AppDelegate.isAiCleanupEnabled`); the two are kept in sync by `AppDelegate` reading this
-    /// value at launch and writing back to it from the tray toggle, so enabling it from either the
-    /// tray or Settings updates the other.
-    static var isEnabled: Bool {
-        get { UserDefaults.standard.bool(forKey: Key.isEnabled) }
-        set { UserDefaults.standard.set(newValue, forKey: Key.isEnabled) }
+    /// (`AppDelegate.isAiCleanupEnabled`), which reads and writes the same key, so enabling it from either the tray or
+    /// Settings updates the other.
+    var isEnabled: Bool {
+        get { defaults.bool(forKey: Key.isEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: Key.isEnabled) }
     }
 
-    static var providerKind: CleanupProviderKind {
-        get { CleanupProviderKind(rawValue: UserDefaults.standard.string(forKey: Key.providerKind) ?? "") ?? .foundryLocal }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.providerKind) }
+    var providerKind: CleanupProviderKind {
+        get { Self.providerKind(in: defaults) }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.providerKind) }
     }
 
-    /// `qwen2.5-1.5b` matches `FoundryLocalCleanupProvider`'s own default (the benchmarked
-    /// recommendation; see CLEANUP-MODEL-BENCHMARK.md).
-    static var foundryLocalModelAlias: String {
-        get { UserDefaults.standard.string(forKey: Key.foundryLocalModelAlias) ?? "qwen2.5-1.5b" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.foundryLocalModelAlias) }
+    var foundryLocalModelAlias: String {
+        get { defaults.string(forKey: Key.foundryLocalModelAlias) ?? Self.defaultFoundryLocalModelAlias }
+        nonmutating set { defaults.set(newValue, forKey: Key.foundryLocalModelAlias) }
     }
 
-    /// `qwen2.5:3b` matches `ManagedOllamaCleanupProvider`'s own default (the best-scoring Ollama
-    /// model in CLEANUP-MODEL-BENCHMARK.md).
-    static var ollamaModel: String {
-        get { UserDefaults.standard.string(forKey: Key.ollamaModel) ?? "qwen2.5:3b" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.ollamaModel) }
+    var ollamaModel: String {
+        get { defaults.string(forKey: Key.ollamaModel) ?? Self.defaultOllamaModel }
+        nonmutating set { defaults.set(newValue, forKey: Key.ollamaModel) }
     }
 
-    static var openAIBaseURL: String {
-        get { UserDefaults.standard.string(forKey: Key.openAIBaseURL) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.openAIBaseURL) }
+    var openAIBaseURL: String {
+        get { defaults.string(forKey: Key.openAIBaseURL) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.openAIBaseURL) }
     }
 
-    static var openAIModel: String {
-        get { UserDefaults.standard.string(forKey: Key.openAIModel) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.openAIModel) }
+    var openAIModel: String {
+        get { defaults.string(forKey: Key.openAIModel) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.openAIModel) }
     }
 
-    static func openAIApiKey() -> String? {
-        try? KeychainStore.get(service: openAIApiKeyKeychainService, account: openAIApiKeyKeychainAccount)
+    var azureEndpoint: String {
+        get { defaults.string(forKey: Key.azureEndpoint) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureEndpoint) }
     }
 
-    /// Saves (or, given `nil`/empty, clears) the OpenAI-compatible API key in Keychain.
-    static func setOpenAIApiKey(_ key: String?) throws {
-        if let key, !key.isEmpty {
-            try KeychainStore.set(key, service: openAIApiKeyKeychainService, account: openAIApiKeyKeychainAccount)
-        } else {
-            try KeychainStore.delete(service: openAIApiKeyKeychainService, account: openAIApiKeyKeychainAccount)
-        }
+    var azureDeployment: String {
+        get { defaults.string(forKey: Key.azureDeployment) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureDeployment) }
     }
 
-    static var azureEndpoint: String {
-        get { UserDefaults.standard.string(forKey: Key.azureEndpoint) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.azureEndpoint) }
+    var azureAuthMode: AzureAuthMode {
+        get { Self.azureAuthMode(in: defaults) }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.azureAuthMode) }
     }
 
-    static var azureDeployment: String {
-        get { UserDefaults.standard.string(forKey: Key.azureDeployment) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.azureDeployment) }
+    var azureTenantId: String {
+        get { defaults.string(forKey: Key.azureTenantId) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureTenantId) }
     }
 
-    static var azureAuthMode: AzureAuthMode {
-        get { AzureAuthMode(rawValue: UserDefaults.standard.string(forKey: Key.azureAuthMode) ?? "") ?? .azureCli }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.azureAuthMode) }
+    var azureClientId: String {
+        get { defaults.string(forKey: Key.azureClientId) ?? "" }
+        nonmutating set { defaults.set(newValue, forKey: Key.azureClientId) }
     }
 
-    static var azureTenantId: String {
-        get { UserDefaults.standard.string(forKey: Key.azureTenantId) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.azureTenantId) }
+    /// Changes whenever a secret is saved or removed through this store. A provider built with a secret is keyed by
+    /// it, so the first request after a new key or client secret is saved builds a new provider, while the secret
+    /// itself never leaves the secret store to become part of a key. A save made by another Scribe process (the
+    /// `--set-azure-client-secret` verb) changes it too, since both share the defaults.
+    var secretRevision: String {
+        defaults.string(forKey: Key.secretRevision) ?? ""
     }
 
-    static var azureClientId: String {
-        get { UserDefaults.standard.string(forKey: Key.azureClientId) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Key.azureClientId) }
+    /// Everything above, read from one defaults instance.
+    func snapshot() -> CleanupSettingsSnapshot {
+        let defaults = self.defaults
+        return CleanupSettingsSnapshot(
+            isEnabled: defaults.bool(forKey: Key.isEnabled),
+            providerKind: Self.providerKind(in: defaults),
+            foundryLocalModelAlias: defaults.string(forKey: Key.foundryLocalModelAlias)
+                ?? Self.defaultFoundryLocalModelAlias,
+            ollamaModel: defaults.string(forKey: Key.ollamaModel) ?? Self.defaultOllamaModel,
+            openAIBaseURL: defaults.string(forKey: Key.openAIBaseURL) ?? "",
+            openAIModel: defaults.string(forKey: Key.openAIModel) ?? "",
+            azureEndpoint: defaults.string(forKey: Key.azureEndpoint) ?? "",
+            azureDeployment: defaults.string(forKey: Key.azureDeployment) ?? "",
+            azureAuthMode: Self.azureAuthMode(in: defaults),
+            azureTenantId: defaults.string(forKey: Key.azureTenantId) ?? "",
+            azureClientId: defaults.string(forKey: Key.azureClientId) ?? "",
+            secretRevision: defaults.string(forKey: Key.secretRevision) ?? "")
     }
 
-    /// Keyed by client id (like `CleanupProviderResolver`'s CLI-set secret), so switching Entra app
-    /// registrations in Settings never reads a stale secret left over from a previous client id.
-    static func azureClientSecret(clientId: String) -> String? {
-        guard !clientId.isEmpty else { return nil }
-        return try? KeychainStore.get(service: CleanupProviderResolver.azureClientSecretKeychainService, account: clientId)
-    }
-
-    static func setAzureClientSecret(_ secret: String?, clientId: String) throws {
-        guard !clientId.isEmpty else { return }
-        if let secret, !secret.isEmpty {
-            try KeychainStore.set(secret, service: CleanupProviderResolver.azureClientSecretKeychainService, account: clientId)
-        } else {
-            try KeychainStore.delete(service: CleanupProviderResolver.azureClientSecretKeychainService, account: clientId)
-        }
-    }
-
-    /// Whether Settings has enough fields filled in to build a provider for `kind`, used to gate
-    /// the Settings UI's "not configured yet" messaging before the user hits "Test Connection".
-    static func isConfigured(for kind: CleanupProviderKind) -> Bool {
+    /// Whether Settings has enough fields filled in to build a provider for `kind`, which gates the Settings UI's
+    /// "Test Connection" button.
+    func isConfigured(for kind: CleanupProviderKind) -> Bool {
         switch kind {
         case .foundryLocal, .ollama:
             return true
         case .openAICompatible:
-            return !openAIBaseURL.isEmpty && !openAIModel.isEmpty
+            return !Self.isBlank(openAIBaseURL) && !Self.isBlank(openAIModel)
         case .microsoftFoundry:
-            return !azureEndpoint.isEmpty && !azureDeployment.isEmpty
+            return !Self.isBlank(azureEndpoint) && !Self.isBlank(azureDeployment)
         }
+    }
+
+    // MARK: - Secrets
+
+    /// The saved OpenAI-compatible API key. Throws when the secret store cannot be read, so a caller can tell a locked
+    /// Keychain from a key that was never saved.
+    func readOpenAIApiKey() throws -> String? {
+        try apiKeys.secret(for: Self.openAIApiKeyAccount)
+    }
+
+    /// The saved key for the Settings window, where a Keychain that cannot be read shows as no key.
+    func openAIApiKey() -> String? {
+        try? readOpenAIApiKey()
+    }
+
+    /// Saves the OpenAI-compatible API key, or removes it when given `nil` or an empty string.
+    func setOpenAIApiKey(_ key: String?) throws {
+        if let key, !key.isEmpty {
+            try apiKeys.save(key, for: Self.openAIApiKeyAccount)
+        } else {
+            try apiKeys.removeSecret(for: Self.openAIApiKeyAccount)
+        }
+        secretsChanged()
+    }
+
+    /// The client secret saved for `clientId`, or `nil` for a blank client id. Throws when the secret store cannot be
+    /// read.
+    func readAzureClientSecret(clientId: String) throws -> String? {
+        let account = Self.secretAccount(forClientId: clientId)
+        guard !account.isEmpty else { return nil }
+        return try clientSecrets.secret(for: account)
+    }
+
+    /// The saved client secret for the Settings window, where a Keychain that cannot be read shows as no secret.
+    func azureClientSecret(clientId: String) -> String? {
+        try? readAzureClientSecret(clientId: clientId)
+    }
+
+    /// Saves the client secret for `clientId`, or removes it when given `nil` or an empty string. A blank client id
+    /// stores nothing, so no item is ever keyed by an empty account shared by every unconfigured install.
+    func setAzureClientSecret(_ secret: String?, clientId: String) throws {
+        let account = Self.secretAccount(forClientId: clientId)
+        guard !account.isEmpty else { return }
+        if let secret, !secret.isEmpty {
+            try clientSecrets.save(secret, for: account)
+        } else {
+            try clientSecrets.removeSecret(for: account)
+        }
+        secretsChanged()
+    }
+
+    /// The account a client secret is saved under: the client id without surrounding whitespace, so a client id pasted
+    /// with a stray space still finds its own secret.
+    static func secretAccount(forClientId clientId: String) -> String {
+        clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Helpers
+
+    private func secretsChanged() {
+        defaults.set(UUID().uuidString, forKey: Key.secretRevision)
+    }
+
+    private static func providerKind(in defaults: UserDefaults) -> CleanupProviderKind {
+        CleanupProviderKind(rawValue: defaults.string(forKey: Key.providerKind) ?? "") ?? .foundryLocal
+    }
+
+    private static func azureAuthMode(in defaults: UserDefaults) -> AzureAuthMode {
+        AzureAuthMode(rawValue: defaults.string(forKey: Key.azureAuthMode) ?? "") ?? .azureCli
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

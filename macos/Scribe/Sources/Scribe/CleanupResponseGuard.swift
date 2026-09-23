@@ -68,7 +68,10 @@ enum CleanupResponseGuard {
             return .rejected(.replyLike)
         }
 
-        return .accepted(cleaned)
+        // Last, because the guards above compare the model's own answer with the transcript. The dashes the writing
+        // style forbids come out of the model's prose here. Dictionary replacements and snippets belong after the
+        // guard (raw transcript, cleanup, guard, then post-processing), so a dash in the user's own text survives.
+        return .accepted(DashNormalizer.normalize(cleaned))
     }
 
     static func looksLikeRefusal(_ text: String) -> Bool {

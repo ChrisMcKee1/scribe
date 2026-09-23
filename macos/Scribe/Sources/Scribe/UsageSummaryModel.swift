@@ -19,7 +19,7 @@ final class UsageSummaryModel: ObservableObject {
     private(set) var inFlight: Task<Void, Never>?
 
     init(
-        readCleanupEnabled: @escaping @MainActor () -> Bool = { CleanupSettingsStore.isEnabled },
+        readCleanupEnabled: @escaping @MainActor () -> Bool = { CleanupSettingsStore.live.isEnabled },
         summarize: @escaping @Sendable (String) async throws -> String = { payload in
             try await UsageSummaryModel.summarizeWithConfiguredProvider(payload)
         },
@@ -88,7 +88,8 @@ final class UsageSummaryModel: ObservableObject {
         inFlight = nil
         switch outcome {
         case .success(let reply):
-            if let parsed = UsageInsight.parse(reply) {
+            // The reply is model output like a cleaned dictation, so the house style's dash rule holds for it too.
+            if let parsed = UsageInsight.parse(DashNormalizer.normalize(reply)) {
                 summary = parsed
             } else {
                 errorMessage = "The AI provider returned no usable summary."
@@ -99,9 +100,10 @@ final class UsageSummaryModel: ObservableObject {
         }
     }
 
-    /// The production request: the provider AI cleanup would use right now, resolved with the throwing resolver.
+    /// The production request: the provider AI cleanup would use right now, from the shared provider cache, which
+    /// throws for an unfinished setup instead of stopping the app.
     nonisolated static func summarizeWithConfiguredProvider(_ payload: String) async throws -> String {
-        let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
+        let provider = try CleanupProviderCache.shared.provider()
         let response = try await provider.clean(
             CleanupRequest(transcript: payload, writingStylePrompt: UsageInsight.systemPrompt))
         return response.cleanedText

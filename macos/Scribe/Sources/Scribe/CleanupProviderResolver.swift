@@ -1,157 +1,335 @@
 import Foundation
+import Security
 
-/// Resolves which CleanupProvider to use. `SCRIBE_CLEANUP_PROVIDER` and its related environment
-/// variables take priority when set, preserving the original CLI/scripted-usage contract
-/// (`--cleanup-text`, the offline eval harness) unchanged. Once no such environment variable is
-/// present, resolution falls through to `CleanupSettingsStore`, which is what the Settings
-/// window's "AI Cleanup" tab writes to, so a user can configure everything from the GUI without
-/// ever touching an environment variable.
+/// One validated cleanup configuration: every setting a provider is built from except the secret itself, which the
+/// secret store's revision stands in for. Two equal connections build interchangeable providers, so
+/// `CleanupProviderCache` keys on it. The prompt is not part of it; it travels with each `CleanupRequest`.
+///
+/// Printing or dumping one shows only the provider kind, since the endpoint, deployment, model and ids are the user's.
+struct CleanupConnection: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
+    enum Target: Hashable, Sendable {
+        case foundryLocal(modelAlias: String)
+        case ollama(model: String)
+        case openAICompatible(completionsURL: URL, model: String, apiKey: CleanupSecretSource)
+        case microsoftFoundry(inferenceBase: URL, deployment: String, identity: AzureIdentity)
+    }
+
+    let target: Target
+    let source: CleanupConfigurationSource
+
+    var kind: CleanupProviderKind {
+        switch target {
+        case .foundryLocal: return .foundryLocal
+        case .ollama: return .ollama
+        case .openAICompatible: return .openAICompatible
+        case .microsoftFoundry: return .microsoftFoundry
+        }
+    }
+
+    var description: String { "CleanupConnection(\(kind.rawValue))" }
+    var customMirror: Mirror { Mirror(self, children: ["kind": kind]) }
+}
+
+/// Where the OpenAI-compatible API key comes from.
+enum CleanupSecretSource: Hashable, Sendable {
+    /// `SCRIBE_CLEANUP_API_KEY`, fixed for the life of the process.
+    case environment
+    /// The settings store's secret store, as of `CleanupSettingsStore.secretRevision`.
+    case secretStore(revision: String)
+}
+
+/// What providers are built with. `live` sends requests through `cleanupSession`, runs the real `az` and `foundry`
+/// tools and reads the system clocks; tests pass stubs and fakes.
+struct CleanupProviderFactory: Sendable {
+    /// One ephemeral session for every cleanup and token request, so no response, cookie or credential from a cleanup
+    /// endpoint or from Entra is ever written to disk.
+    static let cleanupSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
+        return URLSession(configuration: configuration)
+    }()
+
+    var session: URLSession
+    var foundryLocalStatus: FoundryLocalStatusSource
+    var azureCliSearchPath: [String]
+    var azureCliLane: AsyncLane
+    var azureCliLaunch: AzureCliCredentialProvider.Launch
+    /// Wall-clock time, for token expiry.
+    var now: @Sendable () -> Date
+    /// Elapsed time, for how long Foundry Local's endpoint is trusted.
+    var monotonicNow: @Sendable () -> ContinuousClock.Instant
+
+    static var live: CleanupProviderFactory {
+        CleanupProviderFactory(
+            session: cleanupSession,
+            foundryLocalStatus: .live(),
+            azureCliSearchPath: ProcessRunner.defaultSearchPath(),
+            azureCliLane: AzureCliCredentialProvider.processLane,
+            azureCliLaunch: AzureCliCredentialProvider.launchThroughProcessRunner,
+            now: { Date() },
+            monotonicNow: { ContinuousClock.now })
+    }
+}
+
+/// Turns the stored settings, or the `SCRIBE_CLEANUP_PROVIDER` environment variables when they are set, into a
+/// validated `CleanupConnection`, and a connection into a provider.
+///
+/// The environment takes priority when `SCRIBE_CLEANUP_PROVIDER` is set, preserving the CLI and scripted contract
+/// (`--cleanup-text`, the offline eval harness); otherwise the Settings window's AI Cleanup tab decides, through
+/// `CleanupSettingsStore`, so a user can configure everything without an environment variable.
+///
+/// The app resolves through `CleanupProviderCache`, which keeps one provider per connection. The uncached entry points
+/// here, `tryResolveDefaultProvider` and `resolveDefaultProvider`, build a fresh provider every time and are for
+/// one-shot use.
 enum CleanupProviderResolver {
-    /// Keychain service name for the Microsoft Foundry service-principal client secret; the account
-    /// is the client id itself, so switching Entra app registrations never reads a stale secret.
-    static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
-
-    static func resolveDefaultProvider() -> CleanupProvider {
-        do {
-            return try tryResolveDefaultProvider()
-        } catch let CleanupProviderError.notConfigured(message) {
-            fatalError(message)
-        } catch {
-            fatalError("Failed to resolve cleanup provider: \(error.localizedDescription)")
-        }
-    }
-
-    /// Non-fatal variant for the live dictation pipeline: a misconfigured optional AI-cleanup
-    /// provider must never crash mid-dictation (see AGENTS.md's offline-first guarantee, ported
-    /// conceptually here), so this throws `CleanupProviderError.notConfigured` instead of calling
-    /// `fatalError`. The CLI verbs (`--cleanup-text`, usage-insight summaries) keep using the
-    /// fatal `resolveDefaultProvider()` above since a hard failure there is fine (and more visible)
-    /// for a one-shot command-line invocation.
-    static func tryResolveDefaultProvider() throws -> CleanupProvider {
-        let environment = ProcessInfo.processInfo.environment
-        if let envProviderName = environment["SCRIBE_CLEANUP_PROVIDER"] {
-            return try resolveFromEnvironment(envProviderName, environment: environment)
-        }
-        return try resolveFromSettings()
-    }
-
-    /// Configuration via environment variables (legacy/scripted path):
+    /// The configuration to clean with now. Throws `CleanupProviderError.notConfigured` when it is incomplete or
+    /// invalid. It reads only preferences: the secret store is read when a provider is built, not here.
     ///
+    /// The environment variables of the scripted path:
     /// - `SCRIBE_CLEANUP_PROVIDER`: "foundry-local" (default) | "ollama" | "openai-compatible" | "microsoft-foundry"
     /// - `SCRIBE_FOUNDRY_CLEANUP_MODEL`, `SCRIBE_OLLAMA_MODEL`: model overrides for the two managed local providers
     /// - `SCRIBE_CLEANUP_BASE_URL`, `SCRIBE_CLEANUP_MODEL`, `SCRIBE_CLEANUP_API_KEY`: openai-compatible config
     /// - `SCRIBE_AZURE_FOUNDRY_ENDPOINT`, `SCRIBE_AZURE_FOUNDRY_DEPLOYMENT`, `SCRIBE_AZURE_AUTH_MODE`,
-    ///   `SCRIBE_AZURE_TENANT_ID`, `SCRIBE_AZURE_CLIENT_ID`: microsoft-foundry config (secret via Keychain, see below)
-    private static func resolveFromEnvironment(_ providerName: String, environment: [String: String]) throws -> CleanupProvider {
+    ///   `SCRIBE_AZURE_TENANT_ID`, `SCRIBE_AZURE_CLIENT_ID`: microsoft-foundry config. The client secret always comes
+    ///   from the Keychain, saved with `Scribe --set-azure-client-secret <client-id>`, never from the environment.
+    static func connection(store: CleanupSettingsStore, environment: [String: String]) throws -> CleanupConnection {
+        if let providerName = environment["SCRIBE_CLEANUP_PROVIDER"] {
+            return try environmentConnection(providerName, environment: environment, store: store)
+        }
+        return try settingsConnection(store.snapshot())
+    }
+
+    /// Builds the provider for `connection`, reading its secret, when it has one, from `store`. Microsoft Foundry
+    /// credentials come from `credentials`, so a provider rebuilt for the same identity keeps its token.
+    static func makeProvider(
+        for connection: CleanupConnection,
+        store: CleanupSettingsStore,
+        environment: [String: String],
+        credentials: AzureCredentialCache,
+        factory: CleanupProviderFactory
+    ) throws -> any CleanupProvider {
+        switch connection.target {
+        case .foundryLocal(let modelAlias):
+            return FoundryLocalCleanupProvider(
+                modelAlias: modelAlias, status: factory.foundryLocalStatus, session: factory.session,
+                now: factory.monotonicNow)
+        case .ollama(let model):
+            return ManagedOllamaCleanupProvider(model: model, session: factory.session)
+        case .openAICompatible(let completionsURL, let model, let keySource):
+            let apiKey: String?
+            switch keySource {
+            case .environment:
+                apiKey = environment["SCRIBE_CLEANUP_API_KEY"]
+            case .secretStore:
+                apiKey = try readSecret { try store.readOpenAIApiKey() }
+            }
+            return OpenAICompatibleCleanupProvider(
+                model: model, apiKey: apiKey, completionsURL: completionsURL, session: factory.session)
+        case .microsoftFoundry(let inferenceBase, let deployment, let identity):
+            let credential = try credentials.credential(for: identity) {
+                try makeCredential(for: identity, store: store, source: connection.source, factory: factory)
+            }
+            return MicrosoftFoundryCleanupProvider(
+                inferenceBase: inferenceBase, deployment: deployment, credential: credential, session: factory.session)
+        }
+    }
+
+    /// A fresh provider for the live settings and environment, uncached: for one-shot use and tests. The app goes
+    /// through `CleanupProviderCache.shared` instead.
+    static func tryResolveDefaultProvider(
+        store: CleanupSettingsStore = .live,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        factory: CleanupProviderFactory = .live
+    ) throws -> any CleanupProvider {
+        let connection = try connection(store: store, environment: environment)
+        return try makeProvider(
+            for: connection, store: store, environment: environment, credentials: AzureCredentialCache(),
+            factory: factory)
+    }
+
+    /// For the command line verbs only (`--cleanup-text`), where a hard stop is the clearest answer to an incomplete
+    /// setup. Everything in the running app, dictation, Test Connection and the usage summary included, goes through
+    /// `CleanupProviderCache.provider()`, which throws instead, because an optional feature must never end the app.
+    static func resolveDefaultProvider() -> any CleanupProvider {
+        do {
+            return try tryResolveDefaultProvider()
+        } catch {
+            fatalError(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Connections
+
+    private static func environmentConnection(
+        _ providerName: String, environment: [String: String], store: CleanupSettingsStore
+    ) throws -> CleanupConnection {
+        let source = CleanupConfigurationSource.environment
         switch providerName {
         case "microsoft-foundry":
-            return try resolveMicrosoftFoundryProviderThrowing(
-                endpointString: environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
+            return try microsoftFoundryConnection(
+                endpoint: environment["SCRIBE_AZURE_FOUNDRY_ENDPOINT"],
                 deployment: environment["SCRIBE_AZURE_FOUNDRY_DEPLOYMENT"],
-                useServicePrincipal: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal",
+                authMode: environment["SCRIBE_AZURE_AUTH_MODE"] == "service-principal" ? .servicePrincipal : .azureCli,
                 tenantId: environment["SCRIBE_AZURE_TENANT_ID"],
                 clientId: environment["SCRIBE_AZURE_CLIENT_ID"],
-                notConfiguredHint: "'Scribe --set-azure-client-secret <client-id>'")
+                secretRevision: store.secretRevision,
+                source: source)
         case "ollama":
-            let model = environment["SCRIBE_OLLAMA_MODEL"] ?? "qwen2.5:3b"
-            return ManagedOllamaCleanupProvider(model: model)
+            return try ollamaConnection(
+                model: environment["SCRIBE_OLLAMA_MODEL"] ?? CleanupSettingsStore.defaultOllamaModel, source: source)
         case "openai-compatible":
-            guard
-                let baseURLString = environment["SCRIBE_CLEANUP_BASE_URL"],
-                let baseURL = URL(string: baseURLString),
-                let model = environment["SCRIBE_CLEANUP_MODEL"]
-            else {
-                throw CleanupProviderError.notConfigured(
-                    "SCRIBE_CLEANUP_PROVIDER=openai-compatible requires SCRIBE_CLEANUP_BASE_URL and SCRIBE_CLEANUP_MODEL")
-            }
-            return OpenAICompatibleCleanupProvider(
-                id: "openai-compatible",
-                displayName: "OpenAI-compatible endpoint",
-                model: model,
-                apiKey: environment["SCRIBE_CLEANUP_API_KEY"],
-                baseURLProvider: { baseURL })
+            return try openAICompatibleConnection(
+                baseURL: environment["SCRIBE_CLEANUP_BASE_URL"], model: environment["SCRIBE_CLEANUP_MODEL"],
+                apiKey: .environment, source: source)
         default:
-            let modelAlias = environment["SCRIBE_FOUNDRY_CLEANUP_MODEL"] ?? "qwen2.5-1.5b"
-            return FoundryLocalCleanupProvider(modelAlias: modelAlias)
+            return try foundryLocalConnection(
+                modelAlias: environment["SCRIBE_FOUNDRY_CLEANUP_MODEL"]
+                    ?? CleanupSettingsStore.defaultFoundryLocalModelAlias,
+                source: source)
         }
     }
 
-    /// Builds a provider from the Settings window's AI Cleanup tab (`CleanupSettingsStore`), used
-    /// whenever no `SCRIBE_CLEANUP_PROVIDER` environment variable is set.
-    private static func resolveFromSettings() throws -> CleanupProvider {
-        switch CleanupSettingsStore.providerKind {
+    private static func settingsConnection(_ settings: CleanupSettingsSnapshot) throws -> CleanupConnection {
+        let source = CleanupConfigurationSource.settings
+        switch settings.providerKind {
         case .foundryLocal:
-            return FoundryLocalCleanupProvider(modelAlias: CleanupSettingsStore.foundryLocalModelAlias)
+            return try foundryLocalConnection(modelAlias: settings.foundryLocalModelAlias, source: source)
         case .ollama:
-            return ManagedOllamaCleanupProvider(model: CleanupSettingsStore.ollamaModel)
+            return try ollamaConnection(model: settings.ollamaModel, source: source)
         case .openAICompatible:
-            guard
-                !CleanupSettingsStore.openAIBaseURL.isEmpty,
-                let baseURL = URL(string: CleanupSettingsStore.openAIBaseURL),
-                !CleanupSettingsStore.openAIModel.isEmpty
-            else {
-                throw CleanupProviderError.notConfigured(
-                    "Set the endpoint URL and model for the OpenAI-compatible provider in Settings > AI Cleanup.")
-            }
-            return OpenAICompatibleCleanupProvider(
-                id: "openai-compatible",
-                displayName: "OpenAI-compatible endpoint",
-                model: CleanupSettingsStore.openAIModel,
-                apiKey: CleanupSettingsStore.openAIApiKey(),
-                baseURLProvider: { baseURL })
+            return try openAICompatibleConnection(
+                baseURL: settings.openAIBaseURL, model: settings.openAIModel,
+                apiKey: .secretStore(revision: settings.secretRevision), source: source)
         case .microsoftFoundry:
-            let clientId = CleanupSettingsStore.azureClientId
-            return try resolveMicrosoftFoundryProviderThrowing(
-                endpointString: CleanupSettingsStore.azureEndpoint,
-                deployment: CleanupSettingsStore.azureDeployment,
-                useServicePrincipal: CleanupSettingsStore.azureAuthMode == .servicePrincipal,
-                tenantId: CleanupSettingsStore.azureTenantId.isEmpty ? nil : CleanupSettingsStore.azureTenantId,
-                clientId: clientId.isEmpty ? nil : clientId,
-                notConfiguredHint: "Settings > AI Cleanup")
+            return try microsoftFoundryConnection(
+                endpoint: settings.azureEndpoint,
+                deployment: settings.azureDeployment,
+                authMode: settings.azureAuthMode,
+                tenantId: settings.azureTenantId,
+                clientId: settings.azureClientId,
+                secretRevision: settings.secretRevision,
+                source: source)
         }
     }
 
-    /// Shared by both the environment-variable and Settings-store resolution paths. The service
-    /// principal's secret always comes from Keychain (never an env var, a plist, or UserDefaults),
-    /// looked up by `clientId` regardless of which path supplied the id.
-    private static func resolveMicrosoftFoundryProviderThrowing(
-        endpointString: String?,
+    private static func foundryLocalConnection(
+        modelAlias: String, source: CleanupConfigurationSource
+    ) throws -> CleanupConnection {
+        guard let alias = trimmed(modelAlias) else {
+            throw CleanupProviderError.notConfigured(.foundryLocalModelMissing, source: source)
+        }
+        return CleanupConnection(target: .foundryLocal(modelAlias: alias), source: source)
+    }
+
+    private static func ollamaConnection(
+        model: String, source: CleanupConfigurationSource
+    ) throws -> CleanupConnection {
+        guard let model = trimmed(model) else {
+            throw CleanupProviderError.notConfigured(.ollamaModelMissing, source: source)
+        }
+        return CleanupConnection(target: .ollama(model: model), source: source)
+    }
+
+    private static func openAICompatibleConnection(
+        baseURL: String?, model: String?, apiKey: CleanupSecretSource, source: CleanupConfigurationSource
+    ) throws -> CleanupConnection {
+        guard let baseText = trimmed(baseURL) else {
+            throw CleanupProviderError.notConfigured(.openAIEndpointMissing, source: source)
+        }
+        guard let base = URL(string: baseText),
+            let completionsURL = OpenAICompatibleEndpoint.chatCompletionsURL(for: base)
+        else {
+            throw CleanupProviderError.notConfigured(.openAIEndpointInvalid, source: source)
+        }
+        guard let model = trimmed(model) else {
+            throw CleanupProviderError.notConfigured(.openAIModelMissing, source: source)
+        }
+        return CleanupConnection(
+            target: .openAICompatible(completionsURL: completionsURL, model: model, apiKey: apiKey), source: source)
+    }
+
+    private static func microsoftFoundryConnection(
+        endpoint: String?,
         deployment: String?,
-        useServicePrincipal: Bool,
+        authMode: AzureAuthMode,
         tenantId: String?,
         clientId: String?,
-        notConfiguredHint: String
-    ) throws -> CleanupProvider {
-        guard
-            let endpointString, !endpointString.isEmpty, let endpoint = URL(string: endpointString),
-            let deployment, !deployment.isEmpty
+        secretRevision: String,
+        source: CleanupConfigurationSource
+    ) throws -> CleanupConnection {
+        guard let endpointText = trimmed(endpoint) else {
+            throw CleanupProviderError.notConfigured(.azureEndpointMissing, source: source)
+        }
+        guard let endpointURL = URL(string: endpointText),
+            let inferenceBase = MicrosoftFoundryCleanupProvider.inferenceBase(for: endpointURL)
         else {
-            throw CleanupProviderError.notConfigured(
-                "Microsoft Foundry cleanup requires an endpoint and a deployment name (configure in \(notConfiguredHint)).")
+            throw CleanupProviderError.notConfigured(.azureEndpointInvalid, source: source)
+        }
+        guard let deployment = trimmed(deployment) else {
+            throw CleanupProviderError.notConfigured(.azureDeploymentMissing, source: source)
+        }
+        let tenant = trimmed(tenantId)
+        if let tenant, !AzureTenant.isValid(tenant) {
+            throw CleanupProviderError.notConfigured(.azureTenantInvalid, source: source)
         }
 
-        let credentialProvider: AzureCredentialProvider
-        if useServicePrincipal {
-            guard let clientId, !clientId.isEmpty else {
-                throw CleanupProviderError.notConfigured(
-                    "Service-principal auth requires a client id (configure in \(notConfiguredHint)).")
+        let identity: AzureIdentity
+        switch authMode {
+        case .azureCli:
+            identity = .azureCli(tenantId: tenant)
+        case .servicePrincipal:
+            guard let clientId = trimmed(clientId) else {
+                throw CleanupProviderError.notConfigured(.azureClientIdMissing, source: source)
             }
-            let secret = try? KeychainStore.get(service: azureClientSecretKeychainService, account: clientId)
-            guard
-                let principal = AzureServicePrincipal.tryCreate(
-                    tenantId: tenantId, clientId: clientId, clientSecret: secret ?? nil)
-            else {
-                throw CleanupProviderError.notConfigured(
-                    "Service-principal auth requires a tenant id, client id, and a saved client secret (configure in \(notConfiguredHint)).")
+            guard let tenant else {
+                throw CleanupProviderError.notConfigured(.azureTenantMissing, source: source)
             }
-            credentialProvider = AzureServicePrincipalCredentialProvider(principal: principal)
-        } else {
-            credentialProvider = AzureCliCredentialProvider(tenantId: tenantId)
+            identity = .servicePrincipal(tenantId: tenant, clientId: clientId, secretRevision: secretRevision)
         }
+        return CleanupConnection(
+            target: .microsoftFoundry(inferenceBase: inferenceBase, deployment: deployment, identity: identity),
+            source: source)
+    }
 
-        return MicrosoftFoundryCleanupProvider(
-            endpoint: endpoint,
-            deployment: deployment,
-            credentialProvider: credentialProvider)
+    // MARK: - Credentials
+
+    private static func makeCredential(
+        for identity: AzureIdentity,
+        store: CleanupSettingsStore,
+        source: CleanupConfigurationSource,
+        factory: CleanupProviderFactory
+    ) throws -> any AzureCredentialProvider {
+        switch identity {
+        case .azureCli(let tenantId):
+            return AzureCliCredentialProvider(
+                tenantId: tenantId, searchPath: factory.azureCliSearchPath, lane: factory.azureCliLane,
+                launch: factory.azureCliLaunch, now: factory.now)
+        case .servicePrincipal(let tenantId, let clientId, _):
+            let secret = try readSecret { try store.readAzureClientSecret(clientId: clientId) }
+            guard let secret, !secret.isEmpty else {
+                throw CleanupProviderError.notConfigured(.azureClientSecretMissing, source: source)
+            }
+            return AzureServicePrincipalCredentialProvider(
+                principal: AzureServicePrincipal(tenantId: tenantId, clientId: clientId, clientSecret: secret),
+                session: factory.session, now: factory.now)
+        }
+    }
+
+    /// A secret store read, with a failure to read kept apart from a secret that was never saved.
+    private static func readSecret(_ read: () throws -> String?) throws -> String? {
+        do {
+            return try read()
+        } catch let error as KeychainStore.KeychainError {
+            throw CleanupProviderError.secretUnavailable(error)
+        } catch {
+            throw CleanupProviderError.secretUnavailable(.unhandled(errSecInternalComponent))
+        }
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
     }
 }

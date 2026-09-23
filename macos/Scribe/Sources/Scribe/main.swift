@@ -82,16 +82,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
     /// Persisted user intent for AI cleanup. Mirrors Windows' `AppSettings.EnableAiCleanup`. Wired
-    /// into the live dictation pipeline in `transcribeAndInject`: when enabled, a provider is
-    /// resolved via `CleanupProviderResolver.tryResolveDefaultProvider()` (which itself checks
-    /// `CleanupSettingsStore`, i.e. the Settings window's "AI Cleanup" tab, or an env var override)
+    /// into the live dictation pipeline in `transcribeAndInject`: when enabled, the provider comes
+    /// from `CleanupProviderCache.shared` (built from `CleanupSettingsStore`, i.e. the Settings
+    /// window's "AI Cleanup" tab, or an env var override, and reused until that configuration changes)
     /// and its cleaned output is injected instead of the raw post-processed text, falling back to
     /// the post-processed text on any resolution or request failure. A computed proxy over
     /// `CleanupSettingsStore.isEnabled` rather than its own cached flag, so the tray checkbox and
     /// the Settings tab's toggle always agree, however each one was last changed.
     private var isAiCleanupEnabled: Bool {
-        get { CleanupSettingsStore.isEnabled }
-        set { CleanupSettingsStore.isEnabled = newValue }
+        get { CleanupSettingsStore.live.isEnabled }
+        set {
+            let store = CleanupSettingsStore.live
+            store.isEnabled = newValue
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -928,7 +931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 let cleanupStart = DispatchTime.now()
                 do {
                     let preCleanupText = processedText
-                    let provider = try CleanupProviderResolver.tryResolveDefaultProvider()
+                    let provider = try CleanupProviderCache.shared.provider()
                     let writingStyle = matchedProfile?.writingStylePrompt ?? CleanupPrompt.defaultWritingStyle
                     let systemPrompt = CleanupPrompt.systemPrompt(
                         writingStyle: writingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt)
@@ -1054,14 +1057,18 @@ private enum CommandLineTranscriptionTool {
         }
 
         let clientId = arguments[1]
+        guard !CleanupSettingsStore.secretAccount(forClientId: clientId).isEmpty else {
+            fputs("Usage: echo \"<secret>\" | Scribe --set-azure-client-secret <client-id>\n", stderr)
+            exit(EXIT_FAILURE)
+        }
         guard let secret = readLine(strippingNewline: true), !secret.isEmpty else {
             fputs("No secret provided on stdin.\n", stderr)
             exit(EXIT_FAILURE)
         }
 
         do {
-            try KeychainStore.set(
-                secret, service: CleanupProviderResolver.azureClientSecretKeychainService, account: clientId)
+            // Through the store, so the running app's provider cache sees the new secret on its next request.
+            try CleanupSettingsStore.live.setAzureClientSecret(secret, clientId: clientId)
             fputs("Saved client secret for client id \(clientId) to the Keychain.\n", stdout)
             return true
         } catch {

@@ -179,6 +179,18 @@ final class UsageSummaryModelTests: XCTestCase {
         XCTAssertFalse(model.canGenerate)
     }
 
+    /// The summary is model output like a cleaned dictation, so the house style's dash rule holds for it too.
+    @MainActor
+    func testADashInTheReplyIsRewritten() async {
+        let backing = UsageSummaryBackingFake(cleanupEnabled: true)
+        let model = makeModel(backing) { _ in "You dictate about Azure \u{2014} mostly in the morning." }
+
+        model.generate(payload: "Dictations: 3")
+        await model.inFlight?.value
+
+        XCTAssertEqual(model.summary, "You dictate about Azure, mostly in the morning.")
+    }
+
     @MainActor
     func testASecondRequestWhileOneIsRunningIsNotStarted() async {
         let backing = UsageSummaryBackingFake(cleanupEnabled: true)
