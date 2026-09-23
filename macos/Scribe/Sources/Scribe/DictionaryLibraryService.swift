@@ -1,18 +1,19 @@
 import Foundation
 
-/// Persisted user-facing settings for dictionary libraries: which library ids are switched on.
-/// UserDefaults-backed, the same stopgap pattern used by `CleanupSettingsStore` and the overlay
-/// anchor, pending a general structured settings store on macOS.
-enum DictionaryLibrarySettingsStore {
-    private static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
+/// Which dictionary libraries are switched on, persisted in `defaults` as a set of library ids.
+/// Injectable so tests use a suite of their own instead of the user's real preferences.
+struct DictionaryLibrarySettings {
+    static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
+
+    let defaults: UserDefaults
 
     /// The ids of every library the user has switched on. Order is not meaningful; membership is.
-    static var enabledLibraryIds: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: enabledIdsKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: enabledIdsKey) }
+    var enabledLibraryIds: Set<String> {
+        get { Set(defaults.stringArray(forKey: Self.enabledIdsKey) ?? []) }
+        nonmutating set { defaults.set(Array(newValue), forKey: Self.enabledIdsKey) }
     }
 
-    static func setEnabled(_ enabled: Bool, id: String) {
+    func setEnabled(_ enabled: Bool, id: String) {
         var ids = enabledLibraryIds
         if enabled {
             ids.insert(id)
@@ -20,6 +21,24 @@ enum DictionaryLibrarySettingsStore {
             ids.remove(id)
         }
         enabledLibraryIds = ids
+    }
+}
+
+/// The app's library switches in `UserDefaults.standard`: the same stopgap pattern used by
+/// `CleanupSettingsStore` and the overlay anchor, pending a general structured settings store on
+/// macOS.
+enum DictionaryLibrarySettingsStore {
+    static var standard: DictionaryLibrarySettings {
+        DictionaryLibrarySettings(defaults: .standard)
+    }
+
+    static var enabledLibraryIds: Set<String> {
+        get { standard.enabledLibraryIds }
+        set { standard.enabledLibraryIds = newValue }
+    }
+
+    static func setEnabled(_ enabled: Bool, id: String) {
+        standard.setEnabled(enabled, id: id)
     }
 }
 
@@ -50,10 +69,16 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
 /// Direct port of Windows' `Scribe.Core.PostProcessing.DictionaryLibraryService`.
 final class DictionaryLibraryService {
     let librariesDirectory: URL
+    let settings: DictionaryLibrarySettings
     private let fileManager: FileManager
 
-    init(fileManager: FileManager = .default, librariesDirectory overrideDirectory: URL? = nil) {
+    init(
+        fileManager: FileManager = .default,
+        librariesDirectory overrideDirectory: URL? = nil,
+        settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard
+    ) {
         self.fileManager = fileManager
+        self.settings = settings
         if let overrideDirectory {
             self.librariesDirectory = overrideDirectory
         } else {
@@ -69,11 +94,10 @@ final class DictionaryLibraryService {
         BuiltInDictionaryLibraries.all + loadCustom()
     }
 
-    /// The de-duplicated entries of every library the user has switched on (per
-    /// `DictionaryLibrarySettingsStore`), for layering on top of the base dictionary. Empty when
-    /// nothing is enabled.
+    /// The de-duplicated entries of every library the user has switched on (per `settings`), for
+    /// layering on top of the base dictionary. Empty when nothing is enabled.
     func enabledLibraryEntries() -> [DictionaryEntry] {
-        let enabledIds = DictionaryLibrarySettingsStore.enabledLibraryIds
+        let enabledIds = settings.enabledLibraryIds
         guard !enabledIds.isEmpty else { return [] }
 
         let matching = libraries().filter { enabledIds.contains($0.id) }
@@ -128,7 +152,7 @@ final class DictionaryLibraryService {
         if fileManager.fileExists(atPath: path.path) {
             try fileManager.removeItem(at: path)
         }
-        DictionaryLibrarySettingsStore.setEnabled(false, id: id)
+        settings.setEnabled(false, id: id)
     }
 
     private func loadCustom() -> [DictionaryLibrary] {

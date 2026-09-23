@@ -68,10 +68,15 @@ privacy/offline promise.
   top apps, recurring terms with one-click dictionary add, opt-in AI summary)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
   from persisted history), plus an injection-failure recovery notification
+- Dictation history written in the background after the text is delivered, in dictation order. A new
+  install keeps 90 days of text, a history from an earlier build keeps everything until a limit is
+  chosen, and a missing or unreadable setting never deletes anything. Retention is swept at launch and
+  daily, and freed space is reclaimed while the app is idle
 
 ## Known gaps vs. Windows
 
 See `PORTING-PLAN.md` for the authoritative, row-by-row feature checklist. As of this writing the
-main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, and no
-release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
+main outstanding gaps are: an energy-threshold silence detector instead of a trained VAD, no history
+retention picker or Clear history button in Settings yet (the storage side exists), and no release
+packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local
 Accessibility persistence only).

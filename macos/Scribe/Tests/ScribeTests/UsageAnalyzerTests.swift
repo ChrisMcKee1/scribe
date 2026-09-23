@@ -193,4 +193,49 @@ final class UsageAnalyzerTests: XCTestCase {
         let covered = snapshot.terms.filter { $0.covered }
         XCTAssertEqual(covered, [UsageAnalyzer.TermUsage(text: "A-A", dictations: 1, occurrences: 1, covered: true)])
     }
+
+    // MARK: - Read cap
+
+    private func historyRecord(secondsAgo: Double, app: String) -> DictationHistoryRecord {
+        DictationHistoryRecord(
+            startedAt: Self.now.addingTimeInterval(-secondsAgo),
+            durationSeconds: 1,
+            sampleCount: 16_000,
+            transcriptText: "word",
+            targetApp: app)
+    }
+
+    func testReportUsesOnlyTheNewestHistoryLimitAndSaysThePeriodWasCapped() {
+        // Oldest first, as the store returns them; one row past the cap.
+        var records = [historyRecord(secondsAgo: 20_000, app: "Oldest")]
+        records += (0..<UsageAnalyzer.historyLimit).map {
+            historyRecord(secondsAgo: Double(UsageAnalyzer.historyLimit - $0), app: "Recent")
+        }
+
+        let report = UsageAnalyzer.report(
+            records: records,
+            knownTerms: [],
+            sinceUtc: Self.now.addingTimeInterval(-86_400),
+            nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        XCTAssertTrue(report.periodCapped)
+        XCTAssertEqual(report.snapshot.dictations, UsageAnalyzer.historyLimit)
+        XCTAssertEqual(report.snapshot.topApps.map(\.name), ["Recent"])
+    }
+
+    func testReportUnderTheCapUsesEveryRecord() {
+        let records = [historyRecord(secondsAgo: 30, app: "A"), historyRecord(secondsAgo: 10, app: "B")]
+
+        let report = UsageAnalyzer.report(
+            records: records,
+            knownTerms: [],
+            sinceUtc: Self.now.addingTimeInterval(-86_400),
+            nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        XCTAssertFalse(report.periodCapped)
+        XCTAssertEqual(report.snapshot.dictations, 2)
+        XCTAssertEqual(report.snapshot.words, 2)
+    }
 }

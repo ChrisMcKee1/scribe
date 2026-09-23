@@ -134,4 +134,99 @@ final class DictionaryImportMergerTests: XCTestCase {
         XCTAssertEqual(op.index, 0)
         XCTAssertEqual(op.entry.id, 1)
     }
+
+    // MARK: - Applying the plan
+
+    func testChangesFoldADuplicateInTheSameImportIntoOneInsertWithTheLaterValue() {
+        let imported = [
+            DictionaryEntry(pattern: "term", replacement: "First"),
+            DictionaryEntry(pattern: "term", replacement: "Second"),
+        ]
+        let plan = DictionaryImportMerger.merge(existing: [], imported: imported)
+
+        let changes = DictionaryImportMerger.changes(applying: plan, to: [])
+
+        XCTAssertEqual(changes.inserts, [DictionaryEntry(pattern: "term", replacement: "Second")])
+        XCTAssertTrue(changes.updates.isEmpty)
+    }
+
+    func testChangesKeepTheLastUpdateOfAnExistingRowAndItsIdentity() {
+        let existingRows = [existing(0, 7, "cube", "cube"), existing(1, 8, "azure", "Azure")]
+        let plan = DictionaryImportMerger.merge(
+            existing: existingRows,
+            imported: [
+                DictionaryEntry(pattern: "cube", replacement: "Kube"),
+                DictionaryEntry(pattern: "CUBE", replacement: "Kubernetes"),
+                DictionaryEntry(pattern: "azure", replacement: "Azure"),
+            ])
+
+        let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
+
+        XCTAssertTrue(changes.inserts.isEmpty)
+        XCTAssertEqual(changes.updates, [DictionaryEntry(id: 7, pattern: "cube", replacement: "Kubernetes")])
+    }
+
+    func testChangesSkipAnExistingRowThatEndsWhereItStarted() {
+        let existingRows = [existing(0, 3, "cube", "cube")]
+        let plan = DictionaryImportMerger.merge(
+            existing: existingRows,
+            imported: [
+                DictionaryEntry(pattern: "cube", replacement: "Kubernetes"),
+                DictionaryEntry(pattern: "cube", replacement: "cube"),
+            ])
+
+        XCTAssertEqual(DictionaryImportMerger.changes(applying: plan, to: existingRows).updates, [])
+    }
+
+    // MARK: - Final stored rows
+
+    private func importCsvRows(_ imported: [DictionaryEntry], into store: PersistenceStore) throws {
+        let existingRows = try store.fetchAllDictionaryEntries().enumerated().map { index, entry in
+            DictionaryImportMerger.ExistingRow(
+                index: index, id: entry.id, pattern: entry.pattern, replacement: entry.replacement,
+                wholeWord: entry.wholeWord, enabled: entry.enabled)
+        }
+        let plan = DictionaryImportMerger.merge(existing: existingRows, imported: imported)
+        let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
+        try store.applyDictionaryChanges(inserts: changes.inserts, updates: changes.updates)
+    }
+
+    func testADuplicateSpokenFormInOneImportIsStoredOnceWithItsLaterValue() throws {
+        let directory = try StorageTestDirectory()
+        defer { directory.remove() }
+        let store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+
+        try importCsvRows(
+            [
+                DictionaryEntry(pattern: "term", replacement: "First"),
+                DictionaryEntry(pattern: "term", replacement: "Second"),
+            ],
+            into: store)
+
+        let stored = try store.fetchAllDictionaryEntries()
+        XCTAssertEqual(stored.map(\.pattern), ["term"])
+        XCTAssertEqual(stored.map(\.replacement), ["Second"])
+    }
+
+    func testAnImportUpdatesExistingRowsInPlaceAndAddsNewOnes() throws {
+        let directory = try StorageTestDirectory()
+        defer { directory.remove() }
+        let store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+        let cubeID = try store.insertDictionaryEntry(DictionaryEntry(pattern: "cube", replacement: "cube"))
+
+        try importCsvRows(
+            [
+                DictionaryEntry(pattern: "cube", replacement: "Kubernetes"),
+                DictionaryEntry(pattern: "net", replacement: "NET"),
+                DictionaryEntry(pattern: "net", replacement: ".NET"),
+            ],
+            into: store)
+
+        let stored = try store.fetchAllDictionaryEntries()
+        XCTAssertEqual(stored.map(\.pattern), ["cube", "net"])
+        XCTAssertEqual(stored.map(\.replacement), ["Kubernetes", ".NET"])
+        XCTAssertEqual(stored.first?.id, cubeID)
+    }
 }

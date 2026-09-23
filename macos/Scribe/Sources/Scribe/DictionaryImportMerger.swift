@@ -1,9 +1,9 @@
 import Foundation
 
 /// Pure merge of imported dictionary entries into an existing set, matched by spoken form
-/// (case-insensitive) to mirror the duplicate rule dictionary save enforces. The Settings view
-/// owns persistence (an import can still be cancelled), so this only decides an ordered plan and
-/// the counts; `DictionarySettingsTab` applies the plan as a thin adapter. Mirrors
+/// (case-insensitive) to mirror the duplicate rule dictionary save enforces. This decides an ordered
+/// plan and the counts; `changes(applying:to:)` then folds the plan into the rows it leaves behind,
+/// which `PersistenceStore.applyDictionaryChanges` writes in one transaction. Mirrors
 /// `Scribe.Core.Settings.DictionaryImportMerger` on Windows.
 enum DictionaryImportMerger {
     /// An existing row's identity: its position, current spoken form, and current fields.
@@ -37,6 +37,55 @@ enum DictionaryImportMerger {
         let added: Int
         let updated: Int
         let unchanged: Int
+    }
+
+    /// What an import leaves behind once its plan is applied: rows to insert and existing rows whose
+    /// stored fields change. Each is the row's final state after every operation in the batch.
+    struct Changes: Equatable {
+        let inserts: [DictionaryEntry]
+        let updates: [DictionaryEntry]
+    }
+
+    /// Applies `plan` to `existing` the way Windows applies it to the grid: an update replaces the row
+    /// at its index, whether that row came from the store or from an earlier addition in the same
+    /// batch. A spoken form imported twice therefore lands once, with its later values, rather than as
+    /// an update aimed at a row that does not exist yet. Addition indices are assigned exactly as
+    /// `merge` assigns them. An existing row that ends where it started is not rewritten.
+    static func changes(applying plan: Plan, to existing: [ExistingRow]) -> Changes {
+        var working: [Int: DictionaryEntry] = [:]
+        var original: [Int: DictionaryEntry] = [:]
+        for row in existing where working[row.index] == nil {
+            let entry = DictionaryEntry(
+                id: row.id,
+                pattern: row.pattern ?? "",
+                replacement: row.replacement ?? "",
+                wholeWord: row.wholeWord,
+                enabled: row.enabled)
+            working[row.index] = entry
+            original[row.index] = entry
+        }
+
+        var addedIndices: [Int] = []
+        var nextIndex = existing.isEmpty ? 0 : (existing.map(\.index).max() ?? 0) + 1
+        for operation in plan.operations {
+            switch operation.kind {
+            case .add:
+                working[nextIndex] = operation.entry
+                addedIndices.append(nextIndex)
+                nextIndex += 1
+            case .update:
+                working[operation.index] = operation.entry
+            }
+        }
+
+        let inserts = addedIndices.compactMap { working[$0] }
+        let updates = original.keys.sorted().compactMap { index -> DictionaryEntry? in
+            guard let current = working[index], current != original[index] else {
+                return nil
+            }
+            return current
+        }
+        return Changes(inserts: inserts, updates: updates)
     }
 
     /// Merges `imported` into `existing` by spoken form: unchanged rows are counted only;

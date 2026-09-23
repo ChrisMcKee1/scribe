@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private var quickAddWindowController: NSWindowController?
     private let logger = Logger(subsystem: "com.scribe.macos", category: "App")
     private let persistenceStore = PersistenceStore()
+    /// Commits history off the main actor, after the text is delivered, in dictation order.
+    private lazy var historyWriter = HistoryWriter(recorder: persistenceStore)
+    /// Applies the history retention choice and reclaims space while the app is idle.
+    private lazy var storageMaintenance = StorageMaintenance(store: persistenceStore, historyWriter: historyWriter)
     private let audioCaptureEngine = AudioCaptureEngine()
     private lazy var transcriptionEngine = try? TranscriptionEngine(
         logSink: { message in AppDelegate.writeLogLine(message) })
@@ -95,6 +99,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyManager.stop()
+        // Both bounded, so quitting never hangs on storage. Maintenance stops first: a reclaim in
+        // progress rolls back and frees the connection for the last history writes.
+        storageMaintenance.stop(timeout: 2)
+        historyWriter.complete(timeout: 3)
     }
 
     @objc private func startTestDictation(_ sender: Any?) {
@@ -137,9 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         guard lastTranscriptStore.recent().isEmpty else {
             return
         }
-        if let history = try? persistenceStore.fetchDictationHistory() {
-            let texts = history.reversed().compactMap { $0.transcriptText }
-            lastTranscriptStore.seed(texts)
+        // Reads only the newest few rows, however long the history is.
+        if let transcripts = try? persistenceStore.fetchRecentTranscripts(limit: LastTranscriptStore.capacity) {
+            lastTranscriptStore.seed(transcripts)
         }
     }
 
@@ -467,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         do {
             try persistenceStore.initialize()
             reloadPostProcessorRules()
+            storageMaintenance.start()
         } catch {
             Self.writeLogLine("Failed to initialize persistence store: \(error.localizedDescription)")
             logger.error("Failed to initialize persistence store: \(error.localizedDescription, privacy: .public)")
@@ -607,10 +616,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         }
     }
 
-    /// Writes one `dictation_history` row per capture, mirroring Windows' per-dictation history
-    /// used by `DictationStats`. Decode/cleanup timings are optional: a capture that never made it
-    /// to transcription (e.g. no audio) still counts toward total audio/duration stats, just with
-    /// nil timing columns.
+    /// Queues one `dictation_history` row per capture, mirroring Windows' per-dictation history used by
+    /// `DictationStats`. Decode/cleanup timings are optional: a capture that never made it to
+    /// transcription (e.g. no audio) still counts toward total audio/duration stats, just with nil
+    /// timing columns. Returns at once: `HistoryWriter` commits in the background and logs a failed
+    /// write by its shape.
     private func recordDictationHistory(
         summary: AudioCaptureSummary,
         decodeMilliseconds: Double?,
@@ -618,19 +628,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
         transcriptText: String? = nil,
         targetApp: String? = nil
     ) {
-        do {
-            try persistenceStore.recordDictation(
+        historyWriter.enqueue(
+            DictationHistoryRecord(
                 startedAt: summary.startedAt,
                 durationSeconds: summary.durationSeconds,
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decodeMilliseconds,
                 cleanupMilliseconds: cleanupMilliseconds,
                 transcriptText: transcriptText,
-                targetApp: targetApp)
-        } catch {
-            Self.writeLogLine("Failed to write dictation history: \(error.localizedDescription)")
-            logger.error("Failed to write dictation history: \(error.localizedDescription, privacy: .public)")
-        }
+                targetApp: targetApp))
     }
 
     private func handleCaptureStartError(_ error: AudioCaptureEngineError) {
@@ -881,17 +887,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
                 }
             }
 
+            lastTranscriptStore.set(processedText)
+
+            let injectionStart = DispatchTime.now()
+            let injectionResult = await textInjector.inject(text: processedText)
+            let injectionMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - injectionStart.uptimeNanoseconds) / 1_000_000.0
+
+            // After delivery, so storage never sits between speaking and typing.
             recordDictationHistory(
                 summary: summary,
                 decodeMilliseconds: decodeMilliseconds,
                 cleanupMilliseconds: cleanupMilliseconds,
                 transcriptText: processedText,
                 targetApp: bundleIdentifier ?? processName)
-            lastTranscriptStore.set(processedText)
-
-            let injectionStart = DispatchTime.now()
-            let injectionResult = await textInjector.inject(text: processedText)
-            let injectionMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - injectionStart.uptimeNanoseconds) / 1_000_000.0
 
             let decodeSeconds = decodeMilliseconds / 1_000.0
             let realTimeFactor = summary.durationSeconds > 0 ? decodeSeconds / summary.durationSeconds : nil

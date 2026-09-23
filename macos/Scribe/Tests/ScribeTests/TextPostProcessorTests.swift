@@ -137,4 +137,74 @@ final class TextPostProcessorTests: XCTestCase {
         XCTAssertEqual(result.text, "")
         XCTAssertTrue(result.replacements.isEmpty)
     }
+
+    // MARK: - Tight punctuation and surrogate pairs
+
+    func testPunctuationRuleAbsorbsTheSpaceBeforeIt() {
+        let processor = TextPostProcessor()
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "comma", replacement: ",")], snippets: [])
+
+        XCTAssertEqual(processor.process("hello comma world"), "hello, world")
+    }
+
+    func testAnEmojiRightBeforeAPunctuationRuleIsKeptAndDoesNotTrap() {
+        let processor = TextPostProcessor()
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "comma", replacement: ",")], snippets: [])
+
+        XCTAssertEqual(processor.process("\u{1F642}comma"), "\u{1F642},")
+    }
+
+    func testASnippetThatEndsInAnEmojiBeforeAPunctuationRuleDoesNotTrap() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "comma", replacement: ",")],
+            snippets: [Snippet(phrase: "smile", template: "\u{1F642}comma")])
+
+        let result = processor.processDetailed("smile")
+
+        XCTAssertEqual(result.text, "\u{1F642},")
+        XCTAssertEqual(result.replacements.first { $0.kind == .snippet }?.replacement, "\u{1F642},")
+    }
+
+    // MARK: - Rules compiled once per reload
+
+    func testRulesLoadedOnceGiveTheSameOutputAsAFreshLoadForEveryDictation() {
+        let entries = [
+            DictionaryEntry(pattern: "github", replacement: "GitHub"),
+            DictionaryEntry(pattern: "york", replacement: "New York"),
+            DictionaryEntry(pattern: "comma", replacement: ","),
+            DictionaryEntry(pattern: "a p i m", replacement: "APIM"),
+        ]
+        let snippets = [Snippet(phrase: "sign off", template: "Best regards,\ncheck my github")]
+        let corpus = [
+            "i love github comma really",
+            "we moved to new york from york",
+            "deploy a p i m then sign off",
+            "nothing to change here",
+            "github github comma york",
+        ]
+        let loadedOnce = TextPostProcessor()
+        loadedOnce.reload(dictionaryEntries: entries, snippets: snippets)
+
+        for _ in 0..<3 {
+            for text in corpus {
+                let fresh = TextPostProcessor()
+                fresh.reload(dictionaryEntries: entries, snippets: snippets)
+                let expected = fresh.processDetailed(text)
+                let actual = loadedOnce.processDetailed(text)
+                XCTAssertEqual(actual.text, expected.text, text)
+                XCTAssertEqual(actual.replacements, expected.replacements, text)
+            }
+        }
+    }
+
+    func testReloadReplacesTheCompiledRules() {
+        let processor = TextPostProcessor()
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "github", replacement: "GitHub")], snippets: [])
+        XCTAssertEqual(processor.process("github"), "GitHub")
+
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "azure", replacement: "Azure")], snippets: [])
+
+        XCTAssertEqual(processor.process("github and azure"), "github and Azure")
+    }
 }

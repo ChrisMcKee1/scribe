@@ -117,6 +117,39 @@ enum UsageAnalyzer {
         let targetApp: String?
     }
 
+    /// Newest dictations one snapshot reads, as Windows' `UsageReport.HistoryLimit`.
+    static let historyLimit = 5_000
+
+    /// A snapshot plus whether the period held more dictations than it covers.
+    struct Report {
+        let snapshot: Snapshot
+        /// True when the period holds more than `historyLimit` dictations, so the page must say the
+        /// numbers cover only the newest ones.
+        let periodCapped: Bool
+    }
+
+    /// Computes the snapshot for the period from `records`, the period's newest dictations oldest
+    /// first, as `PersistenceStore.fetchDictationHistory(since:limit:)` returns them. Read
+    /// `historyLimit + 1`: the row past the cap is what reveals that the period holds more.
+    static func report(
+        records: [DictationHistoryRecord],
+        knownTerms: [DictionaryEntry],
+        sinceUtc: Date,
+        nowUtc: Date,
+        timeZone: TimeZone = .current
+    ) -> Report {
+        let entries = records.suffix(historyLimit).map {
+            Entry(
+                timestampUtc: $0.startedAt,
+                text: $0.transcriptText ?? "",
+                audioMilliseconds: $0.audioMilliseconds,
+                targetApp: $0.targetApp)
+        }
+        let snapshot = compute(
+            entries: entries, knownTerms: knownTerms, sinceUtc: sinceUtc, nowUtc: nowUtc, timeZone: timeZone)
+        return Report(snapshot: snapshot, periodCapped: records.count > historyLimit)
+    }
+
     /// Computes one internally consistent snapshot. Every metric uses entries on or after
     /// `sinceUtc` (and on or before `nowUtc`); callers own the newest-first read cap and its
     /// disclosure.

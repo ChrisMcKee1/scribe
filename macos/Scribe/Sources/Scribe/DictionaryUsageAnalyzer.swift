@@ -44,9 +44,10 @@ struct DictionaryUsageReport: Equatable {
 /// Every ambiguity resolves towards keeping a term. A false "still in use" costs the user one
 /// glossary slot; a false "dead" costs them a rule they were relying on.
 ///
-/// Unlike Windows' `Scribe.Core.Settings.DictionaryUsageAnalyzer`, macOS has no shipped
-/// dictionary-library concept, so only the base-entry analysis is ported; library scoring is
-/// omitted entirely rather than stubbed.
+/// Only the base-entry analysis of Windows' `Scribe.Core.Settings.DictionaryUsageAnalyzer` is
+/// ported. Windows also scores each enabled library as a whole (`ScoreLibrary`), so a library the
+/// user never needs can be switched off; that part is not ported yet, so library terms are never
+/// judged here.
 enum DictionaryUsageAnalyzer {
     /// Dictations required before an "unused" verdict means anything.
     static let minimumTranscripts = 25

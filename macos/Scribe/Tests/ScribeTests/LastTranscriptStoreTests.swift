@@ -73,6 +73,19 @@ final class LastTranscriptStoreTests: XCTestCase {
         XCTAssertTrue(LastTranscriptStore().recent().isEmpty)
     }
 
+    func testRemoveAllForgetsEveryTranscriptForClearHistory() {
+        let store = LastTranscriptStore()
+        store.set("first")
+        store.set("second")
+
+        store.removeAll()
+
+        XCTAssertTrue(store.recent().isEmpty)
+        XCTAssertNil(store.get())
+        store.seed(["from history"])
+        XCTAssertEqual(store.recent(), ["from history"])
+    }
+
     func testFormatPreviewReturnsShortTextUnchanged() {
         XCTAssertEqual(LastTranscriptStore.formatPreview("Hello there."), "Hello there.")
     }

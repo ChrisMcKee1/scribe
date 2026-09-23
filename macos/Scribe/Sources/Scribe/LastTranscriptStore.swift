@@ -98,6 +98,14 @@ final class LastTranscriptStore {
         return entries
     }
 
+    /// Forgets every retained transcript, for Clear history: text the user asked to delete must not
+    /// stay recoverable from the tray.
+    func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.removeAll()
+    }
+
     /// Renders a transcript as a single-line menu preview: all whitespace runs (including line
     /// breaks) collapse to single spaces, the result is trimmed, and anything longer than
     /// `maxLength` is truncated so the ellipsis fits inside the budget.

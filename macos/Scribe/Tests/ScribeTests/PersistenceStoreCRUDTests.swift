@@ -3,17 +3,17 @@ import XCTest
 
 final class PersistenceStoreCRUDTests: XCTestCase {
     private var store: PersistenceStore!
-    private var tempDatabaseURL: URL!
+    private var directory: StorageTestDirectory!
 
     override func setUpWithError() throws {
-        tempDatabaseURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("scribe-test-\(UUID().uuidString).db")
-        store = PersistenceStore(databaseURL: tempDatabaseURL)
+        directory = try StorageTestDirectory()
+        store = PersistenceStore(databaseURL: directory.databaseURL)
         try store.initialize()
     }
 
     override func tearDownWithError() throws {
-        try? FileManager.default.removeItem(at: tempDatabaseURL)
+        store = nil
+        directory.remove()
     }
 
     // MARK: - Dictionary entries

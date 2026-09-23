@@ -507,15 +507,8 @@ private struct DictionarySettingsTab: View {
                     enabled: entry.enabled)
             }
             let plan = DictionaryImportMerger.merge(existing: existingRows, imported: result.entries)
-
-            for operation in plan.operations {
-                switch operation.kind {
-                case .add:
-                    _ = try persistenceStore.insertDictionaryEntry(operation.entry)
-                case .update:
-                    try persistenceStore.updateDictionaryEntry(operation.entry)
-                }
-            }
+            let changes = DictionaryImportMerger.changes(applying: plan, to: existingRows)
+            try persistenceStore.applyDictionaryChanges(inserts: changes.inserts, updates: changes.updates)
 
             reload()
             onChanged()
@@ -1654,18 +1647,14 @@ private struct UsageInsightsSettingsTab: View {
 
     private func reload() {
         do {
-            let history = try persistenceStore.fetchDictationHistory()
             let knownTerms = try persistenceStore.fetchAllDictionaryEntries()
             let now = Date()
             let since = now.addingTimeInterval(-windowDays * 86400)
-            let entries = history.map {
-                UsageAnalyzer.Entry(
-                    timestampUtc: $0.startedAt,
-                    text: $0.transcriptText ?? "",
-                    audioMilliseconds: $0.audioMilliseconds,
-                    targetApp: $0.targetApp)
-            }
-            snapshot = UsageAnalyzer.compute(entries: entries, knownTerms: knownTerms, sinceUtc: since, nowUtc: now)
+            let records = try persistenceStore.fetchDictationHistory(
+                since: since, limit: UsageAnalyzer.historyLimit + 1)
+            snapshot = UsageAnalyzer.report(
+                records: records, knownTerms: knownTerms, sinceUtc: since, nowUtc: now
+            ).snapshot
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

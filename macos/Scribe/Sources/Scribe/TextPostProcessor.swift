@@ -39,8 +39,10 @@ struct TextPostProcessingResult {
 /// contains pattern" double-expansion guard from Windows' `CompiledRule`; it does not yet implement
 /// the AI-cleanup glossary source-text pass (see PORTING-PLAN.md).
 final class TextPostProcessor {
-    private var dictionaryEntries: [DictionaryEntry] = []
-    private var snippets: [Snippet] = []
+    // Compiled once in `reload`, not per dictation, as Windows' `CompiledRule` is: with every library
+    // switched on that is about 1,700 regular expressions, and they only change when the rules do.
+    private var dictionaryRules: [DictionaryRule] = []
+    private var snippetRules: [SnippetRule] = []
 
     /// - Parameter libraryEntries: enabled entries from any switched-on dictionary libraries
     ///   (see `DictionaryLibraryService`), already filtered to `enabled`. Merged behind the base
@@ -48,10 +50,13 @@ final class TextPostProcessor {
     ///   Mirrors Windows' `DictionaryLibraryComposer.Merge` usage in `TextPostProcessor.Reload`.
     func reload(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry] = []) {
         let base = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
-        self.dictionaryEntries = libraryEntries.isEmpty
+        let effective = libraryEntries.isEmpty
             ? base
             : DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: libraryEntries)
-        self.snippets = snippets.filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
+        dictionaryRules = effective.map(DictionaryRule.init)
+        snippetRules = snippets
+            .filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
+            .map(SnippetRule.init)
     }
 
     func process(_ text: String) -> String {
@@ -67,10 +72,10 @@ final class TextPostProcessor {
 
         let normalized = Self.normalizeWhitespace(text)
 
-        let (afterSnippets, snippetReplacements) = applySinglePass(
-            normalized, rules: snippets.map(SnippetRule.init), kind: .snippet)
-        let (finalText, dictionaryReplacements) = applySinglePass(
-            afterSnippets, rules: dictionaryEntries.map(DictionaryRule.init), kind: .dictionary)
+        let (afterSnippets, snippetReplacements) = Self.applySinglePass(
+            normalized, rules: snippetRules, kind: .snippet)
+        let (finalText, dictionaryReplacements) = Self.applySinglePass(
+            afterSnippets, rules: dictionaryRules, kind: .dictionary)
 
         // Snippet spans were reported against `afterSnippets`, which then had dictionary rules
         // applied on top; re-locate each snippet's (possibly dictionary-canonicalized) template by
@@ -78,8 +83,8 @@ final class TextPostProcessor {
         var replacements = dictionaryReplacements
         var searchStart = finalText.startIndex
         for snippetReplacement in snippetReplacements {
-            let (canonicalTemplate, _) = applySinglePass(
-                snippetReplacement.replacement, rules: dictionaryEntries.map(DictionaryRule.init), kind: .dictionary)
+            let (canonicalTemplate, _) = Self.applySinglePass(
+                snippetReplacement.replacement, rules: dictionaryRules, kind: .dictionary)
             guard !canonicalTemplate.isEmpty else { continue }
             if let range = finalText.range(of: canonicalTemplate, range: searchStart..<finalText.endIndex) {
                 let nsRange = NSRange(range, in: finalText)
@@ -115,7 +120,7 @@ final class TextPostProcessor {
             enabled: entry.enabled)
 
         let normalized = normalizeWhitespace(text)
-        let (result, _) = TextPostProcessor().applySinglePass(normalized, rules: [DictionaryRule(entry: trimmedEntry)], kind: .dictionary)
+        let (result, _) = applySinglePass(normalized, rules: [DictionaryRule(entry: trimmedEntry)], kind: .dictionary)
         return result
     }
 
@@ -252,7 +257,11 @@ final class TextPostProcessor {
     /// never re-scanned within this same call, only by the next phase (see `processDetailed(_:)`).
     /// Also returns every located span whose replacement text actually changed the input, tagged
     /// with the rule's pattern, for Playground highlighting.
-    private func applySinglePass(_ text: String, rules: [Rule], kind: TextReplacementKind) -> (String, [TextReplacement]) {
+    private static func applySinglePass<R: Rule>(
+        _ text: String,
+        rules: [R],
+        kind: TextReplacementKind
+    ) -> (String, [TextReplacement]) {
         let candidates = rules
             .flatMap { rule in rule.findMatches(in: text).map { ($0, rule.pattern) } }
             .sorted { lhs, rhs in
@@ -278,7 +287,7 @@ final class TextPostProcessor {
             if prefixLength > 0,
                 !candidate.replacement.isEmpty,
                 candidate.replacement.allSatisfy(Self.isTightPunctuation),
-                CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(nsText.character(at: candidate.range.location - 1))!)
+                Self.isWhitespace(unit: nsText.character(at: candidate.range.location - 1))
             {
                 prefixLength -= 1
             }
@@ -302,6 +311,16 @@ final class TextPostProcessor {
 
     private static func isTightPunctuation(_ ch: Character) -> Bool {
         ch == "," || ch == "." || ch == "!" || ch == "?" || ch == ";" || ch == ":"
+    }
+
+    /// Whether one UTF-16 unit is whitespace. Half of a surrogate pair (an emoji just before a match,
+    /// which a snippet template can produce) has no scalar of its own and is not whitespace: every
+    /// whitespace character sits in the Basic Multilingual Plane.
+    private static func isWhitespace(unit: unichar) -> Bool {
+        guard let scalar = Unicode.Scalar(unit) else {
+            return false
+        }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
     /// Collapses horizontal whitespace runs to a single space, preserving line breaks. `\v` inside

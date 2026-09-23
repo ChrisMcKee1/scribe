@@ -3,16 +3,20 @@ import XCTest
 
 final class DictionaryLibraryServiceTests: XCTestCase {
     private var tempDirectory: URL!
+    private var defaults: StorageTestDefaults!
     private var service: DictionaryLibraryService!
 
     override func setUpWithError() throws {
         tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScribeLibraryServiceTests-\(UUID().uuidString)", isDirectory: true)
-        service = DictionaryLibraryService(librariesDirectory: tempDirectory)
+        defaults = StorageTestDefaults()
+        service = DictionaryLibraryService(
+            librariesDirectory: tempDirectory, settings: DictionaryLibrarySettings(defaults: defaults.defaults))
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDirectory)
+        defaults.remove()
     }
 
     func testLibrariesIncludesBuiltInsWhenNoCustomFilesExist() {
@@ -60,11 +64,13 @@ final class DictionaryLibraryServiceTests: XCTestCase {
 
     func testRemoveDeletesCustomLibraryFile() throws {
         let library = try service.import(csv: "pattern,replacement\nfoo,Foo\n", suggestedName: "removable")
+        service.settings.setEnabled(true, id: library.id)
         XCTAssertTrue(service.libraries().contains { $0.id == library.id })
 
         try service.remove(id: library.id)
 
         XCTAssertFalse(service.libraries().contains { $0.id == library.id })
+        XCTAssertFalse(service.settings.enabledLibraryIds.contains(library.id))
     }
 
     func testRemoveThrowsForBuiltInLibrary() {
@@ -83,38 +89,44 @@ final class DictionaryLibraryServiceTests: XCTestCase {
 
     func testEnabledLibraryEntriesComposesOnlySwitchedOnLibraries() throws {
         let library = try service.import(csv: "pattern,replacement\nfoo bar,FooBar\n", suggestedName: "enabled-test")
-        let originalEnabled = DictionaryLibrarySettingsStore.enabledLibraryIds
-        defer { DictionaryLibrarySettingsStore.enabledLibraryIds = originalEnabled }
 
-        DictionaryLibrarySettingsStore.enabledLibraryIds = []
+        service.settings.enabledLibraryIds = []
         XCTAssertTrue(service.enabledLibraryEntries().isEmpty)
 
-        DictionaryLibrarySettingsStore.enabledLibraryIds = [library.id]
+        service.settings.enabledLibraryIds = [library.id]
         let entries = service.enabledLibraryEntries()
         XCTAssertEqual(entries.map(\.pattern), ["foo bar"])
     }
 }
 
-final class DictionaryLibrarySettingsStoreTests: XCTestCase {
-    private var originalEnabledIds: Set<String> = []
+final class DictionaryLibrarySettingsTests: XCTestCase {
+    private var defaults: StorageTestDefaults!
+    private var settings: DictionaryLibrarySettings!
 
     override func setUp() {
         super.setUp()
-        originalEnabledIds = DictionaryLibrarySettingsStore.enabledLibraryIds
+        defaults = StorageTestDefaults()
+        settings = DictionaryLibrarySettings(defaults: defaults.defaults)
     }
 
     override func tearDown() {
-        DictionaryLibrarySettingsStore.enabledLibraryIds = originalEnabledIds
+        defaults.remove()
         super.tearDown()
     }
 
     func testSetEnabledAddsAndRemovesIds() {
-        DictionaryLibrarySettingsStore.enabledLibraryIds = []
+        XCTAssertTrue(settings.enabledLibraryIds.isEmpty)
 
-        DictionaryLibrarySettingsStore.setEnabled(true, id: "github")
-        XCTAssertTrue(DictionaryLibrarySettingsStore.enabledLibraryIds.contains("github"))
+        settings.setEnabled(true, id: "github")
+        XCTAssertTrue(settings.enabledLibraryIds.contains("github"))
 
-        DictionaryLibrarySettingsStore.setEnabled(false, id: "github")
-        XCTAssertFalse(DictionaryLibrarySettingsStore.enabledLibraryIds.contains("github"))
+        settings.setEnabled(false, id: "github")
+        XCTAssertFalse(settings.enabledLibraryIds.contains("github"))
+    }
+
+    func testChoicesLiveInTheInjectedDefaultsUnderTheShippingKey() {
+        settings.setEnabled(true, id: "azure")
+
+        XCTAssertEqual(defaults.defaults.stringArray(forKey: DictionaryLibrarySettings.enabledIdsKey), ["azure"])
     }
 }
