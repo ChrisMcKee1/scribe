@@ -47,6 +47,9 @@ enum CleanupResponseGuard {
 
         if hasWrappingQuotePair(cleaned) && !hasMatchingOuterQuotes(original) {
             cleaned = String(cleaned.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+            // A model that quotes its whole answer can quote the echoed delimiters with it, so they
+            // only come into reach once the quotes are gone.
+            cleaned = CleanupPrompt.stripTranscriptTags(cleaned)
         }
 
         guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

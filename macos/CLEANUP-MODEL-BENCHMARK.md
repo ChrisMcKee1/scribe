@@ -109,7 +109,7 @@ study; treat it as a lead worth re-testing at scale, not a settled fact.
 > confused. At the ve..." *(truncated)*
 
 Notably it left a filler "Okay," at the start and phrased the Tuesday-to-Wednesday correction
-awkwardly instead of dropping the rejected value outright — real gaps vs. the golden rewrite that a
+awkwardly instead of dropping the rejected value outright: real gaps vs. the golden rewrite that a
 frontier cloud model (or a larger local model) handles better. This matches the general pattern:
 small local models are usable for cleanup but noticeably behind cloud-tier models on self-correction
 and instruction-immunity, the two hardest cases across every model tested.
@@ -188,7 +188,7 @@ $ foundry --version
 0.10.3
 
 $ foundry status
-| System       | GPU                | Apple (0x106b) Apple M5 (—)              |
+| System       | GPU                | Apple (0x106b) Apple M5 (-)              |
 | Service      | State              | Ready                                    |
 | Service      | Web URLs           | http://127.0.0.1:58621                   |
 | Service      | ORT                | 1.26.0                                   |
@@ -257,7 +257,7 @@ Write in the speaker's language using clear, natural, well-structured prose. Nev
 | `phi3.5:3.8b` | Timed out after 240s at about 77 MB / 2.2 GB, about 358 KB/s | n/a | n/a | Not benchmarked, download too slow for the time box |
 | `qwen2.5:0.5b` | Timed out after 420s at about 79 MB / 397 MB, about 202 KB/s | n/a | n/a | Best next retry candidate, but still not completed here |
 
-**(Superseded)** This is no longer accurate — see the real results and recommendation at the top of
+**(Superseded)** This is no longer accurate. See the real results and recommendation at the top of
 this file. Kept only as evidence that the original download attempt legitimately timed out due to
 throughput, not a scoring failure; a resumable-download UX is still worth building for onboarding.
 

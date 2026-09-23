@@ -13,7 +13,7 @@ enum NewlineInjectionMode: String, Equatable {
 }
 
 /// A per-app dictation profile: when the focused app at the end of a capture matches one of
-/// `bundleIdentifiers`/`processNames`, the profile's overrides apply — a different AI writing style
+/// `bundleIdentifiers`/`processNames`, the profile's overrides apply: a different AI writing style
 /// and/or line-break handling. Nil overrides fall back to the global setting. Mirrors Windows'
 /// `AppProfile` (Models/AppProfile.cs), but keys on bundle identifier first (the stable macOS
 /// identity for an app) with process name as a secondary/fallback match, since macOS apps don't
