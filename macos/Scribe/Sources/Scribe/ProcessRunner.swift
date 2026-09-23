@@ -101,9 +101,10 @@ enum ProcessRunner {
     ///   - timeout: How long the child may run before it is stopped and the outcome says `.timedOut`.
     ///   - outputLimit: Bytes kept from each of standard output and standard error.
     ///   - killGracePeriod: How long a stopped child's process group has between `SIGTERM` and
-    ///     `SIGKILL`. A stopped child that exits during it stays unreaped until the group is empty or
-    ///     the period ends, so descendants still cleaning up keep their grace and the `SIGKILL` can only
-    ///     reach this run's group.
+    ///     `SIGKILL`. A stopped child that exits during it stays unreaped, which keeps its pid and group
+    ///     id from being reused, until both output streams have ended with no live process left in the
+    ///     group, or until the period ends. Descendants still cleaning up keep their grace, and the
+    ///     `SIGKILL` can only reach this run's group.
     /// - Returns: An outcome for every child that started, however it ended. A stopped child is
     ///   reported, not thrown: the outcome says `.timedOut` or `.cancelled`.
     /// - Throws: `CancellationError` when the task was cancelled before a child started, and
@@ -722,7 +723,14 @@ private final class Supervision {
         for member in members.prefix(Int(reported)) where member > 0 && member != leader {
             var info = proc_bsdinfo()
             let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-            if proc_pidinfo(member, PROC_PIDTBSDINFO, 0, &info, size) == size, info.pbi_status != UInt32(SZOMB) {
+            errno = 0
+            if proc_pidinfo(member, PROC_PIDTBSDINFO, 0, &info, size) == size {
+                if info.pbi_status != UInt32(SZOMB) {
+                    return true
+                }
+            } else if errno != ESRCH {
+                // ESRCH: the member has exited, or is a zombie, which this query does not find. Any other
+                // failure leaves the member's state unknown.
                 return true
             }
         }

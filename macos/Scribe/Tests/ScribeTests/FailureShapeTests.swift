@@ -95,7 +95,9 @@ final class FailureShapeTests: XCTestCase {
 
     func testEveryListedFrameworkDomainIsWrittenAsItself() {
         for domain in FailureShape.frameworkDomains {
-            XCTAssertEqual(FailureShape(NSError(domain: domain, code: 1)).description, "NSError(\(domain) 1)")
+            // A URL error also carries its code as the url field, which is what makes URL failures searchable.
+            let expected = domain == NSURLErrorDomain ? "NSError(\(domain) 1) url=1" : "NSError(\(domain) 1)"
+            XCTAssertEqual(FailureShape(NSError(domain: domain, code: 1)).description, expected)
         }
     }
 

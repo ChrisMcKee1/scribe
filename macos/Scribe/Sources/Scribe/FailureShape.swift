@@ -11,8 +11,9 @@ import Foundation
 /// info except the wrapped errors. It mirrors Windows' `Scribe.Core.Diagnostics.FailureShape`.
 ///
 /// Every piece of text in a shape comes from Scribe or the compiler, never from the error: type and
-/// case names are the compiler's, and a domain or a service code is written only when it matches an
-/// entry in a fixed list here. Matching a pattern would not be enough, because a string that merely
+/// case names are the compiler's, a domain or a service code is written only when it matches an entry
+/// in a fixed list here, and numbers (codes, statuses, the number of an Entra `AADSTS` code) are
+/// written from their values. Matching a pattern would not be enough, because a string that merely
 /// looks like an identifier can still be a secret or a word the user dictated. Anything unlisted is
 /// written as `other`.
 ///
