@@ -5781,6 +5781,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
         }
 
+        // The rows' notifications update the ticks, but a sorted view only places an item when it is
+        // added, committed from an edit, or refreshed, so a library switched off here would keep its
+        // old place under a sort on the On column. The collection view itself is refreshed: the grid's
+        // Items.Refresh() only re-sorts a view that already needs a refresh, which a changed property
+        // never causes, so it merely repaints. Committing first because refreshing during an edit throws.
+        if (libraryTargets.Count > 0)
+        {
+            LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
+            System.Windows.Data.CollectionViewSource.GetDefaultView(LibraryGrid.ItemsSource)?.Refresh();
+        }
+
         RefreshDictionaryStatus();
 
         var parts = new List<string>();
