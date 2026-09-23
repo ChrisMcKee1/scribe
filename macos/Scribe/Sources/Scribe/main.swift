@@ -661,12 +661,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
     private func handleInjectionResult(_ result: InjectionResult) {
         dictationMenuItem?.title = "Start Test Dictation"
 
-        switch result {
-        case .success:
-            Self.writeLogLine("Text injection succeeded via the Accessibility value path.")
-            overlayPanelController.hide()
-        case .fallbackUsed:
-            Self.writeLogLine("Text injection succeeded via the pasteboard fallback path.")
+        switch result.delivery {
+        case .accessibility, .pasted, .typed, .nothingToInsert:
             overlayPanelController.hide()
         case .accessibilityDenied:
             let message = "Accessibility permission is required for text injection. Enable it in System Settings > Privacy & Security > Accessibility, then relaunch Scribe."
@@ -679,6 +675,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             Self.writeLogLine(message)
             showFailedThenHideOverlay()
             presentErrorAlert(title: "No Focused Text Field", message: message)
+            postInjectionFailureNotification()
+        case .targetChanged, .targetUnresponsive, .typedPartially, .failed:
+            // No modal alert: it would activate Scribe over whatever the user switched to. The transcript
+            // is already in the recovery store, and the notification points to it.
+            showFailedThenHideOverlay()
             postInjectionFailureNotification()
         }
     }
@@ -870,7 +871,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @preco
             lastTranscriptStore.set(processedText)
 
             let injectionStart = DispatchTime.now()
-            let injectionResult = textInjector.inject(text: processedText)
+            let injectionResult = await textInjector.inject(text: processedText)
             let injectionMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - injectionStart.uptimeNanoseconds) / 1_000_000.0
 
             let decodeSeconds = decodeMilliseconds / 1_000.0

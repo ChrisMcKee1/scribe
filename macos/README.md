@@ -48,7 +48,12 @@ privacy/offline promise.
 - Menu bar app shell (`NSStatusItem`, background-only via `LSUIElement`) with tray items for test
   dictation, Settings, AI Cleanup/Pause toggles, Recent Dictations, Quick Add to Dictionary,
   Welcome, and Quit
-- Global push-to-talk hotkey, real audio capture, and text injection into the focused app
+- Global push-to-talk hotkey, real audio capture, and text injection into the focused app. Scribe
+  inserts through Accessibility where it can; otherwise it borrows the clipboard only when it is empty
+  or holds plain text, keeps its own copy off Universal Clipboard and marks it so clipboard history
+  tools skip it, and puts your text back only if nothing replaced it in the meantime. With anything
+  else on the clipboard it types the text instead. If focus moves to another app while the text is
+  going in, Scribe stops and keeps the dictation for recovery
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2` (`TranscriptionEngine.swift`)
 - Overlay pill with a 9-anchor position picker and live recording/processing state
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
