@@ -61,8 +61,10 @@ jobs:
             grep ": warning:" "$log" | sort -u | head -n 50 || true
           done
 
+      # Serial on purpose: several suites share UserDefaults.standard and the login keychain, so
+      # parallel worker processes overwrite each other's provider settings and keychain items.
       - name: Unit tests
-        run: swift test --package-path macos/Scribe --parallel
+        run: swift test --package-path macos/Scribe
 
   sanitizers:
     name: tests under ${{ matrix.sanitizer }} sanitizer

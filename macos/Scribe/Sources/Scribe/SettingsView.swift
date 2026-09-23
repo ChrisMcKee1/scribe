@@ -1286,7 +1286,7 @@ private struct CleanupSettingsTab: View {
 /// src/Scribe.App/Settings/SettingsWindow.xaml, "Playground" section), which is populated from
 /// `DictationController.PipelineReported`. On macOS the analogous signal is `PipelineReportStore`,
 /// published from `AppDelegate.transcribeAndInject` after every real dictation (hotkey or the
-/// "Start Test Dictation" menu item) — there is no separate "Run" button here because macOS's
+/// "Start Test Dictation" menu item). There is no separate "Run" button here because macOS's
 /// push-to-talk hotkey already works regardless of which window is focused, so simply dictating
 /// normally while this tab is open is enough to see a report land.
 private struct PlaygroundSettingsTab: View {
@@ -1364,7 +1364,7 @@ private struct PlaygroundSettingsTab: View {
                 Text(String(format: "%.0f ms", duration * 1_000))
                     .foregroundStyle(.secondary)
             } else {
-                Text("—")
+                Text("n/a")
                     .foregroundStyle(.secondary)
             }
         }
