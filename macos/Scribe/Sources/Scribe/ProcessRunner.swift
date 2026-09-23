@@ -442,7 +442,7 @@ private final class Supervision {
 
     private func waitForEvents() {
         let capacity: Int32 = 8
-        var events = [kevent](repeating: kevent(), count: Int(capacity))
+        var events: [kevent] = Array(repeating: kevent(), count: Int(capacity))
         let count = kevent(queue, nil, 0, &events, capacity, nil)
         guard count >= 0 else {
             if errno != EINTR {
