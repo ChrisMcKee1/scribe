@@ -104,7 +104,7 @@ final class ScratchAudioTests: XCTestCase {
         let legacyStranger = try makeFile(named: "keep.txt", in: legacy, age: 7_200, now: now)
 
         let result = ScratchAudioDirectory(url: directory, legacyDirectory: legacy)
-            .sweepAbandoned(now: now, isProcessAlive: { $0 == alive })
+            .sweepAbandoned(now: now, isProcessAlive: { $0 == alive }, isAnotherScribeRunning: { false })
 
         XCTAssertFalse(exists(abandoned))
         XCTAssertTrue(exists(recent))
@@ -129,9 +129,78 @@ final class ScratchAudioTests: XCTestCase {
         _ = try makeFile(named: "captured-9.wav", in: legacy, age: 7_200, now: now)
 
         ScratchAudioDirectory(url: root.appendingPathComponent("missing"), legacyDirectory: legacy)
-            .sweepAbandoned(now: now)
+            .sweepAbandoned(now: now, isAnotherScribeRunning: { false })
 
         XCTAssertFalse(exists(legacy))
+    }
+
+    /// Earlier builds name their recordings without a process id and wait on the recognizer without a limit, so
+    /// an older copy of Scribe that is still running may be reading one however old it is. While any other Scribe
+    /// runs, neither the recordings nor their directory are touched; a later launch removes them.
+    func testEarlierBuildsRecordingsAreKeptWhileAnotherCopyOfScribeRuns() throws {
+        let root = try makeTemporaryDirectory(label: "scratch")
+        let legacy = root.appendingPathComponent("asr-work", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let now = Date()
+        let old = try makeFile(named: "captured-1.wav", in: legacy, age: 7 * 24 * 3_600, now: now)
+        let young = try makeFile(named: "captured-2.wav", in: legacy, age: 600, now: now)
+        let scratch = ScratchAudioDirectory(
+            url: root.appendingPathComponent("asr", isDirectory: true), legacyDirectory: legacy)
+
+        let whileRunning = scratch.sweepAbandoned(now: now, isAnotherScribeRunning: { true })
+
+        XCTAssertTrue(exists(old))
+        XCTAssertTrue(exists(young))
+        XCTAssertEqual(whileRunning, ScratchAudioDirectory.SweepResult(legacyKeptWhileAnotherRuns: 2))
+
+        let later = scratch.sweepAbandoned(now: now, isAnotherScribeRunning: { false })
+
+        XCTAssertFalse(exists(old))
+        XCTAssertTrue(exists(young))
+        XCTAssertEqual(later, ScratchAudioDirectory.SweepResult(keptRecent: 1, legacyRemoved: 1))
+    }
+
+    /// An empty directory of an earlier build is not removed while another Scribe runs: that build creates it just
+    /// before writing each recording, and removing it in between would fail its dictation.
+    func testAnEmptyEarlierDirectoryIsKeptWhileAnotherCopyOfScribeRuns() throws {
+        let root = try makeTemporaryDirectory(label: "scratch")
+        let legacy = root.appendingPathComponent("asr-work", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("missing"), legacyDirectory: legacy)
+
+        scratch.sweepAbandoned(isAnotherScribeRunning: { true })
+        XCTAssertTrue(exists(legacy))
+
+        scratch.sweepAbandoned(isAnotherScribeRunning: { false })
+        XCTAssertFalse(exists(legacy))
+    }
+
+    /// The check the sweep relies on, against a real process: a copy of `sleep` under a name no other process
+    /// has, which the kernel records as that process's short name.
+    func testAnotherProcessIsFoundByItsExecutableNameOnlyWhileItRuns() throws {
+        let name = "ScribeProbeTest"
+        let directory = try makeTemporaryDirectory(label: "scratch")
+        let executable = directory.appendingPathComponent(name)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/sleep"), to: executable)
+        XCTAssertFalse(ScratchAudioDirectory.isAnotherProcessRunning(named: name))
+
+        let child = Process()
+        child.executableURL = executable
+        child.arguments = ["30"]
+        try child.run()
+        defer {
+            if child.isRunning {
+                child.terminate()
+            }
+            child.waitUntilExit()
+        }
+
+        XCTAssertTrue(ScratchAudioDirectory.isAnotherProcessRunning(named: name))
+        XCTAssertFalse(ScratchAudioDirectory.isAnotherProcessRunning(named: "ScribeProbeNone"))
+
+        child.terminate()
+        child.waitUntilExit()
+        XCTAssertFalse(ScratchAudioDirectory.isAnotherProcessRunning(named: name))
     }
 
     func testQuittingRemovesOnlyThisProcesssRecordings() throws {

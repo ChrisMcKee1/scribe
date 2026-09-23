@@ -130,17 +130,22 @@ final class AudioCaptureEngine: Sendable {
     private let makeDevice: @Sendable () -> any CaptureDevice
     private let configurationChangeStallLimit: Duration
     private let scheduleStallCheck: Scheduler
+    private let resamplerTailFlush: CaptureProcessor.TailFlush
     private let controlQueue = DispatchQueue(label: "com.scribe.macos.capture.control", qos: .userInitiated)
     private let state = OSAllocatedUnfairLock(initialState: EngineState())
     private let slot = DeviceSlot()
 
+    /// `resamplerTailFlush` is what each recording's processor uses to flush its resampler when the recording
+    /// ends; tests pass their own to make it fail or to hold a stop inside it.
     init(
         configurationChangeStallLimit: Duration = AudioCaptureEngine.defaultConfigurationChangeStallLimit,
         scheduleStallCheck: @escaping Scheduler = AudioCaptureEngine.dispatchAfter,
+        resamplerTailFlush: @escaping CaptureProcessor.TailFlush = CaptureProcessor.flushResamplerTail,
         makeDevice: @escaping @Sendable () -> any CaptureDevice = { AVAudioEngineCaptureDevice() }
     ) {
         self.configurationChangeStallLimit = configurationChangeStallLimit
         self.scheduleStallCheck = scheduleStallCheck
+        self.resamplerTailFlush = resamplerTailFlush
         self.makeDevice = makeDevice
     }
 
@@ -174,7 +179,7 @@ final class AudioCaptureEngine: Sendable {
             let capture = ActiveCapture(
                 owner: owner,
                 generation: state.nextGeneration,
-                processor: CaptureProcessor(owner: owner, policy: policy),
+                processor: CaptureProcessor(owner: owner, policy: policy, tailFlush: resamplerTailFlush),
                 events: events)
             state.current = capture
             return .admitted(capture)
@@ -202,8 +207,9 @@ final class AudioCaptureEngine: Sendable {
 
     /// Ends `owner`'s recording and returns everything it captured, or `nil` when `owner` does not hold the
     /// microphone (it was never started, a stop already took it, or a later recording has it). Returns without
-    /// waiting for the device, which closes on the control queue; a tap buffer that arrives meanwhile is
-    /// dropped. Safe to call from any thread, the main actor included; never call it from `events`.
+    /// waiting for the device, which closes on the control queue, always before a later recording's device opens
+    /// (see `open`); a tap buffer that arrives meanwhile is dropped. Safe to call from any thread, the main actor
+    /// included; never call it from `events`.
     @discardableResult
     func stop(owner: RecordingID) -> CapturedAudio? {
         let taken = state.withLock { state -> ActiveCapture? in
@@ -220,7 +226,7 @@ final class AudioCaptureEngine: Sendable {
             self.closeDevice(generation: generation)
         }
         if let captured {
-            logCompletion(captured)
+            Self.logCompletion(captured)
         }
         return captured
     }
@@ -247,6 +253,16 @@ final class AudioCaptureEngine: Sendable {
     private func open(_ capture: ActiveCapture) throws -> CaptureOpenOutcome {
         dispatchPrecondition(condition: .onQueue(controlQueue))
         guard owns(capture) else { return .stoppedBeforeOpen }
+
+        // A stop releases the microphone to the next recording before it has sealed its samples and queued its
+        // device's close, so on another thread the next recording's open can get here first. The earlier device
+        // is closed before a new one is made: never two engines at once, and never a device replaced unclosed.
+        if slot.device != nil, slot.generation != capture.generation {
+            ScribeLog.info(
+                .audio, "The previous recording's microphone closes before the next one opens",
+                .integer("recording", capture.owner.rawValue))
+            closeDevice(generation: slot.generation)
+        }
 
         let openStarted = ContinuousClock.now
         let device = makeDevice()
@@ -425,7 +441,8 @@ final class AudioCaptureEngine: Sendable {
         }
     }
 
-    private func logCompletion(_ captured: CapturedAudio) {
+    /// Logs the finished capture's shape, and warns about the ways a capture can look healthy and hold little.
+    static func logCompletion(_ captured: CapturedAudio) {
         let summary = captured.summary
         let recording = ScribeLog.Field.integer("recording", captured.owner.rawValue)
         var fields: [ScribeLog.Field] = [
@@ -435,6 +452,7 @@ final class AudioCaptureEngine: Sendable {
             .name("ending", summary.ending),
             .count("buffers", summary.acceptedBufferCount),
             .count("droppedBuffers", summary.droppedBufferCount),
+            .name("resamplerFlush", summary.resamplerFlush),
         ]
         if case .endedItself(let reason) = summary.ending {
             fields.append(.name("reason", reason))
@@ -443,6 +461,12 @@ final class AudioCaptureEngine: Sendable {
             fields += signal.logFields
         }
         ScribeLog.log(.info, .audio, "Capture complete", fields)
+
+        if summary.resamplerFlush == .failed {
+            ScribeLog.error(
+                .audio, "Converting the end of the recording to 16 kHz failed; it keeps what was converted before",
+                recording)
+        }
 
         // Each of these leaves a capture that looks healthy from outside: the meter moved and the duration is
         // right, and the recognizer then returns little or nothing.

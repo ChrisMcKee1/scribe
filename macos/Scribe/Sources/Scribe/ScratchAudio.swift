@@ -44,9 +44,13 @@ struct ScratchAudioDirectory: Sendable {
     /// A file whose process is gone is removed only once it is at least this old.
     static let abandonedAfter: Duration = .seconds(5 * 60)
 
-    /// Earlier builds wrote `captured-<uuid>.wav` into Application Support, with no process id in the name, so
-    /// only age can say that no decode is still using one.
+    /// Earlier builds wrote `captured-<uuid>.wav` into Application Support, with no process id in the name, and
+    /// an older copy of Scribe can still be reading one, so they are removed only while no other Scribe runs,
+    /// and only once they are this old, which also covers a copy that starts during the sweep.
     static let legacyAbandonedAfter: Duration = .seconds(60 * 60)
+
+    /// The executable name of every Scribe build, earlier ones included.
+    static let scribeExecutableName = "Scribe"
 
     let url: URL
     /// The directory earlier builds wrote to, swept once they stop being written; `nil` to skip it.
@@ -133,16 +137,22 @@ struct ScratchAudioDirectory: Sendable {
         var keptRecent = 0
         var failed = 0
         var legacyRemoved = 0
+        /// Earlier builds' recordings left alone because another copy of Scribe was running.
+        var legacyKeptWhileAnotherRuns = 0
     }
 
     /// Removes scratch recordings that nothing can still be using: files whose process no longer exists and
-    /// that are older than `abandonedAfter`, and old files of earlier builds. Files of a live process, this one
+    /// that are older than `abandonedAfter`, and old files of earlier builds while no other copy of Scribe runs
+    /// (age alone never removes one; they wait for a later launch instead). Files of a live process, this one
     /// included, and anything Scribe did not name are left alone, as is a scratch path that is a link or
     /// belongs to someone else. Run it off the main actor at launch.
     @discardableResult
     func sweepAbandoned(
         now: Date = Date(),
-        isProcessAlive: (pid_t) -> Bool = ScratchAudioDirectory.isProcessAlive
+        isProcessAlive: (pid_t) -> Bool = ScratchAudioDirectory.isProcessAlive,
+        isAnotherScribeRunning: () -> Bool = {
+            ScratchAudioDirectory.isAnotherProcessRunning(named: ScratchAudioDirectory.scribeExecutableName)
+        }
     ) -> SweepResult {
         var result = SweepResult()
         let ownPid = getpid()
@@ -165,27 +175,36 @@ struct ScratchAudioDirectory: Sendable {
         }
 
         if let legacyDirectory, Self.ownedDirectoryState(Self.fileSystemPath(legacyDirectory)) == .owned {
-            for entry in Self.entries(in: legacyDirectory)
-            where entry.name.hasPrefix("captured-") && entry.name.hasSuffix(".wav") {
-                guard now.timeIntervalSince(entry.modified) >= Self.seconds(Self.legacyAbandonedAfter) else {
-                    result.keptRecent += 1
-                    continue
-                }
-                if unlink(entry.url.path(percentEncoded: false)) == 0 {
-                    result.legacyRemoved += 1
-                } else {
-                    result.failed += 1
-                }
+            let recordings = Self.entries(in: legacyDirectory).filter {
+                $0.name.hasPrefix("captured-") && $0.name.hasSuffix(".wav")
             }
-            // Succeeds only once the directory is empty.
-            rmdir(Self.fileSystemPath(legacyDirectory))
+            // An earlier build names its recordings without a process id and creates this directory just before
+            // writing each one, so while any other Scribe runs neither a recording nor the directory may go.
+            if isAnotherScribeRunning() {
+                result.legacyKeptWhileAnotherRuns = recordings.count
+            } else {
+                for entry in recordings {
+                    guard now.timeIntervalSince(entry.modified) >= Self.seconds(Self.legacyAbandonedAfter) else {
+                        result.keptRecent += 1
+                        continue
+                    }
+                    if unlink(entry.url.path(percentEncoded: false)) == 0 {
+                        result.legacyRemoved += 1
+                    } else {
+                        result.failed += 1
+                    }
+                }
+                // Succeeds only once the directory is empty.
+                rmdir(Self.fileSystemPath(legacyDirectory))
+            }
         }
 
-        if result.removed + result.legacyRemoved + result.failed > 0 {
+        if result.removed + result.legacyRemoved + result.failed + result.legacyKeptWhileAnotherRuns > 0 {
             ScribeLog.info(
                 .transcription, "Swept abandoned scratch recordings",
                 .count("removed", result.removed), .count("legacyRemoved", result.legacyRemoved),
-                .count("failed", result.failed), .count("keptInUse", result.keptInUse))
+                .count("failed", result.failed), .count("keptInUse", result.keptInUse),
+                .count("legacyKeptWhileAnotherRuns", result.legacyKeptWhileAnotherRuns))
         }
         return result
     }
@@ -193,6 +212,37 @@ struct ScratchAudioDirectory: Sendable {
     /// `true` while a process with this id exists, including one that belongs to another user.
     static func isProcessAlive(_ pid: pid_t) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// Whether a process other than this one, run by this user and not yet exited, has the executable name `name`
+    /// (the kernel's short name, at most 16 characters). Other users' processes are skipped: they cannot have
+    /// written into this user's folders. When the process table cannot be read at all the answer is `true`, so
+    /// a failure errs toward keeping files.
+    static func isAnotherProcessRunning(named name: String) -> Bool {
+        let ownPid = getpid()
+        let ownUid = getuid()
+        let estimate = proc_listallpids(nil, 0)
+        guard estimate > 0 else { return true }
+        // Room for processes started between the two calls.
+        var pids = [pid_t](repeating: 0, count: Int(estimate) + 256)
+        let listed = pids.withUnsafeMutableBytes { buffer in
+            proc_listallpids(buffer.baseAddress, Int32(buffer.count))
+        }
+        guard listed > 0 else { return true }
+        for pid in pids.prefix(min(Int(listed), pids.count)) where pid > 0 && pid != ownPid {
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            // Fails for a process that has just exited and for one this user may not inspect.
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { continue }
+            guard info.pbi_uid == ownUid, info.pbi_status != UInt32(SZOMB) else { continue }
+            let command = withUnsafeBytes(of: &info.pbi_comm) { bytes in
+                String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            if command == name {
+                return true
+            }
+        }
+        return false
     }
 
     /// The process id in a scratch file's name, or `nil` for a name Scribe did not write.

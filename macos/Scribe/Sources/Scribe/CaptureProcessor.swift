@@ -89,6 +89,18 @@ struct AudioCaptureSummary: Sendable, Equatable {
     let acceptedBufferCount: Int
     /// Tap buffers that arrived after the recording ended, or in a format it could not use.
     let droppedBufferCount: Int
+    /// What became of the resampler's last few milliseconds when the recording ended.
+    let resamplerFlush: ResamplerFlush
+
+    /// The resampler holds back a few milliseconds of converted audio until the stream ends, and the recording
+    /// flushes them once when it ends.
+    enum ResamplerFlush: Sendable, Equatable {
+        /// The device ran at 16 kHz or never opened, so there was nothing to flush.
+        case notNeeded
+        case flushed
+        /// Converting them failed: the capture keeps everything converted before the failure.
+        case failed
+    }
 
     var durationSeconds: Double {
         sampleRate > 0 ? Double(sampleCount) / sampleRate : 0
@@ -124,14 +136,33 @@ final class CaptureProcessor: Sendable {
     let owner: RecordingID
     let policy: CaptureStopPolicy
 
+    /// Converts what the resampler still holds when a recording ends, appending it to `samples`, and reports
+    /// whether that worked; after a failure `samples` keeps whatever was appended before it. Tests pass their
+    /// own to make the flush fail, or to hold a stop inside it.
+    typealias TailFlush =
+        @Sendable (_ converter: AVAudioConverter, _ target: AVAudioFormat, _ samples: inout [Float]) -> Bool
+
+    static let flushResamplerTail: TailFlush = { converter, target, samples in
+        CaptureProcessor.convert(
+            ConverterFeed(nil), with: converter, target: target, capacity: 4_096, into: &samples)
+    }
+
+    private let tailFlush: TailFlush
+
     // The state holds AVFoundation objects and the sample array. Only this lock touches them, and nothing
     // leaves a `withLockUnchecked` body except finished Sendable values (event kinds, counts and the captured
     // audio), which is why the lock is created with unchecked state.
     private let state: OSAllocatedUnfairLock<State>
 
-    init(owner: RecordingID, policy: CaptureStopPolicy, createdAt: Date = Date()) {
+    init(
+        owner: RecordingID,
+        policy: CaptureStopPolicy,
+        createdAt: Date = Date(),
+        tailFlush: @escaping TailFlush = CaptureProcessor.flushResamplerTail
+    ) {
         self.owner = owner
         self.policy = policy
+        self.tailFlush = tailFlush
         let tracker = policy.silence.map { SilenceAutoStopTracker(configuration: $0) }
         state = OSAllocatedUnfairLock(uncheckedState: State(createdAt: createdAt, tracker: tracker))
     }
@@ -198,7 +229,8 @@ final class CaptureProcessor: Sendable {
     /// stop request when this buffer ended the recording. Called on the tap's thread; never blocks on anything
     /// but this recording's own lock.
     func process(_ buffer: AVAudioPCMBuffer) -> [CaptureEvent.Kind] {
-        state.withLockUnchecked { state -> [CaptureEvent.Kind] in
+        let flush = tailFlush
+        return state.withLockUnchecked { state -> [CaptureEvent.Kind] in
             state.received += 1
             guard case .recording = state.phase, let input = state.input else {
                 state.dropped += 1
@@ -209,7 +241,7 @@ final class CaptureProcessor: Sendable {
                 let reader = SampleReader(buffer)
             else {
                 state.dropped += 1
-                return CaptureProcessor.end(&state, .formatChanged)
+                return CaptureProcessor.end(&state, .formatChanged, flush: flush)
             }
 
             state.accepted += 1
@@ -227,7 +259,7 @@ final class CaptureProcessor: Sendable {
                     pcmFormat: input.monoFormat, frameCapacity: AVAudioFrameCount(max(1, frameCount))),
                 let monoSamples = mono.floatChannelData?[0]
             else {
-                return CaptureProcessor.end(&state, .conversionFailed)
+                return CaptureProcessor.end(&state, .conversionFailed, flush: flush)
             }
 
             let channelScale = 1 / Float(input.channelCount)
@@ -287,10 +319,10 @@ final class CaptureProcessor: Sendable {
             }
 
             if !CaptureProcessor.append(mono, input: input, to: &state.samples) {
-                return events + CaptureProcessor.end(&state, .conversionFailed)
+                return events + CaptureProcessor.end(&state, .conversionFailed, flush: flush)
             }
             if let reason {
-                events += CaptureProcessor.end(&state, reason)
+                events += CaptureProcessor.end(&state, reason, flush: flush)
             }
             return events
         }
@@ -298,15 +330,17 @@ final class CaptureProcessor: Sendable {
 
     /// Ends a recording still in progress, keeping what it captured. True only for the call that ended it.
     func end(_ reason: CaptureEndReason) -> Bool {
-        state.withLockUnchecked { state -> Bool in
-            !CaptureProcessor.end(&state, reason).isEmpty
+        let flush = tailFlush
+        return state.withLockUnchecked { state -> Bool in
+            !CaptureProcessor.end(&state, reason, flush: flush).isEmpty
         }
     }
 
     /// Ends the recording, unless it already ended by itself, and hands over everything it captured. Every
     /// call after the first returns `nil`.
     func finish(at stoppedAt: Date = Date()) -> CapturedAudio? {
-        state.withLockUnchecked { state -> CapturedAudio? in
+        let flush = tailFlush
+        return state.withLockUnchecked { state -> CapturedAudio? in
             let ending: AudioCaptureSummary.Ending
             switch state.phase {
             case .finished:
@@ -314,7 +348,7 @@ final class CaptureProcessor: Sendable {
             case .ended(let reason):
                 ending = .endedItself(reason)
             case .recording:
-                CaptureProcessor.drainResampler(&state)
+                CaptureProcessor.drainResampler(&state, flush: flush)
                 ending = .stoppedByOwner
             }
 
@@ -333,7 +367,8 @@ final class CaptureProcessor: Sendable {
                 ending: ending,
                 signal: signal,
                 acceptedBufferCount: state.accepted,
-                droppedBufferCount: state.dropped)
+                droppedBufferCount: state.dropped,
+                resamplerFlush: state.resamplerFlush ?? .notNeeded)
             return CapturedAudio(owner: owner, samples: samples, summary: summary)
         }
     }
@@ -396,7 +431,8 @@ final class CaptureProcessor: Sendable {
         var dropped = 0
         let createdAt: Date
         var openedAt: Date?
-        var resamplerDrained = false
+        /// Unset until the recording ends and the resampler is flushed.
+        var resamplerFlush: AudioCaptureSummary.ResamplerFlush?
 
         init(createdAt: Date, tracker: SilenceAutoStopTracker?) {
             self.createdAt = createdAt
@@ -404,20 +440,25 @@ final class CaptureProcessor: Sendable {
         }
     }
 
-    private static func end(_ state: inout State, _ reason: CaptureEndReason) -> [CaptureEvent.Kind] {
+    /// Ends the recording with its one stop request. A failed flush of the resampler's tail is recorded for the
+    /// summary, never reported as a second reason.
+    private static func end(
+        _ state: inout State, _ reason: CaptureEndReason, flush: TailFlush
+    ) -> [CaptureEvent.Kind] {
         guard case .recording = state.phase else { return [] }
-        drainResampler(&state)
+        drainResampler(&state, flush: flush)
         state.phase = .ended(reason)
         return [.stopRequested(reason)]
     }
 
     /// Flushes the resampler's filter tail once, so the last few milliseconds before the end are kept.
-    private static func drainResampler(_ state: inout State) {
-        guard !state.resamplerDrained else { return }
-        state.resamplerDrained = true
-        guard let input = state.input, let converter = input.converter else { return }
-        _ = convert(
-            ConverterFeed(nil), with: converter, target: input.targetFormat, capacity: 4_096, into: &state.samples)
+    private static func drainResampler(_ state: inout State, flush: TailFlush) {
+        guard state.resamplerFlush == nil else { return }
+        guard let input = state.input, let converter = input.converter else {
+            state.resamplerFlush = .notNeeded
+            return
+        }
+        state.resamplerFlush = flush(converter, input.targetFormat, &state.samples) ? .flushed : .failed
     }
 
     private static func append(_ mono: AVAudioPCMBuffer, input: Input, to samples: inout [Float]) -> Bool {

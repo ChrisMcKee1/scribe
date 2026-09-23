@@ -301,6 +301,19 @@ final class AudioTestSignalLatch: Sendable {
     }
 }
 
+/// The order in which scripted devices were prepared, started and closed, across every device that shares it.
+final class CaptureDeviceJournal: Sendable {
+    private let entries = OSAllocatedUnfairLock<[String]>(initialState: [])
+
+    func record(_ entry: String) {
+        entries.withLock { $0.append(entry) }
+    }
+
+    var all: [String] {
+        entries.withLock { $0 }
+    }
+}
+
 /// A capture device that delivers only what a test hands it, from whatever thread the test chooses.
 final class CaptureTestDevice: CaptureDevice, Sendable {
     struct Configuration: Sendable {
@@ -325,15 +338,22 @@ final class CaptureTestDevice: CaptureDevice, Sendable {
     }
 
     let configuration: Configuration
+    let name: String
+    let journal: CaptureDeviceJournal?
     let prepareEntered = AudioTestSignalLatch()
     private let prepareRelease = DispatchSemaphore(value: 0)
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(_ configuration: Configuration = Configuration()) {
+    init(
+        _ configuration: Configuration = Configuration(), name: String = "device", journal: CaptureDeviceJournal? = nil
+    ) {
         self.configuration = configuration
+        self.name = name
+        self.journal = journal
     }
 
     func prepare() throws -> AVAudioFormat {
+        journal?.record("\(name) prepare")
         state.withLock { $0.prepared += 1 }
         if configuration.holdsPrepare {
             prepareEntered.signal()
@@ -364,6 +384,7 @@ final class CaptureTestDevice: CaptureDevice, Sendable {
             state.started += 1
             state.running = true
         }
+        journal?.record("\(name) start")
     }
 
     var isRunning: Bool {
@@ -373,6 +394,7 @@ final class CaptureTestDevice: CaptureDevice, Sendable {
     /// Keeps the tap closure, like AVAudioEngine can for a callback already under way, so a test can deliver a
     /// buffer after the close.
     func close() {
+        journal?.record("\(name) close")
         state.withLock { state in
             state.closed += 1
             state.running = false

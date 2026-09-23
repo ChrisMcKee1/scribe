@@ -207,6 +207,12 @@ struct TranscriptionResult: Sendable, Equatable {
 /// and both output streams are drained while it runs, so no child can wedge a dictation. The recording goes to
 /// a private scratch file that is deleted when the run ends, however it ends (`ScratchAudioDirectory`).
 ///
+/// Cancellation stops a recognizer that is still running and then throws `TranscriptionError.cancelled`; a run
+/// stopped that way never yields a transcript, however complete its output looks. A cancellation that arrives
+/// after the run has seen the recognizer exit on its own, for example while a process the recognizer left
+/// behind still holds its output open (up to `ProcessRunner.postExitDrainLimit`), does not discard its
+/// transcript: `transcribe` returns it, and the caller, which knows why it cancelled, decides whether to use it.
+///
 /// The recognizer is looked up again for every transcription, reusing a successful lookup for a few seconds,
 /// so installing Foundry Local while Scribe runs takes effect on the next dictation. Logs carry shapes only:
 /// the backend kind, durations, byte and character counts, exit codes.
@@ -283,7 +289,8 @@ final class TranscriptionEngine: Sendable {
         }
     }
 
-    /// Transcribes 16 kHz (or `sampleRate`) mono samples. Throws `TranscriptionError`.
+    /// Transcribes 16 kHz (or `sampleRate`) mono samples. Throws `TranscriptionError`; see the type's notes on
+    /// cancellation, which does not discard a transcript from a recognizer that already exited on its own.
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }

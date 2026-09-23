@@ -148,7 +148,8 @@ final class AudioCaptureEngineTests: XCTestCase {
     func testAStopWhileTheMicrophoneOpensHandsOverAnEmptyCaptureAndClosesTheDeviceRightAfter() async throws {
         var configuration = CaptureTestDevice.Configuration()
         configuration.holdsPrepare = true
-        let device = CaptureTestDevice(configuration)
+        let journal = CaptureDeviceJournal()
+        let device = CaptureTestDevice(configuration, journal: journal)
         let engine = AudioCaptureEngine(makeDevice: { device })
         let owner = RecordingID(rawValue: 7)
 
@@ -166,10 +167,73 @@ final class AudioCaptureEngineTests: XCTestCase {
         XCTAssertEqual(outcome, .stoppedWhileOpening)
         XCTAssertTrue(captured.samples.isEmpty)
         XCTAssertEqual(captured.summary.ending, .stoppedByOwner)
+        // The stop's close waits on the control queue behind the open, so it closes the engine the open started.
+        XCTAssertEqual(journal.all, ["device prepare", "device start", "device close"])
         XCTAssertEqual(device.counts.started, 1)
         XCTAssertEqual(device.counts.closed, 1)
         XCTAssertFalse(engine.isCapturing)
         XCTAssertFalse(device.isRunning)
+    }
+
+    /// A start admitted while another thread's stop is still sealing the previous recording, held here inside its
+    /// resampler flush, where a stop spends the time between releasing the microphone and queueing its device's
+    /// close. The new device must not open until the old one has closed, and each device closes exactly once.
+    func testAStartAdmittedWhileTheLastStopStillSealsOpensOnlyOnceTheOldDeviceHasClosed() async throws {
+        let journal = CaptureDeviceJournal()
+        var resampled = CaptureTestDevice.Configuration()
+        resampled.sampleRate = 48_000
+        let first = CaptureTestDevice(resampled, name: "first", journal: journal)
+        let second = CaptureTestDevice(name: "second", journal: journal)
+        let flushEntered = AudioTestSignalLatch()
+        let releaseFlush = DispatchSemaphore(value: 0)
+        let flushes = OSAllocatedUnfairLock(initialState: 0)
+        let engine = AudioCaptureEngine(
+            resamplerTailFlush: { converter, target, samples in
+                if flushes.withLock({ count -> Bool in
+                    count += 1
+                    return count == 1
+                }) {
+                    flushEntered.signal()
+                    _ = releaseFlush.wait(timeout: .now() + .seconds(30))
+                }
+                return CaptureProcessor.flushResamplerTail(converter, target, &samples)
+            },
+            makeDevice: CaptureTestDeviceFactory([first, second]).make)
+        let firstOwner = RecordingID(rawValue: 1)
+        let secondOwner = RecordingID(rawValue: 2)
+        let opened = try await engine.start(owner: firstOwner, policy: .hold(), events: { _ in })
+        XCTAssertEqual(opened, .live)
+        first.deliver(buffer(0.25, frames: 4_800, sampleRate: 48_000))
+
+        let firstCapture = OSAllocatedUnfairLock<CapturedAudio?>(initialState: nil)
+        let stopReturned = AudioTestSignalLatch()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let captured = engine.stop(owner: firstOwner)
+            firstCapture.withLock { $0 = captured }
+            stopReturned.signal()
+        }
+        let entered = await flushEntered.wait()
+        XCTAssertTrue(entered, "the stop never reached its resampler flush")
+
+        let next = try await engine.start(owner: secondOwner, policy: .hold(), events: { _ in })
+        releaseFlush.signal()
+        let returned = await stopReturned.wait()
+        XCTAssertTrue(returned)
+        await engine.waitUntilIdle()
+
+        XCTAssertEqual(next, .live)
+        XCTAssertEqual(journal.all, ["first prepare", "first start", "first close", "second prepare", "second start"])
+        XCTAssertEqual(first.counts.closed, 1)
+        XCTAssertEqual(second.counts.closed, 0)
+        XCTAssertFalse(first.isRunning)
+        let sealed = try XCTUnwrap(firstCapture.withLock { $0 })
+        XCTAssertEqual(sealed.summary.ending, .stoppedByOwner)
+        XCTAssertFalse(sealed.samples.isEmpty)
+
+        engine.stop(owner: secondOwner)
+        await engine.waitUntilIdle()
+        XCTAssertEqual(first.counts.closed, 1)
+        XCTAssertEqual(second.counts.closed, 1)
     }
 
     /// A recording stopped while an earlier one still holds the control queue never opens a device at all.

@@ -320,6 +320,148 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertTrue(scratchFiles(scratch).isEmpty)
     }
 
+    /// Waits for `pid` to exit and then for the process runner, its parent, to reap it, which is when the run has
+    /// seen the exit. Bounded, so a regression fails the test instead of hanging it.
+    private func waitUntilReaped(_ pid: pid_t) async -> Bool {
+        guard ProcessResources.waitForExit(of: pid, timeout: .seconds(30)) else { return false }
+        for _ in 0..<1_000_000 {
+            if kill(pid, 0) == -1, errno == ESRCH {
+                return true
+            }
+            await Task.yield()
+        }
+        return false
+    }
+
+    /// The recognizer printed its transcript and exited on its own, and a process it left behind still holds its
+    /// output open while the run waits out the drain limit. A cancellation that arrives then must not discard the
+    /// finished transcript: the lifecycle decides what a cancelled dictation does with it.
+    func testACancellationAfterTheRecognizerExitedKeepsItsTranscript() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr")
+        let directoryPath = directory.path(percentEncoded: false)
+        let gatePath = directory.appendingPathComponent("gate").path(percentEncoded: false)
+        let descendantPath = directory.appendingPathComponent("descendant").path(percentEncoded: false)
+        let leader = directory.appendingPathComponent("leader")
+        let leaderPath = leader.path(percentEncoded: false)
+        defer { FileManager.default.createFile(atPath: gatePath, contents: nil) }
+        let script = try makeScript(
+            """
+            (
+              i=0
+              while [ $i -lt 600 ] && [ -d '\(directoryPath)' ] && [ ! -e '\(gatePath)' ]; do
+                sleep 0.05; i=$((i+1))
+              done
+            ) &
+            echo $! > '\(descendantPath)'
+            printf '{"text":"kept after the cancel"}'
+            echo $$ > '\(leaderPath).tmp' && mv '\(leaderPath).tmp' '\(leaderPath)'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let samples = tone
+
+        let task = Task {
+            try await engine.transcribe(samples: samples, sampleRate: 16_000)
+        }
+        let leaderReady = await FileGate.waitForFile(at: leader, timeout: .seconds(30))
+        XCTAssertTrue(leaderReady)
+        let recognizer = try XCTUnwrap(
+            pid_t(try String(contentsOf: leader, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let reaped = await waitUntilReaped(recognizer)
+        XCTAssertTrue(reaped, "the run never reaped the recognizer")
+        task.cancel()
+
+        let result = try await task.value
+
+        XCTAssertEqual(result.text, "kept after the cancel")
+        XCTAssertTrue(result.diagnostics.outputHeldAfterExit)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        FileManager.default.createFile(atPath: gatePath, contents: nil)
+        let recorded = try String(contentsOfFile: descendantPath, encoding: .utf8)
+        let descendant = try XCTUnwrap(pid_t(recorded.trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertTrue(
+            ProcessResources.waitForExit(of: descendant, timeout: .seconds(10)), "the descendant outlived the test")
+    }
+
+    /// Fails unless the recording whose path the scripted recognizer wrote to `record` existed while it ran and is
+    /// gone now. The check is `lstat` on that exact path, so it does not depend on reading the directory, and an
+    /// error other than "no such file" fails as itself.
+    private func assertRecordingGone(
+        recordedIn record: URL, file: StaticString = #filePath, line: UInt = #line
+    ) throws {
+        let path = try String(contentsOf: record, encoding: .utf8)
+        XCTAssertTrue(path.hasSuffix(".wav"), "the recognizer was handed \(path)", file: file, line: line)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: record.path(percentEncoded: false) + ".existed"),
+            "the recognizer did not find its recording", file: file, line: line)
+        var info = stat()
+        if lstat(path, &info) == 0 {
+            XCTFail("the recording is still there", file: file, line: line)
+            return
+        }
+        let code = errno
+        XCTAssertEqual(code, ENOENT, "looking for the recording failed with errno \(code)", file: file, line: line)
+    }
+
+    /// The exact recording the recognizer is handed exists while it runs and is gone once `transcribe` returns,
+    /// whether the recognizer succeeds, fails, runs past its deadline or is cancelled.
+    func testTheRecordingTheRecognizerReadIsGoneAfterEveryOutcome() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let evidence = directory.appendingPathComponent("evidence", isDirectory: true)
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        func recognizer(_ name: String, then tail: String) throws -> (script: URL, record: URL) {
+            let record = evidence.appendingPathComponent(name)
+            let path = record.path(percentEncoded: false)
+            let script = try makeScript(
+                """
+                printf '%s' "$5" > '\(path).tmp' && mv '\(path).tmp' '\(path)'
+                if [ -f "$5" ]; then : > '\(path).existed'; fi
+                \(tail)
+                """, in: directory, named: "foundry-\(name)")
+            return (script, record)
+        }
+        let quickDeadline = TranscriptionDeadlines(
+            coldBase: .milliseconds(300), warmBase: .milliseconds(300), perAudioSecond: 0)
+
+        let success = try recognizer("success", then: "printf '{\"text\":\"done\"}'")
+        let result = try await makeEngine(foundry: success.script, scratch: scratch)
+            .transcribe(samples: tone, sampleRate: 16_000)
+        XCTAssertEqual(result.text, "done")
+        try assertRecordingGone(recordedIn: success.record)
+
+        let failure = try recognizer("failure", then: "exit 3")
+        let failed = await transcriptionError {
+            try await self.makeEngine(foundry: failure.script, scratch: scratch)
+                .transcribe(samples: self.tone, sampleRate: 16_000)
+        }
+        XCTAssertEqual(failed, .exitCode(3))
+        try assertRecordingGone(recordedIn: failure.record)
+
+        let slow = try recognizer("deadline", then: "exec sleep 30")
+        let late = await transcriptionError {
+            try await self.makeEngine(foundry: slow.script, scratch: scratch, deadlines: quickDeadline)
+                .transcribe(samples: self.tone, sampleRate: 16_000)
+        }
+        XCTAssertEqual(late, .timedOut)
+        try assertRecordingGone(recordedIn: slow.record)
+
+        let ready = directory.appendingPathComponent("ready")
+        let held = try recognizer(
+            "cancel", then: ": > '\(ready.path(percentEncoded: false))'\nexec sleep 30")
+        let engine = makeEngine(foundry: held.script, scratch: scratch)
+        let samples = tone
+        let task = Task {
+            try await engine.transcribe(samples: samples, sampleRate: 16_000)
+        }
+        let reachedReady = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
+        XCTAssertTrue(reachedReady)
+        task.cancel()
+        let cancelled = await transcriptionError { try await task.value }
+        XCTAssertEqual(cancelled, .cancelled)
+        try assertRecordingGone(recordedIn: held.record)
+    }
+
     // MARK: - Failures
 
     func testEachWayARecognizerFailsHasItsOwnTypedError() async throws {

@@ -1,5 +1,6 @@
 import AVFoundation
 import XCTest
+import os
 
 @testable import Scribe
 
@@ -10,9 +11,10 @@ final class CaptureProcessorTests: XCTestCase {
         sampleRate: Double = 16_000,
         channels: Int = 1,
         commonFormat: AVAudioCommonFormat = .pcmFormatFloat32,
-        interleaved: Bool = false
+        interleaved: Bool = false,
+        tailFlush: @escaping CaptureProcessor.TailFlush = CaptureProcessor.flushResamplerTail
     ) throws -> CaptureProcessor {
-        let processor = CaptureProcessor(owner: RecordingID(rawValue: 1), policy: policy)
+        let processor = CaptureProcessor(owner: RecordingID(rawValue: 1), policy: policy, tailFlush: tailFlush)
         try processor.configure(
             inputFormat: AudioTestBuffers.format(
                 sampleRate: sampleRate, channels: channels, commonFormat: commonFormat, interleaved: interleaved))
@@ -56,6 +58,7 @@ final class CaptureProcessorTests: XCTestCase {
         XCTAssertEqual(captured.summary.acceptedBufferCount, 25)
         XCTAssertEqual(captured.summary.droppedBufferCount, 0)
         XCTAssertEqual(captured.summary.ending, .stoppedByOwner)
+        XCTAssertEqual(captured.summary.resamplerFlush, .notNeeded)
     }
 
     func testEveryChannelIsAveragedIntoTheMonoSignal() throws {
@@ -129,8 +132,10 @@ final class CaptureProcessorTests: XCTestCase {
             _ = processor.process(AudioTestBuffers.mono(Array(tone[start..<(start + 4_800)]), sampleRate: 48_000))
         }
 
-        let samples = try XCTUnwrap(processor.finish()).samples
+        let captured = try XCTUnwrap(processor.finish())
+        let samples = captured.samples
 
+        XCTAssertEqual(captured.summary.resamplerFlush, .flushed)
         XCTAssertEqual(Double(samples.count), 32_000, accuracy: 64)
         XCTAssertEqual(AudioTestSignal.rms(samples[4_000..<28_000]), 0.5 / Float(2).squareRoot(), accuracy: 0.02)
         // 440 Hz at 16 kHz crosses zero upward 440 times a second.
@@ -153,6 +158,67 @@ final class CaptureProcessorTests: XCTestCase {
     }
 
     // MARK: - Ownership of the samples
+
+    /// The owner stops the recording and flushing the resampler's tail fails: the summary and the log say so,
+    /// the ending is still the owner's stop, and the capture keeps everything converted before the failure,
+    /// including the part of the tail that did get through.
+    func testAFailedFinalFlushIsReportedAndTheCaptureKeepsWhatWasConverted() throws {
+        let tone = AudioTestSignal.tone(seconds: 0.5, frequency: 440, amplitude: 0.5, sampleRate: 48_000)
+        let reference = try makeProcessor(sampleRate: 48_000, tailFlush: { _, _, _ in true })
+        let failing = try makeProcessor(
+            sampleRate: 48_000,
+            tailFlush: { _, _, samples in
+                samples.append(contentsOf: [0.125, 0.125])
+                return false
+            })
+        for start in stride(from: 0, to: tone.count, by: 4_800) {
+            let chunk = Array(tone[start..<(start + 4_800)])
+            _ = reference.process(AudioTestBuffers.mono(chunk, sampleRate: 48_000))
+            _ = failing.process(AudioTestBuffers.mono(chunk, sampleRate: 48_000))
+        }
+        let recorder = recordScribeLog()
+
+        let converted = try XCTUnwrap(reference.finish())
+        let captured = try XCTUnwrap(failing.finish())
+        AudioCaptureEngine.logCompletion(captured)
+        recorder.stop()
+
+        XCTAssertFalse(converted.samples.isEmpty)
+        XCTAssertEqual(captured.samples, converted.samples + [0.125, 0.125])
+        XCTAssertEqual(captured.summary.ending, .stoppedByOwner)
+        XCTAssertEqual(captured.summary.resamplerFlush, .failed)
+        XCTAssertEqual(converted.summary.resamplerFlush, .flushed)
+        XCTAssertTrue(recorder.lines.contains { $0.contains("resamplerFlush=failed") }, "\(recorder.lines)")
+        XCTAssertTrue(
+            recorder.lines.contains { $0.contains("Converting the end of the recording to 16 kHz failed") },
+            "\(recorder.lines)")
+    }
+
+    /// A recording that ends by itself flushes once; a failed flush is reported the same way, and the one stop
+    /// request keeps its reason instead of being followed by a second one.
+    func testAFailedFlushWhenTheRecordingEndsItselfKeepsItsOneStopRequest() throws {
+        let flushes = OSAllocatedUnfairLock(initialState: 0)
+        let processor = try makeProcessor(
+            .hold(maximumDuration: .milliseconds(200)),
+            sampleRate: 48_000,
+            tailFlush: { _, _, _ in
+                flushes.withLock { $0 += 1 }
+                return false
+            })
+        var requests: [CaptureEndReason] = []
+        for _ in 0..<10 {
+            let chunk = [Float](repeating: 0.1, count: 4_800)
+            requests += stopRequests(in: processor.process(AudioTestBuffers.mono(chunk, sampleRate: 48_000)))
+        }
+
+        let captured = try XCTUnwrap(processor.finish())
+
+        XCTAssertEqual(requests, [.durationLimit])
+        XCTAssertEqual(flushes.withLock { $0 }, 1)
+        XCTAssertEqual(captured.summary.ending, .endedItself(.durationLimit))
+        XCTAssertEqual(captured.summary.resamplerFlush, .failed)
+        XCTAssertFalse(captured.samples.isEmpty)
+    }
 
     func testFinishHandsTheAudioOverOnceAndDropsEveryLaterBuffer() throws {
         let processor = try makeProcessor()
