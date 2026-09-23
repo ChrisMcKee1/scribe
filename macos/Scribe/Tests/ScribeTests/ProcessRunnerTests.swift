@@ -217,6 +217,77 @@ final class ProcessRunnerTests: XCTestCase {
         XCTAssertLessThan(outcome.duration, .milliseconds(2_500))
     }
 
+    /// Each run's descendant stays behind a gate holding standard input (with a megabyte still unwritten),
+    /// standard output and standard error. Once an outcome is back, the run must hold nothing: its
+    /// supervisor thread has ended and every pipe and kqueue it opened is closed, however many of those
+    /// descendants are still waiting.
+    func testADescendantHoldingEveryPipeLeavesNothingOfTheRunBehind() async throws {
+        let gate = try makeTemporaryDirectory(label: "process").appendingPathComponent("gate")
+        let gatePath = gate.path(percentEncoded: false)
+        defer { _ = FileManager.default.createFile(atPath: gatePath, contents: nil) }
+        let script = #"(while [ ! -e "$1" ]; do sleep 0.05; done) <&0 & printf done"#
+        let input = Data(repeating: 0x2A, count: 1 << 20)
+        let shell = shell
+        func runHeldBehindTheGate() async throws -> ProcessRunner.Outcome {
+            try await ProcessRunner.run(
+                shell, arguments: ["-c", script, "sh", gatePath], standardInput: input, timeout: .seconds(60))
+        }
+
+        // The first run also settles anything the runtime creates lazily, so the baseline is fair.
+        _ = try await runHeldBehindTheGate()
+        let baseline = ProcessResources.pipesAndQueues()
+        XCTAssertGreaterThanOrEqual(baseline.pipes, 0)
+        XCTAssertEqual(ProcessResources.threads(named: "ScribeProcessRunner"), 0)
+
+        for _ in 0..<4 {
+            let outcome = try await runHeldBehindTheGate()
+
+            XCTAssertEqual(outcome.terminationReason, .finished)
+            XCTAssertEqual(outcome.standardOutput.text, "done")
+            XCTAssertFalse(outcome.standardOutput.reachedEndOfFile)
+            XCTAssertFalse(outcome.standardError.reachedEndOfFile)
+            XCTAssertEqual(ProcessResources.pipesAndQueues().pipes, baseline.pipes)
+            XCTAssertEqual(ProcessResources.pipesAndQueues().queues, baseline.queues)
+            XCTAssertEqual(ProcessResources.threads(named: "ScribeProcessRunner"), 0)
+        }
+    }
+
+    /// The shell exits on SIGTERM at once while its worker spends a moment cleaning up, then says so on
+    /// standard output. The worker must get its grace period instead of a SIGKILL the moment its parent
+    /// is gone, and once it has finished the run need not wait out the rest of the period.
+    func testADescendantCleaningUpAfterItsParentExitsGetsTheGracePeriod() async throws {
+        let task = try await startShellAndWaitUntilReady(
+            #"(trap 'sleep 0.3; printf cleaned; exit 0' TERM; touch "$1"; while :; do sleep 0.05; done) & wait"#,
+            killGracePeriod: .seconds(10))
+
+        task.cancel()
+        let outcome = try await task.value
+
+        XCTAssertEqual(outcome.terminationReason, .cancelled)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertEqual(outcome.standardOutput.text, "cleaned")
+        XCTAssertTrue(outcome.standardOutput.reachedEndOfFile)
+        XCTAssertLessThan(outcome.duration, .seconds(8))
+    }
+
+    /// With the shell already gone, its worker ignores SIGTERM; the SIGKILL at the end of the grace
+    /// period must still reach it, which the pipes reaching end of file prove.
+    func testADescendantIgnoringTerminateAfterItsParentExitsIsKilledAtTheDeadline() async throws {
+        let task = try await startShellAndWaitUntilReady(
+            #"(trap "" TERM; touch "$1"; while :; do sleep 0.05; done) & wait"#,
+            killGracePeriod: .milliseconds(300))
+
+        task.cancel()
+        let outcome = try await task.value
+
+        XCTAssertEqual(outcome.terminationReason, .cancelled)
+        XCTAssertEqual(outcome.terminationSignal, SIGTERM)
+        XCTAssertTrue(outcome.standardOutput.reachedEndOfFile)
+        XCTAssertTrue(outcome.standardError.reachedEndOfFile)
+        XCTAssertGreaterThanOrEqual(outcome.duration, .milliseconds(300))
+        XCTAssertLessThan(outcome.duration, .seconds(20))
+    }
+
     func testCancellationBeforeTheLaunchStartsNothingAndThrows() async {
         let task = Task { () async throws -> ProcessRunner.Outcome in
             withUnsafeCurrentTask { $0?.cancel() }

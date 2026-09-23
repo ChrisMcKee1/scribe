@@ -10,6 +10,12 @@ import Foundation
 /// URL error code and the errors it wraps) and never reads a message, a string payload or any user
 /// info except the wrapped errors. It mirrors Windows' `Scribe.Core.Diagnostics.FailureShape`.
 ///
+/// Every piece of text in a shape comes from Scribe or the compiler, never from the error: type and
+/// case names are the compiler's, and a domain or a service code is written only when it matches an
+/// entry in a fixed list here. Matching a pattern would not be enough, because a string that merely
+/// looks like an identifier can still be a secret or a word the user dictated. Anything unlisted is
+/// written as `other`.
+///
 ///     NSError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)
 ///     KeychainError.unhandled values=-25299
 ///     ProcessRunnerError.launchFailed values=2
@@ -19,8 +25,8 @@ import Foundation
 struct FailureShape: Sendable, Equatable, CustomStringConvertible {
     /// The error's Swift type and, for an enum, its case: `NSError`, `TranscriptionEngineError.processFailed`.
     let typeName: String
-    /// The `NSError` domain; `nil` when it only repeats the Swift type (every Swift error's default),
-    /// and `?` when it does not look like a framework constant, such as a host name or a URL.
+    /// The `NSError` domain when it is in `frameworkDomains`; `nil` when it only repeats the Swift type
+    /// (every Swift error's default), and `other` for any other domain.
     let domain: String?
     /// The `NSError` code; `nil` for a Swift error that does not choose its own, whose default code
     /// only numbers its cases.
@@ -30,13 +36,45 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
     let payloadIntegers: [Int64]
     /// From the first error in the chain that reports one through `FailureShapeDetailing`.
     let httpStatus: Int?
-    /// From the first error in the chain that reports one through `FailureShapeDetailing`, and only
-    /// when it looks like an identifier.
+    /// From the first error in the chain that reports one through `FailureShapeDetailing`: the code
+    /// itself when it is in `knownServiceCodes`, an Entra `AADSTS` code rebuilt from its number, or
+    /// `other`.
     let serviceCode: String?
     /// The code of the first `NSURLErrorDomain` error in the chain.
     let urlErrorCode: Int?
     /// The errors this one wraps, outermost first, each as `Type(domain code)`, at most eight.
     let underlying: [String]
+
+    /// Framework error domains, each a constant its framework defines. A Swift error's own default
+    /// domain (its type name, which Scribe computes rather than reads) is recognized separately and
+    /// omitted. Scribe's errors are Swift types and use that default; one that adopts `CustomNSError`
+    /// with a domain of its own has to add the domain here to have it written.
+    static let frameworkDomains: Set<String> = [
+        NSURLErrorDomain,
+        NSPOSIXErrorDomain,
+        NSCocoaErrorDomain,
+        NSOSStatusErrorDomain,
+        NSMachErrorDomain,
+        "kCFErrorDomainCFNetwork",
+        "AVFoundationErrorDomain",
+        "com.apple.coreaudio.avfaudio",
+        "SMAppServiceErrorDomain",
+        "UNErrorDomain",
+    ]
+
+    /// Error codes the cleanup providers can return that Scribe writes as themselves: the OAuth 2.0
+    /// token errors, the OpenAI-style `error.code` and `error.type` values, and the Azure data plane
+    /// codes. Entra's `AADSTS` codes are handled by number instead of listed.
+    static let knownServiceCodes: Set<String> = [
+        "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type",
+        "invalid_scope", "temporarily_unavailable",
+        "invalid_api_key", "invalid_request_error", "authentication_error", "permission_error",
+        "not_found_error", "model_not_found", "context_length_exceeded", "content_filter",
+        "rate_limit_exceeded", "rate_limit_error", "insufficient_quota", "server_error",
+        "unsupported_parameter", "unsupported_value",
+        "DeploymentNotFound", "Unauthorized", "PermissionDenied", "AuthenticationTypeDisabled",
+        "OperationNotSupported", "TooManyRequests", "InternalServerError", "ServiceUnavailable", "429",
+    ]
 
     private static let maximumVisited = 32
     private static let maximumUnderlying = 8
@@ -70,8 +108,8 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
                 if httpStatus == nil, let status = detailing.failureHTTPStatus, (100...599).contains(status) {
                     httpStatus = status
                 }
-                if serviceCode == nil, let candidate = detailing.failureServiceCode {
-                    serviceCode = Self.sanitizedServiceCode(candidate)
+                if serviceCode == nil, let candidate = detailing.failureServiceCode, !candidate.isEmpty {
+                    serviceCode = Self.serviceCodeIdentifier(candidate)
                 }
             }
             if urlErrorCode == nil, head.bridgedDomain == NSURLErrorDomain {
@@ -160,31 +198,25 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
         }
     }
 
-    /// Framework domains are identifiers (`NSURLErrorDomain`, `kCFErrorDomainCFNetwork`) or Apple
-    /// reverse-DNS names (`com.apple.coreaudio.avfaudio`). Anything else is not trusted to be one.
-    private static func frameworkDomain(_ domain: String) -> String {
-        if EnumCaseName.identifier(domain, maximumLength: 96) != nil {
-            return domain
-        }
-        let labels = domain.split(separator: ".", omittingEmptySubsequences: false)
-        if domain.hasPrefix("com.apple."), domain.utf8.count <= 96,
-            labels.allSatisfy({ EnumCaseName.identifier(String($0), maximumLength: 64) != nil })
-        {
-            return domain
-        }
-        return "?"
+    /// A listed framework domain as itself, anything else as `other`.
+    static func frameworkDomain(_ domain: String) -> String {
+        frameworkDomains.contains(domain) ? domain : "other"
     }
 
-    /// Windows' rule for a service's error code: a letter, then up to 63 letters, digits, `_` or `-`.
-    /// No dot, colon, slash or space gets through, so a host, a URL or a sentence cannot pass as a code.
-    private static func sanitizedServiceCode(_ candidate: String) -> String? {
-        let scalars = candidate.unicodeScalars
-        guard let first = scalars.first, first.isASCIILetter, scalars.count <= 64,
-            scalars.allSatisfy({ $0.isASCIILetter || $0.isASCIIDigit || $0 == "_" || $0 == "-" })
-        else {
-            return nil
+    /// A listed service code as itself; an Entra code, `AADSTS` and four to nine digits, rebuilt from
+    /// its number, so only the digits come from the service; anything else as `other`.
+    static func serviceCodeIdentifier(_ candidate: String) -> String {
+        if knownServiceCodes.contains(candidate) {
+            return candidate
         }
-        return candidate
+        let prefix = "AADSTS"
+        let digits = candidate.unicodeScalars.dropFirst(prefix.unicodeScalars.count)
+        if candidate.hasPrefix(prefix), (4...9).contains(digits.count), digits.allSatisfy(\.isASCIIDigit),
+            let number = Int(Substring(digits))
+        {
+            return prefix + String(number)
+        }
+        return "other"
     }
 
     // MARK: - Payloads
@@ -232,9 +264,9 @@ struct FailureShape: Sendable, Equatable, CustomStringConvertible {
 protocol FailureShapeDetailing: Error {
     /// The HTTP status of the response behind the failure.
     var failureHTTPStatus: Int? { get }
-    /// The service's own error code, such as `DeploymentNotFound`, `invalid_api_key` or
-    /// `AADSTS7000215`. Kept only when it looks like an identifier, so a sentence, a host or a URL is
-    /// dropped even when the service put one there.
+    /// The service's own error code, as the response carried it, such as `DeploymentNotFound`,
+    /// `invalid_api_key` or `AADSTS7000215`. The shape writes it only when Scribe lists it (see
+    /// `FailureShape.knownServiceCodes`); any other value, whatever it looks like, becomes `other`.
     var failureServiceCode: String? { get }
 }
 

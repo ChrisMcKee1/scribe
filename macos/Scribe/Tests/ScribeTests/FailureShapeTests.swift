@@ -51,10 +51,11 @@ final class FailureShapeTests: XCTestCase {
 
         let shape = FailureShape(error)
 
-        XCTAssertEqual(shape.description, "LeakingError.leaked(? 7) values=-25299 http=403 inner=NSError(? 2)")
+        XCTAssertEqual(
+            shape.description,
+            "LeakingError.leaked(other 7) values=-25299 http=403 service=other inner=NSError(other 2)")
         PrivacyCanary.assertAbsent(from: shape.description)
         PrivacyCanary.assertAbsent(from: String(describing: shape))
-        XCTAssertNil(shape.serviceCode)
     }
 
     /// Foundation's error structs (`URLError`, `POSIXError`, `CocoaError`) travel inside `any Error` as
@@ -92,9 +93,23 @@ final class FailureShapeTests: XCTestCase {
         XCTAssertEqual(FailureShape(posix).description, "NSError(NSPOSIXErrorDomain 13)")
     }
 
-    func testADomainThatIsNotAFrameworkConstantIsHidden() {
-        for domain in ["contoso-ai.openai.azure.com", "contoso.openai.azure.com", PrivacyCanary.path, "two words"] {
-            XCTAssertEqual(FailureShape(NSError(domain: domain, code: 1)).description, "NSError(? 1)", domain)
+    func testEveryListedFrameworkDomainIsWrittenAsItself() {
+        for domain in FailureShape.frameworkDomains {
+            XCTAssertEqual(FailureShape(NSError(domain: domain, code: 1)).description, "NSError(\(domain) 1)")
+        }
+    }
+
+    /// A domain is a free-form string, so looking like an identifier or an Apple reverse-DNS name proves
+    /// nothing about where it came from.
+    func testADomainScribeDoesNotListIsWrittenAsOther() {
+        let domains = [
+            "canary_private_dictation", "com.apple.canary", "contoso-ai.openai.azure.com", "contoso.openai.azure.com",
+            PrivacyCanary.path, PrivacyCanary.secret, "two words",
+        ]
+        for domain in domains {
+            let shape = FailureShape(NSError(domain: domain, code: 1))
+            XCTAssertEqual(shape.description, "NSError(other 1)", domain)
+            PrivacyCanary.assertAbsent(from: shape.description)
         }
     }
 
@@ -144,23 +159,29 @@ final class FailureShapeTests: XCTestCase {
         PrivacyCanary.assertAbsent(from: shape.description)
     }
 
-    func testAServiceCodeIsKeptOnlyWhenItLooksLikeAnIdentifier() {
-        let accepted = ["invalid_api_key", "DeploymentNotFound", "AADSTS7000215", "content-filter"]
-        for code in accepted {
+    /// A code comes from a response body, so looking like an identifier proves nothing: the fixture's API
+    /// key does, and so does a phrase written in snake case.
+    func testAServiceCodeIsWrittenOnlyWhenScribeListsIt() {
+        for code in ["invalid_api_key", "DeploymentNotFound", "content_filter", "invalid_client", "AADSTS7000215"] {
             let shape = FailureShape(ServiceFailure(failureHTTPStatus: 401, failureServiceCode: code))
             XCTAssertEqual(shape.description, "ServiceFailure http=401 service=\(code)")
         }
 
-        let rejected = [
-            "not a code", "https://example.invalid", "contoso.openai.azure.com", "7starts-with-a-digit", "",
-            String(repeating: "a", count: 65),
+        let unlisted = [
+            PrivacyCanary.secret, "canary_private_dictation", "content-filter", "not a code", "https://example.invalid",
+            "contoso.openai.azure.com", "7starts-with-a-digit", "AADSTS12", "AADSTS7000215x", "aadsts7000215",
+            "AADSTS1234567890", String(repeating: "a", count: 65),
         ]
-        for code in rejected {
+        for code in unlisted {
             let shape = FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: code))
-            XCTAssertNil(shape.serviceCode, code)
+            XCTAssertEqual(shape.serviceCode, "other", code)
+            XCTAssertEqual(shape.description, "ServiceFailure service=other", code)
+            PrivacyCanary.assertAbsent(from: shape.description)
         }
-    }
 
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: "")).serviceCode)
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: nil)).serviceCode)
+    }
     func testAnHTTPStatusOutsideTheValidRangeIsDropped() {
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 0, failureServiceCode: nil)).httpStatus)
         XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 1000, failureServiceCode: nil)).httpStatus)

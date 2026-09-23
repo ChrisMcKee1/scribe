@@ -111,8 +111,8 @@ enum ScribeLog {
 
         /// A user-chosen name or a path, and only when a diagnosis needs it: never a transcript,
         /// dictionary or snippet text, a prompt, clipboard content, an endpoint, a key or AI output.
-        /// Standard error and line observers get `<private>`; the unified log gets the value marked
-        /// `.private`.
+        /// Standard error gets `<private>`; the unified log gets the value in its private argument,
+        /// marked `.private`.
         static func sensitive(_ key: StaticString, _ value: String) -> Field {
             Field(key, .sensitive(value))
         }
@@ -154,34 +154,34 @@ enum ScribeLog {
 
     static func log(_ level: Level, _ category: Category, _ message: StaticString, _ fields: [Field]) {
         let rendering = render(level, category, message, fields)
+        let publicText = rendering.publicText ?? ""
         let logger = loggers[category] ?? Logger(subsystem: subsystem, category: category.rawValue)
         // The public text is built only from static strings and shapes (see Field), so marking it
         // public exposes nothing; the sensitive values travel alone, in the private argument.
         if let privateText = rendering.privateText {
-            logger.log(
-                level: level.osLogType, "\(rendering.publicText, privacy: .public) \(privateText, privacy: .private)")
+            logger.log(level: level.osLogType, "\(publicText, privacy: .public) \(privateText, privacy: .private)")
         } else {
-            logger.log(level: level.osLogType, "\(rendering.publicText, privacy: .public)")
+            logger.log(level: level.osLogType, "\(publicText, privacy: .public)")
         }
-        publish(rendering.line, toStandardError: level != .debug)
+        publish(rendering, toStandardError: level != .debug)
     }
 
     /// Writes `line` to standard error as given. Kept for `AppDelegate.writeLogLine`, whose lines predate
     /// this facade and are not all shapes; new code logs through the functions above instead.
     static func legacyUnshapedLine(_ line: String) {
-        publish(line, toStandardError: true)
+        publish(Rendering(line: line, publicText: nil, privateText: nil), toStandardError: true)
     }
 
     // MARK: - Rendering
 
     /// What one event becomes.
     struct Rendering: Sendable, Equatable {
-        /// The standard error line, which line observers also see:
-        /// `[Cleanup] warning: Cleanup failed, using the raw text failure=[...]`.
+        /// The standard error line: `[Cleanup] warning: Cleanup failed, using the raw text failure=[...]`.
         let line: String
-        /// The unified log's public part: the message and every field except the sensitive ones.
-        let publicText: String
-        /// The unified log's private part, the sensitive fields, or `nil` when there are none.
+        /// The unified log's public argument: the message and every field except the sensitive ones.
+        /// `nil` for a legacy line, which never reaches the unified log.
+        let publicText: String?
+        /// The unified log's private argument, the sensitive fields, or `nil` when there are none.
         let privateText: String?
     }
 
@@ -206,21 +206,22 @@ enum ScribeLog {
             privateText: privateFields.isEmpty ? nil : privateFields.joined(separator: " "))
     }
 
-    // MARK: - Line observers
+    // MARK: - Observers
 
-    /// Calls `observer` with every line from now on, until the returned observation is cancelled:
-    /// each event as its standard error line (debug events included, although standard error never
-    /// gets them) and each legacy line. For tests that check what a code path logs.
-    static func addLineObserver(_ observer: @escaping @Sendable (String) -> Void) -> LineObservation {
+    /// Calls `observer` with every event from now on, until the returned observation is cancelled, with
+    /// exactly what `log` passed on: the standard error line and the unified log's public and private
+    /// arguments. Debug events are included, although standard error never gets them, and so are
+    /// legacy lines. For tests that check what a code path logs.
+    static func addObserver(_ observer: @escaping @Sendable (Rendering) -> Void) -> Observation {
         let id = observers.withLock { current -> UInt64 in
             current.nextID += 1
             current.handlers[current.nextID] = observer
             return current.nextID
         }
-        return LineObservation(id: id)
+        return Observation(id: id)
     }
 
-    final class LineObservation: Sendable {
+    final class Observation: Sendable {
         private let id: UInt64
 
         fileprivate init(id: UInt64) {
@@ -237,22 +238,24 @@ enum ScribeLog {
 
     private struct Observers: Sendable {
         var nextID: UInt64 = 0
-        var handlers: [UInt64: @Sendable (String) -> Void] = [:]
+        var handlers: [UInt64: @Sendable (Rendering) -> Void] = [:]
     }
 
     private static let observers = OSAllocatedUnfairLock(initialState: Observers())
 
     private static let loggers: [Category: Logger] = Dictionary(
-        uniqueKeysWithValues: Category.allCases.map { ($0, Logger(subsystem: ScribeLog.subsystem, category: $0.rawValue)) })
+        uniqueKeysWithValues: Category.allCases.map { category in
+            (category, Logger(subsystem: ScribeLog.subsystem, category: category.rawValue))
+        })
 
-    /// The one place a line reaches standard error or an observer.
-    private static func publish(_ line: String, toStandardError: Bool) {
+    /// The one place an event reaches standard error or an observer.
+    private static func publish(_ rendering: Rendering, toStandardError: Bool) {
         if toStandardError {
-            StandardErrorSink.write(line)
+            _ = StandardErrorSink.emit(rendering.line)
         }
         let handlers = observers.withLock { current in Array(current.handlers.values) }
         for handler in handlers {
-            handler(line)
+            handler(rendering)
         }
     }
 }
@@ -269,14 +272,34 @@ extension ScribeLog.Level {
     }
 }
 
-private enum StandardErrorSink {
-    /// A reader that went away (`Scribe 2>&1 | head`) must not end the app with SIGPIPE on the next
-    /// line. With this flag set on the descriptor, the write fails with EPIPE instead, and a log line
-    /// that cannot be written is simply lost.
-    private static let ignoresBrokenPipe: Bool = fcntl(STDERR_FILENO, F_SETNOSIGPIPE, 1) == 0
+/// Writes whole lines to standard error, one at a time.
+enum StandardErrorSink {
+    private static let writing = OSAllocatedUnfairLock()
 
-    static func write(_ line: String) {
-        _ = ignoresBrokenPipe
-        fputs(line + "\n", stderr)
+    /// Writes `line` and a newline to `descriptor`, standard error unless a test passes another, and
+    /// says whether all of it was written. The descriptor is marked, before every write, to fail a
+    /// write whose reader has gone away (`Scribe 2>&1 | head`) with EPIPE instead of raising SIGPIPE,
+    /// which would end the app; such a line is lost and nothing else happens. Marking it every time
+    /// also covers a standard error that was replaced after launch.
+    static func emit(_ line: String, to descriptor: Int32 = STDERR_FILENO) -> Bool {
+        let bytes = Array((line + "\n").utf8)
+        return writing.withLock {
+            _ = fcntl(descriptor, F_SETNOSIGPIPE, 1)
+            return bytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) -> Bool in
+                guard let base = buffer.baseAddress else { return true }
+                var offset = 0
+                while offset < buffer.count {
+                    let written = Darwin.write(descriptor, base + offset, buffer.count - offset)
+                    if written > 0 {
+                        offset += written
+                    } else if written < 0 && errno == EINTR {
+                        continue
+                    } else {
+                        return false
+                    }
+                }
+                return true
+            }
+        }
     }
 }

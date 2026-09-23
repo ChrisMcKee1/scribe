@@ -101,7 +101,7 @@ extension XCTestCase {
         return url
     }
 
-    /// Records every line `ScribeLog` renders until the test ends.
+    /// Records every event `ScribeLog` renders until the test ends.
     func recordScribeLog() -> ScribeLogRecorder {
         let recorder = ScribeLogRecorder()
         addTeardownBlock {
@@ -111,21 +111,33 @@ extension XCTestCase {
     }
 }
 
-/// Collects the lines `ScribeLog` renders while it is recording.
+/// Collects what `ScribeLog` passes on while it is recording: each event's standard error line and the
+/// unified log's arguments.
 final class ScribeLogRecorder: Sendable {
-    private let recorded: OSAllocatedUnfairLock<[String]>
-    private let observation: ScribeLog.LineObservation
+    private let recorded: OSAllocatedUnfairLock<[ScribeLog.Rendering]>
+    private let observation: ScribeLog.Observation
 
     init() {
-        let recorded = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let recorded = OSAllocatedUnfairLock<[ScribeLog.Rendering]>(initialState: [])
         self.recorded = recorded
-        self.observation = ScribeLog.addLineObserver { line in
-            recorded.withLock { $0.append(line) }
+        self.observation = ScribeLog.addObserver { rendering in
+            recorded.withLock { $0.append(rendering) }
         }
     }
 
-    var lines: [String] {
+    var renderings: [ScribeLog.Rendering] {
         recorded.withLock { $0 }
+    }
+
+    /// The standard error lines.
+    var lines: [String] {
+        renderings.map(\.line)
+    }
+
+    /// Every standard error line and every public unified log argument, which is all a log reader
+    /// without a private-data logging profile can see.
+    var publicText: String {
+        renderings.flatMap { [$0.line, $0.publicText ?? ""] }.joined(separator: "\n")
     }
 
     func stop() {
@@ -198,5 +210,50 @@ enum FileGate {
             _ = kevent(queue, nil, 0, &event, 1, &wait)
         }
         return true
+    }
+}
+
+/// What this test process holds right now, read from the kernel, for tests that prove a run lets go
+/// of everything it opened.
+enum ProcessResources {
+    /// Open pipe and kqueue descriptors, the two kinds a process runner creates.
+    static func pipesAndQueues() -> (pipes: Int, queues: Int) {
+        let pid = getpid()
+        let stride = MemoryLayout<proc_fdinfo>.stride
+        let needed = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+        guard needed > 0 else { return (-1, -1) }
+        var descriptors = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(needed) / stride + 64)
+        let filled = descriptors.withUnsafeMutableBytes { buffer in
+            proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buffer.baseAddress, Int32(buffer.count))
+        }
+        guard filled > 0 else { return (-1, -1) }
+        let open = descriptors.prefix(Int(filled) / stride)
+        return (
+            open.filter { $0.proc_fdtype == UInt32(PROX_FDTYPE_PIPE) }.count,
+            open.filter { $0.proc_fdtype == UInt32(PROX_FDTYPE_KQUEUE) }.count
+        )
+    }
+
+    /// Threads whose name starts with `prefix`.
+    static func threads(named prefix: String) -> Int {
+        let pid = getpid()
+        var handles = [UInt64](repeating: 0, count: 4096)
+        let filled = handles.withUnsafeMutableBytes { buffer in
+            proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, buffer.baseAddress, Int32(buffer.count))
+        }
+        guard filled > 0 else { return -1 }
+        var count = 0
+        for handle in handles.prefix(Int(filled) / MemoryLayout<UInt64>.stride) {
+            var info = proc_threadinfo()
+            let size = Int32(MemoryLayout<proc_threadinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTHREADINFO, handle, &info, size) == size else { continue }
+            let name = withUnsafeBytes(of: info.pth_name) { bytes in
+                String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+            }
+            if name.hasPrefix(prefix) {
+                count += 1
+            }
+        }
+        return count
     }
 }
