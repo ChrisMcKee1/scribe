@@ -724,10 +724,19 @@ actor AzureServicePrincipalCredentialProvider: AzureCredentialProvider {
 
 /// Who Scribe signs in to Microsoft Foundry as. Equal identities share one credential and its token, so the provider
 /// cache keys credentials by it. A service principal's secret is represented by the store's `secretRevision`, never
-/// by its value.
-enum AzureIdentity: Hashable, Sendable {
+/// by its value. Printing or dumping one shows only the auth mode, never the tenant or client id.
+enum AzureIdentity: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
     case azureCli(tenantId: String?)
     case servicePrincipal(tenantId: String, clientId: String, secretRevision: String)
+
+    var description: String {
+        switch self {
+        case .azureCli: return "AzureIdentity(azureCli)"
+        case .servicePrincipal: return "AzureIdentity(servicePrincipal)"
+        }
+    }
+
+    var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
 /// Hands out one credential per identity, the macOS side of Windows' `AzureCredentialFactory`: a credential keeps its

@@ -164,7 +164,8 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertTrue(store.isConfigured(for: .microsoftFoundry))
     }
 
-    /// The only place the production services and `UserDefaults.standard` appear; this reads nothing from either.
+    /// The only test that builds the live store. It reads and writes neither the production Keychain services nor
+    /// `UserDefaults.standard`; it only checks which of them the live store names.
     func testTheLiveStoreUsesTheProductionServicesAndStandardDefaults() {
         let live = CleanupSettingsStore.live
 

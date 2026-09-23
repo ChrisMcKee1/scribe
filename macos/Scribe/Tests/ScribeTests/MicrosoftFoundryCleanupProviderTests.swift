@@ -27,8 +27,12 @@ final class MicrosoftFoundryEndpointTests: XCTestCase {
         }
     }
 
-    func testAnEndpointThatIsNotAnHTTPURLWithAHostHasNoBase() {
-        for endpoint in ["ftp://my-res.openai.azure.com", "my-res.openai.azure.com", "file:///openai/v1"] {
+    /// An Entra token never travels over plain HTTP, so an http endpoint is refused before any request is built.
+    func testAnEndpointThatIsNotAnHTTPSURLWithAHostHasNoBase() {
+        for endpoint in [
+            "ftp://my-res.openai.azure.com", "my-res.openai.azure.com", "file:///openai/v1",
+            "http://my-res.openai.azure.com", "HTTP://my-res.openai.azure.com/openai/v1/", "http://localhost:8080",
+        ] {
             XCTAssertNil(MicrosoftFoundryCleanupProvider.inferenceBase(for: URL(string: endpoint)!), endpoint)
         }
     }

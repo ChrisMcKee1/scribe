@@ -102,6 +102,9 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         fixture.store.azureDeployment = "gpt-5-mini"
         assertNotConfigured(fixture.store, .azureEndpointInvalid)
 
+        fixture.store.azureEndpoint = "http://my-res.openai.azure.com"
+        assertNotConfigured(fixture.store, .azureEndpointInvalid)
+
         fixture.store.azureEndpoint = "https://my-res.openai.azure.com"
         fixture.store.azureDeployment = ""
         assertNotConfigured(fixture.store, .azureDeploymentMissing)

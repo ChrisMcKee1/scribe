@@ -5,26 +5,32 @@ import Security
 /// secret store's revision stands in for. Two equal connections build interchangeable providers, so
 /// `CleanupProviderCache` keys on it. The prompt is not part of it; it travels with each `CleanupRequest`.
 ///
-/// Printing or dumping one shows only the provider kind, since the endpoint, deployment, model and ids are the user's.
+/// Printing or dumping one, or its target, shows only the provider kind, since the endpoint, deployment, model and ids
+/// are the user's.
 struct CleanupConnection: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
-    enum Target: Hashable, Sendable {
+    enum Target: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
         case foundryLocal(modelAlias: String)
         case ollama(model: String)
         case openAICompatible(completionsURL: URL, model: String, apiKey: CleanupSecretSource)
         case microsoftFoundry(inferenceBase: URL, deployment: String, identity: AzureIdentity)
+
+        var kind: CleanupProviderKind {
+            switch self {
+            case .foundryLocal: return .foundryLocal
+            case .ollama: return .ollama
+            case .openAICompatible: return .openAICompatible
+            case .microsoftFoundry: return .microsoftFoundry
+            }
+        }
+
+        var description: String { "CleanupConnection.Target(\(kind.rawValue))" }
+        var customMirror: Mirror { Mirror(self, children: ["kind": kind]) }
     }
 
     let target: Target
     let source: CleanupConfigurationSource
 
-    var kind: CleanupProviderKind {
-        switch target {
-        case .foundryLocal: return .foundryLocal
-        case .ollama: return .ollama
-        case .openAICompatible: return .openAICompatible
-        case .microsoftFoundry: return .microsoftFoundry
-        }
-    }
+    var kind: CleanupProviderKind { target.kind }
 
     var description: String { "CleanupConnection(\(kind.rawValue))" }
     var customMirror: Mirror { Mirror(self, children: ["kind": kind]) }

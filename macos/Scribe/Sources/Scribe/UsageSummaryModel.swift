@@ -1,9 +1,9 @@
 import Foundation
 
-/// The Usage Insights AI summary. It sends the aggregate payload only while AI cleanup is on, and it resolves the
-/// provider with the throwing resolver, so an unfinished provider setup becomes a message on the tab instead of a
-/// crash. A result that arrives after the period changed, after cleanup was turned off or after the tab went away
-/// is dropped, and a failed attempt keeps the last summary that worked.
+/// The Usage Insights AI summary. It sends the aggregate payload only while AI cleanup is on, and it takes the
+/// provider from the shared provider cache, which throws for an unfinished provider setup, so that becomes a message
+/// on the tab instead of a crash. A result that arrives after the period changed, after cleanup was turned off or
+/// after the tab went away is dropped, and a failed attempt keeps the last summary that worked.
 @MainActor
 final class UsageSummaryModel: ObservableObject {
     @Published private(set) var summary: String?

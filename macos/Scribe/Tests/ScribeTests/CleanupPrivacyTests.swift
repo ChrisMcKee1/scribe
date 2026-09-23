@@ -171,12 +171,14 @@ final class CleanupPrivacyTests: XCTestCase {
         fixture.store.azureClientId = "canary-client"
 
         let connection = try CleanupProviderResolver.connection(store: fixture.store, environment: [:])
+        let identity = AzureIdentity.servicePrincipal(
+            tenantId: "canary-tenant", clientId: "canary-client", secretRevision: "canary-revision")
         let principal = AzureServicePrincipal(
             tenantId: "canary-tenant", clientId: "canary-client", clientSecret: PrivacyCanary.secret)
         let token = AzureAccessToken(token: PrivacyCanary.secret, expiresAt: .distantFuture)
         let reply = CleanupServiceReply(code: "canary_code", message: PrivacyCanary.transcript)
 
-        for value in [connection as Any, principal, token, reply] {
+        for value in [connection as Any, connection.target, identity, principal, token, reply] {
             var dumped = ""
             dump(value, to: &dumped)
             for text in [String(describing: value), String(reflecting: value), dumped] {

@@ -245,8 +245,11 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
             fix = "Enter the Ollama model name"
         case .openAIEndpointMissing:
             fix = "Enter the endpoint's base URL and its model"
-        case .openAIEndpointInvalid, .azureEndpointInvalid:
+        case .openAIEndpointInvalid:
             fix = "Enter an endpoint address that starts with http:// or https:// and names a host"
+        case .azureEndpointInvalid:
+            fix = "Enter the Microsoft Foundry endpoint as an https:// address that names the resource (for example "
+                + "https://my-resource.openai.azure.com)"
         case .openAIModelMissing:
             fix = "Enter the model name for the OpenAI-compatible endpoint"
         case .azureEndpointMissing:

@@ -46,16 +46,17 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     /// resource endpoint, a Foundry project URL (`.../api/projects/<name>`), a URL that already ends in `/openai/v1`,
     /// or a dated deployments URL. The path, query, fragment and any user info are dropped, as Windows'
     /// `AzureOpenAIResponsesClientFactory.GetV1Endpoint` keeps only the authority. `nil` unless the endpoint is an
-    /// http or https URL with a host.
+    /// https URL with a host: Azure serves these endpoints over TLS only, and the Entra token each request carries
+    /// must never cross the network in plain text.
     static func inferenceBase(for endpoint: URL) -> URL? {
         guard let components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false),
-            let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+            components.scheme?.lowercased() == "https",
             let host = components.host?.lowercased(), !host.isEmpty
         else {
             return nil
         }
         var base = URLComponents()
-        base.scheme = scheme
+        base.scheme = "https"
         base.host = host
         base.port = components.port
         base.path = "/openai/v1/"
