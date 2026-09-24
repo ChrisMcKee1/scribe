@@ -13,22 +13,41 @@ public static class DefaultHotkeyRestore
     /// <param name="Dictation">What the "Dictation with AI cleanup" row shows from now on.</param>
     /// <param name="DictationOnly">What the "Dictation only" row shows from now on.</param>
     /// <param name="Changed">False when the page already showed exactly these keys, pressed the same way.</param>
+    /// <param name="SaveNeeded">False when the saved settings already hold these keys, so Save has nothing to apply.</param>
     /// <param name="Message">What to tell the user, on screen and through the screen reader.</param>
-    public readonly record struct Result(HotkeyBinding Dictation, HotkeyBinding DictationOnly, bool Changed, string Message);
+    public readonly record struct Result(
+        HotkeyBinding Dictation, HotkeyBinding DictationOnly, bool Changed, bool SaveNeeded, string Message);
 
     /// <param name="shownDictation">The "Dictation with AI cleanup" binding as the page shows it, mode included.</param>
     /// <param name="shownDictationOnly">The "Dictation only" binding as the page shows it, or null when it is not set.</param>
-    public static Result Restore(HotkeyBinding shownDictation, HotkeyBinding? shownDictationOnly)
+    /// <param name="savedDictation">The "Dictation with AI cleanup" binding the saved settings hold.</param>
+    /// <param name="savedDictationOnly">The saved "Dictation only" binding, or null when none is saved.</param>
+    /// <remarks>
+    /// The message is judged against both, because a second press, or a double click, finds the page already showing
+    /// the defaults: it must still say that Save is what applies them when the saved settings hold other keys, rather
+    /// than replace the first notice with one that reads as if nothing were left to do.
+    /// </remarks>
+    public static Result Restore(
+        HotkeyBinding shownDictation,
+        HotkeyBinding? shownDictationOnly,
+        HotkeyBinding savedDictation,
+        HotkeyBinding? savedDictationOnly)
     {
         ArgumentNullException.ThrowIfNull(shownDictation);
+        ArgumentNullException.ThrowIfNull(savedDictation);
 
         var dictation = HotkeyBinding.DefaultDictation;
         var dictationOnly = HotkeyBinding.DefaultDictationOnly;
         var changed = !dictation.SameKeysAndBehavior(shownDictation) || !dictationOnly.SameKeysAndBehavior(shownDictationOnly);
-        var message = changed
-            ? $"Hotkeys set to the defaults: {Defaults}. Save to apply them."
-            : $"Your hotkeys already match the defaults: {Defaults}.";
-        return new Result(dictation, dictationOnly, changed, message);
+        var saveNeeded = !dictation.SameKeysAndBehavior(savedDictation) || !dictationOnly.SameKeysAndBehavior(savedDictationOnly);
+        var message = (changed, saveNeeded) switch
+        {
+            (true, true) => $"Hotkeys set to the defaults: {Defaults}. Save to apply them.",
+            (true, false) => $"Hotkeys set back to the defaults: {Defaults}. They are already saved.",
+            (false, true) => $"The hotkeys already show the defaults: {Defaults}. Save to apply them.",
+            (false, false) => $"Your hotkeys already match the defaults: {Defaults}.",
+        };
+        return new Result(dictation, dictationOnly, changed, saveNeeded, message);
     }
 
     /// <summary>

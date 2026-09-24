@@ -752,7 +752,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `DefaultHotkeyTests` pins each case.
 - **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
   page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
-  the result at once.
+  the result at once. Its notice compares the defaults with the page and with the saved settings, so a second press
+  or a double click before Save still says Save applies them, and one that only undoes unsaved edits says so.
 - **Keys are named by virtual-key code, never by WPF's `Key.ToString()`.** That enum gives Page Down the alias
   `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), and .NET does not promise which name
   comes back. `KeyNames` holds the layout-independent names, the punctuation keys are named by the current layout

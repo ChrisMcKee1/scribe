@@ -208,9 +208,10 @@ public sealed class DefaultHotkeyTests
     [Fact]
     public void Restore_moves_right_ctrl_to_page_down_and_adds_page_up()
     {
-        var restored = DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, shownDictationOnly: null);
+        var restored = DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, null, HotkeyBinding.Legacy, null);
 
         Assert.True(restored.Changed);
+        Assert.True(restored.SaveNeeded);
         Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
         Assert.Equal(
@@ -227,7 +228,7 @@ public sealed class DefaultHotkeyTests
             SecondaryVirtualKey: 0xA1, SuppressChordMembers: true);
         var loose = new HotkeyBinding(0x78, KeyModifiers.Control, HotkeyMode.Toggle, Suppress: false, "Ctrl+F9");
 
-        var restored = DefaultHotkeyRestore.Restore(chordToggle, loose);
+        var restored = DefaultHotkeyRestore.Restore(chordToggle, loose, chordToggle, loose);
 
         Assert.True(restored.Changed);
         AssertHeldAndSwallowed(restored.Dictation, PageDown, "Page Down");
@@ -235,25 +236,58 @@ public sealed class DefaultHotkeyTests
     }
 
     [Fact]
-    public void Restore_on_the_defaults_changes_nothing_and_says_so()
+    public void A_second_press_before_saving_still_asks_for_the_save()
     {
-        var restored = DefaultHotkeyRestore.Restore(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+        // A double click, or pressing again to be sure: the page already shows the defaults, the saved settings do not,
+        // and the notice that replaces the first one must not read as if nothing were left to do.
+        var first = DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, null, HotkeyBinding.Legacy, null);
+        var second = DefaultHotkeyRestore.Restore(first.Dictation, first.DictationOnly, HotkeyBinding.Legacy, null);
+
+        Assert.False(second.Changed);
+        Assert.True(second.SaveNeeded);
+        Assert.Equal(
+            "The hotkeys already show the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for " +
+            "dictation only. Save to apply them.",
+            second.Message);
+    }
+
+    [Fact]
+    public void Restore_on_the_saved_defaults_changes_nothing_and_says_so()
+    {
+        var restored = DefaultHotkeyRestore.Restore(
+            HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly,
+            HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
 
         Assert.False(restored.Changed);
+        Assert.False(restored.SaveNeeded);
         Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
         Assert.StartsWith("Your hotkeys already match the defaults", restored.Message);
+        Assert.DoesNotContain("Save", restored.Message);
+    }
+
+    [Fact]
+    public void Restoring_edits_back_to_the_saved_defaults_needs_no_save()
+    {
+        // The page was edited away from saved defaults and then restored: it matches what is saved again.
+        var restored = DefaultHotkeyRestore.Restore(
+            HotkeyBinding.Legacy, null, HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+
+        Assert.True(restored.Changed);
+        Assert.False(restored.SaveNeeded);
+        Assert.EndsWith("They are already saved.", restored.Message);
     }
 
     [Fact]
     public void Default_keys_stored_under_an_old_alias_already_are_the_defaults()
     {
-        // The name never changed what a key does, so a stored "Next" is still Page Down.
-        var restored = DefaultHotkeyRestore.Restore(
-            HotkeyBinding.DefaultDictation with { DisplayName = "Next" },
-            HotkeyBinding.DefaultDictationOnly with { DisplayName = "Prior" });
+        // The name never changed what a key does, so a stored "Next" is still Page Down, on the page and when saved.
+        var next = HotkeyBinding.DefaultDictation with { DisplayName = "Next" };
+        var prior = HotkeyBinding.DefaultDictationOnly with { DisplayName = "Prior" };
+        var restored = DefaultHotkeyRestore.Restore(next, prior, next, prior);
 
         Assert.False(restored.Changed);
+        Assert.False(restored.SaveNeeded);
         Assert.Equal("Page Down", restored.Dictation.DisplayName);
         Assert.Equal("Page Up", restored.DictationOnly.DisplayName);
     }
@@ -265,11 +299,12 @@ public sealed class DefaultHotkeyTests
     public void The_default_keys_pressed_another_way_are_not_the_defaults(
         HotkeyMode dictationMode, bool dictationSuppressed, HotkeyMode dictationOnlyMode)
     {
-        var restored = DefaultHotkeyRestore.Restore(
-            HotkeyBinding.DefaultDictation with { Mode = dictationMode, Suppress = dictationSuppressed },
-            HotkeyBinding.DefaultDictationOnly with { Mode = dictationOnlyMode });
+        var dictation = HotkeyBinding.DefaultDictation with { Mode = dictationMode, Suppress = dictationSuppressed };
+        var dictationOnly = HotkeyBinding.DefaultDictationOnly with { Mode = dictationOnlyMode };
+        var restored = DefaultHotkeyRestore.Restore(dictation, dictationOnly, dictation, dictationOnly);
 
         Assert.True(restored.Changed);
+        Assert.True(restored.SaveNeeded);
         Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
         Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
     }

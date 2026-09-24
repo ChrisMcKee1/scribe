@@ -273,8 +273,14 @@ public sealed class KeyNamesTests
         var texts = new List<string>
         {
             DefaultHotkeyRestore.Hint,
-            DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, null).Message,
-            DefaultHotkeyRestore.Restore(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly).Message,
+            DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, null, HotkeyBinding.Legacy, null).Message,
+            DefaultHotkeyRestore.Restore(
+                HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly, HotkeyBinding.Legacy, null).Message,
+            DefaultHotkeyRestore.Restore(
+                HotkeyBinding.Legacy, null, HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly).Message,
+            DefaultHotkeyRestore.Restore(
+                HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly,
+                HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly).Message,
         };
         texts.AddRange(new AppSettings?[] { AppSettings.CreateDefault(), AppSettings.CreateForExistingInstall(), null }
             .SelectMany(settings =>
