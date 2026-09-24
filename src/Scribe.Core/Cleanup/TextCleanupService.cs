@@ -1063,18 +1063,32 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         return new CleanupResult(combined, outcome);
     }
 
-    public async Task<string?> CompleteAsync(
-        string systemPrompt, string userMessage, CancellationToken cancellationToken = default)
+    public CleanupRecipient? Recipient
     {
+        get
+        {
+            lock (_gate)
+            {
+                return _status == CleanupStatus.Ready && _agentFactory is not null
+                    ? new CleanupRecipient(_options)
+                    : null;
+            }
+        }
+    }
+
+    public async Task<CompletionResult> CompleteAsync(
+        string systemPrompt, string userMessage, CleanupRecipient recipient, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(recipient);
         if (string.IsNullOrWhiteSpace(systemPrompt) || string.IsNullOrWhiteSpace(userMessage))
         {
-            return null;
+            return CompletionResult.Failed;
         }
 
         using var lease = _operations.TryEnter();
         if (lease is null)
         {
-            return null;
+            return CompletionResult.NotReady;
         }
 
         AIAgent agent;
@@ -1083,10 +1097,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             // Reuse the initialized client's agent factory, but with the caller's own system prompt
             // instead of the cleanup guardrails. Unavailable until a model is configured and Ready, so
-            // callers get a clean null (and can fall back) rather than an exception when AI is off.
+            // callers get a clean refusal (and can fall back) rather than an exception when AI is off.
             if (_status != CleanupStatus.Ready || _agentFactory is not { } factory)
             {
-                return null;
+                return CompletionResult.NotReady;
+            }
+
+            /*
+             * Only to the configuration the caller named, checked where the factory is taken.
+             *
+             * The caller asked the user whether to send this (the dictionary suggestions send recent
+             * history) about the recipient it captured then. A Save between that question and here, or
+             * one that failed and left the window believing another provider was saved, must not send
+             * the history somewhere else. Under _gate the check and the factory belong to the same
+             * configuration: a Configure that lands after this block changes what later calls get, and
+             * this call still goes to the recipient it was checked against, whose client it holds.
+             */
+            if (!recipient.Matches(_options))
+            {
+                return CompletionResult.RecipientChanged;
             }
 
             options = _options;
@@ -1112,7 +1141,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // suggestions, both of which surface free-form model prose in Settings. Cleanup output is
             // covered by TrySanitize, which this path deliberately skips (it has no raw transcript to
             // compare against), so without this the house style would hold for dictation but not here.
-            return SanitizeAuxiliaryCompletion(result.Text);
+            return SanitizeAuxiliaryCompletion(result.Text) is { } text
+                ? new CompletionResult(CompletionOutcome.Completed, text)
+                : CompletionResult.Failed;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1120,8 +1151,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
         catch (Exception ex)
         {
+            // The message is a known historical log format (LogLineRedactor), so it keeps its wording.
             LogProviderFailure(LogLevel.Warning, options.Provider, ex, "Auxiliary AI completion failed; returning null.");
-            return null;
+            return CompletionResult.Failed;
         }
     }
 

@@ -200,11 +200,13 @@ test once more in the other format it supports.
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
 
-If you request AI dictionary suggestions while a provider other than Foundry
-Local is saved, Scribe asks first, then sends its standard suggestion request
-and up to 6,000 characters of your most recent dictations as they were inserted,
-which can include text your dictionary and snippets added. It does not send your
-dictionary itself or your writing style. If you request an AI usage insight,
+If you request AI dictionary suggestions while AI cleanup runs anywhere but on
+this PC, Scribe first asks, naming where the request goes, then sends its
+standard suggestion request and up to 6,000 characters of your most recent
+dictations as they were inserted, which can include text your dictionary and
+snippets added. It sends them only to the provider it named: if your AI cleanup
+provider changes before the request goes out, nothing is sent. It does not send
+your dictionary itself or your writing style. If you request an AI usage insight,
 Scribe sends aggregate usage totals and the labels of recurring terms your
 dictionary covers, leaving out any label whose replacement text spans more than
 one line or is longer than 100 characters. It sends no transcripts, audio,

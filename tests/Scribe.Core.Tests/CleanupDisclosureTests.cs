@@ -52,26 +52,34 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("GitHub Copilot sends all of this to GitHub", text, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void The_dictionary_suggestion_consent_quotes_the_sample_limit_the_code_enforces()
+    [Theory]
+    [InlineData(CleanupProvider.AzureFoundry, "to your Microsoft Foundry deployment.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "to the OpenAI-compatible endpoint you set up.")]
+    [InlineData(CleanupProvider.GitHubCopilot, "to GitHub, through your Copilot sign-in.")]
+    [InlineData(CleanupProvider.FoundryLocal, "to Foundry Local, which runs on this PC.")]
+    public void The_dictionary_suggestion_consent_names_the_recipient_and_the_sample_limit(
+        CleanupProvider provider, string destination)
     {
-        var text = CleanupDisclosure.SuggestionConsent;
+        var text = CleanupDisclosure.SuggestionConsentFor(provider);
 
         Assert.Contains($"up to {N(AiDictionarySuggester.DefaultMaxSampleChars)} characters", text, StringComparison.Ordinal);
-        Assert.Contains("most recent dictations, as they were inserted", text, StringComparison.Ordinal);
+        Assert.Contains("most recent dictations, as they were inserted, " + destination, text, StringComparison.Ordinal);
         Assert.Contains("your dictionary and snippets added", text, StringComparison.Ordinal);
         Assert.Contains("audio are not sent", text, StringComparison.Ordinal);
+        Assert.Contains("If your AI cleanup provider changes before the request goes out, nothing is sent.", text, StringComparison.Ordinal);
         Assert.EndsWith("?", CleanupDisclosure.SuggestionConsentTitle, StringComparison.Ordinal);
     }
 
     [Fact]
     public void The_disclosure_is_free_of_em_and_en_dashes()
     {
-        foreach (var text in new[]
-                 {
-                     CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends,
-                     CleanupDisclosure.SuggestionConsentTitle, CleanupDisclosure.SuggestionConsent,
-                 })
+        var texts = new List<string>
+        {
+            CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends, CleanupDisclosure.SuggestionConsentTitle,
+        };
+        texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
+
+        foreach (var text in texts)
         {
             Assert.DoesNotContain('\u2014', text);
             Assert.DoesNotContain('\u2013', text);
@@ -89,11 +97,32 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}", xaml, StringComparison.Ordinal);
         Assert.Contains("AI cleanup still receives your vocabulary when this is off.", xaml, StringComparison.Ordinal);
         Assert.Contains("CleanupDisclosure.SuggestionConsentTitle", code, StringComparison.Ordinal);
-        Assert.Contains("CleanupDisclosure.SuggestionConsent,", code, StringComparison.Ordinal);
+        Assert.Contains("CleanupDisclosure.SuggestionConsentFor(recipient.Provider)", code, StringComparison.Ordinal);
         Assert.Contains("GlossaryHint.Describe(", code, StringComparison.Ordinal);
+    }
 
-        // The consent is asked by the provider the request will reach, which is the saved one.
-        Assert.Contains("_settings.AiCleanupProvider != CleanupProvider.FoundryLocal &&", code, StringComparison.Ordinal);
+    [Fact]
+    public void The_suggestion_consent_is_bound_to_the_recipient_and_the_saved_provider()
+    {
+        var code = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+
+        // Asked about the recipient the service serves and the provider actually saved, and the history
+        // is sent only to that recipient.
+        Assert.Contains("if (_cleanup.Recipient is { } recipient)", code, StringComparison.Ordinal);
+        Assert.Contains("AiRequestConsent.IsNeeded(recipient, _savedAiProvider)", code, StringComparison.Ordinal);
+        Assert.Contains("_cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient)", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("_settings.AiCleanupProvider != CleanupProvider.FoundryLocal", code, StringComparison.Ordinal);
+
+        // The saved-provider snapshot changes where the document is loaded and right after it is stored,
+        // never before: a Save that fails leaves _settings holding the picked provider.
+        const string Snapshot = "_savedAiProvider = _settings.AiCleanupProvider;";
+        var assignments = Regex.Matches(code, Regex.Escape(Snapshot)).Select(m => m.Index).ToList();
+        Assert.Equal(2, assignments.Count);
+        var load = code.IndexOf("_settings = settingsRepository.Load();", StringComparison.Ordinal);
+        var store = code.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
+        var apply = code.IndexOf("_applySettings(_settings);", store, StringComparison.Ordinal);
+        Assert.True(load >= 0 && load < assignments[0] && assignments[0] < store, "The snapshot is not taken where the settings load.");
+        Assert.True(store < assignments[1] && assignments[1] < apply, "The snapshot does not follow the store.");
     }
 
     [Fact]
@@ -116,6 +145,8 @@ public sealed class CleanupDisclosureTests
         Assert.Contains(
             $"up to {N(AiDictionarySuggester.DefaultMaxSampleChars)} characters of your most recent dictations",
             policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "if your AI cleanup provider changes before the request goes out, nothing is sent", policy, StringComparison.Ordinal);
         Assert.Contains(
             $"spans more than one line or is longer than {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
             policy, StringComparison.Ordinal);

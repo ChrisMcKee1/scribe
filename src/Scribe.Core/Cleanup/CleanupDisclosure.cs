@@ -40,15 +40,24 @@ public static class CleanupDisclosure
     public const string SuggestionConsentTitle = "Send recent dictations to your AI provider?";
 
     /// <summary>
-    /// The confirmation shown before AI dictionary suggestions send recent dictation to a provider
-    /// other than Foundry Local. The sample is history as it was inserted, which is text the dictionary
-    /// and snippets already changed.
+    /// The confirmation shown before AI dictionary suggestions send recent dictation, naming where it goes:
+    /// the provider cleanup is serving, which is the only one the request can reach
+    /// (<see cref="ITextCleanupService.CompleteAsync"/> refuses any other). The sample is history as it was
+    /// inserted, which is text the dictionary and snippets already changed.
     /// </summary>
-    public static string SuggestionConsent { get; } =
+    public static string SuggestionConsentFor(CleanupProvider provider) =>
         $"To suggest vocabulary, Scribe will send up to {Count(AiDictionarySuggester.DefaultMaxSampleChars)} " +
-        "characters of your most recent dictations, as they were inserted, to the AI cleanup provider you " +
-        "saved. That text can include words your dictionary and snippets added. Your dictionary list, your " +
-        "writing style and audio are not sent.";
+        $"characters of your most recent dictations, as they were inserted, to {Destination(provider)}. That " +
+        "text can include words your dictionary and snippets added. Your dictionary list, your writing style " +
+        "and audio are not sent. If your AI cleanup provider changes before the request goes out, nothing is sent.";
+
+    private static string Destination(CleanupProvider provider) => provider switch
+    {
+        CleanupProvider.AzureFoundry => "your Microsoft Foundry deployment",
+        CleanupProvider.OpenAiCompatible => "the OpenAI-compatible endpoint you set up",
+        CleanupProvider.GitHubCopilot => "GitHub, through your Copilot sign-in",
+        _ => "Foundry Local, which runs on this PC",
+    };
 
     private static string Count(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
 }

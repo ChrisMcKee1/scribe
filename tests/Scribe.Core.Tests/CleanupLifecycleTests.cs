@@ -161,7 +161,10 @@ public sealed class CleanupLifecycleTests
         Assert.False(await svc.LoadFoundryModelAsync(CleanupHarness.FoundryAlias));
         Assert.False(await svc.UnloadFoundryModelAsync(null));
         Assert.Null(await svc.GetLoadedFoundryModelAsync());
-        Assert.Null(await svc.CompleteAsync("system", "user"));
+        Assert.Null(svc.Recipient);
+        Assert.Equal(
+            CompletionOutcome.NotReady,
+            (await svc.CompleteAsync("system", "user", new CleanupRecipient(CleanupHarness.FoundryOn()))).Outcome);
         var clean = await svc.CleanAsync("keep my words");
         Assert.Equal(CleanupOutcome.Skipped, clean.Outcome);
         Assert.Equal("keep my words", clean.Text);

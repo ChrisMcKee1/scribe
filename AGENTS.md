@@ -201,8 +201,13 @@ anything was dictated.
   selection (`CleanupPrompt.CountGlossary`). Both quote their limits from the constants that enforce them.
   `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if
   a retired claim ("text only", "relevant" terms) comes back in the README, the docs or the window.
-- **The suggestion consent follows the saved provider**, the one `CompleteAsync` will reach, not the one
-  picked on the AI page.
+- **The suggestion consent is bound to its recipient.** The window captures `ITextCleanupService.Recipient`
+  before it asks, asks unless both that recipient and the saved-provider snapshot (`_savedAiProvider`,
+  which changes only once `SaveBundle` has stored the document) run on this PC (`AiRequestConsent`), and
+  hands the recipient to `CompleteAsync`, which refuses under the service's lock, with
+  `CompletionOutcome.RecipientChanged`, unless it is still serving exactly that configuration. A Save that
+  failed, or one made during the history read, can no longer send the sample somewhere unasked
+  (`CleanupRecipientTests`).
 - If you change what a request carries (a new field, a relevance filter, a new provider), change
   `CleanupDisclosure`, `PRIVACY.md` and the tests in the same change, and note that the matching macOS
   disclosure may be stale.

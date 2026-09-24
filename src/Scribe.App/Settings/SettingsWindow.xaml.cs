@@ -136,6 +136,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // failed it would hold keys that were never stored.
     private HotkeyBinding _savedBinding;
     private HotkeyBinding? _savedDictationOnlyBinding;
+
+    // The AI cleanup provider the stored settings hold, as loaded or last saved, for the same reason: after a
+    // Save that failed, _settings names a provider that cleanup never switched to.
+    private CleanupProvider _savedAiProvider;
     private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
@@ -196,6 +200,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _log = log;
 
         _settings = settingsRepository.Load();
+        _savedAiProvider = _settings.AiCleanupProvider;
         _settingsRecovered = settingsRepository.LastLoadFailed;
         _startupToggle = new StartupToggle(
             startup, enabled => StartupPreference.PersistAsync(settingsRepository, enabled), log);
@@ -2521,7 +2526,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             // RefreshAiStatus reports the saved provider. When that is another one, its status is not
             // Foundry Local's and must not stand in the Foundry Local panel.
-            if (_settings.AiCleanupProvider != CleanupProvider.FoundryLocal)
+            if (_savedAiProvider != CleanupProvider.FoundryLocal)
             {
                 AiStatusText.Text = FoundryIdleStatus;
             }
@@ -4482,7 +4487,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // one. Only Foundry Local and Microsoft Foundry have a status line: another provider's status in the
         // Foundry Local panel would describe an engine that is not running, and stay there once the user
         // switched back.
-        switch (_settings.AiCleanupProvider)
+        switch (_savedAiProvider)
         {
             case CleanupProvider.AzureFoundry:
                 AzureCleanupStatusText.Text = detail;
@@ -5092,6 +5097,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settingsRecovered = false;
             _savedBinding = _settings.Hotkey;
             _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
+
+            // Only now, once the document is stored: _settings already holds the picked provider, and a
+            // Save that fails keeps it there while cleanup goes on serving the saved one.
+            _savedAiProvider = _settings.AiCleanupProvider;
             _externalAiCleanup.Saved();
             _externalMicrophone.Saved();
             if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
@@ -5536,21 +5545,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // Prefer the user's configured AI model: it can work out how a term is spoken versus how it is
         // written (acronyms, phonetic mishears, casing), not just spot repeated words. Fall back to the
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
-        if (_cleanup.Status == CleanupStatus.Ready)
+        if (_cleanup.Recipient is { } recipient)
         {
-            // Asked by the saved provider, not the one picked on the AI page: the request goes to the
-            // model cleanup is serving, and a provider picked but not saved would let a remote one
-            // receive the sample without this question, or ask it about one that runs on this PC.
-            if (_settings.AiCleanupProvider != CleanupProvider.FoundryLocal &&
+            // The recipient is captured before the question and handed to CompleteAsync, which sends only
+            // while cleanup still serves it, so the history goes where the dialog said or nowhere. Asked
+            // unless both it and the saved provider run on this PC (AiRequestConsent says why both).
+            if (AiRequestConsent.IsNeeded(recipient, _savedAiProvider) &&
                 !await ConfirmRiskyAsync(
                     CleanupDisclosure.SuggestionConsentTitle,
-                    CleanupDisclosure.SuggestionConsent,
+                    CleanupDisclosure.SuggestionConsentFor(recipient.Provider),
                     "Send and continue"))
             {
                 return;
             }
 
-            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current));
+            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current, recipient));
         }
         else
         {
@@ -5582,7 +5591,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current)
+    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current, CleanupRecipient recipient)
     {
         List<HistoryEntry> history;
         try
@@ -5616,12 +5625,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            var response = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample);
+            // The recipient the user agreed to, checked again where the request is built: a Save during the
+            // history read above cannot turn this into a request to another provider.
+            var completion = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);
             if (_closed)
             {
                 return;
             }
 
+            if (completion.Outcome == CompletionOutcome.RecipientChanged)
+            {
+                ShowThemedMessage(
+                    "Nothing was sent",
+                    "Your AI cleanup provider changed after you agreed to send your dictations, so Scribe sent " +
+                    "nothing. Press the button again to decide about the provider now in use.");
+                return;
+            }
+
+            var response = completion.Text;
             if (string.IsNullOrWhiteSpace(response))
             {
                 // The model was unavailable or returned nothing: fall back to the deterministic miner.
@@ -6207,7 +6228,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        if (_cleanup.Status != CleanupStatus.Ready)
+        if (_cleanup.Recipient is not { } recipient)
         {
             UsageInsightText.Text = "Configure a ready AI cleanup model to generate an insight.";
             return;
@@ -6218,16 +6239,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageInsightText.Text = "Generating insight…";
         try
         {
-            var response = await _cleanup.CompleteAsync(
+            var completion = await _cleanup.CompleteAsync(
                 UsageInsight.SystemPrompt,
-                UsageInsight.BuildSummary(snapshot));
+                UsageInsight.BuildSummary(snapshot),
+                recipient);
             if (!InsightStillApplies(snapshot))
             {
                 return;
             }
 
-            UsageInsightText.Text = UsageInsight.Parse(response)
-                ?? "The configured model did not return an insight.";
+            UsageInsightText.Text = completion.Outcome == CompletionOutcome.RecipientChanged
+                ? "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again."
+                : UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.";
         }
         catch (Exception ex)
         {
