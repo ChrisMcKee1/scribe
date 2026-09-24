@@ -20,8 +20,8 @@ final class DictationTurnsTests: XCTestCase {
             if await turns.waitForTurn(second) { order.values.append("second") }
         }
         await waitUntil("the second waits") { turns.waitingCount == 1 }
-        let firstGranted = await turns.waitForTurn(first)
-        XCTAssertTrue(firstGranted)
+        let firstGranted = await bounded("the first's turn") { await turns.waitForTurn(first) }
+        XCTAssertEqual(firstGranted, true)
         order.values.append("first")
         turns.finish(first)
         _ = await bounded("the second's turn") { await later.value }
@@ -484,5 +484,44 @@ final class RecentDictationsMenuTests: XCTestCase {
         recent.menuNeedsUpdate(submenu)
         choose(submenu.items[0])
         XCTAssertEqual(pasteboard.string(forType: .string), "dictated after the Clear")
+    }
+}
+
+/// The test support's own guarantees: a gate settled at teardown stays settled, so a waiter that arrives afterwards goes
+/// on instead of parking for good, a gate the test opened keeps its value, and a closed clock refuses every later sleep.
+@MainActor
+final class DictationTestSupportTests: XCTestCase {
+    func testAGateSettledAtTeardownLetsALaterWaiterGoOn() async {
+        let left = DictationGate<Int>()
+        let opened = DictationGate<Int>()
+        opened.open(3)
+        HeldGates.releaseAll()
+
+        let refused = await bounded("a wait that arrives after teardown", within: 5) { () -> Bool in
+            do {
+                _ = try await left.wait()
+                return false
+            } catch {
+                return error is CancellationError
+            }
+        }
+        XCTAssertEqual(refused, true)
+        let kept = await bounded("a wait on a gate the test opened", within: 5) { () -> Int? in try? await opened.wait() }
+        XCTAssertEqual(kept ?? nil, 3)
+    }
+
+    func testAClosedClockRefusesEveryLaterSleep() async {
+        let clock = ManualDictationClock()
+        clock.closeForTeardown()
+
+        let refused = await bounded("a sleep on a closed clock", within: 5) { () -> Bool in
+            do {
+                try await clock.sleep(until: clock.now.advanced(by: .seconds(1)))
+                return false
+            } catch {
+                return error is CancellationError
+            }
+        }
+        XCTAssertEqual(refused, true)
     }
 }

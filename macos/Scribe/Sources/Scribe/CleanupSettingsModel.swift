@@ -118,7 +118,7 @@ final class CleanupSettingsModel: ObservableObject {
     /// result is for a configuration the tab no longer shows.
     private var revision = 0
     /// The Test Connection running now, for `cancelConnectionTest()`, and whether the user stopped it.
-    private var runningCheck: Task<CleanupConnectionCheck, Never>?
+    private var runningCheck: Task<CleanupConnectionCheck?, Never>?
     private var checkCancelledByUser = false
     private var observation: SettingsNotificationObservation?
     /// Stops a running Test Connection when Settings closes. The task running it keeps this model alive, so waiting
@@ -246,16 +246,19 @@ final class CleanupSettingsModel: ObservableObject {
         checkCancelledByUser = false
         let checkConnection = access.checkConnection
         let operations = operations
-        let check = Task { () -> CleanupConnectionCheck in
+        // Nil when the check was cancelled before it was admitted, so nothing ran; a refusal at Quit says so.
+        let check = Task { () -> CleanupConnectionCheck? in
             do {
                 return try await operations.run { await checkConnection() }
-            } catch {
+            } catch AuxiliaryOperations.Refusal.closed {
                 return CleanupConnectionCheck(
                     reachable: false, message: "Test Connection did not run, because Scribe is quitting.")
+            } catch {
+                return nil
             }
         }
         runningCheck = check
-        let result = await withTaskCancellationHandler {
+        let outcome = await withTaskCancellationHandler {
             await check.value
         } onCancel: {
             check.cancel()
@@ -263,9 +266,11 @@ final class CleanupSettingsModel: ObservableObject {
         runningCheck = nil
         isTesting = false
         guard started == revision else { return }
-        if checkCancelledByUser {
+        guard let result = outcome, !checkCancelledByUser else {
             statusMessage = "Test Connection was cancelled."
-        } else if result.reachable {
+            return
+        }
+        if result.reachable {
             statusMessage = result.message
         } else {
             errorMessage = result.message

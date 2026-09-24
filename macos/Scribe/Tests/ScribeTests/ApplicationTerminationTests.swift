@@ -149,6 +149,125 @@ final class ApplicationTerminationTests: XCTestCase {
         XCTAssertEqual(stops.values.count, 1)
         XCTAssertTrue(harness.controller.isClosing)
     }
+
+    // MARK: - A cancelled caller starts nothing
+
+    /// Runs `operation` through `operations` from a task that is cancelled before it asks, and returns how `run`
+    /// answered.
+    private func runFromACancelledTask(
+        _ operations: AuxiliaryOperations, _ operation: @escaping @Sendable () async throws -> Void
+    ) async -> Result<Void, any Error>? {
+        let asked = Task { @MainActor () -> Result<Void, any Error> in
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                try await operations.run(operation)
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        return await bounded("the cancelled caller's run") { await asked.value }
+    }
+
+    /// An operation asked for by a caller that is already cancelled is never admitted: a detached task does not
+    /// inherit its creator's cancellation, so one created for this caller would start uncancelled. `run` says it was
+    /// cancelled, not that Scribe is quitting.
+    func testAnOperationAskedForByACancelledCallerIsNeverAdmitted() async {
+        let operations = AuxiliaryOperations()
+        let entries = SendableCounter()
+
+        let answer = await runFromACancelledTask(operations) { entries.increment() }
+
+        guard case .failure(let error)? = answer else {
+            XCTFail("the operation ran for a cancelled caller")
+            return
+        }
+        XCTAssertTrue(error is CancellationError, "\(error)")
+        XCTAssertEqual(entries.value, 0)
+        XCTAssertEqual(operations.admittedCount, 0, "a task was made for a cancelled caller")
+        XCTAssertEqual(operations.runningCount, 0)
+    }
+
+    /// A caller cancelled after its operation was admitted, while the operation's own task has not started it yet:
+    /// the forwarded cancellation is seen in that task, and the operation never starts.
+    func testAnOperationWhoseCallerIsCancelledBeforeItStartsNeverRuns() async {
+        let parked = AudioTestSignalLatch()
+        let proceed = AudioTestSignalLatch()
+        addTeardownBlock { proceed.signal() }
+        let operations = AuxiliaryOperations(beforeStart: {
+            parked.signal()
+            _ = await proceed.wait()
+        })
+        let entries = SendableCounter()
+        let asked = Task { @MainActor () -> Result<Void, any Error> in
+            do {
+                try await operations.run { entries.increment() }
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+
+        let reached = await parked.wait()
+        XCTAssertTrue(reached, "the operation's task never started")
+        XCTAssertEqual(operations.admittedCount, 1)
+        asked.cancel()
+        proceed.signal()
+        let answer = await bounded("the cancelled run") { await asked.value }
+
+        guard case .failure(let error)? = answer else {
+            XCTFail("the operation ran after its caller was cancelled")
+            return
+        }
+        XCTAssertTrue(error is CancellationError, "\(error)")
+        XCTAssertEqual(entries.value, 0)
+        XCTAssertEqual(operations.runningCount, 0)
+    }
+
+    /// Test Connection asked for from a task already cancelled (the tab's own task, when Settings goes away), with the
+    /// real provider cache behind it: the check never starts, so no API key is read from the Keychain and no request
+    /// is sent, and the tab says the check was cancelled, not that Scribe is quitting.
+    func testATestConnectionCancelledBeforeItWasAdmittedReadsNoCredentialAndSendsNothing() async throws {
+        let requests = RequestLog()
+        let session = makeStubSession { request in
+            requests.record(request)
+            return StubReply.completion(request, "ok")
+        }
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let fixture = makeCleanupStore(apiKeys: apiKeys)
+        fixture.store.isEnabled = true
+        fixture.store.providerKind = .openAICompatible
+        fixture.store.openAIBaseURL = "http://127.0.0.1:1234/v1"
+        fixture.store.openAIModel = "local-model"
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:], factory: .testing(session: session))
+        var access = CleanupSettingsAccess.backed(by: fixture.store, providers: cache)
+        let entries = SendableCounter()
+        let check = access.checkConnection
+        access.checkConnection = {
+            entries.increment()
+            return await check()
+        }
+        let operations = AuxiliaryOperations()
+        let model = CleanupSettingsModel(
+            access: access, drafts: SettingsDrafts(), center: NotificationCenter(), operations: operations)
+        XCTAssertFalse(model.isDisabled(.connectionTest))
+        let readsBefore = apiKeys.reads
+
+        let asked = Task { @MainActor in
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            await model.testConnection()
+        }
+        _ = await bounded("the cancelled Test Connection") { await asked.value }
+
+        XCTAssertEqual(entries.value, 0, "the check started")
+        XCTAssertEqual(operations.admittedCount, 0)
+        XCTAssertEqual(apiKeys.reads, readsBefore, "an API key was read from the Keychain")
+        XCTAssertEqual(requests.count, 0, "a request was sent")
+        XCTAssertEqual(model.statusMessage, "Test Connection was cancelled.")
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isTesting)
+    }
 }
 
 /// A count any thread can bump.

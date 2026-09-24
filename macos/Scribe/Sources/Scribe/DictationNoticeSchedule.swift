@@ -24,9 +24,10 @@ extension OverlayNotice {
         }
     }
 
-    /// The informational outcomes that must not go unsaid: raw text went in instead of the cleaned text, or nothing
-    /// went in at all. When the pill cannot show one at once, a notification says it instead of the pill, rather than
-    /// the pill saying it later as well.
+    /// The informational outcomes that must not go unsaid: cleanup could not be used for a dictation, or its speech could
+    /// not be recognized. When the pill cannot show one at once, a notification says it instead of the pill, rather than
+    /// the pill saying it later as well. Such a notification is posted before the dictation's delivery, so it says
+    /// nothing about whether the text went in.
     var notifiesWhenThePillIsBusy: Bool {
         self == .cleanupFellBack || self == .transcriptionFailed
     }

@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import CoreGraphics
 import Foundation
@@ -9,8 +10,10 @@ import os
 // Fakes for every service `DictationController` drives, and a harness that wires them together. Everything a test
 // orders runs on the main actor: fakes hold their calls at gates the test opens, the clock moves only when the test
 // moves it, and a test waits for an explicit signal (a gate's waiter, a controller checkpoint, a count) before it
-// checks what did or did not happen. Waits a regression could strand run under a watchdog, and a harness releases
-// everything its test left held and shuts its controller down in the test's teardown.
+// checks what did or did not happen, so no order depends on time. Time appears only as failure bounds: `waitUntil`
+// gives up after a number of yields, `pollUntil` (for work on other threads, the capture engine's control queue)
+// after a real deadline, and `bounded`, `within` and `HeldFlush` are watchdogs around waits a regression could strand.
+// A harness settles every gate its test left open and shuts its controller down in the test's teardown.
 
 /// Yields until `condition` holds, and fails the test instead of hanging when it never does. Each yield lets the
 /// main actor run whatever is queued on it (tasks, and the capture relay's main-queue deliveries).
@@ -78,8 +81,107 @@ final class Collected<Value> {
     var values: [Value] = []
 }
 
-/// Every `DictationGate` made since the last release, so a harness's teardown can let go of whatever its test left
-/// waiting at one.
+/// What `within` throws when its watchdog fires.
+struct WatchdogTimeout: Error, CustomStringConvertible {
+    let description: String
+}
+
+/// `bounded` for an operation that throws: returns its value, rethrows its error, and throws `WatchdogTimeout` (after
+/// failing the test) when it has not finished within `seconds`.
+@MainActor
+func within<Value: Sendable>(
+    _ description: String,
+    seconds: Double = 30,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ operation: @escaping @MainActor @Sendable () async throws -> Value
+) async throws -> Value {
+    let outcome = await bounded(description, within: seconds, file: file, line: line) {
+        () -> Result<Value, any Error> in
+        do {
+            return .success(try await operation())
+        } catch {
+            return .failure(error)
+        }
+    }
+    guard let outcome else {
+        throw WatchdogTimeout(description: "timed out waiting for \(description)")
+    }
+    return try outcome.get()
+}
+
+/// A resampler flush the capture engine runs on its control queue, held there until the test lets it go. Only the
+/// first flush is held. A watchdog on another queue lets it go by itself after `watchdog` seconds when the test has not,
+/// and records that it did, so a regression that waits for the flush on the caller's thread neither hangs the suite nor
+/// passes: the test finds the flush let go by the watchdog instead of still held. No assertion measures time.
+final class HeldFlush: Sendable {
+    enum Release: Equatable, Sendable {
+        case test
+        case watchdog
+    }
+
+    private struct State: Sendable {
+        var flushes = 0
+        var isHeld = false
+        var releasedBy: Release?
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let gate = DispatchSemaphore(value: 0)
+    /// Signalled when the first flush begins to wait.
+    let entered = AudioTestSignalLatch()
+
+    init(watchdog seconds: Double = 20) {
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + seconds) { [self] in
+            _ = self.release(by: .watchdog)
+        }
+    }
+
+    /// The flush to give `AudioCaptureEngine(resamplerTailFlush:)`.
+    var tailFlush: CaptureProcessor.TailFlush {
+        { [self] converter, target, samples in
+            let holds = state.withLock { state -> Bool in
+                state.flushes += 1
+                guard state.flushes == 1, state.releasedBy == nil else { return false }
+                state.isHeld = true
+                return true
+            }
+            if holds {
+                entered.signal()
+                // The watchdog lets it go when the test does not; this bound is only for a watchdog that never ran.
+                _ = gate.wait(timeout: .now() + 120)
+            }
+            return CaptureProcessor.flushResamplerTail(converter, target, &samples)
+        }
+    }
+
+    /// Whether the first flush is waiting now.
+    var isHeld: Bool {
+        state.withLock { $0.isHeld }
+    }
+
+    /// Who let the first flush go, if anyone has.
+    var releasedBy: Release? {
+        state.withLock { $0.releasedBy }
+    }
+
+    /// Lets the first flush go, whether it is waiting yet or not; false when it was let go already.
+    @discardableResult
+    func release(by releaser: Release = .test) -> Bool {
+        let first = state.withLock { state -> Bool in
+            guard state.releasedBy == nil else { return false }
+            state.releasedBy = releaser
+            state.isHeld = false
+            return true
+        }
+        if first {
+            gate.signal()
+        }
+        return first
+    }
+}
+
+/// Every `DictationGate` made since the last release, so a harness's teardown can settle whatever its test left open.
 @MainActor
 enum HeldGates {
     private static var releases: [@MainActor () -> Void] = []
@@ -88,7 +190,7 @@ enum HeldGates {
         releases.append(release)
     }
 
-    /// Fails every waiter still parked at a gate made since the last call.
+    /// Settles every gate made since the last call that the test left open (`DictationGate.settleForTeardown`).
     static func releaseAll() {
         let pending = releases
         releases = []
@@ -109,7 +211,7 @@ final class DictationGate<Value: Sendable> {
 
     init() {
         HeldGates.register { [weak self] in
-            self?.releaseWaiters()
+            self?.settleForTeardown()
         }
     }
 
@@ -161,13 +263,11 @@ final class DictationGate<Value: Sendable> {
         settle(.failure(error))
     }
 
-    /// Teardown: every waiter still here throws `CancellationError`.
-    func releaseWaiters() {
-        let pending = waiters
-        waiters.removeAll()
-        for waiter in pending.values {
-            waiter.resume(throwing: CancellationError())
-        }
+    /// Teardown: a gate the test left unsettled fails for good with `CancellationError`, so every waiter goes on, the
+    /// ones parked now and any that arrive later. A gate the test settled keeps its outcome.
+    func settleForTeardown() {
+        guard outcome == nil else { return }
+        settle(.failure(CancellationError()))
     }
 
     private func settle(_ result: Result<Value, any Error>) {
@@ -603,6 +703,7 @@ final class ManualDictationClock: DictationClock {
     private(set) var now = ContinuousClock.now
     private var sleepers: [Sleeper] = []
     private var nextID: UInt64 = 0
+    private var isClosed = false
 
     var sleeperCount: Int {
         sleepers.count
@@ -628,7 +729,7 @@ final class ManualDictationClock: DictationClock {
         let id = nextID
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                if Task.isCancelled {
+                if Task.isCancelled || isClosed {
                     continuation.resume(throwing: CancellationError())
                 } else if deadline <= now {
                     continuation.resume()
@@ -643,8 +744,9 @@ final class ManualDictationClock: DictationClock {
         }
     }
 
-    /// Teardown: every sleeper throws `CancellationError`.
-    func cancelAllSleepers() {
+    /// Teardown: the clock closes for good. Every sleeper throws `CancellationError`, and so does every later sleep.
+    func closeForTeardown() {
+        isClosed = true
         let pending = sleepers
         sleepers.removeAll()
         for sleeper in pending {
@@ -815,14 +917,15 @@ final class DictationHarness {
         controller.noticeSchedule.shown?.notice
     }
 
-    /// Teardown: lets go of everything the test left held, then shuts the controller down under a watchdog, so no
-    /// task of this test is still suspended, or runs, once the next test starts.
+    /// Teardown: settles every gate the test left open, for good, so a waiter that arrives later goes on too, closes
+    /// the clock, and shuts the controller down under a watchdog, so no task of this test is still suspended, or runs,
+    /// once the next test starts.
     func tearDown() async {
         HeldGates.releaseAll()
         if !gate.isOpen {
             gate.open(.withoutStoredRules)
         }
-        clock.cancelAllSleepers()
+        clock.closeForTeardown()
         _ = await bounded("the harness's controller to shut down in teardown") {
             await self.controller.shutDown()
         }

@@ -6,7 +6,9 @@ import os
 
 /// `AudioCaptureEngine.retire(owner:)`, the stop the dictation lifecycle uses: it returns without waiting for the
 /// recording's lock or its resampler, drops every buffer delivered after it, and seals the samples on the control
-/// queue ahead of the next recording's open.
+/// queue ahead of the next recording's open. Every await on the engine runs under a watchdog (`within`), and every hold
+/// the tests put on the control queue is let go in teardown.
+@MainActor
 final class AudioCaptureEngineRetireTests: XCTestCase {
     private func buffer(_ value: Float, frames: Int = 160, sampleRate: Double = 16_000) -> AVAudioPCMBuffer {
         AudioTestBuffers.mono([Float](repeating: value, count: frames), sampleRate: sampleRate)
@@ -23,11 +25,13 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
         let engine = AudioCaptureEngine(
             scheduleStallCheck: { _, _ in
                 stallEntered.signal()
-                _ = releaseStall.wait(timeout: .now() + .seconds(30))
+                _ = releaseStall.wait(timeout: .now() + .seconds(60))
             },
             makeDevice: { device })
         let owner = RecordingID(rawValue: 1)
-        let outcome = try await engine.start(owner: owner, policy: .hold(), events: { _ in })
+        let outcome = try await within("the recording to open") {
+            try await engine.start(owner: owner, policy: .hold(), events: { _ in })
+        }
         XCTAssertEqual(outcome, .live)
         device.deliver(buffer(0.25))
         device.changeConfiguration(stopsDevice: false)
@@ -39,8 +43,8 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
         device.deliver(buffer(0.5))
         XCTAssertFalse(seal.isSealed)
         releaseStall.signal()
-        let sealed = await seal.audio
-        await engine.waitUntilIdle()
+        let sealed = try await within("the seal") { await seal.audio }
+        try await within("the engine's device work") { await engine.waitUntilIdle() }
 
         let captured = try XCTUnwrap(sealed)
         XCTAssertEqual(captured.samples, [Float](repeating: 0.25, count: 160), "a buffer after the stop was kept")
@@ -52,54 +56,45 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
         XCTAssertNil(engine.stop(owner: owner))
     }
 
-    /// The retire returns while the resampler's flush is held on the control queue, and the next recording, admitted
-    /// meanwhile, opens only after the retired recording's device has closed.
+    /// The retire returns while the resampler's flush is still held on the control queue (`HeldFlush`, whose
+    /// watchdog would have let it go had the retire waited for it), and the next recording, admitted meanwhile, opens
+    /// only after the retired recording's device has closed.
     func testRetireReturnsWhileTheFlushIsHeldAndTheNextOpenWaitsForTheSeal() async throws {
         let journal = CaptureDeviceJournal()
         var resampled = CaptureTestDevice.Configuration()
         resampled.sampleRate = 48_000
         let first = CaptureTestDevice(resampled, name: "first", journal: journal)
         let second = CaptureTestDevice(name: "second", journal: journal)
-        let flushEntered = AudioTestSignalLatch()
-        let releaseFlush = DispatchSemaphore(value: 0)
-        addTeardownBlock { releaseFlush.signal() }
-        let flushes = OSAllocatedUnfairLock(initialState: 0)
+        let flush = HeldFlush()
+        addTeardownBlock { _ = flush.release() }
         let engine = AudioCaptureEngine(
-            resamplerTailFlush: { converter, target, samples in
-                if flushes.withLock({ count -> Bool in
-                    count += 1
-                    return count == 1
-                }) {
-                    flushEntered.signal()
-                    // Bounded, so a regression that seals on the caller shows as a slow retire, not a hang.
-                    _ = releaseFlush.wait(timeout: .now() + .seconds(5))
-                }
-                return CaptureProcessor.flushResamplerTail(converter, target, &samples)
-            },
+            resamplerTailFlush: flush.tailFlush,
             makeDevice: CaptureTestDeviceFactory([first, second]).make)
         let firstOwner = RecordingID(rawValue: 1)
         let secondOwner = RecordingID(rawValue: 2)
-        _ = try await engine.start(owner: firstOwner, policy: .hold(), events: { _ in })
+        _ = try await within("the first recording to open") {
+            try await engine.start(owner: firstOwner, policy: .hold(), events: { _ in })
+        }
         first.deliver(buffer(0.25, frames: 4_800, sampleRate: 48_000))
 
-        let retireStarted = ContinuousClock.now
         let seal = try XCTUnwrap(engine.retire(owner: firstOwner))
-        XCTAssertLessThan(retireStarted.duration(to: ContinuousClock.now), .milliseconds(500))
-        let entered = await flushEntered.wait()
+        XCTAssertNil(flush.releasedBy, "the retire returned only after the flush was let go")
+        let entered = await flush.entered.wait()
         XCTAssertTrue(entered, "the seal never reached the resampler flush")
+        XCTAssertTrue(flush.isHeld)
         XCTAssertFalse(seal.isSealed)
 
         let next = Task { try await engine.start(owner: secondOwner, policy: .hold(), events: { _ in }) }
-        releaseFlush.signal()
-        let sealed = await seal.audio
-        let opened = try await next.value
-        await engine.waitUntilIdle()
+        XCTAssertTrue(flush.release(), "the flush's watchdog let it go before the test did")
+        let sealed = try await within("the seal") { await seal.audio }
+        let opened = try await within("the next recording to open") { try await next.value }
+        try await within("the engine's device work") { await engine.waitUntilIdle() }
 
         XCTAssertEqual(opened, .live)
         XCTAssertFalse(try XCTUnwrap(sealed).samples.isEmpty)
         XCTAssertEqual(journal.all, ["first prepare", "first start", "first close", "second prepare", "second start"])
         engine.stop(owner: secondOwner)
-        await engine.waitUntilIdle()
+        try await within("the engine's device work") { await engine.waitUntilIdle() }
         XCTAssertEqual(first.counts.closed, 1)
         XCTAssertEqual(second.counts.closed, 1)
     }
@@ -110,13 +105,16 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
         let factory = CaptureTestDeviceFactory([])
         let engine = AudioCaptureEngine(makeDevice: factory.make)
         XCTAssertNil(engine.retire(owner: RecordingID(rawValue: 3)))
-        let early = try await engine.start(owner: RecordingID(rawValue: 3), policy: .hold(), events: { _ in })
+        let early = try await within("the stopped start") {
+            try await engine.start(owner: RecordingID(rawValue: 3), policy: .hold(), events: { _ in })
+        }
         XCTAssertEqual(early, .stoppedBeforeOpen)
         XCTAssertTrue(factory.made.isEmpty)
 
         var held = CaptureTestDevice.Configuration()
         held.holdsPrepare = true
         let device = CaptureTestDevice(held)
+        addTeardownBlock { device.releasePrepare() }
         let opening = AudioCaptureEngine(makeDevice: { device })
         let owner = RecordingID(rawValue: 4)
         let start = Task { try await opening.start(owner: owner, policy: .hold(), events: { _ in }) }
@@ -124,9 +122,9 @@ final class AudioCaptureEngineRetireTests: XCTestCase {
         XCTAssertTrue(entered)
         let seal = try XCTUnwrap(opening.retire(owner: owner))
         device.releasePrepare()
-        let outcome = try await start.value
-        let sealed = await seal.audio
-        await opening.waitUntilIdle()
+        let outcome = try await within("the open") { try await start.value }
+        let sealed = try await within("the seal") { await seal.audio }
+        try await within("the engine's device work") { await opening.waitUntilIdle() }
 
         XCTAssertEqual(outcome, .stoppedWhileOpening)
         XCTAssertEqual(try XCTUnwrap(sealed).samples, [])

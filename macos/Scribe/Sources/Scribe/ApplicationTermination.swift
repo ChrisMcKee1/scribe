@@ -27,9 +27,17 @@ final class AuxiliaryOperations {
 
     private var running: [UInt64: Running] = [:]
     private var nextID: UInt64 = 0
+    private let beforeStart: @Sendable () async -> Void
     private(set) var isClosed = false
+    /// How many operations were ever admitted: past the refusal at Quit and the caller's cancellation, into a task of
+    /// their own.
+    private(set) var admittedCount = 0
 
-    init() {}
+    /// `beforeStart` runs in each admitted operation's own task, before that task checks for cancellation and starts
+    /// the operation; tests hold it there to cancel the caller in between.
+    init(beforeStart: @escaping @Sendable () async -> Void = {}) {
+        self.beforeStart = beforeStart
+    }
 
     /// How many operations are running.
     var runningCount: Int {
@@ -38,18 +46,28 @@ final class AuxiliaryOperations {
 
     /// Runs `operation` off the main actor as one registered operation and returns its result. Cancelling the
     /// calling task cancels the operation, and the call returns only once the operation has. Throws
-    /// `Refusal.closed`, without running anything, once Quit has closed admission.
+    /// `Refusal.closed`, without running anything, once Quit has closed admission, and `CancellationError`, without
+    /// running anything, when the calling task is already cancelled: a detached task does not inherit its creator's
+    /// cancellation, so an operation started for a cancelled caller would run uncancelled until the forwarding below
+    /// reached it, past any check of its own it makes on entry.
     func run<Value: Sendable>(_ operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
         guard !isClosed else { throw Refusal.closed }
+        try Task.checkCancellation()
+        admittedCount += 1
         nextID &+= 1
         let id = nextID
+        let beforeStart = beforeStart
         let task = Task.detached(priority: .userInitiated) {
-            try await operation()
+            await beforeStart()
+            // A cancellation forwarded before this task got here: the operation never starts.
+            try Task.checkCancellation()
+            return try await operation()
         }
         running[id] = Running(
             cancel: { task.cancel() },
             finished: { _ = try? await task.value })
         defer { running[id] = nil }
+        // A cancellation of work already admitted is forwarded to it.
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {

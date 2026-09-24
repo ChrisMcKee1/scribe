@@ -5,8 +5,9 @@ import os
 @testable import Scribe
 
 /// The recording lifecycle: admission, stops, faults, rebinding, the duration deadline and the pill's notices, driven
-/// through fakes and gates on the main actor. Nothing here waits on time: the clock moves when a test moves it, and a
-/// test checks what did not happen only after an explicit signal that the step it is about has run.
+/// through fakes and gates on the main actor. No order here depends on time: the clock moves when a test moves it, and
+/// a test checks what did not happen only after an explicit signal that the step it is about has run. The one test that
+/// runs the real capture engine polls its control queue with a real deadline, and its held flush has a watchdog.
 @MainActor
 final class DictationControllerTests: XCTestCase {
     private func isListening(_ state: OverlayState?) -> Bool {
@@ -150,30 +151,19 @@ final class DictationControllerTests: XCTestCase {
     }
 
     /// The same through the real capture engine and its adapter, with the release arriving through a real
-    /// `HotkeyManager` as the event tap would deliver it. The engine's resampler flush is held on its control queue:
-    /// the release callback still returns at once, the main actor stays free (the next recording is admitted), and
-    /// once the flush goes on both dictations are processed in order.
+    /// `HotkeyManager` as the event tap would deliver it. The engine's resampler flush is held on its control queue
+    /// (`HeldFlush`): the release callback returns while the flush is still held, the main actor stays free (the next
+    /// recording is admitted), and once the test lets the flush go both dictations are processed in order. A release
+    /// that waited for the flush could only return once the flush's watchdog let it go, which the test sees.
     func testTheReleaseCallbackReturnsWhileTheRealEngineStillSealsTheRecording() async throws {
         var resampled = CaptureTestDevice.Configuration()
         resampled.sampleRate = 48_000
         let firstDevice = CaptureTestDevice(resampled, name: "first")
         let secondDevice = CaptureTestDevice(resampled, name: "second")
-        let flushEntered = AudioTestSignalLatch()
-        let releaseFlush = DispatchSemaphore(value: 0)
-        addTeardownBlock { releaseFlush.signal() }
-        let flushes = OSAllocatedUnfairLock(initialState: 0)
+        let flush = HeldFlush()
+        addTeardownBlock { _ = flush.release() }
         let engine = AudioCaptureEngine(
-            resamplerTailFlush: { converter, target, samples in
-                if flushes.withLock({ count -> Bool in
-                    count += 1
-                    return count == 1
-                }) {
-                    flushEntered.signal()
-                    // Bounded, so a regression that seals in the callback shows as a slow release, not a hang.
-                    _ = releaseFlush.wait(timeout: .now() + .seconds(3))
-                }
-                return CaptureProcessor.flushResamplerTail(converter, target, &samples)
-            },
+            resamplerTailFlush: flush.tailFlush,
             makeDevice: CaptureTestDeviceFactory([firstDevice, secondDevice]).make)
         let harness = makeHarness(capture: LiveDictationCapture(engine: engine))
         let manager = harness.wireHotkeyManager(keyCode: 61)
@@ -184,21 +174,20 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertTrue(
             firstDevice.deliver(AudioTestBuffers.mono([Float](repeating: 0.25, count: 4_800), sampleRate: 48_000)))
 
-        let releaseStarted = ContinuousClock.now
         manager.receive(HotkeyTestEvents.rightOption(down: false))
-        let releaseTook = releaseStarted.duration(to: ContinuousClock.now)
-        XCTAssertLessThan(releaseTook, .milliseconds(500), "the release callback waited for the seal")
+        XCTAssertNil(flush.releasedBy, "the release callback returned only after the flush was let go")
         XCTAssertNil(harness.controller.currentRecording)
         XCTAssertEqual(harness.controller.processingCount, 1)
-        let entered = await flushEntered.wait()
+        let entered = await flush.entered.wait()
         XCTAssertTrue(entered, "the seal never reached the resampler flush")
+        XCTAssertTrue(flush.isHeld)
 
         // The flush holds the control queue; the main actor admits the next recording meanwhile.
         manager.receive(HotkeyTestEvents.rightOption(down: true))
         XCTAssertNotNil(harness.controller.currentRecording, "the main actor could not admit the next recording")
         XCTAssertEqual(harness.transcriber.calls, 0)
 
-        releaseFlush.signal()
+        XCTAssertTrue(flush.release(), "the flush's watchdog let it go before the test did")
         await pollUntil("the second recording is live") { harness.controller.isRecordingLive }
         XCTAssertTrue(
             secondDevice.deliver(AudioTestBuffers.mono([Float](repeating: 0.5, count: 4_800), sampleRate: 48_000)))
@@ -206,6 +195,7 @@ final class DictationControllerTests: XCTestCase {
         await pollUntil("both dictations are processed") { harness.controller.processingCount == 0 }
         _ = await bounded("the engine's device work to finish") { await engine.waitUntilIdle() }
 
+        XCTAssertEqual(flush.releasedBy, .test)
         XCTAssertEqual(harness.fakeInjector.texts, ["first words", "second words"])
         XCTAssertEqual(harness.transcriber.sampleCounts.count, 2)
         XCTAssertTrue(harness.transcriber.sampleCounts.allSatisfy { $0 > 0 }, "a dictation lost its samples")
@@ -566,6 +556,42 @@ final class DictationControllerTests: XCTestCase {
         harness.release()
         await harness.waitUntilProcessed()
         XCTAssertFalse(harness.presenter.noticesShown().contains(.cleanupFellBack), "said twice")
+    }
+
+    /// The fallback notification goes out before the dictation is delivered, so it says nothing about insertion. Here
+    /// A's delivery is still held when the notification is posted, and is then refused: only the delivery's own
+    /// notice says the text did not go in.
+    func testTheCleanupFallbackNotificationMakesNoClaimAboutDelivery() async throws {
+        let harness = makeHarness()
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        let reply = DictationGate<String>()
+        provider.reply = { _ in try await reply.wait() }
+        let delivery = DictationGate<Void>()
+        harness.fakeInjector.holdNext = delivery
+        harness.fakeInjector.result = InjectionResult(delivery: .targetChanged)
+
+        await harness.dictate()
+        await waitUntil("A's cleanup is asked") { reply.waitingCount == 1 }
+        _ = try await harness.pressAdmitted()
+        await harness.waitUntilLive()
+        reply.fail(DictationTestFailure(code: 8))
+        await waitUntil("A's delivery is held") { delivery.waitingCount == 1 }
+
+        XCTAssertEqual(harness.notifier.kinds, [.cleanupFellBack])
+        let fallback = try XCTUnwrap(harness.notifier.notices.first)
+        let said = (fallback.title + " " + fallback.body).lowercased()
+        for claim in ["insert", "typed", "pasted", "went in", "deliver", "was used", "used instead", "as recognized"] {
+            XCTAssertFalse(said.contains(claim), "the fallback notification claims \"\(claim)\"")
+        }
+
+        delivery.open(())
+        await waitUntil("A's refused delivery is reported") { harness.notifier.notices.count == 2 }
+        XCTAssertEqual(harness.notifier.kinds, [.cleanupFellBack, .notInserted])
+        harness.cleanup.isEnabled = false
+        harness.fakeInjector.result = InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored)
+        harness.release()
+        await harness.waitUntilProcessed()
     }
 
     /// The same for a failed recognition, which the generic branch used to drop without a word.

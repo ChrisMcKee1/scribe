@@ -105,11 +105,13 @@ struct DictationNotice: Equatable, Sendable {
             settingsPane: .accessibility)
     }
 
-    /// Posted only when the pill could not say so at the time (`OverlayNotice.notifiesWhenThePillIsBusy`).
+    /// Posted only when the pill could not say so at the time (`OverlayNotice.notifiesWhenThePillIsBusy`), and
+    /// before the dictation's delivery, so it speaks about cleanup alone: whether the text went in is the delivery's
+    /// own outcome to report.
     static let cleanupFellBack = DictationNotice(
         kind: .cleanupFellBack,
-        title: "AI cleanup was skipped",
-        body: "AI cleanup failed or gave an unusable reply, so the dictation was inserted as it was recognized.",
+        title: "AI cleanup could not be used",
+        body: "AI cleanup failed or gave a reply that could not be used for this dictation.",
         recoveryText: nil,
         settingsPane: nil)
 
