@@ -160,6 +160,35 @@
             <Setter Property="Focusable" Value="False"/>
         </Style>
 
+        <!-- Every grid on these pages is one Tab stop whose cells the arrow keys move between, as in a Windows
+             list. WPF-UI's cell style (DefaultDataGridCellStyle, DataGrid.xaml in WPF-UI 4.3.0) makes no cell a
+             Tab stop, so a grid of text had no Tab stop at all (the Libraries, History, Usage and Diagnostics
+             grids could not be reached from the keyboard, and after Space on a check box the arrow keys had no
+             cell to move to), while a grid whose cells hold buttons put every row's button in the Tab order.
+             Cells take focus again, and TabNavigation Once enters a grid on the cell that last had focus (the
+             first cell before that) and leaves it on the next Tab. WPF's row panel, DataGridCellsPanel, is a
+             Local navigation group of its own, which would still walk Tab along the row and keep the grid from
+             remembering its cell, so the rows lay their cells out in one that continues to the grid instead. A
+             cell navigates its own content locally, so Tab from a cell that holds a button reaches the button
+             first. -->
+        <Style x:Key="KeyboardCell" TargetType="DataGridCell" BasedOn="{StaticResource DefaultDataGridCellStyle}">
+            <Setter Property="IsTabStop" Value="True"/>
+        </Style>
+        <Style x:Key="KeyboardRow" TargetType="DataGridRow" BasedOn="{StaticResource DefaultDataGridRowStyle}">
+            <Setter Property="ItemsPanel">
+                <Setter.Value>
+                    <ItemsPanelTemplate>
+                        <DataGridCellsPanel KeyboardNavigation.TabNavigation="Continue"/>
+                    </ItemsPanelTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Once"/>
+            <Setter Property="CellStyle" Value="{StaticResource KeyboardCell}"/>
+            <Setter Property="RowStyle" Value="{StaticResource KeyboardRow}"/>
+        </Style>
+
         <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
              ghost pill on hover and an accent-coloured pill when selected. -->
         <Style TargetType="RadioButton" x:Key="OverlayZone">
