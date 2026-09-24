@@ -798,11 +798,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
-  prompt) and `LibrarySwitchOffCopy` (which still-used terms the dictionary cleanup copies into the dictionary before
-  it switches their libraries off) apply it to whatever order they are given. The window hands the glossary hint
-  (`GlossaryHint`) and the cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids
-  in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and
-  random orders.
+  prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. `LibrarySwitchOffCopy` decides which
+  still-used terms the dictionary cleanup copies into the dictionary before it switches their libraries off: only a
+  rule dictation applies today, judged across every library that is on (a copy outranks every library, so copying a
+  losing rule would override the winner), and only when the libraries that stay on would write it differently. The
+  window hands the glossary hint (`GlossaryHint`) and the cleanup scan their libraries through
+  `LibraryPrecedence.Enabled`, and saves the enabled ids in precedence order, never in display order.
+  `LibraryOrderInvariantTests` hands the Core calls display, reversed and random orders.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row

@@ -6,24 +6,25 @@ namespace Scribe.Core.Settings;
 
 /// <summary>
 /// Which still-used library terms the dictionary cleanup copies into the user's dictionary before it switches their
-/// libraries off. A library is switched off as a whole, so its working terms have to move into the dictionary first,
-/// and each copy has to be the rule dictation applies today, or switching the library off changes what the next
-/// dictation writes.
+/// libraries off. A library is switched off as a whole, so a working rule of its has to move into the dictionary first,
+/// and the copy must keep what dictation writes: the dictionary outranks every library, so a copy of a rule that is not
+/// the one dictation applies today would override the rule that is.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Libraries are handled in precedence order (<see cref="LibraryPrecedence"/>), never in the order the review lists
-/// them (most unused terms first), because the first copy of a spoken form wins: when two libraries switched off
-/// together keep the same spoken form with different written forms, dictation applies the one earlier in precedence.
-/// Until this was moved here the review's order decided, so the library with more unused terms won and dictation
-/// changed after Save, a flaw present since 0.4.3.
+/// A kept term is copied only when all of these hold. Its library's row is the rule dictation applies today for that
+/// spoken form: no enabled dictionary row has the spoken form, and no library earlier in precedence
+/// (<see cref="LibraryPrecedence"/>) that is on, whether it stays on or is switched off too, supplies it. And the
+/// libraries that stay on would not write the same thing without it. The winners come from
+/// <see cref="DictionaryLibraryOverlapAnalyzer.Coverage"/>, the composition the badges show, never from the order the
+/// review lists the libraries in (most unused terms first).
 /// </para>
 /// <para>
-/// For the same reason a kept term is not copied when a library that stays on and comes earlier supplies its spoken
-/// form: that library's rule is the one dictation applies, and still will, while a copy in the dictionary would
-/// override it. A library that stays on and comes later does not block the copy, since the switched-off library won
-/// over it until now. An earlier switched-off library's unused row for the same spoken form does not block it either:
-/// the scan found no trace of that row, which is why it is being dropped.
+/// Until this was moved here the window copied first-wins in the review's order against the dictionary alone, a flaw
+/// present since 0.4.3: switching off only the library that loses a spoken form copied its losing rule over the winner
+/// that stays on, and of two libraries switched off together the one with more unused terms won. A winner whose row the
+/// scan found no trace of is not kept, so nothing is copied for its spoken form; that is the cleanup dropping an unused
+/// rule, as intended.
 /// </para>
 /// </remarks>
 public static class LibrarySwitchOffCopy
@@ -31,10 +32,11 @@ public static class LibrarySwitchOffCopy
     /// <summary>One row of the dictionary grid as the cleanup leaves it: its spoken form and whether it is on.</summary>
     public readonly record struct Row(string? Pattern, bool Enabled);
 
-    /// <param name="Copies">Entries to add to the dictionary, switched on, in the order they were decided.</param>
+    /// <param name="Copies">Entries to add to the dictionary, switched on, in precedence order of their libraries.</param>
     /// <param name="Collided">
-    /// Still-used terms that could not be copied because a dictionary row that is switched off already has the spoken
-    /// form (a duplicate would block Save), so the user has to be told they are losing a rule that works today.
+    /// Rules dictation applies today that could not be copied because a dictionary row that is switched off already has
+    /// the spoken form (a duplicate would block Save), and that the libraries staying on would write differently, so
+    /// the user has to be told the result changes.
     /// </param>
     public sealed record Result(IReadOnlyList<DictionaryEntry> Copies, int Collided);
 
@@ -68,60 +70,43 @@ public static class LibrarySwitchOffCopy
             }
         }
 
-        var pending = switchingOff.Where(usage => usage is not null).ToList();
-        var suppliedEarlier = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var usages = switchingOff.Where(usage => usage is not null).ToList();
+        var enabled = LibraryPrecedence.Order(enabledLibraries);
+        var staying = enabled.Where(library => !usages.Any(usage => IsFor(usage, library))).ToList();
+
+        // What each spoken form's winning library row is now, and what it would be with only the libraries that stay on.
+        var current = DictionaryLibraryOverlapAnalyzer.Coverage(enabled, enabled.Select(library => library.Id));
+        var afterSwitch = DictionaryLibraryOverlapAnalyzer.Coverage(staying, staying.Select(library => library.Id));
+
         var copies = new List<DictionaryEntry>();
         var collided = 0;
-
-        foreach (var library in LibraryPrecedence.Order(enabledLibraries))
-        {
-            var index = pending.FindIndex(usage => IsFor(usage, library));
-            if (index < 0)
-            {
-                // A library that stays on: every spoken form it supplies from here on is its to keep.
-                foreach (var entry in library.EnabledEntries)
-                {
-                    var pattern = entry.Pattern?.Trim();
-                    if (!string.IsNullOrEmpty(pattern))
-                    {
-                        suppliedEarlier.Add(pattern);
-                    }
-                }
-
-                continue;
-            }
-
-            Copy(pending[index]);
-            pending.RemoveAt(index);
-        }
-
-        // A listed library that is not on (a caller's slip) is still handled, after every library that is.
-        foreach (var usage in LibraryPrecedence.Order(pending, usage => usage.Id, usage => usage.BuiltIn))
-        {
-            Copy(usage);
-        }
-
-        return new Result(copies, collided);
-
-        void Copy(LibraryUsage usage)
+        foreach (var usage in LibraryPrecedence.Order(usages, usage => usage.Id, usage => usage.BuiltIn))
         {
             foreach (var term in usage.KeepTerms)
             {
                 var pattern = term?.Pattern?.Trim();
-                if (term is null || string.IsNullOrEmpty(pattern) || suppliedEarlier.Contains(pattern))
+                if (term is null || string.IsNullOrEmpty(pattern) || enabledRows.Contains(pattern))
                 {
+                    // Nothing to keep, or the dictionary writes this spoken form today and still will.
+                    continue;
+                }
+
+                if (!current.TryGetValue(pattern, out var winner) || !IsFor(usage, winner) || !winner.Entry.Equals(term))
+                {
+                    // Another library's rule (or another row of this one) is what dictation applies today.
+                    continue;
+                }
+
+                if (afterSwitch.TryGetValue(pattern, out var next) && WritesTheSame(next.Entry, term))
+                {
+                    // A library that stays on writes the same thing, so switching this one off changes nothing.
                     continue;
                 }
 
                 if (!existing.Add(pattern))
                 {
-                    // Usually a dictionary row that is on already does the same job. A row that is off does not,
-                    // and a duplicate spoken form would block Save, so that rule is lost and has to be reported.
-                    if (!enabledRows.Contains(pattern))
-                    {
-                        collided++;
-                    }
-
+                    // A dictionary row that is off has the spoken form, and a duplicate would block Save.
+                    collided++;
                     continue;
                 }
 
@@ -129,8 +114,20 @@ public static class LibrarySwitchOffCopy
                 copies.Add(new DictionaryEntry(0, pattern, term.Replacement, term.WholeWord, Enabled: true));
             }
         }
+
+        return new Result(copies, collided);
     }
 
     private static bool IsFor(LibraryUsage usage, DictionaryLibrary library) =>
         usage.BuiltIn == library.BuiltIn && string.Equals(usage.Id, library.Id, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFor(LibraryUsage usage, LibraryCoverage coverage) =>
+        usage.BuiltIn == coverage.BuiltIn && string.Equals(usage.Id, coverage.LibraryId, StringComparison.OrdinalIgnoreCase);
+
+    // The same text for the same words: matching ignores the case of the spoken form but not its other characters, and
+    // the written form and the word-boundary rule are applied as they are.
+    private static bool WritesTheSame(DictionaryEntry a, DictionaryEntry b) =>
+        string.Equals(a.Pattern, b.Pattern, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(a.Replacement, b.Replacement, StringComparison.Ordinal) &&
+        a.WholeWord == b.WholeWord;
 }
