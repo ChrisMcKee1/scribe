@@ -38,12 +38,29 @@ struct VocabularyPass {
     /// What the provider is sent, with the spans of the replacements made in it.
     let result: TextPostProcessingResult
     /// The replacements held back until the reply, in the order their words appear in `result.text`.
-    fileprivate let heldBack: [TextPostProcessor.HeldBackEdit]
+    let heldBack: [TextPostProcessor.HeldBackEdit]
 
     /// What the cleanup provider is sent.
     var text: String {
         result.text
     }
+}
+
+/// What `TextPostProcessor.finishAfterCleanup` made of one reply: the reply in normal form, the held-back replacements
+/// it made there, and the result. The tests read it to check each replacement against the words it answered to.
+struct CleanupRestoration {
+    /// A held-back replacement that was made: its index in `VocabularyPass.heldBack`, and where its words stood in
+    /// `reply`, which the replacement took the place of.
+    struct Made: Equatable {
+        let heldBack: Int
+        let range: NSRange
+    }
+
+    /// The reply as normalized (`TextPostProcessor.normalizeReply`).
+    let reply: String
+    /// In reply order; no held-back replacement is made twice.
+    let made: [Made]
+    let result: TextPostProcessingResult
 }
 
 /// Applies user snippets, then dictionary substitutions, to a raw transcript. Ports the shape of
@@ -102,23 +119,24 @@ final class TextPostProcessor {
     /// With AI cleanup on, the step after an accepted reply: the replacements `pass` held back, made where the reply
     /// kept their words. Nothing but `pass` decides it, so a rule edited while the request was out changes nothing.
     func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
-        Self.finish(reply, after: pass)
+        Self.restore(reply, after: pass).result
     }
 
     /// Whether `entry` is a vocabulary rule, one whose replacement may be made in text a provider is sent: a spelling
-    /// of one line and 1 to `vocabularyReplacementLimit` characters, with no em or en dash, already in the form the
-    /// pipeline normalizes text to (no tab, no run of spaces, no space before `, . ! ? ;` or `:`, none at either end).
-    /// Every other rule is template-like, and its replacement never leaves the Mac: a template in all but name, a
-    /// deletion, a replacement with a dash (made after the reply's dash normalization, so the user's own dash
-    /// survives, as on Windows, where every rule runs after cleanup), and one whose spacing the normalization of the
-    /// reply would change. The Usage Insights request leaves template-like replacements out by this same test.
+    /// of one line and 1 to `vocabularyReplacementLimit` characters, with no em or en dash, already in the form a reply
+    /// is normalized to (`normalizeReply`: no tab, no run of spaces, none at either end, and no space before one of
+    /// `, . ! ? ;` or `:` that no letter or digit follows, so "Visual Basic .NET" is one). Every other rule is
+    /// template-like, and its replacement never leaves the Mac: a template in all but name, a deletion, a replacement
+    /// with a dash (made after the reply's dash normalization, so the user's own dash survives, as on Windows, where
+    /// every rule runs after cleanup), and one whose spacing the normalization of the reply would change. The Usage
+    /// Insights request leaves template-like replacements out by this same test.
     static func isVocabulary(_ entry: DictionaryEntry) -> Bool {
         let replacement = entry.replacement
         return !replacement.isEmpty
             && replacement.utf16.count <= vocabularyReplacementLimit
             && !replacement.contains(where: \.isNewline)
             && !DashNormalizer.containsDash(replacement)
-            && normalizeWhitespace(replacement) == replacement
+            && normalizeReply(replacement) == replacement
     }
 
     // MARK: - Compiled rules
@@ -200,8 +218,9 @@ final class TextPostProcessor {
             // The reply is normalized before the held-back replacements are made, so the text sent has to be in that
             // form already for a reply that is the text sent to give exactly the cleanup-off text. Should a
             // replacement made in it break that form anyway, none is made: every replacement is held back with its
-            // words as spoken, and the text sent is the normalized transcript itself.
-            if TextPostProcessor.normalizeWhitespace(pass.text) == pass.text {
+            // words as spoken, and the text sent is the normalized transcript itself, which is in that form, since the
+            // transcript's normalization takes out everything the reply's does.
+            if TextPostProcessor.normalizeReply(pass.text) == pass.text {
                 return pass
             }
             return TextPostProcessor.vocabularyPass(normalized, edits: edits, vocabulary: nil)
@@ -656,7 +675,7 @@ final class TextPostProcessor {
 
     /// A replacement held back from the text sent: the words that set it off and where they sit in the text sent, and
     /// the cleanup-off text they become, with the spans in it for the Playground.
-    fileprivate struct HeldBackEdit {
+    struct HeldBackEdit {
         let location: Int
         let words: String
         let output: String
@@ -665,9 +684,10 @@ final class TextPostProcessor {
 
     /// The text a provider is sent for `normalized`: the edits that are one vocabulary rule's replacement made in it,
     /// and every other edit held back, its words written with the vocabulary rules where that is safe (`writtenForm`)
-    /// and as spoken otherwise. A replacement that begins with `, . ! ? ;` or `:` is held back after a space or tab,
-    /// which the reply's normalization would take out before it. With `vocabulary` nil nothing is made and every
-    /// edit's words go as spoken, so the text sent is `normalized` itself.
+    /// and as spoken otherwise. A replacement the reply's normalization would pull up against a space or tab before it
+    /// (`tightensAfterSpace`: one that begins with `, . ! ? ;` or `:` that no letter or digit follows) is held back
+    /// after one. With `vocabulary` nil nothing is made and every edit's words go as spoken, so the text sent is
+    /// `normalized` itself.
     private static func vocabularyPass(
         _ normalized: String, edits: [PlannedEdit], vocabulary: [DictionaryRule]?
     ) -> VocabularyPass {
@@ -688,7 +708,7 @@ final class TextPostProcessor {
             if edit.source.location > position {
                 append(source.substring(with: NSRange(location: position, length: edit.source.location - position)))
             }
-            let pulledIn = endsWithSpace && startsWithTightPunctuation(edit.output)
+            let pulledIn = endsWithSpace && tightensAfterSpace(edit.output)
             if vocabulary != nil, edit.isVocabulary, !pulledIn {
                 spans += shifted(edit.spans, by: sentLength)
                 append(edit.output)
@@ -712,9 +732,9 @@ final class TextPostProcessor {
 
     /// The words of a held-back replacement as the vocabulary rules write them, so the model reads the user's
     /// spellings there too: the trigger "my k eight s notes" is sent as "my K8s notes". Only for words that stand
-    /// apart from the text around them, and only when the written form stays in normal form, cannot be pulled up
-    /// against a space before it, and begins and ends with a word character exactly where the words do, so it is
-    /// found in the reply as the words would be. Nil otherwise, and the words go as spoken.
+    /// apart from the text around them, and only when the written form stays in the reply's normal form, cannot be
+    /// pulled up against a space before it, and begins and ends with a word character exactly where the words do, so
+    /// it is found in the reply as the words would be. Nil otherwise, and the words go as spoken.
     private static func writtenForm(
         of spoken: String, at range: NSRange, in source: NSString, rules: [DictionaryRule], afterSpace: Bool
     ) -> String? {
@@ -726,7 +746,7 @@ final class TextPostProcessor {
         let written = applySinglePass(spoken, rules: rules, kind: .dictionary).0
         guard let writtenFirst = written.unicodeScalars.first, let writtenLast = written.unicodeScalars.last,
             isWordScalar(writtenFirst) == isWordScalar(first), isWordScalar(writtenLast) == isWordScalar(last),
-            normalizeWhitespace(written) == written, !(afterSpace && startsWithTightPunctuation(written))
+            normalizeReply(written) == written, !(afterSpace && tightensAfterSpace(written))
         else {
             return nil
         }
@@ -739,27 +759,27 @@ final class TextPostProcessor {
     /// reply for the k-th in the text sent. When the reply holds a different number of them (the model dropped,
     /// repeated or rewrote the words), it is not made and the reply's words stay. Only replacements cleanup off would
     /// make are ever made, each at most once, and a reply that is the text sent gets exactly the cleanup-off text.
-    private static func finish(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
+    static func restore(_ reply: String, after pass: VocabularyPass) -> CleanupRestoration {
         guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return TextPostProcessingResult(text: "", replacements: [])
+            return CleanupRestoration(reply: "", made: [], result: TextPostProcessingResult(text: "", replacements: []))
         }
-        let normalized = normalizeWhitespace(reply)
+        let normalized = normalizeReply(reply)
         let target = normalized as NSString
         let sent = pass.text as NSString
-        var made: [(range: NSRange, edit: HeldBackEdit)] = []
+        var made: [CleanupRestoration.Made] = []
         var searchFrom = 0
-        for edit in pass.heldBack {
+        for (index, edit) in pass.heldBack.enumerated() {
             let own = NSRange(location: edit.location, length: edit.words.utf16.count)
             let context = WordContext(of: own, in: sent)
             let inSent = occurrences(of: edit.words, in: sent).filter { WordContext(of: $0, in: sent) == context }
             let inReply = occurrences(of: edit.words, in: target).filter { WordContext(of: $0, in: target) == context }
-            guard inSent.count == inReply.count, let index = inSent.firstIndex(of: own),
-                inReply[index].location >= searchFrom
+            guard inSent.count == inReply.count, let rank = inSent.firstIndex(of: own),
+                inReply[rank].location >= searchFrom
             else {
                 continue
             }
-            made.append((range: inReply[index], edit: edit))
-            searchFrom = inReply[index].location + inReply[index].length
+            made.append(CleanupRestoration.Made(heldBack: index, range: inReply[rank]))
+            searchFrom = inReply[rank].location + inReply[rank].length
         }
 
         var text = ""
@@ -767,7 +787,9 @@ final class TextPostProcessor {
         var spans: [TextReplacement] = []
         var outputs: [NSRange] = []
         var position = 0
-        for (range, edit) in made {
+        for replacement in made {
+            let edit = pass.heldBack[replacement.heldBack]
+            let range = replacement.range
             let kept = target.substring(with: NSRange(location: position, length: range.location - position))
             text += kept
             length += kept.utf16.count
@@ -781,7 +803,8 @@ final class TextPostProcessor {
         text += target.substring(from: position)
         // For the Playground: what the vocabulary rules wrote in the text sent, wherever the reply kept it.
         let vocabulary = relocate(pass.result.replacements, in: text, options: [.caseInsensitive], avoiding: outputs)
-        return TextPostProcessingResult(text: text, replacements: withoutOverlaps(spans + vocabulary))
+        let result = TextPostProcessingResult(text: text, replacements: withoutOverlaps(spans + vocabulary))
+        return CleanupRestoration(reply: normalized, made: made, result: result)
     }
 
     /// Whether a word character touches a stretch of text, before it and after it.
@@ -857,11 +880,12 @@ final class TextPostProcessor {
         CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
-    /// Whether `text` begins with one of `, . ! ? ;` or `:`, which the whitespace normalization pulls up against a
-    /// space or tab before it.
-    private static func startsWithTightPunctuation(_ text: String) -> Bool {
-        guard let first = text.unicodeScalars.first else { return false }
-        return ",.!?;:".unicodeScalars.contains(first)
+    /// Whether the reply's normalization would pull `text` up against a space or tab before it: `text` begins with one
+    /// of `, . ! ? ;` or `:` that no letter or digit follows. Asked of the normalization itself, on `text` alone, so a
+    /// lone punctuation mark always counts, whatever follows it where it is made.
+    private static func tightensAfterSpace(_ text: String) -> Bool {
+        let probe = "x " + text
+        return normalizeReply(probe) != probe
     }
 
     /// `spans` moved `offset` UTF-16 units along.
@@ -937,18 +961,33 @@ final class TextPostProcessor {
 
     private static let horizontalWhitespace = try! NSRegularExpression(pattern: "[ \\t\\f\\x0B]+")
     private static let spaceBeforePunctuation = try! NSRegularExpression(pattern: "[ \\t]+([,.!?;:])")
+    private static let spaceBeforeClosingPunctuation = try! NSRegularExpression(
+        pattern: "[ \\t]+([,.!?;:])(?![\\p{L}\\p{N}])")
 
     /// Collapses horizontal whitespace runs to a single space, preserving line breaks. `\v` inside
     /// an ICU character class (which `NSRegularExpression` uses) expands to the full "vertical
     /// whitespace" set (`\n`, `\r`, form feed, NEL, LS, PS), unlike .NET's `Regex`, where `\v` inside
     /// a bracket means only the literal vertical-tab byte. Using `\v` here silently collapsed every
     /// CRLF/LF in the text to a single space; `\x0B` is the literal-vertical-tab escape that actually
-    /// matches Windows' `NormalizeWhitespace` behavior. The two expressions are compiled once: every
-    /// rule's replacement is checked against this form at each reload (`isVocabulary`).
+    /// matches Windows' `NormalizeWhitespace` behavior. The expressions are compiled once: every
+    /// rule's replacement is checked against the reply's form at each reload (`isVocabulary`).
     private static func normalizeWhitespace(_ text: String) -> String {
+        normalize(text, tightening: spaceBeforePunctuation)
+    }
+
+    /// A reply's normalization: `normalizeWhitespace`, except that the space before a punctuation mark that begins a
+    /// word stays. A model that writes "we use .NET" or "about .5 seconds" means the space, and so does a replacement
+    /// like ".NET" made after a space; the transcript's rule would glue either to the word before it. Everything the
+    /// text sent is held to is this form (`isVocabulary`, `writtenForm`, the last guard in `correctVocabulary`), and
+    /// the transcript's form takes out everything this one does, so a normalized transcript is already in it.
+    static func normalizeReply(_ text: String) -> String {
+        normalize(text, tightening: spaceBeforeClosingPunctuation)
+    }
+
+    private static func normalize(_ text: String, tightening: NSRegularExpression) -> String {
         let collapsed = horizontalWhitespace.stringByReplacingMatches(
             in: text, range: NSRange(location: 0, length: text.utf16.count), withTemplate: " ")
-        let tightened = spaceBeforePunctuation.stringByReplacingMatches(
+        let tightened = tightening.stringByReplacingMatches(
             in: collapsed, range: NSRange(location: 0, length: collapsed.utf16.count), withTemplate: "$1")
         return tightened.trimmingCharacters(in: .whitespacesAndNewlines)
     }

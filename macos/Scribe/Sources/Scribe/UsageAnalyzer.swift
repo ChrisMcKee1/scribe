@@ -96,8 +96,8 @@ enum UsageAnalyzer {
         let covered: Bool
         /// A covered term that is the replacement of a template-like dictionary rule (`TextPostProcessor.isVocabulary`
         /// is false for one of the rules it comes from): a signature block, a long or multi-line text, one with a dash
-        /// or with spacing the normalization would change. The dictation path never sends such a replacement to a
-        /// cleanup provider, so the AI summary never sends it either (`UsageInsight.buildSummary`).
+        /// or with spacing the reply's normalization would change. The dictation path never sends such a replacement
+        /// to a cleanup provider, so the AI summary never sends it either (`UsageInsight.buildSummary`).
         var isTemplateLike = false
     }
 

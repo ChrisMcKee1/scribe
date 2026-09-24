@@ -223,6 +223,7 @@ final class PersistenceStore: Sendable {
 
     let databaseURL: URL
     private let owner: ConnectionOwner
+    private let removedText = RemovedTextLedger()
     private let logger = Logger(subsystem: "com.scribe.macos", category: "Persistence")
 
     init(
@@ -748,6 +749,24 @@ final class PersistenceStore: Sendable {
         owner.close()
     }
 
+    // MARK: - Removed text outside history
+
+    /// How many committed writes have deleted or replaced stored text outside dictation history: a dictionary entry,
+    /// snippet or app profile deleted, or a dictionary entry rewritten (edited, or updated by an import). In WAL mode
+    /// the database file keeps the old page, text and all, until a checkpoint copies the new one over it, so storage
+    /// maintenance owes one whenever this moves (`StorageMaintenance`). History deletions are not counted here:
+    /// maintenance makes those itself and owes their checkpoint directly. Adding a row, or switching one on or off,
+    /// removes no text and is not counted.
+    var removedTextCount: UInt64 {
+        removedText.count
+    }
+
+    /// Sets the one observer told after each of those writes, on the writing caller's thread once the write has
+    /// committed, never on the storage queue. Storage maintenance sets it to ask for a pass (`StorageMaintenance`).
+    func observeRemovedText(_ observer: (@Sendable () -> Void)?) {
+        removedText.observe(observer)
+    }
+
     // MARK: - Dictionary entries
     //
     // The synchronous forms serve the CLI verbs, the tests and code already off the main actor.
@@ -851,6 +870,7 @@ final class PersistenceStore: Sendable {
         try owner.withSession(.foreground) { session in
             try Self.updateDictionaryEntry(entry, in: session)
         }
+        removedText.record()
     }
 
     /// `updateDictionaryEntry(_:)` for main-actor callers.
@@ -858,12 +878,14 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             try Self.updateDictionaryEntry(entry, in: session)
         }
+        removedText.record()
     }
 
     func deleteDictionaryEntry(id: Int64) throws {
         try owner.withSession(.foreground) { session in
             try Self.deleteDictionaryEntry(id: id, in: session)
         }
+        removedText.record()
     }
 
     /// `deleteDictionaryEntry(id:)` for main-actor callers.
@@ -871,6 +893,7 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             try Self.deleteDictionaryEntry(id: id, in: session)
         }
+        removedText.record()
     }
 
     /// Persists planned dictionary changes in one transaction, so either every added and updated row
@@ -885,6 +908,9 @@ final class PersistenceStore: Sendable {
                 try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
             }
         }
+        if !updates.isEmpty {
+            removedText.record()
+        }
     }
 
     /// Imports parsed CSV rows against the dictionary as it is stored at that moment: the stored rows
@@ -893,11 +919,15 @@ final class PersistenceStore: Sendable {
     /// Settings tab has not loaded yet or against rows an earlier import has just changed, and nothing
     /// can write in between. All or nothing.
     func importDictionary(_ imported: [DictionaryEntry]) async throws -> DictionaryImportSummary {
-        try await owner.withSessionAsync(.foreground) { session in
+        let summary = try await owner.withSessionAsync(.foreground) { session in
             try session.transaction(.write) { () -> DictionaryImportSummary in
                 try Self.importDictionary(imported, session)
             }
         }
+        if summary.updated > 0 {
+            removedText.record()
+        }
+        return summary
     }
 
     /// Mines recent history for recurring terms and adds the ones no stored rule covers. History and
@@ -1083,6 +1113,7 @@ final class PersistenceStore: Sendable {
         try owner.withSession(.foreground) { session in
             try Self.deleteSnippet(id: id, in: session)
         }
+        removedText.record()
     }
 
     /// `deleteSnippet(id:)` for main-actor callers.
@@ -1090,6 +1121,7 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             try Self.deleteSnippet(id: id, in: session)
         }
+        removedText.record()
     }
 
     private func fetchSnippets(enabledOnly: Bool) throws -> [Snippet] {
@@ -1173,6 +1205,7 @@ final class PersistenceStore: Sendable {
         try owner.withSession(.foreground) { session in
             try Self.deleteAppProfile(id: id, in: session)
         }
+        removedText.record()
     }
 
     /// `deleteAppProfile(id:)` for main-actor callers.
@@ -1180,6 +1213,7 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             try Self.deleteAppProfile(id: id, in: session)
         }
+        removedText.record()
     }
 
     private static func insertAppProfile(_ profile: AppProfile, in session: SQLiteSession) throws -> Int64 {
@@ -1258,6 +1292,40 @@ final class PersistenceStore: Sendable {
             try bind(statement)
             try statement.run()
         }
+    }
+}
+
+// MARK: - Removed text
+
+/// The count behind `PersistenceStore.removedTextCount` and its one observer, under a lock of their own so a write on
+/// any thread can record, and maintenance can read, without the storage queue.
+///
+/// `@unchecked Sendable` because the compiler cannot see the discipline: `recorded` and `observer` are only read or
+/// written while `lock` is held, and the observer is called after the lock is released.
+private final class RemovedTextLedger: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: UInt64 = 0
+    private var observer: (@Sendable () -> Void)?
+
+    var count: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func observe(_ observer: (@Sendable () -> Void)?) {
+        lock.lock()
+        self.observer = observer
+        lock.unlock()
+    }
+
+    /// Counts one committed write that deleted or replaced text, then tells the observer.
+    func record() {
+        lock.lock()
+        recorded &+= 1
+        let observer = self.observer
+        lock.unlock()
+        observer?()
     }
 }
 

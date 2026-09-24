@@ -688,11 +688,11 @@ final class DictationController {
         // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With
         // cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it, and
         // split around the request: the vocabulary rules' (one-line spellings of at most 100 characters with no em or
-        // en dash, already in normal form) are made in the text the provider is sent and its reply is checked
-        // against, so the model starts from the user's spellings; the snippets and the template-like replacements are
-        // held back and made on the accepted reply where it kept the words that set them off. So no snippet template
-        // or template-like replacement ever reaches a provider, a dash the user wrote survives, no rule runs twice,
-        // and a reply that is the text sent gives exactly the cleanup-off text.
+        // en dash, already in the reply's normal form) are made in the text the provider is sent and its reply is
+        // checked against, so the model starts from the user's spellings; the snippets and the template-like
+        // replacements are held back and made on the accepted reply where it kept the words that set them off. So no
+        // snippet template or template-like replacement ever reaches a provider, a dash the user wrote survives, no
+        // rule runs twice, and a reply that is the text sent gives exactly the cleanup-off text.
         let post: TextPostProcessingResult
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {

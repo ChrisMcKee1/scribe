@@ -250,17 +250,19 @@ final class TextPostProcessorTests: XCTestCase {
 
     /// A deletion, and a replacement whose spacing the normalization of the reply would change, are template-like: the
     /// reply is normalized before the held-back replacements are made, so either would come back other than cleanup
-    /// off writes it. Spacing the normalization keeps, such as a no-break space inside the replacement, is vocabulary.
+    /// off writes it. Spacing the normalization keeps, such as a no-break space inside the replacement or a space
+    /// before a punctuation mark that begins a word (".NET"), is vocabulary.
     func testADeletionAndSpacingTheNormalizationWouldChangeAreTemplateLike() {
         XCTAssertFalse(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "um", replacement: "")))
         let unstable = [
-            "a\tb", "a  b", " a", "a ", "\u{00A0}a", "a\u{00A0}", "a ,b", "a .", "\ta", "a  ", "a\u{0B}b",
+            "a\tb", "a  b", " a", "a ", "\u{00A0}a", "a\u{00A0}", "a , b", "a .", "a ,", "\ta", "a  ", "a\u{0B}b", " ",
         ]
         for replacement in unstable {
             let entry = DictionaryEntry(pattern: "x", replacement: replacement)
             XCTAssertFalse(TextPostProcessor.isVocabulary(entry), "\(replacement.debugDescription) is vocabulary")
         }
-        for replacement in ["a\u{00A0}b", "a, b", ",", "a.b", "C#"] {
+        let stable = ["a\u{00A0}b", "a, b", ",", "a.b", "C#", ".NET", "Visual Basic .NET", "a ,b", "about .5"]
+        for replacement in stable {
             let entry = DictionaryEntry(pattern: "x", replacement: replacement)
             XCTAssertTrue(TextPostProcessor.isVocabulary(entry), "\(replacement.debugDescription) is template-like")
         }
@@ -524,7 +526,7 @@ final class TextPostProcessorTests: XCTestCase {
     /// A replacement with a tab or a run of spaces is template-like, since normalizing the reply would change it: it is
     /// made after cleanup, exactly as cleanup off writes it.
     func testSpacingTheNormalizationWouldChangeIsMadeAfterCleanupAsWritten() {
-        for replacement in ["a\tb", "a  b", " a", "a ", "a ,b"] {
+        for replacement in ["a\tb", "a  b", " a", "a ", "a , b"] {
             let rule = DictionaryEntry(pattern: "zed", replacement: replacement)
             let processor = TextPostProcessor()
             processor.reload(dictionaryEntries: [rule], snippets: [])
@@ -554,5 +556,148 @@ final class TextPostProcessorTests: XCTestCase {
 
         XCTAssertEqual(pass.text, "use Kubeflow \ncomma then, done")
         XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "use Kubeflow , then, done")
+    }
+
+    // MARK: - The reviewers' counterexamples (verification cross-examination)
+
+    /// A rule inside a word that writes a space or a period never makes a trigger either (A6, widened): "x" becomes " "
+    /// or "." inside "signaturex", and what is left, "signature", was never said, so the snippet "signature" never
+    /// expands, with cleanup on as with it off. The space is template-like and made after cleanup; the period is a
+    /// spelling made in the text sent. (The deletion is `testADeletionNeverMakesATrigger`.)
+    func testARuleInsideAWordThatWritesASpaceOrAPeriodNeverMakesATrigger() {
+        for (replacement, sent) in [(" ", "signaturex"), (".", "signature.")] {
+            let processor = TextPostProcessor()
+            processor.reload(
+                dictionaryEntries: [DictionaryEntry(pattern: "x", replacement: replacement, wholeWord: false)],
+                snippets: [Snippet(phrase: "signature", template: "Private\nfooter")])
+            let cleanupOff = "signature" + replacement
+            XCTAssertEqual(processor.process("signaturex"), cleanupOff)
+
+            let pass = processor.correctVocabulary("signaturex")
+
+            XCTAssertEqual(pass.text, sent)
+            XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, cleanupOff)
+            let changed = processor.finishAfterCleanup("Signaturex, then more.", after: pass).text
+            XCTAssertFalse(changed.contains("Private"), "\(replacement.debugDescription) made the snippet")
+        }
+    }
+
+    /// A filler deletion never joins the words around it into a trigger (A6, widened): deleting "um" from "insert um
+    /// address" leaves "insert  address", as cleanup off writes it, and the snippet "insert address", never said, does
+    /// not expand, whether the reply keeps the filler or drops it.
+    func testAFillerDeletionNeverJoinsItsNeighboursIntoATrigger() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "um", replacement: "")],
+            snippets: [Snippet(phrase: "insert address", template: "Private\naddress")])
+        let transcript = "insert um address"
+        XCTAssertEqual(processor.process(transcript), "insert  address")
+
+        let pass = processor.correctVocabulary(transcript)
+
+        XCTAssertEqual(pass.text, transcript)
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "insert  address")
+        XCTAssertEqual(processor.finishAfterCleanup("Insert um address.", after: pass).text, "Insert  address.")
+        XCTAssertEqual(processor.finishAfterCleanup("Insert address.", after: pass).text, "Insert address.")
+    }
+
+    /// Precedence is cleanup off's. The snippet "alpha beta" takes its words before the dictionary pass, so the rule
+    /// "beta gamma" never matches in "alpha beta gamma" and "alpha Q" is never sent; and a longer rule takes its words
+    /// from a shorter one inside them, so "alpha beta" is one template-like replacement, not "alpha" and the spelling
+    /// "B". The shorter rule still spells the held-back words in the text sent.
+    func testPrecedenceIsCleanupOffs() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "beta gamma", replacement: "Q")],
+            snippets: [Snippet(phrase: "alpha beta", template: "Private\nAB")])
+        XCTAssertEqual(processor.process("alpha beta gamma"), "Private\nAB gamma")
+        var pass = processor.correctVocabulary("alpha beta gamma")
+        XCTAssertEqual(pass.text, "alpha beta gamma")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "Private\nAB gamma")
+        XCTAssertEqual(processor.finishAfterCleanup("Alpha beta gamma.", after: pass).text, "Private\nAB gamma.")
+
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "alpha beta", replacement: "Line1\nx"),
+                DictionaryEntry(pattern: "beta", replacement: "B"),
+            ],
+            snippets: [])
+        let transcript = "alpha beta gamma then beta"
+        XCTAssertEqual(processor.process(transcript), "Line1\nx gamma then B")
+        pass = processor.correctVocabulary(transcript)
+        XCTAssertEqual(pass.text, "alpha B gamma then B")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "Line1\nx gamma then B")
+        XCTAssertEqual(
+            processor.finishAfterCleanup("Alpha B gamma then B.", after: pass).text, "Line1\nx gamma then B.")
+    }
+
+    /// Opus's "footer beta": the snippet "sig" ends its template with "footer", and the rule "footer beta" reaches from
+    /// the template into the next word said. Cleanup off makes that match, so cleanup on makes it too, as part of the
+    /// snippet's held-back replacement: neither the template nor the rule's output is sent. A reply that dropped
+    /// "beta" no longer holds the words the match was made on, and nothing is made.
+    func testADictionaryRuleAcrossATemplatesEndIsKept() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "footer beta", replacement: "Footer B")],
+            snippets: [Snippet(phrase: "sig", template: "Pat Doe\nfooter")])
+        let transcript = "add sig beta now"
+        XCTAssertEqual(processor.process(transcript), "add Pat Doe\nFooter B now")
+
+        let pass = processor.correctVocabulary(transcript)
+
+        XCTAssertEqual(pass.text, transcript)
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "add Pat Doe\nFooter B now")
+        XCTAssertEqual(
+            processor.finishAfterCleanup("Add sig beta now.", after: pass).text, "Add Pat Doe\nFooter B now.")
+        XCTAssertEqual(processor.finishAfterCleanup("Add sig now.", after: pass).text, "Add sig now.")
+    }
+
+    /// ".NET" keeps the space before it (Opus). Normalizing the reply used to take out the space before any
+    /// punctuation mark, so "we use dot net for this" came back as "we use.NET for this". The reply now keeps the space
+    /// before a mark that begins a word, so every shipped entry that begins with one, or holds one after a space, is a
+    /// spelling made in the text sent and comes back as cleanup off writes it, alone or with every library on; and a
+    /// model that writes ".NET" itself keeps its space. A mark that ends a word is still pulled up.
+    func testAReplacementThatBeginsWithPunctuationKeepsTheSpaceBeforeIt() {
+        // Entries spoken as words; ".net maui" and the like are written forms, which no one dictates.
+        let shipped = BuiltInDictionaryLibraries.all.flatMap(\.entries).filter { entry in
+            entry.enabled && entry.pattern.first?.isLetter == true
+                && (entry.replacement.hasPrefix(".") || entry.replacement.contains(" ."))
+        }
+        let replacements = Set(shipped.map(\.replacement))
+        for expected in [".NET", ".NET Core", ".NET MAUI", "Visual Basic .NET"] {
+            XCTAssertTrue(replacements.contains(expected), "\(expected) is not shipped")
+        }
+        for entry in shipped {
+            let processor = TextPostProcessor()
+            processor.reload(dictionaryEntries: [entry], snippets: [])
+            let transcript = "we use \(entry.pattern) for this"
+            let cleanupOff = "we use \(entry.replacement) for this"
+            XCTAssertEqual(processor.process(transcript), cleanupOff)
+
+            let pass = processor.correctVocabulary(transcript)
+
+            XCTAssertEqual(pass.text, cleanupOff, "\(entry.replacement) was not made in the text sent")
+            XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, cleanupOff)
+            XCTAssertEqual(
+                processor.finishAfterCleanup("We use \(entry.replacement) for this.", after: pass).text,
+                "We use \(entry.replacement) for this.")
+        }
+
+        let everyLibrary = TextPostProcessor()
+        everyLibrary.reload(
+            dictionaryEntries: [], snippets: [],
+            libraryEntries: BuiltInDictionaryLibraries.all.flatMap(\.entries).filter(\.enabled))
+        let transcript = "we build with dot net maui and visual basic dot net"
+        let cleanupOff = everyLibrary.process(transcript)
+        XCTAssertTrue(cleanupOff.hasSuffix(" .NET MAUI and Visual Basic .NET"), cleanupOff)
+        let pass = everyLibrary.correctVocabulary(transcript)
+        XCTAssertEqual(pass.text, cleanupOff)
+        XCTAssertEqual(everyLibrary.finishAfterCleanup(pass.text, after: pass).text, cleanupOff)
+
+        let noRules = TextPostProcessor()
+        let plain = noRules.correctVocabulary("we use it")
+        XCTAssertEqual(
+            noRules.finishAfterCleanup("We use .NET 8 , and .5 of it .", after: plain).text,
+            "We use .NET 8, and .5 of it.")
     }
 }

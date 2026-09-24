@@ -403,6 +403,116 @@ final class StorageMaintenanceTests: XCTestCase {
         XCTAssertEqual(maintenance.runPass().checkpoint, .completed)
     }
 
+    // MARK: - Rules, snippets and profiles
+
+    /// Whether `text` is in the database file, read while the store's connection is still open: closing the last
+    /// connection would checkpoint on its own, and what is tested is whether maintenance did.
+    private func databaseFileContains(_ text: String) throws -> Bool {
+        try Data(contentsOf: directory.databaseURL).range(of: Data(text.utf8)) != nil
+    }
+
+    /// What counts as removed text outside history: a dictionary entry, snippet or app profile deleted, or an entry
+    /// rewritten, by an edit or an import. Adding a row, or switching one on or off, removes nothing.
+    func testTheStoreCountsTheWritesThatRemoveTextOutsideHistory() async throws {
+        let store = try makeStore()
+        let id = try await store.addDictionaryEntry(DictionaryEntry(pattern: "alpha", replacement: "Alpha"))
+        let snippetID = try await store.addSnippet(Snippet(phrase: "my block", template: "Block"))
+        let profile = AppProfile(name: "Editor", bundleIdentifiers: [], processNames: [])
+        let profileID = try await store.addAppProfile(profile)
+        try await store.saveDictionaryEntryEnabled(id: id, enabled: false)
+        try await store.saveSnippetEnabled(id: snippetID, enabled: false)
+        _ = try await store.addDictionaryEntriesIfAbsent([DictionaryEntry(pattern: "beta", replacement: "Beta")])
+        _ = try await store.importDictionary([DictionaryEntry(pattern: "gamma", replacement: "Gamma")])
+        XCTAssertEqual(store.removedTextCount, 0, "adding or switching a row counted as removing text")
+
+        try await store.saveDictionaryEntry(DictionaryEntry(id: id, pattern: "alpha", replacement: "ALPHA"))
+        XCTAssertEqual(store.removedTextCount, 1)
+        _ = try await store.importDictionary([DictionaryEntry(pattern: "alpha", replacement: "Alpha again")])
+        XCTAssertEqual(store.removedTextCount, 2)
+        try await store.removeDictionaryEntry(id: id)
+        try await store.removeSnippet(id: snippetID)
+        try await store.removeAppProfile(id: profileID)
+        XCTAssertEqual(store.removedTextCount, 5)
+    }
+
+    /// Deleting or rewriting a dictionary entry, a snippet or an app profile owes a WAL checkpoint, as a history
+    /// deletion does: until one runs, the database file keeps the old page, text and all. Each write asks for a pass
+    /// that only checkpoints, and once it has run the text is in neither the database file nor the WAL.
+    func testDeletingOrRewritingARuleSnippetOrProfileTakesItsTextOutOfTheFiles() async throws {
+        let store = try makeStore()
+        let deleted = "entry-\(UUID().uuidString)"
+        let edited = "edited-\(UUID().uuidString)"
+        let imported = "imported-\(UUID().uuidString)"
+        let template = "snippet-\(UUID().uuidString)"
+        let style = "profile-\(UUID().uuidString)"
+        let deletedID = try store.insertDictionaryEntry(DictionaryEntry(pattern: "alpha", replacement: deleted))
+        let editedID = try store.insertDictionaryEntry(DictionaryEntry(pattern: "beta", replacement: edited))
+        _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "gamma", replacement: imported))
+        let snippetID = try store.insertSnippet(Snippet(phrase: "my block", template: template))
+        let profile = AppProfile(
+            name: "Editor", bundleIdentifiers: ["com.example.editor"], processNames: [], writingStylePrompt: style)
+        let profileID = try store.insertAppProfile(profile)
+        XCTAssertTrue(try store.checkpointWal())
+        for text in [deleted, edited, imported, template, style] {
+            XCTAssertTrue(try databaseFileContains(text), "the search missed text that is stored")
+        }
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let maintenance = makeMaintenance(store, hooks: hooks) { $0.initialDelay = 3_600 }
+        maintenance.start()
+
+        let rewritten = DictionaryEntry(id: editedID, pattern: "beta", replacement: "B")
+        let writes: [(text: String, write: () async throws -> Void)] = [
+            (deleted, { try await store.removeDictionaryEntry(id: deletedID) }),
+            (edited, { try await store.saveDictionaryEntry(rewritten) }),
+            (imported, { _ = try await store.importDictionary([DictionaryEntry(pattern: "gamma", replacement: "G")]) }),
+            (template, { try await store.removeSnippet(id: snippetID) }),
+            (style, { try await store.removeAppProfile(id: profileID) }),
+        ]
+        for (text, write) in writes {
+            try await write()
+            let report = passes.next()
+            XCTAssertEqual(report?.checkpoint, .completed, "no checkpoint followed the write")
+            XCTAssertEqual(report?.retention, .notRun, "the write ran a whole pass")
+            XCTAssertEqual(walBytes, 0)
+            XCTAssertFalse(try databaseFileContains(text), "the old text is still in the database file")
+        }
+        XCTAssertTrue(maintenance.stop(timeout: 5))
+    }
+
+    /// The checkpoint a rule's deletion owes waits while a dictation holds a lease, and runs on a retry once it ends.
+    func testTheCheckpointARuleDeletionOwesWaitsForADictation() async throws {
+        let store = try makeStore()
+        let text = "entry-\(UUID().uuidString)"
+        let id = try store.insertDictionaryEntry(DictionaryEntry(pattern: "alpha", replacement: text))
+        XCTAssertTrue(try store.checkpointWal())
+        let activity = ForegroundActivity()
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let maintenance = makeMaintenance(store, activity: activity, hooks: hooks) {
+            $0.initialDelay = 3_600
+            $0.checkpointRetryDelay = 0.1
+        }
+        maintenance.start()
+
+        let lease = activity.begin()
+        try await store.removeDictionaryEntry(id: id)
+        XCTAssertEqual(passes.next()?.checkpoint, .deferredForActivity)
+        XCTAssertTrue(try databaseFileContains(text), "the checkpoint ran during the dictation")
+        lease.end()
+
+        // Retries that fell before the lease ended were deferred again; the first after it completes.
+        var outcome = passes.next()?.checkpoint
+        while outcome == .deferredForActivity {
+            outcome = passes.next()?.checkpoint
+        }
+        XCTAssertEqual(outcome, .completed)
+        XCTAssertFalse(try databaseFileContains(text), "the old text is still in the database file")
+        XCTAssertTrue(maintenance.stop(timeout: 5))
+    }
+
     // MARK: - Clear history
 
     func testClearHistoryRunsAfterEarlierWritesAndThenReclaims() async throws {
@@ -479,5 +589,33 @@ final class StorageMaintenanceTests: XCTestCase {
 
         XCTAssertTrue(maintenance.stop(timeout: 5))
         XCTAssertTrue(maintenance.runPass().stopped)
+    }
+}
+
+/// Every report maintenance finishes, handed to the test in order, each waited for with a bound.
+private final class PassReports: @unchecked Sendable {
+    // `@unchecked Sendable`: `reports` and `taken` are only read or written while `lock` is held.
+    private let lock = NSLock()
+    private var reports: [StorageMaintenanceReport] = []
+    private var taken = 0
+    private let arrived = DispatchSemaphore(value: 0)
+
+    func record(_ report: StorageMaintenanceReport) {
+        lock.lock()
+        reports.append(report)
+        lock.unlock()
+        arrived.signal()
+    }
+
+    /// The next pass's report, or nil when none finishes within `timeout` seconds.
+    func next(timeout: TimeInterval = 10) -> StorageMaintenanceReport? {
+        guard arrived.wait(timeout: .now() + timeout) == .success else {
+            return nil
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        let report = reports[taken]
+        taken += 1
+        return report
     }
 }

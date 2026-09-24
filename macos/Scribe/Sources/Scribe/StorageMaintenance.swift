@@ -237,7 +237,8 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 ///
 /// One pass at a time, on a private serial queue, never on the caller's thread: 30 seconds after
 /// `start()`, then daily on the wall clock (so a Mac that slept through the deadline runs it on wake),
-/// when the retention choice changes, and after Clear history.
+/// when the retention choice changes, and after Clear history; and a pass that only checkpoints after
+/// a dictionary entry, snippet or app profile is deleted, or an entry rewritten.
 ///
 /// Retention deletes in short batches, and every batch checks the stored choice in its own
 /// transaction, so a choice changed, removed or made unreadable mid-sweep stops it. Only a choice on
@@ -259,9 +260,13 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 /// reuses them or a reclaim gives them back to the disk, and no setting reaches copies outside the
 /// file, such as backups or APFS snapshots. In WAL mode the zeroed pages go to the WAL first: until a
 /// checkpoint copies them back, the database file keeps the old page images, and earlier frames of the
-/// WAL keep the text until it is truncated. So any deletion or reclamation leaves a WAL checkpoint
-/// owed, whatever the freelist says, and the checkpoint truncates the WAL. A checkpoint a reader keeps
-/// busy is retried with a doubling backoff.
+/// WAL keep the text until it is truncated. So every deletion or rewrite of stored text leaves a WAL
+/// checkpoint owed, whatever the freelist says, and the checkpoint truncates the WAL: a history
+/// deletion (retention, Clear) and a reclamation owe it here, and a dictionary entry, snippet or app
+/// profile deleted, or an entry rewritten, owes it through the store's count of such writes
+/// (`PersistenceStore.removedTextCount`), each of which asks, as it commits, for a pass that only
+/// checkpoints. A checkpoint waits while a dictation holds a lease, and one a reader keeps busy is
+/// retried; both back off, doubling.
 ///
 /// Logs counts and outcome names only.
 ///
@@ -301,7 +306,7 @@ final class StorageMaintenance: @unchecked Sendable {
         /// Called from inside SQLite's progress handler, on the storage queue, each time a reclaim
         /// statement asks whether to stop. Must not call into the store.
         var onReclaimCheck: (@Sendable () -> Void)?
-        /// Called on the maintenance queue after every pass, with its report.
+        /// Called on the maintenance queue after every pass, a pass that only checkpoints included, with its report.
         var onPassFinished: (@Sendable (StorageMaintenanceReport) -> Void)?
     }
 
@@ -321,6 +326,7 @@ final class StorageMaintenance: @unchecked Sendable {
     private var stopped = false
     private var yieldRequested = false
     private var passPending = false
+    private var checkpointPassPending = false
     private var followUpDue: DispatchTime?
     private var reclaimEverythingRequested = false
     private var timer: DispatchSourceTimer?
@@ -334,6 +340,9 @@ final class StorageMaintenance: @unchecked Sendable {
     private var conversionBlocked = false
     private var reclaimEverythingOwed = false
     private var checkpointOwed = false
+    /// `PersistenceStore.removedTextCount` as of the last checkpoint decision (`checkpointIfOwed`). It starts at zero,
+    /// not at the count, so a removal made before maintenance existed is still owed its checkpoint.
+    private var observedRemovedText: UInt64 = 0
 
     /// - Parameters:
     ///   - activity: the dictation lease holder; nil only where nothing dictates (tests, tools).
@@ -358,6 +367,11 @@ final class StorageMaintenance: @unchecked Sendable {
         observedStoreActivity = store.foregroundActivityCount
         observedActivityChanges = activity?.changeCount ?? 0
         quietSince = uptime()
+        // A deleted or rewritten rule, snippet or profile asks for the checkpoint that takes the old text out of the
+        // files; before `start` and after `stop` the request is dropped and the store's count waits for a pass.
+        store.observeRemovedText { [weak self] in
+            self?.requestCheckpointPass()
+        }
     }
 
     deinit {
@@ -500,6 +514,41 @@ final class StorageMaintenance: @unchecked Sendable {
         log(report)
         hooks.onPassFinished?(report)
         return report
+    }
+
+    /// Asks for the checkpoint a deleted or rewritten rule, snippet or profile is owed, soon and on its own: no
+    /// retention sweep and no reclamation run with it, so edits in Settings never change when those run or how long
+    /// their backoff grows. Coalesced like `requestPass`, and dropped before `start` and after `stop`, when the
+    /// store's count waits for the next pass.
+    private func requestCheckpointPass() {
+        stateLock.lock()
+        guard started, !stopped, !checkpointPassPending else {
+            stateLock.unlock()
+            return
+        }
+        checkpointPassPending = true
+        stateLock.unlock()
+
+        queue.async { [weak self] in
+            self?.performCheckpointPass()
+        }
+    }
+
+    /// A pass that only checkpoints, if one is owed. Like any checkpoint it waits while a dictation holds a lease
+    /// and backs off while a reader keeps it busy; the retry is an ordinary pass. It stands aside for Clear history,
+    /// which checkpoints when it is done, and for shutdown.
+    private func performCheckpointPass() {
+        stateLock.lock()
+        checkpointPassPending = false
+        stateLock.unlock()
+
+        var report = StorageMaintenanceReport()
+        if !shouldYield {
+            report.checkpoint = checkpointIfOwed()
+        }
+        report.stopped = isStoppedNow
+        log(report)
+        hooks.onPassFinished?(report)
     }
 
     private func finishClear(_ result: Result<Int, Error>) {
@@ -696,10 +745,16 @@ final class StorageMaintenance: @unchecked Sendable {
         return .completed(.convertedToIncremental, freedPages: max(0, freePages - after.freePages))
     }
 
-    /// Owed after any deletion or reclamation, whatever the freelist says: a small delete frees no
-    /// whole page yet still leaves the deleted text in the WAL until a checkpoint copies it back and
-    /// truncates the file.
+    /// Owed after any deletion or rewrite of stored text or any reclamation, whatever the freelist says: a
+    /// small delete frees no whole page yet still leaves the deleted text in the WAL until a checkpoint
+    /// copies it back and truncates the file. A move of the store's count of rule, snippet and profile
+    /// removals since the last attempt makes it owed here.
     private func checkpointIfOwed() -> StorageMaintenanceReport.Checkpoint {
+        let removedText = store.removedTextCount
+        if removedText != observedRemovedText {
+            observedRemovedText = removedText
+            checkpointOwed = true
+        }
         guard checkpointOwed else {
             return .notNeeded
         }
