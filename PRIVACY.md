@@ -219,7 +219,10 @@ The remote provider processes this information under the account, terms, data
 retention settings, and privacy policy associated with that provider. Depending
 on your configuration, the provider may be Microsoft, GitHub, or the operator of
 an OpenAI-compatible endpoint. The publisher of Scribe does not receive this
-information.
+information. For Microsoft Foundry, Scribe asks the service not to store its
+responses, but Microsoft's abuse monitoring can still keep a sample of prompts
+and responses it flags for review, as Microsoft's data privacy documentation for
+Foundry models describes.
 
 The GitHub Copilot provider differs from the others in how it connects. There is
 no endpoint you configure and no key Scribe stores. Scribe runs the GitHub

@@ -206,8 +206,11 @@ anything was dictated.
   `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
   `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
   and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
-  `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if
-  a retired claim ("text only", "relevant" terms) comes back in the README, the docs or the window.
+  `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if a
+  retired claim (that cleanup sends only the transcript, or only the terms that matter to a dictation)
+  comes back in `PRIVACY.md`, the README, this file, the privacy review lens, the Foundry,
+  service-principal or Store docs, or the window's XAML; the phrases it looks for are listed in
+  `No_user_facing_text_claims_cleanup_sends_only_the_transcript_or_only_relevant_terms`.
 - **The suggestion consent is bound to its recipient.** The window captures `ITextCleanupService.Recipient`
   before it asks, asks unless both that recipient and the saved-provider snapshot (`_savedAiProvider`,
   which changes only once `SaveBundle` has stored the document) run on this PC (`AiRequestConsent`), and

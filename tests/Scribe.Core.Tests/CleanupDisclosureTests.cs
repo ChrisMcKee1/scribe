@@ -166,6 +166,19 @@ public sealed class CleanupDisclosureTests
             policy, StringComparison.Ordinal);
         Assert.Contains("Scribe versions up to 0.4.3 did not overwrite deleted content", policy, StringComparison.Ordinal);
         Assert.Contains("does not reach copies made elsewhere", policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "For Microsoft Foundry, Scribe asks the service not to store its responses, but Microsoft's abuse " +
+            "monitoring can still keep a sample of prompts and responses it flags for review",
+            policy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_readme_says_what_store_false_does_and_does_not_do()
+    {
+        var readme = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "README.md")));
+
+        Assert.Contains("asks Microsoft Foundry not to store the response", readme, StringComparison.Ordinal);
+        Assert.Contains("abuse monitoring can still keep a sample of flagged prompts and responses for review", readme, StringComparison.Ordinal);
     }
 
     public static TheoryData<string> UserFacingDocuments => new()
@@ -173,6 +186,7 @@ public sealed class CleanupDisclosureTests
         "PRIVACY.md",
         "README.md",
         "AGENTS.md",
+        ".claude/skills/scribe-code-review/agents/privacy-egress.md",
         "docs/foundry-setup.md",
         "docs/service-principal-setup.md",
         "docs/microsoft-store-submission.md",
@@ -193,6 +207,7 @@ public sealed class CleanupDisclosureTests
                      "only the transcribed",
                      "transcript text only",
                      "only transcript text",
+                     "turns request storage off",
                  })
         {
             Assert.DoesNotContain(claim, text, StringComparison.OrdinalIgnoreCase);

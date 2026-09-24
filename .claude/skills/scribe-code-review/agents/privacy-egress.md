@@ -6,8 +6,11 @@ every privacy guarantee Scribe already makes still hold and still fail closed?**
 Scribe's entire product claim is that it is private and offline. `AGENTS.md` states it in the first
 paragraph: audio is captured, transcribed in memory on the CPU, and discarded, and nothing is
 uploaded. The only optional online feature is AI cleanup against a user-configured Azure, Foundry, or
-OpenAI-compatible endpoint, which sends the **transcribed text only, never audio**, and is strictly
-opt-in. `AGENTS.md` "Never" list carries the hardest line in the repository: *"Send audio anywhere
+OpenAI-compatible endpoint, or GitHub Copilot, which never sends audio and is strictly opt-in. What each
+request does send is exact and pinned: the recognized text, the cleanup instructions with the writing
+style, and the vocabulary glossary (every enabled dictionary and library term within its budget, whether
+or not the dictation mentions it). `CleanupDisclosure` and `PRIVACY.md` say so, and
+`CleanupDisclosureTests` holds them to the code. `AGENTS.md` "Never" list carries the hardest line in the repository: *"Send audio anywhere
 off the device."* A missed egress is the worst outcome this product can have, which is why this lens
 runs on `opus` and is one of the panel lenses.
 
@@ -38,7 +41,7 @@ happens, and here it also risks the opposite failure: clearing a real leak.
 3. **What gates it.** Which `AppSettings` flag, which explicit user action, and what the value is on
    a first run and on an upgrade of an existing install.
 4. **Which boundary it crosses**, from the inventory in §1.
-5. **Whether a pin already covers it.** Name the test. The four that matter are listed in §1.
+5. **Whether a pin already covers it.** Name the test. The ones that matter are listed in §1.
 6. **What `main` does today**, so you can tell a new leak from pre-existing behavior the diff merely
    moved.
 
@@ -51,22 +54,26 @@ verdict, not a shrug.
 
 | Boundary | What crosses it | Gate |
 | --- | --- | --- |
-| AI cleanup | The transcript, the writing style, prompts, relevant dictionary terms, per-app profile instructions. Never audio. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:109`), plus a remote `CleanupProvider`. |
-| AI dictionary suggestions | A bounded sample of recent transcript history, capped at `AiDictionarySuggester.DefaultMaxSampleChars` (6000). | An explicit button press in Settings. |
-| AI usage insight | Aggregate totals and dictionary-covered term labels only. | An explicit button press. |
+| AI cleanup | Per request: the recognized text, the cleanup instructions with the writing style (or the matching per-app profile's), and the glossary: every enabled dictionary and library term, up to `CleanupPrompt.MaxGlossaryTermsCloud` (5,000) terms and `MaxGlossaryChars` (24,000) characters (80 terms under the Local prompt style), whether or not the dictation mentions them, minus templates (`CleanupPrompt.IsVocabularyReplacement`). Never audio, snippet templates, history or the focused app's name. | `EnableAiCleanup` (`src/Scribe.Core/Models/AppSettings.cs:109`), plus a remote `CleanupProvider`. |
+| AI cleanup readiness probe | Each time cleanup connects (startup with cleanup on, switching it on, a provider or model change, the retry after a failure): one `"ok"` transcript under the real guardrails and writing style, with no glossary (`TextCleanupService.ProbeAgentAsync`, `BuildProbeSystemPrompt`), and once more on Chat Completions when an Azure deployment rejects Responses. A probe that carries the glossary again is 🔴 (`CleanupProbeVocabularyTests`). | The same as AI cleanup: no dictation needed. |
+| AI dictionary suggestions | A bounded sample of recent transcript history as it was inserted, capped at `AiDictionarySuggester.DefaultMaxSampleChars` (6000), after a consent naming the recipient. `CompleteAsync` sends only to the `CleanupRecipient` the user was asked about (`CleanupRecipientTests`). | An explicit button press in Settings. |
+| AI usage insight | Aggregate totals and dictionary-covered term labels only, never a template label (`UsageAnalyzer.TermUsage.Shareable`). | An explicit button press. |
 | Model and update downloads | Outbound GET only. `TranscriptionModelInstaller` fetches model files and verifies a SHA256; Velopack and the Store fetch updates. Nothing user-authored is uploaded. | First-run install, update check. |
 | Azure key probe | A fixed `"ok"` string, never user text. `SettingsWindow.ProbeAzureApiKeyAsync` (`src/Scribe.App/Settings/SettingsWindow.xaml.cs:2975`) posts it with `store = false` in the body (`:3000`). | The user pressing Verify. |
 | OpenTelemetry export | Spans with the tags in `ScribeTelemetry`: counts, durations, outcomes, and the focused application name (`TagTargetApp`, `ScribeTelemetry.cs:44`). No transcript text. | Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (`src/Scribe.App/Infrastructure/TelemetryRegistration.cs:23`). |
 | Diagnostics bundle | The retained daily logs plus `report.txt`, written to a path the user picked. Never `scribe.db`. | The user pressing "Save diagnostics". |
 
-The four fail-closed pins that already exist, all in `tests/Scribe.Core.Tests/`:
+The fail-closed pins that already exist, all in `tests/Scribe.Core.Tests/`:
 
 - `TextCleanupServiceTests.cs:140` `Stored_output_override_fails_closed_on_an_unrecognised_raw_representation`
 - `SessionBannerTests.cs:56` `Banner_never_contains_a_secret`
 - `DiagnosticsBundleTests.cs:50` `Bundle_never_reaches_outside_the_logs_folder`
 - `UsageInsightTests.cs:39` `BuildSummary_excludes_uncovered_terms_mined_from_dictation_text`
+- `CleanupProbeVocabularyTests` (the readiness probe carries no glossary, read from the wire)
+- `CleanupRecipientTests` (a one-off request reaches only the recipient the user was asked about)
+- `CleanupDisclosureTests` (what Settings and `PRIVACY.md` say is sent matches the limits the code enforces)
 
-A diff that weakens any of these four, or adds a path that routes around one, is 🔴 Critical. Deleting
+A diff that weakens any of these, or adds a path that routes around one, is 🔴 Critical. Deleting
 or relaxing one is also `guardrail-erosion` territory; synthesis dedups, so state the privacy
 consequence rather than the "a test was removed" observation.
 
@@ -114,17 +121,19 @@ Two paths send derived data rather than a live dictation, and both have a narrow
 Widening either is the quiet way this promise breaks.
 
 - **Usage insight.** `UsageInsight.BuildSummary` (`src/Scribe.Core/Diagnostics/UsageInsight.cs`) emits
-  dictation count, word count, active days, and recurring terms. The guarantee is the `Covered` check
-  at `UsageInsight.cs:36`: only terms the user's own dictionary already canonicalizes are included.
+  dictation count, word count, active days, and recurring terms. The guarantee is the `Covered` and
+  `Shareable` check in `BuildSummary`: only terms the user's own dictionary already canonicalizes are
+  included, and only when every replacement behind the label is vocabulary rather than a template.
   Uncovered terms are raw tokens mined from dictation text, surnames and project codenames, and they
   never enter the payload. Removing that `continue`, inverting it, or adding a field carrying app
   names, timestamps, or transcript excerpts is 🔴. `UsageAnalyzer.TermUsage`
-  (`src/Scribe.Core/Diagnostics/UsageAnalyzer.cs:15`) is where `Covered` is set; a change there that
-  marks mined terms covered is the same defect one layer down.
+  (`src/Scribe.Core/Diagnostics/UsageAnalyzer.cs:15`) is where `Covered` and `Shareable` are set; a change
+  there that marks mined terms covered, or a template shareable, is the same defect one layer down.
 - **Dictionary suggestions.** `AiDictionarySuggester.BuildHistorySample` genuinely sends transcript
   text, bounded by `DefaultMaxSampleChars`. That is disclosed in `PRIVACY.md`. Flag 🟡 if the diff
   raises the cap materially, removes the bound, or moves the call off an explicit user action onto a
-  timer, a startup path, or the dictation loop.
+  timer, a startup path, or the dictation loop, and 🔴 if it asks about one provider and sends to another:
+  the consent names `ITextCleanupService.Recipient` and `CompleteAsync` must be handed that recipient.
 
 ## §4. The diagnostics bundle
 

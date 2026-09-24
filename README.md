@@ -130,10 +130,12 @@ identity you name, every time ([setup guide](docs/service-principal-setup.md)). 
 OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
 or api.openai.com with your own key. Scribe sends the recognized *text* (never audio) only to the
 service **you** configure, together with its cleanup instructions, your writing style and your
-enabled dictionary and library terms, and it turns request storage off on Microsoft Foundry. The
-[privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly what each
-request carries. And when you want the raw transcript, **toggle AI cleanup straight from the tray
-menu** with no settings trip required.
+enabled dictionary and library terms, and it asks Microsoft Foundry not to store the response
+(Microsoft's abuse monitoring can still keep a sample of flagged prompts and responses for review, as
+its [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)
+explains). The [privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly
+what each request carries. And when you want the raw transcript, **toggle AI cleanup straight from the
+tray menu** with no settings trip required.
 
 > **No Foundry resource yet?** [`docs/foundry-setup.md`](docs/foundry-setup.md) walks you through it
 > from scratch with a script that creates the resource, project and model deployment in one run.
@@ -307,7 +309,8 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
   cleanup request sends the recognized *text* of that dictation (never audio), Scribe's cleanup
   instructions with your writing style, and your enabled dictionary and library terms (up to 5,000),
   whether or not the dictation mentions them. It goes only to the service **you** configure, under
-  **your** credentials, and Scribe turns request storage off on Microsoft Foundry.
+  **your** credentials. Scribe asks Microsoft Foundry not to store the response, though Microsoft's
+  abuse monitoring can still keep a sample of flagged prompts and responses for review.
 - **Even the stats are local.** Performance and Usage are computed from history already on your disk.
   Usage AI insight runs only when you click it and sends bounded aggregate data without transcripts,
   audio, application names or timestamps.
