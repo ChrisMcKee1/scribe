@@ -18,13 +18,14 @@ internal static class AzureOpenAIResponsesClientFactory
         Uri resourceEndpoint,
         string apiKey,
         TimeSpan? networkTimeout = null,
-        bool disableRetries = false)
+        bool disableRetries = false,
+        Action<OpenAIClientOptions>? configure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
 
         var client = new OpenAIClient(
             new ApiKeyCredential(apiKey),
-            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries, configure));
         return client.GetResponsesClient();
     }
 
@@ -42,13 +43,14 @@ internal static class AzureOpenAIResponsesClientFactory
         Uri resourceEndpoint,
         string apiKey,
         TimeSpan? networkTimeout = null,
-        bool disableRetries = false)
+        bool disableRetries = false,
+        Action<OpenAIClientOptions>? configure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
 
         return new OpenAIClient(
             new ApiKeyCredential(apiKey),
-            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries, configure));
     }
 
     /// <inheritdoc cref="CreateClientWithApiKey"/>
@@ -56,26 +58,28 @@ internal static class AzureOpenAIResponsesClientFactory
         Uri resourceEndpoint,
         TokenCredential credential,
         TimeSpan? networkTimeout = null,
-        bool disableRetries = false)
+        bool disableRetries = false,
+        Action<OpenAIClientOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(credential);
 
         return new OpenAIClient(
             new BearerTokenPolicy(credential, AzureAIScope),
-            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries, configure));
     }
 
     public static ResponsesClient CreateWithTokenCredential(
         Uri resourceEndpoint,
         TokenCredential credential,
         TimeSpan? networkTimeout = null,
-        bool disableRetries = false)
+        bool disableRetries = false,
+        Action<OpenAIClientOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(credential);
 
         var client = new OpenAIClient(
             new BearerTokenPolicy(credential, AzureAIScope),
-            CreateOptions(resourceEndpoint, networkTimeout, disableRetries));
+            CreateOptions(resourceEndpoint, networkTimeout, disableRetries, configure));
         return client.GetResponsesClient();
     }
 
@@ -90,10 +94,13 @@ internal static class AzureOpenAIResponsesClientFactory
         return new Uri($"{resourceEndpoint.GetLeftPart(UriPartial.Authority).TrimEnd('/')}/openai/v1/");
     }
 
+    // configure runs last, so a test that puts a fake transport under the client sees every setting
+    // above exactly as production has it (TextCleanupService.OpenAIClientOptionsOverride).
     private static OpenAIClientOptions CreateOptions(
         Uri resourceEndpoint,
         TimeSpan? networkTimeout,
-        bool disableRetries)
+        bool disableRetries,
+        Action<OpenAIClientOptions>? configure)
     {
         var options = new OpenAIClientOptions
         {
@@ -110,6 +117,7 @@ internal static class AzureOpenAIResponsesClientFactory
             options.RetryPolicy = new ClientRetryPolicy(maxRetries: 0);
         }
 
+        configure?.Invoke(options);
         return options;
     }
 }
