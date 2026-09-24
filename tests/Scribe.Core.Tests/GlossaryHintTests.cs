@@ -49,14 +49,17 @@ public sealed class GlossaryHintTests
     public void With_post_processing_off_it_says_the_dictionary_is_not_applied_here()
     {
         Assert.Equal(
-            "1 of 1 entries enabled. Post-processing is off, so none of them are applied on this PC.",
+            "1 of 1 entries enabled. Post-processing is off, so it is not applied on this PC.",
             Describe([Row("azure", "Azure")], [], aiCleanupOn: false, postProcessingOn: false));
+        Assert.Equal(
+            "2 of 2 entries enabled. Post-processing is off, so none of them are applied on this PC.",
+            Describe([Row("azure", "Azure"), Row("um", string.Empty)], [], aiCleanupOn: false, postProcessingOn: false));
 
         // And AI cleanup still receives the vocabulary, as the post-processing switch itself says.
         Assert.Equal(
-            "1 of 1 entries enabled. Post-processing is off, so none of them are applied on this PC. Your AI " +
+            "1 of 1 entries enabled. Post-processing is off, so it is not applied on this PC. Your AI " +
             "provider receives that term as vocabulary with every cleanup request, whether or not the dictation " +
-            "mentions them.",
+            "mentions it.",
             Describe([Row("azure", "Azure")], [], postProcessingOn: false));
     }
 
@@ -150,7 +153,7 @@ public sealed class GlossaryHintTests
     {
         Assert.Equal("0 of 0 entries enabled. AI cleanup receives no vocabulary.", Describe([], []));
         Assert.Equal(
-            "1 of 1 entries enabled. All of them are applied on this PC. AI cleanup receives no vocabulary.",
+            "1 of 1 entries enabled. It is applied on this PC. AI cleanup receives no vocabulary.",
             Describe([Row("um", string.Empty)], []));
     }
 

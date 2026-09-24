@@ -79,10 +79,12 @@ public static class GlossaryHint
             var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The on-device model" : "Your AI provider";
             if (glossary.Included == glossary.Eligible)
             {
-                var terms = glossary.Eligible == 1 ? "that term" : $"all {Count(glossary.Eligible)} terms";
+                var (terms, them) = glossary.Eligible == 1
+                    ? ("that term", "it")
+                    : ($"all {Count(glossary.Eligible)} terms", "them");
                 text.Append(
                     $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
-                    "dictation mentions them.");
+                    $"dictation mentions {them}.");
             }
             else
             {
@@ -133,9 +135,13 @@ public static class GlossaryHint
             return text;
         }
 
-        return text.Append(postProcessingOn
-            ? " All of them are applied on this PC."
-            : " Post-processing is off, so none of them are applied on this PC.");
+        return text.Append((postProcessingOn, entries == 1) switch
+        {
+            (true, true) => " It is applied on this PC.",
+            (true, false) => " All of them are applied on this PC.",
+            (false, true) => " Post-processing is off, so it is not applied on this PC.",
+            (false, false) => " Post-processing is off, so none of them are applied on this PC.",
+        });
     }
 
     private static string Count(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
