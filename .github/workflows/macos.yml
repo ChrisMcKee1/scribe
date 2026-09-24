@@ -25,14 +25,17 @@ on:
       real_asr:
         description: >-
           Also run the optional real speech recognition job: it installs Foundry Local and its speech model and
-          transcribes the committed fixtures. Optional and never required; a hosted runner may not fit the model.
+          transcribes the committed short fixtures. Optional and never required.
         type: boolean
         default: false
 permissions:
   contents: read
 
+# A newer push cancels the run it replaces. The event is part of the group, so a push does not cancel a run
+# dispatched by hand (the only way to run the optional real speech recognition job), and a dispatch does not
+# cancel a push's run.
 concurrency:
-  group: macos-${{ github.ref }}
+  group: macos-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 # An explicit bash runs every step with -o pipefail, so a build or a test run piped through tee
@@ -203,8 +206,8 @@ jobs:
   # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech
   # model in the Actions cache between runs, and transcribes the committed fixtures through the
   # production TranscriptionEngine (ScribeScenarioTests.RealRecognizerScenarioTests), reporting cold
-  # and warm latency, word overlap, peak memory and disk. A 7 GB hosted runner may not fit the model;
-  # finding that out is part of what the job is for.
+  # and warm latency, word overlap, peak memory and disk. It fits a hosted runner: Foundry Local picks
+  # the model's 692 MB CPU variant there, and its processes peak at about 1.1 GB resident.
   real-asr:
     name: real speech recognition (optional)
     if: github.event_name == 'workflow_dispatch' && inputs.real_asr
