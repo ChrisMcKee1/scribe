@@ -19,10 +19,11 @@ enum ScenarioLimits {
     /// run everything several times slower; a passing run never comes near it.
     static let watchdogSeconds: Double = 120
 
-    /// How far a resampled capture's length may stray from the exact count, in 16 kHz samples: 1 ms. The runners
-    /// measure no difference at all through both converters; a lost or repeated buffer shows in the buffer counts and
-    /// the correlation as well.
-    static let resamplerSlack = 16
+    /// How far a resampled capture's length may stray from the exact count, in 16 kHz samples. The runners measure no
+    /// difference at all through both converters, on both runners and under both sanitizers. Losing the converter's
+    /// tail, which the flush at the end of a recording keeps, leaves a capture 5 or 6 samples short, so the slack stays
+    /// below that; a lost or repeated buffer shows in the buffer counts and the correlation as well.
+    static let resamplerSlack = 2
 
     /// The least correlation a resampled capture may have with its fixture. The round trip through two rate converters
     /// measures 0.996 or more on the runners; a capture that lost or repeated a buffer, took the wrong channel or ran
