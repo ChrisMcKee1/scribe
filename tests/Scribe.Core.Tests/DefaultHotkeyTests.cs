@@ -284,6 +284,7 @@ public sealed class DefaultHotkeyTests
         Assert.Contains("even with Ctrl or Shift held", hint);
         Assert.Contains("Pause dictation from the tray icon to use them in other apps", hint);
         Assert.Contains("Fn with the Down and Up arrows", hint);
+        Assert.Contains("the keypad's Page Down and Page Up with Num Lock off also work", hint);
     }
 
     [Fact]

@@ -745,8 +745,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   come from the binding. The hook matches virtual-key codes and never reads the name.
 - **The trade-off is stated in Settings.** A suppressed binding never reaches other apps, and a binding without
   modifiers also fires with Ctrl or Shift held, so the defaults take Page Up, Page Down and Ctrl+Page Up or Down
-  (tab switching) away from every other app while Scribe runs unpaused. Letting a tap or a modified press through
-  would be a change to `ChordStateMachine` with tests of its own, not a tweak.
+  (tab switching) away from every other app while Scribe runs unpaused. The hook reads only the virtual-key code
+  (never `LLKHF_EXTENDED`), so the numeric keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys
+  to it, and the hint says so. Letting a tap or a modified press through would be a change to `ChordStateMachine` with
+  tests of its own, not a tweak.
 
 ## Startup (read before touching OnStartup)
 

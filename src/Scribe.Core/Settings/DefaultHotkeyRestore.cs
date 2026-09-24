@@ -34,7 +34,8 @@ public static class DefaultHotkeyRestore
     /// <summary>
     /// The hint above the button: what it restores, and what binding those keys costs. The hook swallows a bound key,
     /// so other apps never see it, and a binding without modifiers fires whatever else is held, so Ctrl or Shift with
-    /// the key is swallowed too.
+    /// the key is swallowed too. The hook matches the virtual-key code alone, so the numeric keypad's Page Down and
+    /// Page Up (its 3 and 9 with Num Lock off) are the same keys to it.
     /// </summary>
     public static string Hint
     {
@@ -46,7 +47,7 @@ public static class DefaultHotkeyRestore
                 $"so with the defaults {dictation} and {dictationOnly} no longer page through documents, web pages or " +
                 "terminals, even with Ctrl or Shift held. Pause dictation from the tray icon to use them in other apps " +
                 $"for a while. Most laptops without {dictation} and {dictationOnly} have them on Fn with the Down and Up " +
-                "arrows.";
+                $"arrows, and the keypad's {dictation} and {dictationOnly} with Num Lock off also work.";
         }
     }
 
