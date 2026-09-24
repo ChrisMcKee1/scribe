@@ -166,8 +166,8 @@ enum ScribeLog {
         publish(rendering, toStandardError: level != .debug)
     }
 
-    /// Writes `line` to standard error as given. Kept for `AppDelegate.writeLogLine`, whose lines predate
-    /// this facade and are not all shapes; new code logs through the functions above instead.
+    /// Writes `line` to standard error as given. Kept for `TextInjector`'s log sink, whose lines predate this facade;
+    /// new code logs through the functions above instead.
     static func legacyUnshapedLine(_ line: String) {
         publish(Rendering(line: line, publicText: nil, privateText: nil), toStandardError: true)
     }

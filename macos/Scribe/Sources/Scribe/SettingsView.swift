@@ -1001,7 +1001,7 @@ private struct CleanupSettingsTab: View {
 /// highlights, and per-step timings. Mirrors Windows' Playground panel (see
 /// src/Scribe.App/Settings/SettingsWindow.xaml, "Playground" section), which is populated from
 /// `DictationController.PipelineReported`. On macOS the analogous signal is `PipelineReportStore`,
-/// published from `AppDelegate.transcribeAndInject` after every real dictation (hotkey or the
+/// published by `DictationController` after every real dictation (hotkey or the
 /// "Start Test Dictation" menu item). There is no separate "Run" button here because macOS's
 /// push-to-talk hotkey already works regardless of which window is focused, so simply dictating
 /// normally while this tab is open is enough to see a report land.
@@ -1041,10 +1041,10 @@ private struct PlaygroundSettingsTab: View {
                         VStack(alignment: .leading, spacing: 4) {
                             timingRow("Capture", report.captureDuration)
                             timingRow("Speech Recognition (Decode)", report.decodeDuration)
-                            timingRow("Dictionary / Snippets", report.postProcessingDuration)
                             if let cleanupDuration = report.cleanupDuration {
                                 timingRow(report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)", cleanupDuration)
                             }
+                            timingRow("Dictionary / Snippets", report.postProcessingDuration)
                             timingRow("Text Insertion", report.injectionDuration)
                             Divider()
                             timingRow("Total", report.totalDuration)
