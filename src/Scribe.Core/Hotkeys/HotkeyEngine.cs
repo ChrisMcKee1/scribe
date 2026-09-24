@@ -114,9 +114,10 @@ internal sealed class HotkeyEngine
     /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and a dictation a held or
     /// toggled binding had started is ended the way its release or second press would have ended it, reported as
     /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
-    /// A switch with nothing recording starts and stops nothing. The WinEvent callback that calls this runs on the thread
-    /// that set the hook, which is the owner; a call from any other thread once an owner is attached is ignored rather
-    /// than allowed to race the keyboard callback.
+    /// An Activated still waiting for the dispatcher is invalidated first, through the queue's activation epoch, so it
+    /// cannot open the microphone after the lock. A switch with nothing recording starts and stops nothing. The WinEvent
+    /// callback that calls this runs on the thread that set the hook, which is the owner; a call from any other thread
+    /// once an owner is attached is ignored rather than allowed to race the keyboard callback.
     /// </summary>
     public void OnDesktopSwitch()
     {
@@ -128,6 +129,7 @@ internal sealed class HotkeyEngine
 
         // Commands requested before the switch took effect before it, as for a key event.
         ApplyPendingCommands();
+        _transitions.AdvanceActivationEpoch();
         var (transition, _) = _standard.Reset();
         var secondary = _dictationOnly?.Reset();
 
@@ -364,8 +366,10 @@ internal sealed class HotkeyEngine
             return;
         }
 
+        // The activation epoch is read here on the owner thread, the only one that advances it, so an Activated computed
+        // after a desktop switch always carries the new one.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-            transition, trigger, _generation, AllowReconcile: true));
+            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _transitions.ActivationEpoch));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.

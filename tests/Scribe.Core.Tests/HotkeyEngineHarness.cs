@@ -49,11 +49,11 @@ internal sealed class HotkeyEngineHarness : IDisposable
     }
 
     /// <summary>
-    /// What the dispatcher would raise for this transition: a Deactivated always, an Activated only
-    /// while its epoch is still current.
+    /// What the dispatcher would raise for this transition, by the consumer's own rule
+    /// (<see cref="HotkeyService.ShouldDispatch"/>): a Deactivated always, an Activated only while it is still current.
     /// </summary>
     public bool WouldDispatch(HotkeyService.QueuedTransition transition) =>
-        transition.Transition == HotkeyTransition.Deactivated || Router.IsCurrent(transition.Generation);
+        HotkeyService.ShouldDispatch(transition, Router, Transitions);
 
     /// <summary>
     /// Runs <paramref name="body"/> on a dedicated thread and fails the test, rather than hanging,

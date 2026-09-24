@@ -663,7 +663,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   have ended it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
   so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log): the
   audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
-  recovery notice as for any failed insertion. Without this a key held through Win+L or a UAC prompt
+  recovery notice as for any failed insertion. An Activated still waiting for the consumer never
+  starts a recording after the switch: before anything it queues for the switch, the hook thread
+  advances the transition queue's activation epoch (one interlocked add; the requesters' generation
+  and the router's lock are never touched from the hook), every queued Activated carries the epoch it
+  was computed in, and the consumer drops one that is older (`HotkeyService.ShouldDispatch`); stops
+  always go out. Without all this a key held through Win+L or a UAC prompt
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
   as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from

@@ -159,6 +159,53 @@ public sealed class HotkeyDesktopSwitchTests
     }
 
     [Fact]
+    public void An_activation_still_queued_when_the_desktop_switches_never_starts_a_recording()
+    {
+        // The consumer thread is behind: Page Down's Activated is still in the queue when Win+L switches the desktop.
+        // Raised now it would open the microphone after the lock, only for the switch's stop to close it again, so the
+        // consumer's own rule must discard it; the stop stays dispatchable.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        h.Down(PageDown);
+        h.Engine.OnDesktopSwitch();
+        h.Engine.OnDesktopSwitch();
+
+        var queued = h.TakeTransitions();
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            queued.Select(t => t.Transition).ToArray());
+        Assert.False(h.WouldDispatch(queued[0]));
+        Assert.True(h.WouldDispatch(queued[1]));
+
+        // A genuinely new press after the switch still starts normally.
+        Assert.True(h.Down(PageDown).Suppress);
+        var fresh = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Activated, fresh.Transition);
+        Assert.True(h.WouldDispatch(fresh));
+    }
+
+    [Fact]
+    public void The_consumer_raises_no_activation_queued_before_a_desktop_switch()
+    {
+        // The real consumer step: an Activated whose activation epoch is older than the queue's is dropped, one that is
+        // current is raised, and stops are raised whatever their epoch.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        using var queue = new HotkeyTransitionQueue();
+        var raised = new List<string>();
+        service.Activated += (_, e) => raised.Add("start " + e.Trigger);
+        service.Deactivated += (_, e) => raised.Add("stop " + e.Trigger);
+        queue.AdvanceActivationEpoch(); // the switch
+
+        service.DispatchTransition(new HotkeyService.QueuedTransition(
+            HotkeyTransition.Activated, HotkeyTrigger.Standard, 0, AllowReconcile: true, ActivationEpoch: 0), queue);
+        service.DispatchTransition(new HotkeyService.QueuedTransition(
+            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 0, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch), queue);
+        service.DispatchTransition(new HotkeyService.QueuedTransition(
+            HotkeyTransition.Activated, HotkeyTrigger.DictationOnly, 0, AllowReconcile: true, ActivationEpoch: 1), queue);
+
+        Assert.Equal(new[] { "stop Standard", "start DictationOnly" }, raised.ToArray());
+    }
+
+    [Fact]
     public void A_desktop_switch_stop_reaches_subscribers_with_its_reason()
     {
         // The consumer thread's step: a desktop-switch stop is raised like any Deactivated, with its reason, so the
@@ -168,9 +215,11 @@ public sealed class HotkeyDesktopSwitchTests
         service.Deactivated += (_, e) => seen.Add((e.Trigger, e.Deactivation));
 
         service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly, 1, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch));
+            HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly, 1, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch),
+            new HotkeyTransitionQueue());
         service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 1, AllowReconcile: false));
+            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 1, AllowReconcile: false),
+            new HotkeyTransitionQueue());
 
         Assert.Equal(
             new[]
