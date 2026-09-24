@@ -586,6 +586,14 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   with its dictation id: it attaches only while that recording is live, whatever ends the recording
   drops it, and a firing tracker detaches itself and its stop names its own recording. The controller
   subscribes to level updates once, for its lifetime.
+- **A stop Scribe makes itself releases the hotkey's toggle.** The controller's shared `StopAndProcess`
+  asks `DictationStopPolicy.ReleasesHotkeyToggle` (Core, tested) and calls `IHotkeyService.CancelToggle`
+  before admitting the stop for the silence auto-stop, a microphone fault, a pause and the duration
+  ceiling: the hook still believes its toggle is on and would swallow the next press as the toggle-off of
+  a dictation that already ended (the fault path used to skip this). The two stops the hook sends itself,
+  a release or second press and a desktop switch, release nothing: the hook ended or reset its own latch
+  first, and releasing again could cancel a fresh press it took after sending the stop. A new
+  `DictationStopReason` releases the toggle by default and must be classified in `DictationStopPolicyTests`.
 - **`ClosableTimer` records each schedule's due time.** A tick with nothing armed is dropped, an early
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a

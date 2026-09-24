@@ -572,7 +572,6 @@ internal sealed class DictationController : IDisposable
 
         if (stopRecording)
         {
-            _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.Paused);
         }
         else if (change.Presentation is { } shown)
@@ -828,35 +827,9 @@ internal sealed class DictationController : IDisposable
                 tracker.NoiseFloor, tracker.VoiceThreshold);
         }
 
-        // Reset the hook's toggle flag so the next press starts a new dictation rather than being
-        // swallowed as the "toggle off" for the dictation we just ended ourselves.
-        _hotkeys.CancelToggle();
+        // The shared stop path releases the hook's toggle for this stop (see DictationStopPolicy), so the next press starts
+        // a new dictation rather than being swallowed as the toggle-off of this one.
         StopAndProcess(DictationStopReason.SilenceAutoStop, stop.DictationId);
-    }
-
-    /// <summary>Why a recording ended. Written to the log on every stop, without exception.</summary>
-    internal enum DictationStopReason
-    {
-        /// <summary>The user released the hold key, or pressed the toggle key a second time.</summary>
-        HotkeyReleased,
-
-        /// <summary>Toggle mode with auto-stop enabled decided the speaker had gone quiet.</summary>
-        SilenceAutoStop,
-
-        /// <summary>The capture stream faulted: device removed, format change, driver reset.</summary>
-        MicrophoneFault,
-
-        /// <summary>Dictation was paused from the tray while a recording was live.</summary>
-        Paused,
-
-        /// <summary>The recording reached the MaxDictationMinutes ceiling and was ended cleanly.</summary>
-        DurationLimit,
-
-        /// <summary>
-        /// The input desktop switched (the lock screen, a secure desktop) while the key was held or the toggle was on. The
-        /// hook cannot see the key's release there, so it ended the recording as the binding would have.
-        /// </summary>
-        DesktopSwitch,
     }
 
     // Fired on a timer thread when a recording has run for the full MaxDictationMinutes. Ends the
@@ -883,7 +856,6 @@ internal sealed class DictationController : IDisposable
 
             RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id, pillText: null);
 
-            _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.DurationLimit, id);
         }
         catch (Exception ex)
@@ -899,10 +871,18 @@ internal sealed class DictationController : IDisposable
     /// pause, the duration ceiling and a desktop switch. The reason is logged with the hold
     /// duration, because "it stopped after about ten seconds" is the single most common way a
     /// dictation problem gets reported and the causes are indistinguishable from the outside.
+    /// A stop Scribe makes itself first releases the hotkey's toggle latch, as
+    /// <see cref="DictationStopPolicy.ReleasesHotkeyToggle"/> decides, so the next press starts a new
+    /// dictation instead of being swallowed as the toggle-off of this one.
     /// </summary>
     /// <param name="expectedId">When set, only this dictation may be stopped; a stop meant for an earlier one is ignored.</param>
     private void StopAndProcess(DictationStopReason reason, long expectedId = 0)
     {
+        if (DictationStopPolicy.ReleasesHotkeyToggle(reason))
+        {
+            _hotkeys.CancelToggle();
+        }
+
         // Only the stop that actually ends the live recording is admitted, and only that one disarms its duration
         // ceiling, so a late or redundant stop can never cancel the ceiling of a recording that started after it.
         var stop = _lifecycle.TryBeginProcessing(expectedId);

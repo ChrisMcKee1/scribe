@@ -342,9 +342,10 @@ public sealed class HotkeyService : IHotkeyService
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
-                // Shape only, and only Debug: the engine sends this whenever its arbiter still named an owner, which a
-                // stop the hook never saw (a microphone fault ending a toggle) can leave behind with nothing recording.
-                // The controller's reason=DesktopSwitch line is the record of a recording actually ended.
+                // Shape only, and only Debug: the engine sends this whenever its arbiter names an owner, and that can be
+                // with nothing recording (an activation the controller refused while it was still processing leaves its
+                // binding latched, and an activation dropped above as queued before the switch is still followed by
+                // this stop). The controller's reason=DesktopSwitch line is the record of a recording actually ended.
                 if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
                 {
                     _logger.LogDebug("Desktop switch: stop sent ({Trigger}).", item.Trigger);

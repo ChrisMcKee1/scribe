@@ -360,6 +360,26 @@ public sealed class HotkeyDesktopSwitchTests
     }
 
     [Fact]
+    public void A_toggle_released_by_a_stop_scribe_made_itself_starts_afresh_and_leaves_no_owner()
+    {
+        // A microphone fault, the silence auto-stop, a pause or the duration ceiling ends a toggle recording without the
+        // hook. The controller's stop path then releases the toggle (DictationStopPolicy), which is this CancelToggle: a
+        // desktop switch finds no owner and sends nothing, and the next tap starts a new dictation.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation with { Mode = HotkeyMode.Toggle });
+        h.Down(PageDown);
+        h.Up(PageDown); // toggled on; then the microphone faults and the controller ends the recording
+        h.Router.CancelToggle();
+
+        h.Engine.OnDesktopSwitch();
+        h.Down(PageDown);
+        h.Up(PageDown);
+
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Activated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+    }
+
+    [Fact]
     public void A_notice_whose_desktop_cannot_be_checked_applies_nothing()
     {
         // GetThreadDesktop or GetUserObjectInformation failed. Ending a live dictation on an unproven switch loses what
