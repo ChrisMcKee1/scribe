@@ -9,6 +9,9 @@ namespace Scribe.Core.Hotkeys;
 /// </summary>
 public static class HotkeyText
 {
+    private const uint VkPrior = 0x21; // Page Up
+    private const uint VkNext = 0x22; // Page Down
+
     /// <summary>
     /// The name of one key: its canonical name when it means the same on every layout, otherwise what
     /// <paramref name="layoutName"/> says (the shell asks the current keyboard layout), otherwise null.
@@ -62,11 +65,39 @@ public static class HotkeyText
             body += $" {Verb(dictationOnly.Mode)} {Describe(dictationOnly, layoutName)} instead to dictate without AI cleanup.";
         }
 
+        if (PageKeyFallback(dictation, settings.DictationOnlyHotkey) is { } fallback)
+        {
+            body += " " + fallback;
+        }
+
         return (title, body);
     }
 
     /// <summary>"Hold" or "Press", for a sentence that starts with how a binding is used.</summary>
     internal static string Verb(HotkeyMode mode) => mode == HotkeyMode.Toggle ? "Press" : "Hold";
+
+    // Where a keyboard without Page Down or Page Up has them, for the Page keys these bindings use, in the order they use
+    // them: many laptops have no such keys, and every other place that names the defaults says so.
+    private static string? PageKeyFallback(HotkeyBinding dictation, HotkeyBinding? dictationOnly)
+    {
+        var pageKeys = new List<uint>(2);
+        foreach (var key in new[] { dictation.VirtualKey, dictation.SecondaryVirtualKey, dictationOnly?.VirtualKey, dictationOnly?.SecondaryVirtualKey })
+        {
+            if (key is VkNext or VkPrior && !pageKeys.Contains(key.Value))
+            {
+                pageKeys.Add(key.Value);
+            }
+        }
+
+        static string Arrow(uint key) => key == VkNext ? "Down" : "Up";
+        return pageKeys.Count switch
+        {
+            0 => null,
+            1 => $"No {KeyNames.Of(pageKeys[0])} key? Most laptops have it on Fn with the {Arrow(pageKeys[0])} arrow.",
+            _ => $"No {KeyNames.Of(pageKeys[0])} or {KeyNames.Of(pageKeys[1])} key? Most laptops have them on Fn with " +
+                 $"the {Arrow(pageKeys[0])} and {Arrow(pageKeys[1])} arrows.",
+        };
+    }
 
     // Each key's part of the stored name, for a key nothing else can name. Every build stored the keys in the order they
     // were pressed, joined by "+", after any modifiers ("Ctrl+X"), and none put a "+" inside a key's name. The modifiers

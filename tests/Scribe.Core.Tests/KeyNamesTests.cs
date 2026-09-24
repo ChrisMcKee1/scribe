@@ -232,14 +232,15 @@ public sealed class KeyNamesTests
     }
 
     [Fact]
-    public void The_welcome_teaches_both_default_keys()
+    public void The_welcome_teaches_both_default_keys_and_where_a_laptop_has_them()
     {
         var (title, body) = HotkeyText.Gesture(AppSettings.CreateDefault());
 
         Assert.Equal("Hold, speak, release", title);
         Assert.Equal(
             "Hold Page Down and start talking. Release when you are done, and the text appears wherever your cursor " +
-            "is. Hold Page Up instead to dictate without AI cleanup.",
+            "is. Hold Page Up instead to dictate without AI cleanup. No Page Down or Page Up key? Most laptops have " +
+            "them on Fn with the Down and Up arrows.",
             body);
     }
 
@@ -258,13 +259,41 @@ public sealed class KeyNamesTests
         Assert.Equal("Hold, speak, release", legacyTitle);
         Assert.StartsWith("Hold Right Ctrl and start talking.", legacyBody);
         Assert.DoesNotContain("without AI cleanup", legacyBody);
+        Assert.DoesNotContain("Fn", legacyBody);
 
         Assert.Equal("Press, speak, press again", toggleTitle);
         Assert.StartsWith("Press Page Down and start talking. Press it again when you are done", toggleBody);
-        Assert.EndsWith("Press Page Up instead to dictate without AI cleanup.", toggleBody);
+        Assert.Contains("Press Page Up instead to dictate without AI cleanup.", toggleBody);
 
         Assert.Equal("Hold, speak, release", unknownTitle);
         Assert.StartsWith("Hold your push-to-talk key", unknownBody);
+        Assert.DoesNotContain("Fn", unknownBody);
+    }
+
+    [Theory]
+    // Only the Page keys in use are named, in the order the bindings use them.
+    [InlineData(0x22u, null, "No Page Down key? Most laptops have it on Fn with the Down arrow.")]
+    [InlineData(0x78u, 0x21u, "No Page Up key? Most laptops have it on Fn with the Up arrow.")]
+    [InlineData(0x21u, 0x22u, "No Page Up or Page Down key? Most laptops have them on Fn with the Up and Down arrows.")]
+    [InlineData(0x78u, 0x79u, null)] // F9 and F10: nothing to say
+    public void The_welcome_says_where_a_laptop_has_the_page_keys_it_uses(uint dictation, uint? dictationOnly, string? sentence)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = new HotkeyBinding(dictation, KeyModifiers.None, HotkeyMode.Hold, Suppress: true);
+        settings.DictationOnlyHotkey = dictationOnly is { } key
+            ? new HotkeyBinding(key, KeyModifiers.None, HotkeyMode.Hold, Suppress: true)
+            : null;
+
+        var (_, body) = HotkeyText.Gesture(settings);
+
+        if (sentence is null)
+        {
+            Assert.DoesNotContain("Fn", body);
+        }
+        else
+        {
+            Assert.EndsWith(sentence, body);
+        }
     }
 
     [Fact]
