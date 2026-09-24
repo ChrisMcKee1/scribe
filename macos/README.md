@@ -2,7 +2,7 @@
 
 A native Swift menu bar port of [Scribe](../README.md), Windows' offline push-to-talk dictation
 app. Built with Swift Package Manager and bundled into a minimal, ad-hoc-signed `.app` by a shell
-script. Feature parity with the Windows app is close (see `PORTING-PLAN.md` for the full,
+script. Feature parity with the Windows app is close (see `PORTING-PLAN.md` for the parity table, the
 row-by-row checklist and known gaps); this is a working daily-driver app, not a prototype.
 
 ## Requirements
@@ -11,7 +11,9 @@ row-by-row checklist and known gaps); this is a working daily-driver app, not a 
 - Apple Silicon (`arm64`)
 - Xcode Command Line Tools or Xcode with `swift` available on PATH
 - [Foundry Local](https://github.com/microsoft/homebrew-foundrylocal) for on-device ASR and the
-  default AI cleanup provider: `brew tap microsoft/foundrylocal && brew install foundrylocal`
+  default AI cleanup provider: `brew install microsoft/foundrylocal/foundrylocal`. Use the fully
+  qualified name: since Homebrew 6.0, a short name from a third-party tap is refused until the tap is
+  trusted (`brew trust`), while installing by the full name trusts that one formula
 - Optional: [Ollama](https://ollama.com) as an alternative local AI cleanup provider
 
 ## Build
@@ -103,10 +105,55 @@ privacy/offline promise.
   unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
   reclaimed only while no dictation is running. Settings > History chooses the limit (7, 30, 90 days,
   1 year or Forever) and clears all history after a confirmation, which also empties Recent Dictations
+- Scribe removes only what it made: the private recording it hands the recognizer, as soon as the recognizer
+  returns, and any a crash left behind, at the next launch. It never deletes Foundry Local's or Ollama's model
+  caches, which you installed and which other apps share
+
+## Tests
+
+```bash
+swift test --package-path macos/Scribe --parallel
+```
+
+runs both test targets, each test in a worker process of its own; CI runs them the same way on macOS 15 and 26
+and under the thread and address sanitizers.
+
+- `Tests/ScribeTests`: the unit tests. Every suite uses a defaults suite, Keychain service, temporary directory
+  and pasteboard of its own, so no test reads or changes your settings or credentials.
+- `Tests/ScribeScenarioTests`: headless scenarios on the committed speech fixtures in `tests/fixtures/speech`
+  (the phrases of `fixtures.json` and `scenario-fixtures.json`, which the Windows scenario suite also uses). They
+  play the fixtures through the real capture engine on scripted devices at 16, 44.1 and 48 kHz, mono and stereo,
+  with the voice on either channel; run silence auto-stop on room tone, steady noise, a quiet microphone and speech
+  followed by silence; drive the whole dictation pipeline with a stand-in recognizer that answers with each
+  fixture's text; and read and sweep 50,000 rows of history. They need no microphone, recognizer, permission or
+  network. They find the fixtures from their own source path; `SCRIBE_FIXTURES_DIR` points them at another copy,
+  and they are skipped when there are none. Their timings and levels are printed, and written to the folder
+  `SCRIBE_SCENARIO_REPORT_DIR` names when it is set.
+- With Foundry Local and its model installed,
+  `SCRIBE_REAL_ASR=1 swift test --package-path macos/Scribe --filter RealRecognizerScenarioTests` transcribes the
+  short fixtures with the real recognizer and holds each asserted phrase to Windows' word-overlap bar. The
+  workflow's optional real speech recognition job does the same on a hosted runner, only when it is dispatched by
+  hand; it fits one, with the model taking about 700 MB of disk and Foundry Local about 1.1 GB of memory.
+
+The runners cannot grant Microphone, Accessibility or Input Monitoring access and have no screen to look at, so the
+event tap, a real microphone, insertion into real apps and the menu bar and overlay UI still need a real Mac.
+
+## Formatting
+
+`macos/Scribe/.swift-format` is the style: four-space indentation and 120 columns. Format with the Swift 6.1
+toolchain's formatter (Xcode 16.4), which CI's style job lints with, strictly:
+
+```bash
+swift format format --in-place --recursive --configuration macos/Scribe/.swift-format \
+    macos/Scribe/Sources macos/Scribe/Tests
+swift format lint --strict --recursive --configuration macos/Scribe/.swift-format \
+    macos/Scribe/Sources macos/Scribe/Tests
+```
 
 ## Known gaps vs. Windows
 
-See `PORTING-PLAN.md` for the authoritative, row-by-row feature checklist. As of this writing the
-main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in
-one call rather than split on pauses as Windows does; and there is no release packaging/notarization or
-auto-update story yet (dev builds are ad-hoc signed for local Accessibility persistence only).
+See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
+the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
+call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
+recognition; and there is no release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed
+for local Accessibility persistence only).
