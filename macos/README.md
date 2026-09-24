@@ -65,8 +65,10 @@ privacy/offline promise.
   against what was sent and its dashes rewritten, and then your snippets and every other dictionary replacement
   made where the reply kept the words that set them off (where the model rewrote, dropped or repeated those
   words, its words stay). Those others are the template-like replacements: one that is more than one line,
-  longer than 100 characters, holds an em or en dash, deletes the words, or has spacing the text's
-  normalization would change (a tab, a run of spaces, a space at either end or before punctuation). With
+  longer than 100 characters, holds an em or en dash, deletes the words, or has spacing the reply's
+  normalization would change (a tab, a run of spaces, a space at either end, or a space before a punctuation
+  mark that no letter or digit follows). The reply's normalization keeps the space before a mark that begins a
+  word, so ".NET" after a word, whether your dictionary or the model wrote it, is not glued to it. With
   cleanup off, snippets and then your dictionary, as on Windows; then line breaks for the target app. A cleanup
   request contains the dictation with your vocabulary corrections applied, never a snippet body or a
   template-like replacement; no rule runs twice, none is matched against the model's text, and a model that
@@ -128,11 +130,12 @@ privacy/offline promise.
   text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
   unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
   reclaimed only while no dictation is running. Deleted text is written over with zeros rather than left in
-  the database's free space, and after a history deletion (Clear History, the retention sweep, reclaiming
-  space) Scribe checkpoints the database's write-ahead log and truncates it, so the text is gone from both
-  files once that checkpoint succeeds; a dictation or another reader of the database can hold it off, and it
-  is retried. Other deletions, such as a dictionary entry, leave the log to SQLite, and text deleted by an
-  earlier build, before this was set, can remain in free pages until they are reused or reclaimed.
+  the database's free space, and after a history deletion (Clear History, the retention sweep), after space is
+  reclaimed, and after a dictionary entry, snippet or app profile is deleted or an entry is changed, Scribe
+  checkpoints the database's write-ahead log and truncates it, so the old text is gone from both files once
+  that checkpoint succeeds; a dictation or another reader of the database can hold it off, and it is retried.
+  Text deleted by an earlier build, before this was set, can remain in free pages until they are reused or
+  reclaimed.
   Settings > History chooses the limit (7, 30, 90 days, 1 year or Forever) and clears all history after a
   confirmation, which also empties Recent Dictations and the Playground's last dictation and closes an open
   Quick Add window

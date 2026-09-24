@@ -74,13 +74,14 @@ Key macOS architecture facts before you edit it:
 - **Pipeline.** With AI cleanup off: snippets, then the dictionary and libraries, as on Windows. With
   cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it
   (`TextPostProcessor.correctVocabulary`): the vocabulary rules' replacements (one line of at most 100
-  characters, no em or en dash, already in normal form) are made in the text the provider is sent and its
-  reply is checked against, and the snippets' and every template-like replacement are held back and made on
-  the reply where it kept the words that set them off (`finishAfterCleanup`). No rule is ever matched against
-  the model's text, so a model that returns what it was sent gets exactly the cleanup-off text from the rules
-  (`TextPostProcessorPropertyTests`; the response guard still rewrites dashes in the reply). No glossary is sent
-  (porting Windows' is an open decision). Never let a snippet body or a template-like replacement reach a
-  provider. The rules are compiled off the main actor (`DictationRuleSnapshot`) and installed in one step.
+  characters, no em or en dash, already in the reply's normal form, which keeps a space before ".NET") are made
+  in the text the provider is sent and its reply is checked against, and the snippets' and every template-like
+  replacement are held back and made on the reply where it kept the words that set them off
+  (`finishAfterCleanup`). No rule is ever matched against the model's text, so a model that returns what it was
+  sent gets exactly the cleanup-off text from the rules (`TextPostProcessorPropertyTests`; the response guard
+  still rewrites dashes in the reply). No glossary is sent (porting Windows' is an open decision). Never let a
+  snippet body or a template-like replacement reach a provider. The rules are compiled off the main actor
+  (`DictationRuleSnapshot`) and installed in one step.
 - **Speech recognition.** Foundry Local `parakeet-tdt-0.6b-v2` (English only), its port found with
   `foundry status -o json`. The app bundles no runtime or model: users install Foundry Local, and
   Ollama if they want it for cleanup.
