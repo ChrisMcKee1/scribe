@@ -126,22 +126,27 @@ public sealed class HotkeyDesktopSwitchTests
             h.TakeTransitions().Select(t => (t.Transition, t.Trigger, t.Deactivation)).ToArray());
     }
 
-    [Fact]
-    public void Both_keys_held_through_a_desktop_switch_end_the_one_dictation_once()
+    [Theory]
+    [InlineData(PageDown, PageUp, HotkeyTrigger.Standard)]
+    [InlineData(PageUp, PageDown, HotkeyTrigger.DictationOnly)]
+    public void Both_keys_held_through_a_desktop_switch_end_the_owners_dictation_once(
+        uint owner, uint refused, HotkeyTrigger expected)
     {
-        // Page Up pressed while Page Down dictates is refused by the arbiter; the switch ends the one dictation there is.
+        // The second key pressed is refused by the arbiter, but its machine still latches the press and reports itself
+        // active when reset. The switch stops the arbiter's real owner, whichever machine it is and whichever reports,
+        // so the dictation that is actually recording never records through the lock.
         using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
-        h.Down(PageDown);
-        h.Down(PageUp);
+        h.Down(owner);
+        h.Down(refused);
         h.Engine.OnDesktopSwitch();
 
         Assert.Equal(
             new[]
             {
-                (HotkeyTransition.Activated, HotkeyTrigger.Standard),
-                (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+                (HotkeyTransition.Activated, expected, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, expected, HotkeyDeactivation.DesktopSwitch),
             },
-            h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+            h.TakeTransitions().Select(t => (t.Transition, t.Trigger, t.Deactivation)).ToArray());
     }
 
     [Fact]
@@ -302,6 +307,56 @@ public sealed class HotkeyDesktopSwitchTests
         var fresh = Assert.Single(h.TakeTransitions());
         Assert.Equal(HotkeyTransition.Activated, fresh.Transition);
         Assert.True(h.WouldDispatch(fresh));
+    }
+
+    [Fact]
+    public void A_first_press_seen_before_the_late_notice_for_the_switch_back_starts_and_holds()
+    {
+        // After unlocking, the first press's key callback can run before the WinEvent for the switch back is delivered.
+        // That notice finds the input back and applies nothing: it neither advances the activation epoch, which would
+        // discard the press's queued start, nor resets the key state, which would take the next autorepeat for a press.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        h.Engine.OnDesktopSwitchNotice(() => false); // locked
+        Assert.Empty(h.TakeTransitions());
+
+        Assert.True(h.Down(PageDown).Suppress); // unlocked, and pressed at once
+        h.Engine.OnDesktopSwitchNotice(() => true); // the notice for the switch back, delivered after that press
+        Assert.True(h.Down(PageDown).Suppress);
+        Assert.True(h.Up(PageDown).Suppress);
+
+        var transitions = h.TakeTransitions();
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyDeactivation.Released),
+            },
+            transitions.Select(t => (t.Transition, t.Deactivation)).ToArray());
+        Assert.True(h.WouldDispatch(transitions[0]));
+        Assert.Equal(1, h.Engine.DesktopSwitches);
+    }
+
+    [Fact]
+    public void A_first_toggle_tap_seen_before_the_late_notice_for_the_switch_back_is_not_lost()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation with { Mode = HotkeyMode.Toggle });
+        h.Engine.OnDesktopSwitchNotice(() => false); // locked
+
+        h.Down(PageDown);
+        h.Up(PageDown); // unlocked, and tapped at once: toggled on
+        h.Engine.OnDesktopSwitchNotice(() => true); // the notice for the switch back, delivered after that tap
+        h.Down(PageDown);
+        h.Up(PageDown); // and off, by the second tap
+
+        var transitions = h.TakeTransitions();
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyDeactivation.Released),
+            },
+            transitions.Select(t => (t.Transition, t.Deactivation)).ToArray());
+        Assert.True(h.WouldDispatch(transitions[0]));
     }
 
     [Fact]
