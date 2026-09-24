@@ -128,10 +128,12 @@ to filter) so you pick a model instead of remembering deployment names. Live in 
 tenant? Choose **service principal** sign-in instead and Scribe authenticates as exactly the
 identity you name, every time ([setup guide](docs/service-principal-setup.md)). Or aim it at **any
 OpenAI-compatible endpoint**: Ollama or LM Studio on localhost, vLLM on your homelab, OpenRouter,
-or api.openai.com with your own key. Only the transcribed *text* is ever sent (never audio), only
-to the endpoint **you** configure, and Scribe asks compatible services not to retain it. And when
-you want the raw transcript, **toggle AI cleanup straight from the tray menu** with no settings trip
-required.
+or api.openai.com with your own key. Scribe sends the recognized *text* (never audio) only to the
+service **you** configure, together with its cleanup instructions, your writing style and your
+enabled dictionary and library terms, and it turns request storage off on Microsoft Foundry. The
+[privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly what each
+request carries. And when you want the raw transcript, **toggle AI cleanup straight from the tray
+menu** with no settings trip required.
 
 > **No Foundry resource yet?** [`docs/foundry-setup.md`](docs/foundry-setup.md) walks you through it
 > from scratch with a script that creates the resource, project and model deployment in one run.
@@ -141,7 +143,10 @@ required.
 
 ### Teach it your words
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
-AI cleanup a glossary of your preferred vocabulary. Build it in seconds: **import a CSV** your team
+AI cleanup a glossary of your preferred vocabulary. With a provider other than Foundry Local, that
+glossary, your enabled dictionary and library terms up to 5,000 of them, goes with every cleanup
+request whether or not you said them, so turn off any entry or library you would rather keep to
+yourself. Build it in seconds: **import a CSV** your team
 shares, grab the self-documenting **template**, or let **Learn from history** spot the acronyms
 and product names you keep saying and add them for you.
 
@@ -175,7 +180,8 @@ Every metric uses the same selected period. It shows totals, active days, speech
 a trend chart and recurring technical terms, and any recurring term your dictionary doesn't cover
 yet gets an **Add** button that locks in its spelling on the spot. Opening or refreshing Usage
 stays fully local. The optional AI insight button sends only aggregate totals and term labels
-already in your dictionary. Terms mined from your dictations but not yet in your dictionary stay
+already in your dictionary, leaving out any whose replacement is longer than one line or 100
+characters. Terms mined from your dictations but not yet in your dictionary stay
 on your machine, and it never sends transcript text, audio, application names or timestamps.
 
 ![Scribe usage insights: totals, trend chart, top apps and recurring terminology with one-click add](docs/screenshots/usage.png)
@@ -296,9 +302,11 @@ and prompt A/B results), and the [local performance benchmark](docs/local-perfor
   and 250 MB.
 - **Transcription is 100% local** (Parakeet via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on CPU).
 - **AI cleanup is optional and yours to control.** The on-device provider (Foundry Local) is fully
-  offline. If you choose Azure or a custom endpoint, only the *transcribed text* (never audio) is
-  sent to the server **you** configure, under **your** credentials, and Scribe asks compatible
-  services not to retain it.
+  offline. If you choose Microsoft Foundry, GitHub Copilot or an OpenAI-compatible endpoint, each
+  cleanup request sends the recognized *text* of that dictation (never audio), Scribe's cleanup
+  instructions with your writing style, and your enabled dictionary and library terms (up to 5,000),
+  whether or not the dictation mentions them. It goes only to the service **you** configure, under
+  **your** credentials, and Scribe turns request storage off on Microsoft Foundry.
 - **Even the stats are local.** Performance and Usage are computed from history already on your disk.
   Usage AI insight runs only when you click it and sends bounded aggregate data without transcripts,
   audio, application names or timestamps.

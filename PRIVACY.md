@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** September 23, 2026
+**Effective date:** September 24, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice
@@ -169,25 +169,46 @@ endpoint.
 
 ## Optional AI features and data transmission
 
-AI features are optional. The default Foundry Local provider runs on the device
-and does not send transcript text to a cloud AI service.
+AI features are optional. The default Foundry Local provider runs on the device,
+so the text it cleans, its instructions and your vocabulary stay on the device.
 
-If you enable Microsoft Foundry, an OpenAI-compatible remote provider, or
-GitHub Copilot, Scribe sends the information needed to perform the action to
-that provider. This may include:
+If you turn on AI cleanup with Microsoft Foundry, an OpenAI-compatible endpoint,
+or GitHub Copilot, every cleanup request sends that provider:
 
-- The current transcript
-- Writing-style instructions and prompts
-- Relevant dictionary or glossary terms
-- Per-application profile instructions
+- The text Scribe recognized for the dictation, before your dictionary and
+  snippets are applied to it. A long dictation can be sent in several parts,
+  each with everything listed below.
+- Scribe's cleanup instructions, including your writing style or, when a
+  per-application profile matches the focused application, that profile's
+  writing style. The name of the application is not sent.
+- Your vocabulary: the enabled entries of your dictionary and of every enabled
+  dictionary library, each as its written form and, where that differs, its
+  spoken form. Scribe includes this vocabulary whether or not the dictation
+  mentions any of it, and whether or not post-processing is switched on, since
+  that switch only decides whether the dictionary is applied on this PC. Your
+  own entries come first, and the list holds up to 5,000 terms and 24,000
+  characters (80 terms when the Local prompt style is in use), with each form
+  put on one line and shortened to 100 characters.
 
-Audio is never included.
+Each time AI cleanup connects to such a provider, for example when Scribe starts
+with AI cleanup on, when you turn AI cleanup on, or when you save a different
+provider or model, Scribe first sends a short test request containing the word
+"ok" and the cleanup instructions, with none of your vocabulary. If a Microsoft
+Foundry deployment does not accept that request's format, Scribe sends the same
+test once more in the other format it supports.
 
-If you request AI dictionary suggestions, Scribe may send a bounded sample of
-recent transcript history to the configured AI provider. If you request an AI
-usage insight, Scribe sends aggregate usage totals and dictionary-covered term
-labels, but not complete transcripts, audio, focused application names, or
-dictation timestamps.
+AI cleanup never sends audio, your snippet templates, your dictation history, or
+the name of the focused application.
+
+If you request AI dictionary suggestions while a provider other than Foundry
+Local is saved, Scribe asks first, then sends its standard suggestion request
+and up to 6,000 characters of your most recent dictations as they were inserted,
+which can include text your dictionary and snippets added. It does not send your
+dictionary itself or your writing style. If you request an AI usage insight,
+Scribe sends aggregate usage totals and the labels of recurring terms your
+dictionary covers, leaving out any label whose replacement text spans more than
+one line or is longer than 100 characters. It sends no transcripts, audio,
+focused application names, or dictation timestamps.
 
 The remote provider processes this information under the account, terms, data
 retention settings, and privacy policy associated with that provider. Depending
@@ -244,6 +265,18 @@ encrypt transcript history, optional stored audio, dictionary content, snippets,
 profiles, or diagnostic logs. Provider API keys and service-principal secrets
 receive the additional Windows Data Protection API protection described above.
 
+When Scribe deletes a history entry, a recording, or a cleanup failure sample,
+whether you delete it or its retention period ends, the database overwrites the
+deleted content inside its file with zeros (SQLite's secure delete). This has
+limits. Scribe versions up to 0.4.3 did not do it, so content they deleted can
+remain in unused space inside the database file until the database writes over
+that space or removes it from the file. The database's write-ahead log
+(`scribe.db-wal`) can hold an earlier copy of deleted content until Scribe
+empties it, which storage maintenance does shortly after you delete history and
+on its regular passes, and Scribe does again when it exits. And deletion inside
+the database does not reach copies made elsewhere, such as the damaged copies
+described below, backups, or data the storage device itself keeps.
+
 If Scribe finds its database damaged when it starts, it rebuilds the database
 from whatever can still be read and keeps the damaged file beside it, named
 `scribe.db.corrupt-` followed by the date and time, so it can be recovered by
@@ -269,6 +302,9 @@ You can:
 
 - Choose when Scribe accesses the microphone by starting and stopping dictation
 - Disable AI cleanup or select the on-device Foundry Local provider
+- Turn off dictionary entries or libraries you do not want sent to a remote AI
+  provider as vocabulary (a term that is off is also no longer applied on this
+  PC)
 - Avoid invoking AI dictionary suggestions and AI usage insights
 - Disable audio history
 - Review and delete individual history entries

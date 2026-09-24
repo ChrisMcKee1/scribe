@@ -1547,11 +1547,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // The glossary sent to AI cleanup is bounded, but the bound depends on where cleanup runs: a
-    // cloud endpoint takes everything, a small on-device model takes a short list so the vocabulary
-    // does not crowd out the transcript. Local find-and-replace is never capped either way. This is
-    // surfaced as a status line rather than enforced as an input limit, because blocking the 81st
-    // entry would break a feature that still works.
+    // What the dictionary gives AI cleanup, counted by Core the way dictation builds it (GlossaryHint):
+    // this page's rows as typed, the libraries switched on, and the provider and prompt style on screen.
+    // Local find-and-replace is never capped. This is a status line rather than an input limit,
+    // because blocking the 81st entry would break a feature that still works.
     private void UpdateDictionaryGlossaryHint()
     {
         if (DictionaryGlossaryHint is null)
@@ -1567,73 +1566,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var enabled = _rows.Count(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Replacement));
-        var total = _rows.Count;
+        var libraryEntries = _loadedLibraries
+            .Where(library => _libraryRows.Any(r => r.Enabled &&
+                string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(library => library.EnabledEntries)
+            .ToList();
 
-        if (AiCleanupCheck?.IsChecked != true)
-        {
-            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled.";
-            return;
-        }
-
-        var style = CleanupPrompt.ResolvePromptStyle(SelectedPromptStyle, SelectedProvider);
-        if (style != CleanupPromptStyle.Local)
-        {
-            DictionaryGlossaryHint.Text =
-                $"{enabled:N0} of {total:N0} entries enabled. All of them are replaced locally, and all " +
-                "of them are sent to AI cleanup as a glossary.";
-            return;
-        }
-
-        // The glossary the model actually receives is the merged list, not just this page's rows, and
-        // the enabled libraries alone can run to several hundred terms. Counting only personal entries
-        // reported "well under the cap" on a stock install that was in fact discarding most of the
-        // library. Mirror DictionaryLibraryComposer's de-duplication (trimmed, case-insensitive,
-        // personal first) so the number quoted here is the number that gets built.
-        var effective = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var row in _rows)
-        {
-            if (row.Enabled && !string.IsNullOrWhiteSpace(row.Pattern) &&
-                !string.IsNullOrWhiteSpace(row.Replacement))
-            {
-                effective.Add(row.Pattern.Trim());
-            }
-        }
-
-        var personalCount = effective.Count;
-        foreach (var library in _loadedLibraries)
-        {
-            if (!_libraryRows.Any(r => r.Enabled &&
-                    string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
-            {
-                continue;
-            }
-
-            foreach (var entry in library.EnabledEntries)
-            {
-                if (!string.IsNullOrWhiteSpace(entry.Pattern))
-                {
-                    effective.Add(entry.Pattern.Trim());
-                }
-            }
-        }
-
-        var cap = CleanupPrompt.MaxGlossaryTermsLocal;
-        var libraryCount = effective.Count - personalCount;
-        var libraryNote = libraryCount > 0 ? $" plus {libraryCount:N0} from enabled libraries" : string.Empty;
-
-        if (effective.Count <= cap)
-        {
-            DictionaryGlossaryHint.Text = $"{enabled:N0} of {total:N0} entries enabled{libraryNote}.";
-            return;
-        }
-
-        DictionaryGlossaryHint.Text =
-            $"{enabled:N0} of {total:N0} entries enabled{libraryNote}. All of them are replaced locally. " +
-            $"On-device cleanup has a small context window, so only the first {cap:N0} of those " +
-            $"{effective.Count:N0} terms are sent to it as a glossary; {effective.Count - cap:N0} are not. " +
-            "Your own entries come first, so they always make the cut. Local replacement still covers " +
-            "the rest, and a cloud provider receives the full list.";
+        DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
+            _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
+            libraryEntries,
+            AiCleanupOn: AiCleanupCheck?.IsChecked == true,
+            SelectedProvider,
+            SelectedPromptStyle));
     }
 
     // --- Libraries -----------------------------------------------------------------------
@@ -5594,11 +5538,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
         if (_cleanup.Status == CleanupStatus.Ready)
         {
-            if (SelectedProvider != CleanupProvider.FoundryLocal &&
+            // Asked by the saved provider, not the one picked on the AI page: the request goes to the
+            // model cleanup is serving, and a provider picked but not saved would let a remote one
+            // receive the sample without this question, or ask it about one that runs on this PC.
+            if (_settings.AiCleanupProvider != CleanupProvider.FoundryLocal &&
                 !await ConfirmRiskyAsync(
-                    "Send recent dictations to your AI provider?",
-                    "To suggest vocabulary, Scribe will send up to 6,000 characters from recent " +
-                    "dictation history to the provider endpoint you configured. Audio is never sent.",
+                    CleanupDisclosure.SuggestionConsentTitle,
+                    CleanupDisclosure.SuggestionConsent,
                     "Send and continue"))
             {
                 return;
