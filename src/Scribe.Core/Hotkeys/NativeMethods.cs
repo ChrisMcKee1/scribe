@@ -152,9 +152,14 @@ internal static partial class NativeMethods
     /// GetThreadDesktop returns needs no closing. This is the check Raymond Chen gives for a desktop-switch notice
     /// ("How can I detect that the system is no longer showing a UAC prompt?", The Old New Thing, 2020).
     /// </summary>
-    internal static bool? ThreadDesktopReceivesInput()
+    internal static bool? ThreadDesktopReceivesInput() => DesktopReceivesInput(GetThreadDesktop(GetCurrentThreadId()));
+
+    /// <summary>
+    /// Whether <paramref name="desktop"/> is the desktop receiving input, from GetUserObjectInformation with UOI_IO; null
+    /// for no handle, or when the query fails (it does for a handle that is not a desktop).
+    /// </summary>
+    internal static bool? DesktopReceivesInput(nint desktop)
     {
-        var desktop = GetThreadDesktop(GetCurrentThreadId());
         if (desktop == 0)
         {
             return null;
