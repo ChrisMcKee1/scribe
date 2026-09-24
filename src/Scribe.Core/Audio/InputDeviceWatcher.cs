@@ -41,8 +41,9 @@ internal interface IEndpointNotifications : IDisposable
 }
 
 /// <summary>
-/// Watches the capture endpoints and raises one debounced <see cref="Changed"/> when the microphones Windows offers, or its
-/// default microphone, have actually changed. Capture never depends on it (each dictation asks Windows for its device
+/// Watches the capture endpoints and raises <see cref="Changed"/> when a reading finds that the microphones Windows offers,
+/// or its default microphone, have actually changed: its own reading once a burst of notifications has gone quiet, or a
+/// caller's reading through <see cref="Read"/>. Capture never depends on it (each dictation asks Windows for its device
 /// afresh); it exists so an open Settings window, and the log, keep up with what Windows is doing.
 /// </summary>
 /// <remarks>
