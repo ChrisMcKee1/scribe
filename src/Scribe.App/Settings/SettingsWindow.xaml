@@ -244,7 +244,9 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left navigation rail -->
+            <!-- Left navigation rail. A ListBox is one Tab stop and the arrow keys move along it. Each item
+                 names itself for screen readers: an item that holds a panel instead of text is otherwise
+                 announced by its type name, "System.Windows.Controls.ListBoxItem". -->
             <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
                      Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -255,79 +257,79 @@
                         <Setter Property="Margin" Value="0,2"/>
                     </Style>
                 </ListBox.ItemContainerStyle>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="General">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Settings24" FontSize="18"/>
                         <TextBlock Text="General" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Dictation">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Mic24" FontSize="18"/>
                         <TextBlock Text="Dictation" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Overlay">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Desktop24" FontSize="18"/>
                         <TextBlock Text="Overlay" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="AI cleanup">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Wand24" FontSize="18"/>
                         <TextBlock Text="AI cleanup" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Dictionary">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Book24" FontSize="18"/>
                         <TextBlock Text="Dictionary" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Libraries">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Library24" FontSize="18"/>
                         <TextBlock Text="Libraries" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Snippets">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
                         <TextBlock Text="Snippets" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Profiles">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Apps24" FontSize="18"/>
                         <TextBlock Text="Profiles" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Playground">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
                         <TextBlock Text="Playground" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="History">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="History24" FontSize="18"/>
                         <TextBlock Text="History" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Usage">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="DataTrending24" FontSize="18"/>
                         <TextBlock Text="Usage" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Diagnostics">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
                         <TextBlock Text="Diagnostics" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="About">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Info24" FontSize="18"/>
                         <TextBlock Text="About" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
