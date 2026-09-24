@@ -97,6 +97,61 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
 
+        <!-- The detail side of a master-detail page (Libraries, Snippets, Profiles). FillCard replaces
+             ui:Card's own style rather than extending it, so it draws no border or fill, and a list
+             and the detail beside it read as one panel. This keeps WPF-UI's card and gives it the
+             strong control stroke, the Fluent border meant to stay visible, which every WPF-UI theme
+             defines, high contrast included. -->
+        <Style TargetType="ui:Card" x:Key="DetailCard" BasedOn="{StaticResource {x:Type ui:Card}}">
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrongStrokeColorDefaultBrush}"/>
+        </Style>
+
+        <!-- Check boxes in the editable grids. Outside edit mode a check box cell shows a box that takes
+             neither the mouse nor focus, as WPF's and WPF-UI's own column styles do, and toggling it is
+             left to the column's edit. The grid's own click handling still focuses and selects on every
+             press; DataGridCheckBoxClick then turns a plain press on the box into that edit, so one click
+             toggles it inside the row's edit transaction, and Space on the focused cell still toggles
+             through the same edit. The Editing styles are the same box while the cell edits, focusable
+             and clickable. Based on the WPF-UI check box so they match the rest of the app. -->
+        <Style x:Key="GridCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="LibraryOnCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Name, StringFormat='Use the {0} library'}"/>
+        </Style>
+        <Style x:Key="LibraryOnCheckBox" TargetType="CheckBox" BasedOn="{StaticResource LibraryOnCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+        <Style x:Key="WholeWordCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Whole word for {0}'}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Pattern}" Value="">
+                    <Setter Property="AutomationProperties.Name" Value="Whole word for the new entry"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="WholeWordCheckBox" TargetType="CheckBox" BasedOn="{StaticResource WholeWordCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+        <Style x:Key="EntryEnabledCheckBoxEditing" TargetType="CheckBox" BasedOn="{StaticResource GridCheckBoxEditing}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding Pattern, StringFormat='Enabled for {0}'}"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Pattern}" Value="">
+                    <Setter Property="AutomationProperties.Name" Value="Enabled for the new entry"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="EntryEnabledCheckBox" TargetType="CheckBox" BasedOn="{StaticResource EntryEnabledCheckBoxEditing}">
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+
         <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
              ghost pill on hover and an accent-coloured pill when selected. -->
         <Style TargetType="RadioButton" x:Key="OverlayZone">
@@ -963,6 +1018,8 @@
                                                                Text="Project endpoints use the account host with API keys. This is expected because project data planes require Entra sign-in."/>
                                                 </StackPanel>
 
+                                                <!-- Shown only for an Azure CLI sign-in (AzureSettingsAccess.ShowCliTenant):
+                                                     the tenant box is all it holds. -->
                                                 <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
                                                     <ui:CardExpander.Header>
                                                         <StackPanel>
@@ -972,7 +1029,7 @@
                                                         </StackPanel>
                                                     </ui:CardExpander.Header>
                                                     <StackPanel Margin="0,4,0,0">
-                                                        <StackPanel x:Name="AzureCliTenantPanel">
+                                                        <StackPanel>
                                                             <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}"/>
                                                             <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                                         VerticalContentAlignment="Center"
@@ -1188,8 +1245,12 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
-                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                    <DataGridCheckBoxColumn Header="Whole word" Binding="{Binding WholeWord, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                            ElementStyle="{StaticResource WholeWordCheckBox}"
+                                                            EditingElementStyle="{StaticResource WholeWordCheckBoxEditing}"/>
+                                    <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                            ElementStyle="{StaticResource EntryEnabledCheckBox}"
+                                                            EditingElementStyle="{StaticResource EntryEnabledCheckBoxEditing}"/>
                                     <DataGridTemplateColumn Header="" Width="44">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
@@ -1250,7 +1311,9 @@
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                           Background="Transparent" BorderThickness="0">
                                     <DataGrid.Columns>
-                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"/>
+                                        <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
+                                                                ElementStyle="{StaticResource LibraryOnCheckBox}"
+                                                                EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
                                         <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
@@ -1258,7 +1321,7 @@
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </ui:Card>
-                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="2" Padding="14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="Auto"/>
@@ -1325,7 +1388,7 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <StackPanel x:Name="SnippetEditor" Visibility="Collapsed" VerticalAlignment="Top">
                                         <TextBlock Text="Trigger phrase" Style="{StaticResource SettingTitle}"/>
@@ -1400,7 +1463,7 @@
                                 </Grid>
                             </ui:Card>
 
-                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource FillCard}">
+                            <ui:Card Grid.Column="1" Padding="18,14" Style="{StaticResource DetailCard}">
                                 <Grid>
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel x:Name="ProfileEditor" Visibility="Collapsed" VerticalAlignment="Top">
