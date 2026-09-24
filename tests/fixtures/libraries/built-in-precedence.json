@@ -1,0 +1,16 @@
+{
+  "description": "Built-in dictionary library ids in precedence order: when two enabled built-in libraries list the same spoken form, the one earlier here supplies the rule, and this order decides which terms fill the on-device AI cleanup glossary. The first eleven are the order Scribe 0.4.3 composed them in (category, then name, ordinal and case-insensitive), frozen as ids so a rename or a new category never moves a library. Append a new built-in at the end; never reorder or remove an id. Windows keeps the same list in Scribe.Core.Libraries.LibraryPrecedence.BuiltInOrder, and LibraryPrecedenceTests fails until the two agree. Custom libraries come after every built-in, in the order of their file names.",
+  "order": [
+    "ai-terminology",
+    "ai-model-names",
+    "data-and-ai",
+    "data-engineering",
+    "data-science-machine-learning",
+    "github",
+    "microsoft-365",
+    "microsoft-azure",
+    "dotnet-development",
+    "modern-developer-stack",
+    "software-development"
+  ]
+}

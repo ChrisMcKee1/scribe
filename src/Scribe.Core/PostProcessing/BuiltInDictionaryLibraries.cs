@@ -1,3 +1,4 @@
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.PostProcessing;
@@ -15,7 +16,10 @@ public static class BuiltInDictionaryLibraries
 
     private static readonly Lazy<IReadOnlyList<DictionaryLibrary>> Cached = new(Load);
 
-    /// <summary>All built-in libraries, ordered by category then name.</summary>
+    /// <summary>
+    /// All built-in libraries, in precedence order (<see cref="LibraryPrecedence.BuiltInOrder"/>), which is not the
+    /// order the Libraries list shows them in.
+    /// </summary>
     public static IReadOnlyList<DictionaryLibrary> All => Cached.Value;
 
     private static IReadOnlyList<DictionaryLibrary> Load()
@@ -59,10 +63,9 @@ public static class BuiltInDictionaryLibraries
                 file.Entries));
         }
 
-        return libraries
-            .OrderBy(l => l.Category, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        // By the frozen id list, not by category and name: a renamed or recategorized library must keep its place,
+        // because this order decides which library supplies a spoken form two of them share.
+        return LibraryPrecedence.Order(libraries);
     }
 
     // "microsoft-azure" -> "Microsoft Azure": a readable fallback when a file omits its name header,

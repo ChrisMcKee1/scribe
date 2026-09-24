@@ -15,14 +15,15 @@ namespace Scribe.Core.Tests;
 public sealed class LogPrivacyGuardTests
 {
     // The whole app shell (Settings verifies endpoints, keys and Azure sign-in; the tray, quick add and dictation
-    // relay cleanup), every Core folder whose code talks to a provider or handles what one returned, and the
-    // provider-facing files of Core folders that are otherwise local.
+    // relay cleanup), every Core folder whose code talks to a provider or handles what one returned, the folder that
+    // holds library names and terms, and the provider-facing files of Core folders that are otherwise local.
     private static readonly string[] GuardedFolders =
     [
         Path.Combine("src", "Scribe.App"),
         Path.Combine("src", "Scribe.Core", "Cleanup"),
         Path.Combine("src", "Scribe.Core", "Diagnostics"),
         Path.Combine("src", "Scribe.Core", "Feedback"),
+        Path.Combine("src", "Scribe.Core", "Libraries"),
         Path.Combine("src", "Scribe.Core", "Settings"),
     ];
 

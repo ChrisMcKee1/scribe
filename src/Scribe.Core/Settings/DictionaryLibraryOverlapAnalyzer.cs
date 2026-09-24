@@ -1,4 +1,6 @@
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Settings;
 
@@ -31,6 +33,12 @@ public readonly record struct DictionaryOverlap(
 {
     public bool IsRedundant => Kind == DictionaryOverlapKind.Redundant;
 }
+
+/// <summary>
+/// The enabled library row that covers a spoken form: the first enabled row for it in precedence order, and the
+/// library that supplies it.
+/// </summary>
+public readonly record struct LibraryCoverage(DictionaryEntry Entry, string LibraryId, string LibraryName);
 
 /// <summary>The overlaps found, split by what the user should be asked about.</summary>
 public readonly record struct DictionaryOverlapReport(IReadOnlyList<DictionaryOverlap> Overlaps)
@@ -132,6 +140,78 @@ public static class DictionaryLibraryOverlapAnalyzer
         }
 
         return new DictionaryOverlapReport(overlaps);
+    }
+
+    /// <summary>
+    /// Every spoken form the enabled libraries cover (trimmed, case-insensitive), with the enabled row that applies and
+    /// the library that supplies it. Rows turned off inside a library cover nothing. The Dictionary page's library
+    /// badges are drawn from this.
+    /// </summary>
+    /// <remarks>
+    /// Libraries are taken in precedence order (<see cref="LibraryPrecedence"/>) whatever order they arrive in, so a
+    /// caller holding them in the order the Libraries list shows still names the library dictation uses.
+    /// </remarks>
+    /// <param name="libraries">The loaded libraries, in any order.</param>
+    /// <param name="enabledIds">Ids of the libraries switched on, in any order; compared case-insensitively.</param>
+    public static IReadOnlyDictionary<string, LibraryCoverage> Coverage(
+        IEnumerable<DictionaryLibrary>? libraries, IEnumerable<string>? enabledIds)
+    {
+        var covering = new Dictionary<string, LibraryCoverage>(StringComparer.OrdinalIgnoreCase);
+        foreach (var library in LibraryPrecedence.Enabled(libraries, enabledIds))
+        {
+            foreach (var entry in library.Entries)
+            {
+                if (entry is null || !entry.Enabled || string.IsNullOrWhiteSpace(entry.Pattern))
+                {
+                    continue;
+                }
+
+                covering.TryAdd(entry.Pattern.Trim(), new LibraryCoverage(entry, library.Id, library.Name));
+            }
+        }
+
+        return covering;
+    }
+
+    /// <summary>
+    /// <see cref="Analyze"/> against the enabled libraries themselves: their rows, in precedence order whatever order
+    /// the libraries arrive in, are the library entries, and each spoken form is named after the first enabled library
+    /// that lists it. The Save prompt is built from this.
+    /// </summary>
+    /// <remarks>
+    /// The name counts a row turned off inside a library, as the Save prompt always has, so where an earlier library
+    /// lists a spoken form only in a turned-off row, the prompt names that library while a later one supplies the rule.
+    /// That is kept exactly, because this method only moves the prompt's loop out of the window, and
+    /// <c>LibraryCompositionGoldenTests</c> pins it.
+    /// </remarks>
+    /// <param name="personal">The dictionary the user is saving.</param>
+    /// <param name="libraries">The loaded libraries, in any order.</param>
+    /// <param name="enabledIds">Ids of the libraries switched on, in any order; compared case-insensitively.</param>
+    public static DictionaryOverlapReport AnalyzeEnabledLibraries(
+        IEnumerable<DictionaryEntry>? personal,
+        IEnumerable<DictionaryLibrary>? libraries,
+        IEnumerable<string>? enabledIds)
+    {
+        var libraryEntries = new List<DictionaryEntry>();
+        var libraryNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var library in LibraryPrecedence.Enabled(libraries, enabledIds))
+        {
+            foreach (var entry in library.Entries)
+            {
+                if (entry is null)
+                {
+                    continue;
+                }
+
+                libraryEntries.Add(entry);
+                if (!string.IsNullOrWhiteSpace(entry.Pattern))
+                {
+                    libraryNames.TryAdd(entry.Pattern.Trim(), library.Name);
+                }
+            }
+        }
+
+        return Analyze(personal, libraryEntries, libraryNames);
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 
 namespace Scribe.Core.PostProcessing;
@@ -13,13 +14,19 @@ public static class DictionaryLibraryComposer
 {
     /// <summary>
     /// Flattens the enabled entries of the supplied libraries into one de-duplicated list, in
-    /// library order then entry order. Only entries whose <see cref="DictionaryEntry.Enabled"/> flag
-    /// is set contribute.
+    /// precedence order (<see cref="LibraryPrecedence"/>) then entry order, whatever order the
+    /// libraries arrive in. Only entries whose <see cref="DictionaryEntry.Enabled"/> flag is set
+    /// contribute.
     /// </summary>
+    /// <remarks>
+    /// Ordering here rather than trusting the caller is what keeps the Libraries list's A to Z order
+    /// out of dictation: a caller holding libraries in display order still gets the winners, and
+    /// the glossary order, that dictation uses.
+    /// </remarks>
     public static IReadOnlyList<DictionaryEntry> ComposeLibraries(IEnumerable<DictionaryLibrary> libraries)
     {
         ArgumentNullException.ThrowIfNull(libraries);
-        return Deduplicate(libraries.Where(l => l is not null).SelectMany(l => l.EnabledEntries));
+        return Deduplicate(LibraryPrecedence.Order(libraries).SelectMany(l => l.EnabledEntries));
     }
 
     /// <summary>
