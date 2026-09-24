@@ -144,4 +144,37 @@ public class SessionBannerTests : IDisposable
         Assert.False(SessionBanner.IsSessionMarker("text before " + SessionBanner.StartMarker));
         Assert.False(SessionBanner.IsSessionMarker(null));
     }
+
+    [Fact]
+    public void The_audio_line_names_the_windows_default_and_a_different_communications_default()
+    {
+        // Earlier builds recorded from the communications default; naming both answers which one a session used.
+        var text = string.Join(Environment.NewLine, SessionBanner.Compose(
+            _session, "0.3.11", InstallChannel.Packaged, Paths(), AppSettings.CreateDefault(),
+            defaultAudioDevice: "Microphone (6- Insta360 Link 2 Pro)",
+            audioDeviceCount: 3,
+            communicationsAudioDevice: "Mic In (Elgato Wave Neo)"));
+
+        Assert.Contains(
+            "audio: selected='Windows default' default='Microphone (6- Insta360 Link 2 Pro)' " +
+            "communicationsDefault='Mic In (Elgato Wave Neo)' inputs=3",
+            text);
+    }
+
+    [Fact]
+    public void The_audio_line_says_whether_a_chosen_microphone_is_there()
+    {
+        var settings = AppSettings.CreateDefault();
+        new MicrophoneSelection("{0.0.1.00000000}.{yeti}", "Blue Yeti").ApplyTo(settings);
+
+        var text = string.Join(Environment.NewLine, SessionBanner.Compose(
+            _session, "0.3.11", InstallChannel.Packaged, Paths(), settings,
+            defaultAudioDevice: "Microphone (6- Insta360 Link 2 Pro)",
+            audioDeviceCount: 2,
+            selectedAudioDeviceAvailable: false));
+
+        Assert.Contains("audio: selected='Blue Yeti' available=False default='Microphone (6- Insta360 Link 2 Pro)' inputs=2", text);
+        Assert.DoesNotContain("communicationsDefault", text);
+        Assert.DoesNotContain("{yeti}", text); // the name, never the endpoint ID
+    }
 }

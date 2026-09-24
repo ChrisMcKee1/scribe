@@ -31,12 +31,19 @@ public enum RecordingOpenOutcome
 /// <param name="OpenDuration">How long the device took to open, for the slow-open warning.</param>
 /// <param name="Discarded">With <see cref="RecordingOpenOutcome.Reclaimed"/>, how much audio the stop threw away.</param>
 /// <param name="ReclaimFailure">With <see cref="RecordingOpenOutcome.Reclaimed"/>, what the stop threw, if it threw.</param>
+/// <param name="RequestedDeviceUnavailable">
+/// True when this open was asked for a chosen microphone that could not be opened, so it recorded from the Windows
+/// default instead. Read from this open's own start, so never true for <see cref="RecordingOpenOutcome.NotOpened"/>.
+/// </param>
+/// <param name="DeviceName">The microphone this open recorded from; null for <see cref="RecordingOpenOutcome.NotOpened"/>.</param>
 public readonly record struct RecordingOpen(
     RecordingOpenOutcome Outcome,
     DictationPresentation? Presentation,
     TimeSpan OpenDuration,
     TimeSpan Discarded,
-    Exception? ReclaimFailure);
+    Exception? ReclaimFailure,
+    bool RequestedDeviceUnavailable = false,
+    string? DeviceName = null);
 
 /// <summary>
 /// Opens the microphone for a recording the lifecycle has started, so that every capture has exactly one owner and every
@@ -66,10 +73,21 @@ public static class RecordingCapture
         var started = Stopwatch.GetTimestamp();
         var opened = audio.Start(deviceId, dictationId);
         var openDuration = Stopwatch.GetElapsedTime(started);
+        if (!opened)
+        {
+            // Nothing opened, so the capture service's last-start values belong to an earlier recording.
+            return new RecordingOpen(RecordingOpenOutcome.NotOpened, null, openDuration, TimeSpan.Zero, null);
+        }
 
-        return opened
-            ? HandOff(lifecycle, audio, dictationId, openDuration)
-            : new RecordingOpen(RecordingOpenOutcome.NotOpened, null, openDuration, TimeSpan.Zero, null);
+        // Taken from the start that just opened this recording's microphone, before the hand-off can stop it. Only the
+        // activation thread starts captures, so no later start can have replaced them yet.
+        var requestedDeviceUnavailable = audio.LastRequestedDeviceUnavailable;
+        var deviceName = audio.LastDeviceName;
+        return HandOff(lifecycle, audio, dictationId, openDuration) with
+        {
+            RequestedDeviceUnavailable = requestedDeviceUnavailable,
+            DeviceName = deviceName,
+        };
     }
 
     /// <summary>
