@@ -66,10 +66,58 @@ public sealed class AzureCliProcessTreeTests
             Node(300, 4, "CMD.EXE", 0),
             Node(301, 300, "Python.exe", 1),
             Node(302, 300, "az", 1),
-            Node(303, 300, "pythonista.exe", 1),
+            Node(303, 300, "pythonw.exe", 1),
+            Node(304, 300, "notpython.exe", 1),
+            Node(305, 300, "py.exe", 1),
         ];
 
-        Assert.Equal([300, 301, 302], AzureCliProcessTree.Select(300, snapshot).Select(node => node.Id));
+        Assert.Equal([300, 301, 302, 303], AzureCliProcessTree.Select(300, snapshot).Select(node => node.Id));
+    }
+
+    // A pip install of azure-cli in the Microsoft Store's Python runs "python -m azure.cli", and the Store alias runs
+    // the versioned python3.X.exe, which an exact "python" missed: cmd.exe was ended and az login ran on, outside the
+    // gate. Only processes reached through az's own chain are candidates, so a user's own Python is never at risk.
+    [Fact]
+    public void A_store_python_running_az_is_az_s_own()
+    {
+        ProcessNode[] snapshot =
+        [
+            Node(700, 4, "cmd.exe", 0),
+            Node(701, 700, "python3.12.exe", 1),
+            Node(702, 701, "msedge.exe", 2),
+            Node(703, 4, "python3.12.exe", 1),
+        ];
+
+        Assert.Equal([700, 701], AzureCliProcessTree.Select(700, snapshot).Select(node => node.Id));
+    }
+
+    // The root is ended, and gone, before the snapshot, so nothing it starts can be missed.
+    [Fact]
+    public void The_root_is_ended_and_gone_before_the_snapshot_is_taken()
+    {
+        var world = new ProcessWorld();
+        var root = world.Start(800, 4, "cmd.exe");
+        world.Start(801, 800, "python.exe");
+
+        AzureCliProcessTree.End(root, world);
+
+        Assert.Equal(["kill 800", "wait for the root", "snapshot", "kill 801"], world.Calls);
+    }
+
+    // The race the order closes: cmd.exe starts az's python just as it is being ended. Taking the snapshot first
+    // missed that python, which then ran on outside the gate; for az login it would open a sign-in window for an
+    // attempt already retired.
+    [Fact]
+    public void A_python_the_root_starts_just_before_it_is_ended_is_ended_too()
+    {
+        var world = new ProcessWorld();
+        var root = world.Start(900, 4, "cmd.exe");
+        world.StartOnKill(900, new ProcessNode(901, 900, "python.exe", null));
+
+        AzureCliProcessTree.End(root, world);
+
+        Assert.False(world.IsAlive(900));
+        Assert.False(world.IsAlive(901));
     }
 
     // Parent ids outlive their processes and are reused, so an older python.exe can name az's cmd.exe as its parent.
@@ -127,6 +175,61 @@ public sealed class AzureCliProcessTreeTests
             Assert.True(tree.Root.WaitForExit(TimeSpan.FromSeconds(5)));
             Assert.True(WaitUntilExited(tree.Browser), "the whole tree kill was expected to end the stand-in browser");
             Assert.True(WaitUntilExited(tree.BrowserUnderAzChild));
+        }
+    }
+
+    /// <summary>
+    /// Processes as End sees them. A process can be set to start a child at the moment it is ended, which is how the
+    /// race between az.cmd starting python and being killed is reproduced. As the real snapshot does, it always
+    /// includes the root, whose id and start time outlive it while Scribe holds its handle.
+    /// </summary>
+    private sealed class ProcessWorld : AzureCliProcessTree.IProcessOperations
+    {
+        private readonly Dictionary<int, ProcessNode> _alive = [];
+        private readonly Dictionary<int, ProcessNode> _startsOnKill = [];
+        private ProcessNode? _root;
+        private int _clock;
+
+        public List<string> Calls { get; } = [];
+
+        public ProcessNode Start(int id, int parent, string image)
+        {
+            var node = new ProcessNode(id, parent, image, T0.AddSeconds(++_clock));
+            _alive[id] = node;
+            _root ??= node;
+            return node;
+        }
+
+        public void StartOnKill(int id, ProcessNode child) => _startsOnKill[id] = child;
+
+        public bool IsAlive(int id) => _alive.ContainsKey(id);
+
+        public void Kill(ProcessNode process)
+        {
+            Calls.Add($"kill {process.Id}");
+            if (_startsOnKill.Remove(process.Id, out var child))
+            {
+                Start(child.Id, child.ParentId, child.ImageName);
+            }
+
+            if (_alive.TryGetValue(process.Id, out var live) && live.StartTime == process.StartTime)
+            {
+                _alive.Remove(process.Id);
+            }
+        }
+
+        public void WaitForRootExit(TimeSpan limit) => Calls.Add("wait for the root");
+
+        public IReadOnlyCollection<ProcessNode> Snapshot()
+        {
+            Calls.Add("snapshot");
+            var nodes = _alive.Values.ToList();
+            if (_root is { } root && !_alive.ContainsKey(root.Id))
+            {
+                nodes.Add(root);
+            }
+
+            return nodes;
         }
     }
 

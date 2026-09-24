@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Infrastructure;
 
 namespace Scribe.App.Infrastructure;
 
@@ -326,6 +327,10 @@ public sealed class AzureCliInstaller
                value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-');
     }
 
+    // How long the output may take to end once the process has exited (ProcessExit): what it wrote is read by then,
+    // and something it started that holds the pipe must not hold Azure CLI's gate with it.
+    private static readonly TimeSpan OutputLimit = TimeSpan.FromSeconds(2);
+
     // What a cancelled process takes down with it.
     private enum CancelScope
     {
@@ -365,15 +370,18 @@ public sealed class AzureCliInstaller
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+
+        // Locked because the output can now still be arriving when the text is read: the wait no longer lasts until
+        // the end of the output when something az started holds it open (ProcessExit).
+        process.OutputDataReceived += (_, e) => Append(stdout, e.Data);
+        process.ErrorDataReceived += (_, e) => Append(stderr, e.Data);
 
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         try
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            await ProcessExit.WaitAsync(process, OutputLimit, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -388,16 +396,15 @@ public sealed class AzureCliInstaller
                         // after we've reported a timeout, and a retry would overlap a live install.
                         process.Kill(entireProcessTree: true);
 
-                        // Bounded reap so the OS releases the handles before we surface the cancellation.
-                        await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                        // Bounded reap so the OS releases the handles before we surface the cancellation: the exit,
+                        // and at most OutputLimit for the end of the output.
+                        await ProcessExit.WaitAsync(process, OutputLimit, CancellationToken.None).ConfigureAwait(false);
                     }
                     else
                     {
+                        // Ends az's own processes, awaiting the root's exit but not the end of the output, which
+                        // something az started and left running may hold.
                         AzureCliProcessTree.End(process);
-
-                        // Only the exit is awaited, not the end of the output: what az started and was left running may
-                        // hold the output pipe it inherited, and a wait with a timeout does not wait for the streams.
-                        process.WaitForExit(TimeSpan.FromSeconds(5));
                     }
                 }
             }
@@ -409,7 +416,28 @@ public sealed class AzureCliInstaller
             throw;
         }
 
-        return (process.ExitCode, stdout.ToString(), stderr.ToString());
+        return (process.ExitCode, Read(stdout), Read(stderr));
+    }
+
+    private static void Append(StringBuilder text, string? line)
+    {
+        if (line is null)
+        {
+            return;
+        }
+
+        lock (text)
+        {
+            text.AppendLine(line);
+        }
+    }
+
+    private static string Read(StringBuilder text)
+    {
+        lock (text)
+        {
+            return text.ToString();
+        }
     }
 
     private static string Truncate(string value, int max) =>

@@ -23,9 +23,17 @@ public readonly record struct ProcessNode(int Id, int ParentId, string ImageName
 /// az login closed that browser with all its tabs, perhaps the one where the user had just looked up their tenant ID.
 /// </para>
 /// <para>
-/// So only processes whose image is az's own are followed: the root, and below it cmd, az and python. Anything else,
-/// and everything under it, is left running. As in KillTree, a child must have started after its parent, so a process
-/// whose parent id was merely reused by az is never taken for az's.
+/// So only processes whose image is az's own are followed: the root, and below it cmd, az and any python, whose image
+/// is python.exe for az's own install but, for a pip install in the Microsoft Store's Python, the versioned
+/// python3.X.exe the Store alias runs. Only processes reached through az's own chain are candidates, so a user's own
+/// Python is never at risk. Anything else, and everything under it, is left running. As in KillTree, a child must
+/// have started after its parent, so a process whose parent id was merely reused by az is never taken for az's.
+/// </para>
+/// <para>
+/// The root is ended, and its exit awaited, before the snapshot is taken, as KillTree also ends a parent before it
+/// looks for its children. A python the root started just before it was ended is then in the snapshot, and nothing
+/// can be started after it. The ended root keeps its id and start time while its <see cref="Process"/> handle is open,
+/// and its children still name it as their parent.
 /// </para>
 /// </remarks>
 public static partial class AzureCliProcessTree
@@ -33,12 +41,13 @@ public static partial class AzureCliProcessTree
     private const uint SnapProcess = 0x00000002;
     private const nint InvalidHandle = -1;
 
-    private static readonly string[] AzureCliImages = ["cmd", "az", "python"];
+    // How long the root is given to exit once ended, before the snapshot is taken anyway.
+    private static readonly TimeSpan RootExitLimit = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// The processes to end for the az invocation rooted at <paramref name="rootId"/>, the root first and every parent
-    /// before its children: the root, and each descendant reached only through az's own images (cmd, az, python), each
-    /// of which started after its parent.
+    /// before its children: the root, and each descendant reached only through az's own images (cmd, az, and any image
+    /// whose name starts with python), each of which started after its parent.
     /// </summary>
     public static IReadOnlyList<ProcessNode> Select(int rootId, IReadOnlyCollection<ProcessNode> snapshot)
     {
@@ -75,39 +84,89 @@ public static partial class AzureCliProcessTree
     }
 
     /// <summary>
-    /// Ends the az invocation <paramref name="root"/> started: the root, and the descendants <see cref="Select"/> picks
-    /// from a snapshot taken now. Never throws; a process that has already exited is skipped.
+    /// Ends the az invocation <paramref name="root"/> started: the root first, and once it has exited, the descendants
+    /// <see cref="Select"/> picks from a snapshot taken then. Never throws; a process that has already exited is skipped.
+    /// Only the root's exit is awaited, not the end of its redirected output.
     /// </summary>
     public static void End(Process root)
     {
         ArgumentNullException.ThrowIfNull(root);
+        var rootNode = new ProcessNode(root.Id, 0, string.Empty, TryReadStartTime(root));
+        End(rootNode, new LiveProcesses(root, rootNode.StartTime));
+    }
 
-        IReadOnlyList<ProcessNode> selected;
-        try
+    // The order of End's steps, over operations a test can replace.
+    internal static void End(ProcessNode root, IProcessOperations operations)
+    {
+        operations.Kill(root);
+        operations.WaitForRootExit(RootExitLimit);
+        foreach (var node in Select(root.Id, operations.Snapshot()).Where(node => node.Id != root.Id))
         {
-            selected = Select(root.Id, Snapshot(root));
+            operations.Kill(node);
         }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-            selected = [];
-        }
+    }
 
-        TryKill(root);
-        foreach (var node in selected.Where(node => node.Id != root.Id))
+    /// <summary>What <see cref="End(ProcessNode, IProcessOperations)"/> does to processes. None of it throws.</summary>
+    internal interface IProcessOperations
+    {
+        /// <summary>Ends the process, if it is still the one that started at the node's start time.</summary>
+        void Kill(ProcessNode process);
+
+        /// <summary>Waits, for up to <paramref name="limit"/>, for the root to exit.</summary>
+        void WaitForRootExit(TimeSpan limit);
+
+        /// <summary>The processes below the root as they are now, with the root itself.</summary>
+        IReadOnlyCollection<ProcessNode> Snapshot();
+    }
+
+    private sealed class LiveProcesses(Process root, DateTime? rootStartTime) : IProcessOperations
+    {
+        public void Kill(ProcessNode process)
         {
+            if (process.Id == root.Id)
+            {
+                TryKill(root);
+                return;
+            }
+
             try
             {
-                using var process = Process.GetProcessById(node.Id);
+                using var live = Process.GetProcessById(process.Id);
 
                 // The id could have been reused since the snapshot; only the process that was seen is ended.
-                if (process.StartTime == node.StartTime)
+                if (live.StartTime == process.StartTime)
                 {
-                    TryKill(process);
+                    TryKill(live);
                 }
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
             {
                 // Exited since the snapshot.
+            }
+        }
+
+        public void WaitForRootExit(TimeSpan limit)
+        {
+            try
+            {
+                // With a timeout this waits for the exit alone, not for the end of the redirected output.
+                root.WaitForExit(limit);
+            }
+            catch (SystemException)
+            {
+                // Not started, or already gone; the snapshot is taken either way.
+            }
+        }
+
+        public IReadOnlyCollection<ProcessNode> Snapshot()
+        {
+            try
+            {
+                return AzureCliProcessTree.Snapshot(root, rootStartTime);
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+            {
+                return [];
             }
         }
     }
@@ -124,19 +183,25 @@ public static partial class AzureCliProcessTree
         }
     }
 
-    private static bool IsAzureCliImage(string imageName) =>
-        AzureCliImages.Contains(Path.GetFileNameWithoutExtension(imageName ?? string.Empty), StringComparer.OrdinalIgnoreCase);
+    private static bool IsAzureCliImage(string imageName)
+    {
+        var name = Path.GetFileNameWithoutExtension(imageName ?? string.Empty);
+        return name.Equals("cmd", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("az", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("python", StringComparison.OrdinalIgnoreCase);
+    }
 
     // Every process's parent id and image name (Toolhelp32), with start times read for the root's subtree only, the
     // only part Select can follow. The subtree is gathered through every image here; Select decides what is az's.
-    internal static IReadOnlyList<ProcessNode> Snapshot(Process root)
+    // The root's start time can be passed in, read before it was ended.
+    internal static IReadOnlyList<ProcessNode> Snapshot(Process root, DateTime? rootStartTime = null)
     {
         var entries = ReadProcessEntries();
         var byParent = entries.Where(entry => entry.Id != entry.ParentId).ToLookup(entry => entry.ParentId);
         var rootEntry = entries.FirstOrDefault(entry => entry.Id == root.Id);
         var nodes = new List<ProcessNode>
         {
-            new(root.Id, rootEntry.ParentId, rootEntry.ImageName ?? string.Empty, TryReadStartTime(root)),
+            new(root.Id, rootEntry.ParentId, rootEntry.ImageName ?? string.Empty, rootStartTime ?? TryReadStartTime(root)),
         };
 
         var seen = new HashSet<int> { root.Id };
