@@ -235,7 +235,7 @@ final class PipelineScenarioTests: XCTestCase {
                 XCTAssertGreaterThan(hearing.correlation, 0.999_99, clip.name)
                 XCTAssertEqual(hearing.lag, 0, clip.name)
             } else {
-                XCTAssertGreaterThanOrEqual(hearing.correlation, 0.97, clip.name)
+                XCTAssertGreaterThanOrEqual(hearing.correlation, ScenarioLimits.minimumCorrelation, clip.name)
             }
         }
     }

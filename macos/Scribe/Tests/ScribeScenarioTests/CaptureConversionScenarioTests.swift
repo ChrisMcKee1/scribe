@@ -32,11 +32,6 @@ final class CaptureConversionScenarioTests: XCTestCase {
         }
     }
 
-    /// The least correlation a resampled capture may have with its fixture. The round trip through two rate converters
-    /// keeps speech far above it; a capture that lost or repeated buffers, took the wrong channel or ran at the wrong
-    /// rate falls far below it.
-    private static let minimumCorrelation = 0.97
-
     func testSixteenKilohertzMonoFloatIsCapturedSampleForSample() async throws {
         try await capture(
             DeviceCase(clip: "dict-azure-devops", sampleRate: 16_000, layout: .mono, encoding: .float32, seed: 11))
@@ -126,10 +121,10 @@ final class CaptureConversionScenarioTests: XCTestCase {
                 abs(captured.samples.count - clip.pcm.count), ScenarioLimits.resamplerSlack,
                 "\(captured.samples.count) samples captured of a \(clip.pcm.count)-sample fixture", file: file,
                 line: line)
-            XCTAssertGreaterThanOrEqual(match.correlation, Self.minimumCorrelation, file: file, line: line)
+            XCTAssertGreaterThanOrEqual(match.correlation, ScenarioLimits.minimumCorrelation, file: file, line: line)
             XCTAssertEqual(
-                levelChange, ScenarioAudio.dbfs(Double(gain)), accuracy: 0.6, "level after the downmix", file: file,
-                line: line)
+                levelChange, ScenarioAudio.dbfs(Double(gain)), accuracy: ScenarioLimits.levelSlackDb,
+                "level after the downmix", file: file, line: line)
         }
 
         // The signal report, taken before the downmix, says which channel the voice was on.
@@ -267,7 +262,7 @@ final class CaptureConversionScenarioTests: XCTestCase {
         XCTAssertLessThanOrEqual(abs(captured.samples.count - expectedCount), ScenarioLimits.resamplerSlack)
         let match = ScenarioAudio.similarity(
             of: captured.samples, to: Array(clip.samples.prefix(expectedCount)), maxLag: 64)
-        XCTAssertGreaterThanOrEqual(match.correlation, Self.minimumCorrelation)
+        XCTAssertGreaterThanOrEqual(match.correlation, ScenarioLimits.minimumCorrelation)
 
         report.note("keptFrames", count: keptFrames)
         report.note("samples", count: captured.samples.count)

@@ -19,9 +19,19 @@ enum ScenarioLimits {
     /// run everything several times slower; a passing run never comes near it.
     static let watchdogSeconds: Double = 120
 
-    /// How far a resampled capture's length may stray from the exact count, in 16 kHz samples: the converters' filter
-    /// tails, 4 ms at most. A lost or repeated buffer shows in the buffer counts and the correlation instead.
-    static let resamplerSlack = 64
+    /// How far a resampled capture's length may stray from the exact count, in 16 kHz samples: 1 ms. The runners measure
+    /// no difference at all through both converters; a lost or repeated buffer shows in the buffer counts and the
+    /// correlation as well.
+    static let resamplerSlack = 16
+
+    /// The least correlation a resampled capture may have with its fixture. The round trip through two rate converters
+    /// measures 0.996 or more on the runners; a capture that lost or repeated a buffer, took the wrong channel or ran at
+    /// the wrong rate falls far below it.
+    static let minimumCorrelation = 0.99
+
+    /// How far a capture's level may stray from the level its channel layout implies, in dB. The runners measure 0.07
+    /// at most.
+    static let levelSlackDb = 0.25
 }
 
 /// Awaits `operation` under a watchdog: returns its value or rethrows its error, and fails the test and throws

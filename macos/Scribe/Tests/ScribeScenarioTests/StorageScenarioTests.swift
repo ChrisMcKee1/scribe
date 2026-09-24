@@ -135,7 +135,7 @@ final class StorageScenarioTests: XCTestCase {
         report.note("rows", count: Self.rows)
         report.note("kept", count: kept)
         report.note("retentionPass", duration: sweeping)
-        report.note("reclaim", String(describing: pass.reclaim))
+        report.note("freedPages", count: Int(freedPages))
         report.note("checkpoint", String(describing: pass.checkpoint))
         report.note("pagesBefore", count: Int(before.pageCount))
         report.note("pagesAfter", count: Int(after.pageCount))
