@@ -342,13 +342,12 @@ public sealed class HotkeyService : IHotkeyService
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
-                // Shape only: that the desktop switched mid-dictation, never anything about the keys or the text.
+                // Shape only, and only Debug: the engine sends this whenever its arbiter still named an owner, which a
+                // stop the hook never saw (a microphone fault ending a toggle) can leave behind with nothing recording.
+                // The controller's reason=DesktopSwitch line is the record of a recording actually ended.
                 if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
                 {
-                    _logger.LogInformation(
-                        "Hotkey dictation ({Trigger}) stopped by a desktop switch: the lock screen or a secure desktop " +
-                        "appeared while its key was held or its toggle was on.",
-                        item.Trigger);
+                    _logger.LogDebug("Desktop switch: stop sent ({Trigger}).", item.Trigger);
                 }
 
                 Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, item.Deactivation));
