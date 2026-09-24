@@ -133,7 +133,8 @@ privacy/offline promise.
   the database's free space, and after a history deletion (Clear History, the retention sweep), after space is
   reclaimed, and after a dictionary entry, snippet or app profile is deleted or an entry is changed, Scribe
   checkpoints the database's write-ahead log and truncates it, so the old text is gone from both files once
-  that checkpoint succeeds; a dictation or another reader of the database can hold it off, and it is retried.
+  that checkpoint succeeds; a dictation, a Clear History still running or another reader of the database can
+  hold it off, and it is retried.
   Text deleted by an earlier build, before this was set, can remain in free pages until they are reused or
   reclaimed.
   Settings > History chooses the limit (7, 30, 90 days, 1 year or Forever) and clears all history after a
