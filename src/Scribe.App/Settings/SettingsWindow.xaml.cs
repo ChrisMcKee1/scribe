@@ -1314,6 +1314,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void InitializeDictionaryGrid()
     {
         DictionaryGrid.ItemsSource = _rows;
+        DataGridCheckBoxClick.Attach(DictionaryGrid);
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
         DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
         SetDictionaryEditable(false);
@@ -1629,15 +1630,39 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void InitializeLibraryGrid()
     {
         LibraryGrid.ItemsSource = _libraryRows;
+        DataGridCheckBoxClick.Attach(LibraryGrid);
 
         // Switching a library on or off changes which dictionary entries are redundant, so the
-        // Library column on the dictionary page has to follow it rather than wait for a save.
-        LibraryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        // Library column on the dictionary page has to follow it rather than wait for a save. The
+        // rows say when it changes, which is the moment the box toggles; CellEditEnding would wait
+        // until the edit commits, and the dictionary cleanup switches libraries off without an edit.
+        _libraryRows.CollectionChanged += LibraryRows_CollectionChanged;
 
         _libraryDetailEmptyText = LibraryDetailEmpty.Text;
         LibraryDetailEmpty.Text = "Loading libraries...";
         SetLibrariesEditable(false);
         UpdateLibraryDetail(null);
+    }
+
+    private void LibraryRows_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        foreach (var row in e.OldItems?.OfType<LibraryRow>() ?? [])
+        {
+            row.PropertyChanged -= LibraryRow_PropertyChanged;
+        }
+
+        foreach (var row in e.NewItems?.OfType<LibraryRow>() ?? [])
+        {
+            row.PropertyChanged += LibraryRow_PropertyChanged;
+        }
+    }
+
+    private void LibraryRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(LibraryRow.Enabled))
+        {
+            Dispatcher.BeginInvoke(RefreshDictionaryStatus);
+        }
     }
 
     // The enabled set is saved from these rows, so an unloaded list must not be editable: saving it
@@ -1682,6 +1707,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var enabled = new HashSet<string>(_settings.EnabledDictionaryLibraryIds, StringComparer.OrdinalIgnoreCase);
         _loadedLibraries.Clear();
         _loadedLibraries.AddRange(libraries);
+
+        // Clear raises a reset that names no removed rows, so their handlers are dropped here.
+        foreach (var stale in _libraryRows)
+        {
+            stale.PropertyChanged -= LibraryRow_PropertyChanged;
+        }
 
         _libraryRows.Clear();
         foreach (var library in _loadedLibraries)
@@ -3210,10 +3241,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The optional CLI tenant box pins the az login account to a tenant. In service principal
         // mode the app registration names its own tenant, so a second tenant field would be two
-        // controls claiming the same setting.
-        if (AzureCliTenantPanel is not null)
+        // controls claiming the same setting, and an API key never asks Entra for a token. The box is
+        // the expander's only content, so the expander goes with it rather than opening onto nothing.
+        if (AzureAdvancedExpander is not null)
         {
-            AzureCliTenantPanel.Visibility = apiKeyMode || servicePrincipal ? Visibility.Collapsed : Visibility.Visible;
+            AzureAdvancedExpander.Visibility = AzureSettingsAccess.ShowCliTenant(SelectedAzureAuthMode, apiKeyMode)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         if (AzureStatusTitle is not null)
@@ -5839,12 +5873,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             }
         }
 
-        // LibraryRow raises no change notification, so the grid keeps painting the old tick until it
-        // is told to re-read. Committing first because refreshing mid-edit throws.
+        // The rows' notifications update the ticks, but a sorted view only places an item when it is
+        // added, committed from an edit, or refreshed, so a library switched off here would keep its
+        // old place under a sort on the On column. The collection view itself is refreshed: the grid's
+        // Items.Refresh() only re-sorts a view that already needs a refresh, which a changed property
+        // never causes, so it merely repaints. Committing first because refreshing during an edit throws.
         if (libraryTargets.Count > 0)
         {
             LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-            LibraryGrid.Items.Refresh();
+            System.Windows.Data.CollectionViewSource.GetDefaultView(LibraryGrid.ItemsSource)?.Refresh();
         }
 
         RefreshDictionaryStatus();
@@ -6729,6 +6766,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public Visibility CoverageVisibility =>
             Coverage == DictionaryRowCoverage.None ? Visibility.Collapsed : Visibility.Visible;
 
+        // The check box and badge cells have no text of their own, so UI Automation names them after
+        // ToString(), which would otherwise read out this type's name.
+        public override string ToString() => Pattern;
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         private bool Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
@@ -6800,16 +6841,40 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         };
     }
 
-    /// <summary>Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable.</summary>
-    public sealed class LibraryRow
+    /// <summary>
+    /// Library row backing the libraries grid; only <see cref="Enabled"/> is user-editable. It notifies
+    /// so the dictionary page's library badges follow a toggle the moment it happens, and so the
+    /// dictionary cleanup's switches, made in code, reach the grid's check boxes.
+    /// </summary>
+    public sealed class LibraryRow : INotifyPropertyChanged
     {
+        private bool _enabled;
+
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public int Terms { get; set; }
         public string Source { get; set; } = string.Empty;
         public bool BuiltIn { get; set; }
-        public bool Enabled { get; set; }
+
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled != value)
+                {
+                    _enabled = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Enabled)));
+                }
+            }
+        }
+
+        // A check box cell has no text of its own, so UI Automation names the focused cell after
+        // ToString(), which would otherwise read out this type's name.
+        public override string ToString() => Name;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
     }
 
     /// <summary>
