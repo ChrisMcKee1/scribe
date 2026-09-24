@@ -203,7 +203,8 @@ public static partial class DictionaryUsageAnalyzer
         var parts = new List<string>();
         if (unusedCount > 0)
         {
-            parts.Add($"{unusedCount:N0} of your own {(unusedCount == 1 ? "entry" : "entries")}");
+            // One of your own entries: the noun stays plural whatever the count.
+            parts.Add($"{unusedCount:N0} of your own entries");
         }
 
         if (libraries.Count > 0)
@@ -212,8 +213,8 @@ public static partial class DictionaryUsageAnalyzer
                 + $"{libraries.Count:N0} {(libraries.Count == 1 ? "library" : "libraries")}");
         }
 
-        var headline = $"Checked {examined:N0} terms against your last {transcripts:N0} dictations. "
-            + $"{string.Join(" and ", parts)} did not appear.";
+        var headline = $"Checked {examined:N0} {(examined == 1 ? "term" : "terms")} against your last "
+            + $"{transcripts:N0} dictations. {string.Join(" and ", parts)} did not appear.";
 
         // The glossary cap only bites once the dictionary is bigger than it, so the number is only
         // worth raising when it is actually costing the user something.
