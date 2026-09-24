@@ -36,6 +36,10 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private readonly CaptureBufferPool _buffers = new();
     private readonly object _sync = new();
 
+    // The listeners for InputDevicesChanged, kept here so the watcher knows whether anything is listening.
+    private readonly object _subscriptionGate = new();
+    private Action<IReadOnlyList<AudioDevice>>? _inputDevicesChanged;
+
     private IWaveIn? _capture;
     private ICaptureDevice? _device;
     private CaptureRecording? _raw;
@@ -116,15 +120,46 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public event EventHandler<Exception>? CaptureFaulted;
 
-    public event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged;
+    /// <inheritdoc/>
+    /// <remarks>
+    /// While anything listens, the watcher also checks its registration on its recovery interval (see
+    /// <see cref="InputDeviceWatcher.SetWatched"/>), so a registration lost to an audio service restart comes back without
+    /// the list being read again; the shell listens only while a Settings window is open.
+    /// </remarks>
+    public event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged
+    {
+        add
+        {
+            lock (_subscriptionGate)
+            {
+                _inputDevicesChanged += value;
+                _watcher?.SetWatched(_inputDevicesChanged is not null);
+            }
+        }
+
+        remove
+        {
+            lock (_subscriptionGate)
+            {
+                _inputDevicesChanged -= value;
+                _watcher?.SetWatched(_inputDevicesChanged is not null);
+            }
+        }
+    }
 
     public IReadOnlyList<AudioDevice> GetInputDevices()
     {
         ObjectDisposedException.ThrowIf(Disposing, this);
 
-        // Whoever asks is about to show the list, so it is the moment to make sure the list keeps up afterwards too.
-        _watcher?.EnsureListening();
-        return _devices.GetInputDevices();
+        // Whoever asks is about to show the list, so it is the moment to make sure the list keeps up afterwards too, and
+        // the reading goes through the watcher's baseline so a list shown earlier hears about anything this one finds.
+        if (_watcher is null)
+        {
+            return _devices.GetInputDevices();
+        }
+
+        _watcher.EnsureListening();
+        return _watcher.Read();
     }
 
     public bool Start(string? deviceId = null, long owner = 0)
@@ -747,7 +782,7 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     private void RaiseInputDevicesChanged(IReadOnlyList<AudioDevice> devices) =>
         ResilientEvent.InvokeAll(
-            InputDevicesChanged,
+            Volatile.Read(ref _inputDevicesChanged),
             devices,
             ex => TryLog(log => log.LogWarning(
                 "An input device change handler threw ({Failure}).", FailureShape.DescribeWithStack(ex))));

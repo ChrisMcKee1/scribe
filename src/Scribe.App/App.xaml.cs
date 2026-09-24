@@ -393,9 +393,6 @@ public partial class App : Application
             }
         };
 
-        // An open Settings window keeps its microphone list current; the tray reads the devices whenever its menu opens.
-        services.GetRequiredService<IAudioCaptureService>().InputDevicesChanged += OnInputDevicesChanged;
-
         // Warm-load the ~600 MB recognizer and the VAD model off the UI thread so the first
         // dictation is fast and does not stall on model initialization.
         var transcription = services.GetRequiredService<ITranscriptionService>();
@@ -1136,8 +1133,9 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Raised on the thread pool by the capture service's device watcher. Posted, never invoked: that thread must not wait
-    /// for the UI thread, and a failure here must never reach it.
+    /// Raised by the capture service when a reading of the devices finds a change: on the watcher's thread pool thread
+    /// after a burst of Windows notifications, or on this thread when the tray menu's own reading noticed first. Posted,
+    /// never invoked, so neither thread waits for the window, and a failure here must never reach them.
     /// </summary>
     private void OnInputDevicesChanged(IReadOnlyList<AudioDevice> devices)
     {
@@ -1176,15 +1174,21 @@ public partial class App : Application
         }
 
         var services = _host!.Services;
+        var audio = services.GetRequiredService<IAudioCaptureService>();
 
         // While the window is open its saves run on this thread: the one-time VACUUM stays off until it
         // closes, and one already running stops now.
         var foreground = services.GetRequiredService<StorageMaintenance>().EnterForegroundWork();
         try
         {
+            // Only while the window is open: its microphone list follows device changes, and the watcher behind the
+            // capture service keeps checking that it can still hear Windows (the tray reads the devices whenever its
+            // menu opens, so it needs neither). Before the window reads its list, so a change any later reading finds
+            // reaches it; the handler posts, so it runs once the window is in place.
+            audio.InputDevicesChanged += OnInputDevicesChanged;
             _settingsWindow = new SettingsWindow(
                 services.GetRequiredService<ISettingsRepository>(),
-                services.GetRequiredService<IAudioCaptureService>(),
+                audio,
                 services.GetRequiredService<IDictionaryRepository>(),
                 services.GetRequiredService<IDictionaryLibraryService>(),
                 services.GetRequiredService<ISnippetRepository>(),
@@ -1213,6 +1217,7 @@ public partial class App : Application
                 services.GetRequiredService<SessionDiagnostics>());
             _settingsWindow.Closed += (_, _) =>
             {
+                audio.InputDevicesChanged -= OnInputDevicesChanged;
                 _settingsWindow = null;
                 foreground.Dispose();
             };
@@ -1222,7 +1227,9 @@ public partial class App : Application
         catch
         {
             // A window that never opened never closes, and its scope would hold the compaction off for
-            // the rest of the session. Disposing twice is harmless if it did close.
+            // the rest of the session. Disposing twice is harmless if it did close, and so is removing the
+            // device listener twice.
+            audio.InputDevicesChanged -= OnInputDevicesChanged;
             foreground.Dispose();
             throw;
         }

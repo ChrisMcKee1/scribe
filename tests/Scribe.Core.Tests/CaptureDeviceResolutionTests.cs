@@ -300,9 +300,9 @@ public sealed class CaptureDeviceResolutionTests
         var pool = new ConcurrentQueue<Action>();
         var service = endpoints.CreateService(devices =>
             new InputDeviceWatcher(notifications.Register, devices.GetInputDevices, endpoints.Log, time, pool.Enqueue));
-        RunAll(pool); // the watcher's first reading
         IReadOnlyList<AudioDevice>? announced = null;
-        service.InputDevicesChanged += devices => announced = devices;
+        service.InputDevicesChanged += devices => announced = devices; // a Settings window, opening
+        service.GetInputDevices(); // and showing the list
         Assert.True(service.Start());
         var live = endpoints.Capture;
         Speak(service, live);
@@ -314,7 +314,7 @@ public sealed class CaptureDeviceResolutionTests
         notifications.Raise(EndpointChange.CaptureDefault);
         RunAll(pool);
         time.Advance(InputDeviceWatcher.DefaultQuietPeriod);
-        Assert.Single(time.Timers).Fire();
+        time.Timers[0].Fire(); // the quiet period's timer
 
         Assert.NotNull(announced);
         Assert.True(Assert.Single(announced, device => device.Id == Elgato).IsDefault);
@@ -332,6 +332,45 @@ public sealed class CaptureDeviceResolutionTests
         service.Dispose();
         Assert.Equal(["register #1", "unregister #1", "release #1"], notifications.Events);
         Assert.Equal(0, notifications.CallsInsideCallback);
+    }
+
+    [Fact]
+    public void The_tray_reading_a_change_first_tells_an_open_settings_list_at_once()
+    {
+        var endpoints = ReportedMachine();
+        var time = new ManualTimeProvider();
+        using var service = endpoints.CreateService(devices => new InputDeviceWatcher(
+            new FakeEndpointNotifications().Register, devices.GetInputDevices, endpoints.Log, time, _ => { }));
+        IReadOnlyList<AudioDevice>? announced = null;
+        service.InputDevicesChanged += devices => announced = devices;
+        service.GetInputDevices(); // the Settings window's list
+
+        endpoints.SetDefaults(console: Elgato, multimedia: Elgato, communications: Elgato);
+        var trayList = service.GetInputDevices(); // the tray menu opening, before any notification was read
+
+        Assert.Same(trayList, announced);
+    }
+
+    [Fact]
+    public void Listening_for_changes_keeps_the_registration_checked_and_the_last_listener_leaving_stops_it()
+    {
+        var endpoints = ReportedMachine();
+        var time = new ManualTimeProvider();
+        using var service = endpoints.CreateService(devices => new InputDeviceWatcher(
+            new FakeEndpointNotifications().Register, devices.GetInputDevices, endpoints.Log, time, _ => { }));
+        var healthCheck = time.Timers[1];
+        Action<IReadOnlyList<AudioDevice>> settings = _ => { };
+        Action<IReadOnlyList<AudioDevice>> another = _ => { };
+        Assert.Equal(Timeout.InfiniteTimeSpan, healthCheck.DueTime);
+
+        service.InputDevicesChanged += settings;
+        Assert.Equal(InputDeviceWatcher.DefaultRecoveryInterval, healthCheck.DueTime);
+        service.InputDevicesChanged += another;
+        service.InputDevicesChanged -= settings;
+        Assert.Equal(InputDeviceWatcher.DefaultRecoveryInterval, healthCheck.DueTime);
+
+        service.InputDevicesChanged -= another;
+        Assert.Equal(Timeout.InfiniteTimeSpan, healthCheck.DueTime);
     }
 
     private static void RunAll(ConcurrentQueue<Action> pool)

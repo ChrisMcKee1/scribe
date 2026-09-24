@@ -68,6 +68,16 @@ internal interface IEndpointNotifications : IDisposable
 /// The registration is the one device enumerator Scribe keeps for any length of time. When the audio service goes away
 /// under it, COM hands its client an error instead of an answer (see <see cref="AudioServiceFailure"/>), and
 /// <see cref="EnsureListening"/> replaces it: bounded by <see cref="DefaultRecoveryInterval"/>, and logged once per episode.
+/// It runs whenever a list is about to be shown, and, while something listens for changes (<see cref="SetWatched"/>),
+/// also on that interval by itself, so an open Settings window regains live updates without being touched. While
+/// nothing listens it stays lazy: nothing shown can go stale, and the next list shown checks first.
+/// </para>
+/// <para>
+/// Every reading goes through <see cref="Read"/> or the watcher's own reading after a burst, one at a time and against one
+/// baseline, and whichever reading finds a different picture announces it. A list shown from an earlier reading therefore
+/// always hears about a change, even one another caller read first: when the watcher kept a baseline of its own, a change
+/// that landed before its first reading became that baseline and was never announced to a Settings window opened before
+/// it.
 /// </para>
 /// </remarks>
 internal sealed class InputDeviceWatcher : IDisposable
@@ -75,7 +85,10 @@ internal sealed class InputDeviceWatcher : IDisposable
     /// <summary>How long a burst of notifications must stay quiet before the endpoints are read.</summary>
     internal static readonly TimeSpan DefaultQuietPeriod = TimeSpan.FromMilliseconds(400);
 
-    /// <summary>The least time between two attempts to replace a registration that lost the audio service.</summary>
+    /// <summary>
+    /// The least time between two attempts to replace a registration that lost the audio service, and how often the
+    /// registration is checked while something listens.
+    /// </summary>
     internal static readonly TimeSpan DefaultRecoveryInterval = TimeSpan.FromSeconds(30);
 
     private readonly Func<Action<EndpointChange>, IEndpointNotifications> _register;
@@ -86,6 +99,7 @@ internal sealed class InputDeviceWatcher : IDisposable
     private readonly TimeSpan _quietPeriod;
     private readonly TimeSpan _recoveryInterval;
     private readonly ClosableTimer _quiet;
+    private readonly ClosableTimer _health;
     private readonly Action<EndpointChange> _onChange;
 
     // Taken by Start, EnsureListening and Dispose only; never on a notification callback.
@@ -94,12 +108,19 @@ internal sealed class InputDeviceWatcher : IDisposable
     private long? _lastRecoveryAttempt;
     private bool _recoveryEpisode;
 
-    // Taken on the thread pool only: serializes the reads, so a slow one can never overwrite a newer one.
+    // Every reading of the endpoints happens under this gate, the watcher's own on the thread pool and a caller's about to
+    // show a list, so readings are compared and announced in the order they were taken and a slow one never overwrites a
+    // newer one. Never taken on a notification callback. The last successful reading is null once a reading failed:
+    // whoever read then shows no list, so the next reading is news to them.
     private readonly object _readGate = new();
     private IReadOnlyList<AudioDevice>? _lastRead;
+    private bool _anyReading;
 
     // 1 while a request to restart the quiet period is queued and has not run yet.
     private int _armQueued;
+
+    // 1 while something listens for changes, which keeps the registration checked on the recovery interval.
+    private int _watched;
     private int _disposed;
 
     /// <param name="register">
@@ -131,12 +152,14 @@ internal sealed class InputDeviceWatcher : IDisposable
         _quietPeriod = quietPeriod ?? DefaultQuietPeriod;
         _recoveryInterval = recoveryInterval ?? DefaultRecoveryInterval;
         _quiet = new ClosableTimer(ReadAndCompare, _time);
+        _health = new ClosableTimer(CheckWhileWatched, _time);
         _onChange = OnEndpointChange;
     }
 
     /// <summary>
-    /// Raised on the thread pool, after a burst of notifications went quiet, when the active capture endpoints or their
-    /// defaults differ from the last read. Carries the new list. Handlers must not block.
+    /// Raised when a reading, the watcher's own after a burst of notifications went quiet or one a caller took through
+    /// <see cref="Read"/>, finds the active capture endpoints or their defaults different from the last reading. Carries
+    /// the new list, on the thread that read it. Handlers must not block.
     /// </summary>
     public event Action<IReadOnlyList<AudioDevice>>? Changed;
 
@@ -147,8 +170,9 @@ internal sealed class InputDeviceWatcher : IDisposable
     }
 
     /// <summary>
-    /// Registers for notifications and takes the first reading on the thread pool. Never throws: a registration that
-    /// fails is logged, and <see cref="EnsureListening"/> tries again later.
+    /// Registers for notifications. Never throws: a registration that fails is logged, and <see cref="EnsureListening"/>
+    /// tries again later. Nothing is read here: the first reading anyone takes is the baseline, and nobody can hold an
+    /// older one.
     /// </summary>
     public void Start()
     {
@@ -173,14 +197,61 @@ internal sealed class InputDeviceWatcher : IDisposable
                     FailureShape.Describe(ex)));
             }
         }
+    }
 
-        TryQueue(ReadFirst);
+    /// <summary>
+    /// Reads the endpoints for a caller about to show them, against the same baseline as the watcher's own readings: when
+    /// the picture differs from the last reading, whoever took that one, <see cref="Changed"/> is raised with it, so a
+    /// list shown earlier catches up. Throws what the reading throws, after which the next reading counts as news.
+    /// </summary>
+    public IReadOnlyList<AudioDevice> Read()
+    {
+        lock (_readGate)
+        {
+            IReadOnlyList<AudioDevice> now;
+            try
+            {
+                now = _read();
+            }
+            catch
+            {
+                ForgetLastReading();
+                throw;
+            }
+
+            Publish(now);
+            return now;
+        }
+    }
+
+    /// <summary>
+    /// Whether anything listens for changes. While something does, the registration is also checked every recovery
+    /// interval (<see cref="EnsureListening"/>, with the same bound and logging), so a list left open regains live updates
+    /// after the audio service comes back; while nothing does, the check waits for the next list to be shown.
+    /// </summary>
+    public void SetWatched(bool watched)
+    {
+        Volatile.Write(ref _watched, watched ? 1 : 0);
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (watched)
+        {
+            _health.Schedule(_recoveryInterval);
+        }
+        else
+        {
+            _health.Cancel();
+        }
     }
 
     /// <summary>
     /// Replaces a registration that has lost the audio service, or one that could never be made: at most once per call and
-    /// once per recovery interval, logged once per episode. Called where a fresh microphone list is about to be shown, so
-    /// the list after it stays live. Never throws, and never runs on a notification callback.
+    /// once per recovery interval, logged once per episode. Called where a fresh microphone list is about to be shown, and
+    /// on the recovery interval while something listens (<see cref="SetWatched"/>). Never throws, and never runs on a
+    /// notification callback.
     /// </summary>
     public void EnsureListening()
     {
@@ -254,6 +325,7 @@ internal sealed class InputDeviceWatcher : IDisposable
         }
 
         _quiet.Close();
+        _health.Close();
 
         IEndpointNotifications? notifications;
         lock (_registrationGate)
@@ -350,49 +422,32 @@ internal sealed class InputDeviceWatcher : IDisposable
         _quiet.Schedule(_quietPeriod);
     }
 
-    private void ReadFirst()
-    {
-        lock (_readGate)
-        {
-            if (_lastRead is null && !IsDisposed)
-            {
-                _lastRead = TryRead();
-            }
-        }
-    }
-
-    // Thread pool, once a burst has been quiet for the quiet period. Never throws: it runs on a timer thread. The event is
-    // raised under the read gate, so two readings that overlap are announced in the order they were read and the last one
-    // announced is always the newest; handlers must not block, and none takes this gate.
+    // Thread pool, once a burst has been quiet for the quiet period. Never throws: it runs on a timer thread.
     private void ReadAndCompare()
     {
         try
         {
             lock (_readGate)
             {
-                if (IsDisposed || TryRead() is not { } now)
-                {
-                    return;
-                }
-
-                var before = _lastRead;
-                if (before is not null && SamePicture(before, now))
-                {
-                    return;
-                }
-
-                _lastRead = now;
                 if (IsDisposed)
                 {
                     return;
                 }
 
-                TryLog(log => log.LogInformation("Audio input devices changed: {Change}", DescribeChange(before, now)));
-                ResilientEvent.InvokeAll(
-                    Changed,
-                    now,
-                    ex => TryLog(log => log.LogWarning(
-                        "An audio device change handler threw ({Failure}).", FailureShape.DescribeWithStack(ex))));
+                IReadOnlyList<AudioDevice> now;
+                try
+                {
+                    now = _read();
+                }
+                catch (Exception ex)
+                {
+                    // The next notification, or the next list shown, reads again.
+                    ForgetLastReading();
+                    TryLog(log => log.LogDebug("Could not read the audio input devices ({Failure}).", FailureShape.Describe(ex)));
+                    return;
+                }
+
+                Publish(now);
             }
         }
         catch (Exception ex)
@@ -402,19 +457,62 @@ internal sealed class InputDeviceWatcher : IDisposable
         }
     }
 
-    private IReadOnlyList<AudioDevice>? TryRead()
+    // Caller holds _readGate. The event is raised under it, so two readings are announced in the order they were taken and
+    // the last one announced is always the newest; handlers must not block, and none takes this gate. The very first
+    // reading is nobody's news: no list can have been shown from an earlier one.
+    private void Publish(IReadOnlyList<AudioDevice> now)
+    {
+        var before = _lastRead;
+        var first = !_anyReading;
+        _anyReading = true;
+        _lastRead = now;
+        if (first || IsDisposed || (before is not null && SamePicture(before, now)))
+        {
+            return;
+        }
+
+        TryLog(log => log.LogInformation("Audio input devices changed: {Change}", DescribeChange(before, now)));
+        ResilientEvent.InvokeAll(
+            Changed,
+            now,
+            ex => TryLog(log => log.LogWarning(
+                "An audio device change handler threw ({Failure}).", FailureShape.DescribeWithStack(ex))));
+    }
+
+    // Caller holds _readGate. A reading failed, so whoever took it shows no list: the next reading is news to them even if
+    // it matches the one before.
+    private void ForgetLastReading()
+    {
+        _anyReading = true;
+        _lastRead = null;
+    }
+
+    // Thread pool, on the recovery interval while something listens. Never throws: it runs on a timer thread. A tick can
+    // already be on its way when the last listener leaves, so both the check and the re-arm look at the flag again.
+    private void CheckWhileWatched()
     {
         try
         {
-            return _read();
+            if (IsDisposed || Volatile.Read(ref _watched) == 0)
+            {
+                return;
+            }
+
+            EnsureListening();
+            if (!IsDisposed && Volatile.Read(ref _watched) != 0)
+            {
+                _health.Schedule(_recoveryInterval);
+            }
         }
         catch (Exception ex)
         {
-            // The next notification reads again; until then the last reading stands.
-            TryLog(log => log.LogDebug("Could not read the audio input devices ({Failure}).", FailureShape.Describe(ex)));
-            return null;
+            TryLog(log => log.LogDebug(
+                "Checking the audio device watcher's registration failed ({Failure}).", FailureShape.Describe(ex)));
         }
     }
+
+    /// <summary>Test seam: the periodic check, as a tick that was already past its timer delivers it.</summary>
+    internal void DeliverWatchedCheck() => CheckWhileWatched();
 
     /// <summary>True when two readings name the same devices, with the same names and the same defaults, in any order.</summary>
     internal static bool SamePicture(IReadOnlyList<AudioDevice> before, IReadOnlyList<AudioDevice> now) =>

@@ -14,6 +14,7 @@ internal sealed class FakeEndpointNotifications
     private Registration? _last;
     private int _registrations;
     private int _registerAttempts;
+    private int _probes;
     private int _insideCallback;
     private int _callsInsideCallback;
 
@@ -22,6 +23,9 @@ internal sealed class FakeEndpointNotifications
     public int CallsInsideCallback => Volatile.Read(ref _callsInsideCallback);
 
     public int RegisterAttempts => Volatile.Read(ref _registerAttempts);
+
+    /// <summary>How many times any registration was probed.</summary>
+    public int Probes => Volatile.Read(ref _probes);
 
     public Func<Exception>? ProbeFailure { get; set; }
 
@@ -85,6 +89,7 @@ internal sealed class FakeEndpointNotifications
         public void Probe()
         {
             owner.NoteCall();
+            Interlocked.Increment(ref owner._probes);
             if (owner.ProbeFailure?.Invoke() is { } failure)
             {
                 throw failure;

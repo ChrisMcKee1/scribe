@@ -100,9 +100,11 @@ public interface IAudioCaptureService : IDisposable
     event EventHandler<Exception>? CaptureFaulted;
 
     /// <summary>
-    /// Raised on a background thread, once a burst of Windows device notifications has gone quiet, when the active input
-    /// devices or the Windows default input have changed. Carries the new list. A capture already running is not touched:
-    /// it keeps the device it opened, and the next capture resolves its device afresh. Handlers must not block.
+    /// Raised when a reading finds the active input devices or the Windows default input different from the last reading:
+    /// the watcher's own, once a burst of Windows device notifications has gone quiet (on a background thread), or one
+    /// <see cref="GetInputDevices"/> took for another caller (on that caller's thread), so a list shown earlier catches up
+    /// whoever noticed first. Carries the new list. A capture already running is not touched: it keeps the device it
+    /// opened, and the next capture resolves its device afresh. Handlers must not block.
     /// </summary>
     event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged;
 }

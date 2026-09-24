@@ -743,11 +743,18 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   every operation (the open, the default lookup, the listing) and releases it before returning; a device keeps working
   after its enumerator is released (measured). The one long-lived enumerator is the `InputDeviceWatcher` registration,
   which `EnsureListening` replaces when COM reports the audio service gone (`AudioServiceFailure`), bounded and logged
-  once per episode.
+  once per episode. It is checked whenever a list is shown, and on the recovery interval only while something listens
+  for changes (the shell listens only while a Settings window is open).
+- **Every list reading shares the watcher's one baseline.** `AudioCaptureService.GetInputDevices` reads through
+  `InputDeviceWatcher.Read`, serialized with the watcher's own readings, and whichever reading finds a different picture
+  announces it. A baseline the watcher kept for itself swallowed a change that landed before its first reading, so a
+  Settings window opened earlier kept the old default.
 - **`GetDevice` hands back unplugged, disabled and not present endpoints.** Only an ID Windows does not know fails
   (E_NOTFOUND); creating a capture on such an endpoint then fails at audio client activation with
   AUDCLNT_E_DEVICE_INVALIDATED (both measured). So a chosen microphone's lookup and its capture creation both sit
-  inside the fallback to the Windows default, and the user is told once per episode (`UnavailableMicrophoneNotice`).
+  inside the fallback to the Windows default. `UnavailableMicrophoneNotice` tells the user once per episode: it is fed
+  every committed microphone choice (a different ID ends the episode) and every capture that opened, whatever owned it
+  afterwards, with the fallback read from that capture's own start (`RecordingOpen.RequestedDeviceUnavailable`).
 - **NAudio 3.0.1 keeps `IMMNotificationClient` and `RegisterEndpointNotificationCallback` internal.** The public route
   is `MMDeviceEnumerator.CreateNotificationClient(useSynchronizationContext: false)`, whose events run on the audio
   worker thread. Microsoft's rules for those callbacks are strict (never block, never register or unregister in one,

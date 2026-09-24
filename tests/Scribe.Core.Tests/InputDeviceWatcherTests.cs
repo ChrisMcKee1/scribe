@@ -24,7 +24,7 @@ public sealed class InputDeviceWatcherTests
     public void A_burst_of_notifications_is_read_once_after_it_has_been_quiet_and_announced_once()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         var announced = new List<IReadOnlyList<AudioDevice>>();
         rig.Watcher.Changed += announced.Add;
 
@@ -58,7 +58,7 @@ public sealed class InputDeviceWatcherTests
     public void A_notification_after_the_quiet_period_restarted_restarts_it_again()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
 
         rig.Notifications.Raise(EndpointChange.Device);
         rig.RunQueued();
@@ -80,7 +80,7 @@ public sealed class InputDeviceWatcherTests
     public void Render_defaults_and_ordinary_property_changes_never_wake_the_watcher()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
 
         rig.Notifications.Raise(EndpointChange.RenderDefault);
         rig.Notifications.Raise(EndpointChange.OtherProperty);
@@ -93,7 +93,7 @@ public sealed class InputDeviceWatcherTests
     {
         // A render device plugged in raises device notifications too; the endpoints are read and found the same.
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         var announced = 0;
         rig.Watcher.Changed += _ => announced++;
 
@@ -111,7 +111,7 @@ public sealed class InputDeviceWatcherTests
     public void A_renamed_microphone_is_announced()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         IReadOnlyList<AudioDevice>? announced = null;
         rig.Watcher.Changed += devices => announced = devices;
 
@@ -129,7 +129,7 @@ public sealed class InputDeviceWatcherTests
     public void A_notification_callback_never_waits_even_while_a_reading_is_holding_the_watcher()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         rig.Notifications.Raise(EndpointChange.Device);
         rig.RunQueued();
 
@@ -168,7 +168,7 @@ public sealed class InputDeviceWatcherTests
     public void Nothing_registers_unregisters_reads_or_touches_a_device_inside_a_callback()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         var readsBefore = rig.Reads;
 
         foreach (var change in Enum.GetValues<EndpointChange>())
@@ -185,7 +185,7 @@ public sealed class InputDeviceWatcherTests
     public void Disposal_unregisters_before_the_enumerator_is_released_and_later_notifications_do_nothing()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         var announced = 0;
         rig.Watcher.Changed += _ => announced++;
         rig.Notifications.Raise(EndpointChange.Device);
@@ -212,7 +212,7 @@ public sealed class InputDeviceWatcherTests
     public void A_handler_that_throws_does_not_keep_the_change_from_the_others()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         var second = 0;
         rig.Watcher.Changed += _ => throw new InvalidOperationException("A window that is already gone.");
         rig.Watcher.Changed += _ => second++;
@@ -231,7 +231,7 @@ public sealed class InputDeviceWatcherTests
     public void A_registration_that_lost_the_audio_service_is_replaced_once_and_logged_once()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         rig.Notifications.ProbeFailure = () => new COMException("Disconnected.", AudioServiceFailure.Disconnected);
 
         rig.Watcher.EnsureListening();
@@ -256,7 +256,7 @@ public sealed class InputDeviceWatcherTests
     public void A_reconnection_that_keeps_failing_is_retried_only_after_the_bound_and_warned_about_once()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         rig.Notifications.ProbeFailure = () => new COMException("Server unavailable.", AudioServiceFailure.RpcServerUnavailable);
         rig.Notifications.RegisterFailure = () => new COMException("Not running.", AudioServiceFailure.AudioServiceNotRunning);
 
@@ -284,7 +284,7 @@ public sealed class InputDeviceWatcherTests
     public void A_failure_that_is_not_the_audio_service_going_away_leaves_the_registration_alone()
     {
         var rig = new Rig([Insta, Elgato]);
-        rig.StartAndReadFirst();
+        rig.StartAndShow();
         rig.Notifications.ProbeFailure = () => new COMException("Unspecified.", unchecked((int)0x80004005));
 
         rig.Watcher.EnsureListening();
@@ -304,7 +304,7 @@ public sealed class InputDeviceWatcherTests
         Assert.False(rig.Watcher.IsListening);
         Assert.Single(rig.Log.Entries, entry => entry.Level == LogLevel.Warning);
         rig.RunQueued();
-        Assert.Equal(1, rig.Reads); // the first reading still happens
+        Assert.Equal(0, rig.Reads); // nothing is read until a list is shown
 
         rig.Notifications.RegisterFailure = null;
         rig.Watcher.EnsureListening(); // within the bound since the failed attempt
@@ -312,6 +312,172 @@ public sealed class InputDeviceWatcherTests
         rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
         rig.Watcher.EnsureListening();
         Assert.True(rig.Watcher.IsListening);
+    }
+
+    [Fact]
+    public void A_change_that_lands_before_the_watcher_reads_anything_itself_still_reaches_a_list_shown_before_it()
+    {
+        // The reviewed ordering: the session banner and then a Settings window read the list at startup, Windows moves the
+        // default, and only then does the watcher take a reading of its own. With a baseline of its own, that reading
+        // became the baseline in silence and the Settings window kept the old default.
+        var rig = new Rig([Insta, Elgato]);
+        rig.Watcher.Start();
+        var announced = new List<IReadOnlyList<AudioDevice>>();
+        rig.Watcher.Changed += announced.Add;
+        rig.Watcher.Read(); // the banner
+        rig.Watcher.Read(); // the Settings window
+        Assert.Empty(announced); // the first reading is nobody's news, and the second found the same
+
+        rig.Devices = [Insta with { IsDefault = false }, Elgato with { IsDefault = true }];
+        rig.Notifications.Raise(EndpointChange.CaptureDefault);
+        rig.RunQueued();
+        rig.Time.Advance(Quiet);
+        rig.FireTimer();
+
+        var shown = Assert.Single(announced);
+        Assert.True(Assert.Single(shown, device => device.Id == "elgato").IsDefault);
+    }
+
+    [Fact]
+    public void A_list_shown_earlier_hears_about_a_change_another_caller_read_first()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow(); // a Settings window shows Insta as the default
+        var announced = new List<IReadOnlyList<AudioDevice>>();
+        rig.Watcher.Changed += announced.Add;
+
+        // The default moves, and the tray menu opens and reads it before the watcher's own reading comes round.
+        rig.Devices = [Insta with { IsDefault = false }, Elgato with { IsDefault = true }];
+        var tray = rig.Watcher.Read();
+
+        Assert.Same(tray, Assert.Single(announced)); // announced at once, by the reading that noticed
+        rig.Notifications.Raise(EndpointChange.CaptureDefault);
+        rig.RunQueued();
+        rig.Time.Advance(Quiet);
+        rig.FireTimer();
+        Assert.Single(announced); // the watcher's own reading found nothing new
+    }
+
+    [Fact]
+    public void A_change_undone_within_one_burst_still_reaches_a_list_that_saw_the_change()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        var announced = new List<IReadOnlyList<AudioDevice>>();
+        rig.Watcher.Changed += announced.Add;
+
+        rig.Devices = [Insta, Elgato, new AudioDevice("usb", "USB Microphone", false)];
+        rig.Watcher.Read(); // the tray, while the USB microphone is plugged in
+        rig.Devices = [Insta, Elgato]; // and it is pulled out again before the burst goes quiet
+        rig.Notifications.Raise(EndpointChange.Device);
+        rig.RunQueued();
+        rig.Time.Advance(Quiet);
+        rig.FireTimer();
+
+        Assert.Equal([3, 2], announced.Select(devices => devices.Count));
+    }
+
+    [Fact]
+    public void After_a_failed_reading_the_next_one_is_news_even_when_nothing_changed()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        var announced = new List<IReadOnlyList<AudioDevice>>();
+        rig.Watcher.Changed += announced.Add;
+
+        // A Settings window opens while the audio service is restarting and shows no microphones.
+        rig.FailReads = true;
+        Assert.Throws<COMException>(() => rig.Watcher.Read());
+        rig.FailReads = false;
+
+        rig.Notifications.Raise(EndpointChange.Device);
+        rig.RunQueued();
+        rig.Time.Advance(Quiet);
+        rig.FireTimer();
+
+        Assert.Equal(2, Assert.Single(announced).Count);
+    }
+
+    [Fact]
+    public void While_something_listens_a_lost_registration_is_replaced_on_the_interval_without_a_list_being_shown()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        rig.Watcher.SetWatched(true);
+        Assert.Equal(InputDeviceWatcher.DefaultRecoveryInterval, rig.HealthTimer.DueTime);
+
+        rig.Notifications.ProbeFailure = () => new COMException("Disconnected.", AudioServiceFailure.Disconnected);
+        rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
+        rig.HealthTimer.Fire();
+
+        Assert.Equal(["register #1", "unregister #1", "release #1", "register #2"], rig.Notifications.Events);
+        Assert.Single(rig.Log.Entries, entry => entry.Level == LogLevel.Warning);
+        Assert.Equal(InputDeviceWatcher.DefaultRecoveryInterval, rig.HealthTimer.DueTime); // checking again, on the interval
+    }
+
+    [Fact]
+    public void The_check_while_listening_keeps_to_the_recovery_bound_and_warns_once()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        rig.Watcher.SetWatched(true);
+        rig.Notifications.ProbeFailure = () => new COMException("Server unavailable.", AudioServiceFailure.RpcServerUnavailable);
+        rig.Notifications.RegisterFailure = () => new COMException("Not running.", AudioServiceFailure.AudioServiceNotRunning);
+
+        for (var tick = 0; tick < 3; tick++)
+        {
+            rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
+            rig.HealthTimer.Fire();
+        }
+
+        Assert.Equal(1 + 3, rig.Notifications.RegisterAttempts); // one attempt per interval, never more
+        Assert.Single(rig.Log.Entries, entry => entry.Level == LogLevel.Warning);
+
+        rig.Notifications.RegisterFailure = null;
+        rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
+        rig.HealthTimer.Fire();
+        Assert.True(rig.Watcher.IsListening);
+    }
+
+    [Fact]
+    public void While_nothing_listens_the_registration_waits_for_the_next_list_to_be_checked()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        rig.Watcher.SetWatched(true);
+        rig.Watcher.SetWatched(false);
+        Assert.Equal(Timeout.InfiniteTimeSpan, rig.HealthTimer.DueTime);
+        rig.Notifications.ProbeFailure = () => new COMException("Disconnected.", AudioServiceFailure.Disconnected);
+
+        // The canceled timer delivers nothing, and a tick that was already past it when the last listener left neither
+        // checks nor arms the timer again.
+        rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
+        rig.HealthTimer.Fire();
+        rig.Watcher.DeliverWatchedCheck();
+
+        Assert.Equal(0, rig.Notifications.Probes);
+        Assert.Equal(["register #1"], rig.Notifications.Events);
+        Assert.Equal(Timeout.InfiniteTimeSpan, rig.HealthTimer.DueTime);
+    }
+
+    [Fact]
+    public void The_last_listener_leaving_while_a_check_runs_stops_the_checks()
+    {
+        var rig = new Rig([Insta, Elgato]);
+        rig.StartAndShow();
+        rig.Watcher.SetWatched(true);
+
+        // The Settings window closes while the periodic check is probing the registration.
+        rig.Notifications.ProbeFailure = () =>
+        {
+            rig.Watcher.SetWatched(false);
+            return null!;
+        };
+        rig.Time.Advance(InputDeviceWatcher.DefaultRecoveryInterval);
+        rig.HealthTimer.Fire();
+
+        Assert.Equal(1, rig.Notifications.Probes);
+        Assert.Equal(Timeout.InfiniteTimeSpan, rig.HealthTimer.DueTime); // not armed again
     }
 
     [Theory]
@@ -378,13 +544,18 @@ public sealed class InputDeviceWatcherTests
 
         public Action? DuringRead { get; set; }
 
+        /// <summary>Makes every reading fail, as it does while the audio service restarts.</summary>
+        public volatile bool FailReads;
+
         public int Reads => Volatile.Read(ref _reads);
 
         public int QueuedCount => _queued.Count;
 
-        public void StartAndReadFirst()
+        /// <summary>Starts the watcher and shows a list, as Settings opening does: that reading is the baseline.</summary>
+        public void StartAndShow()
         {
             Watcher.Start();
+            Watcher.Read();
             RunQueued();
         }
 
@@ -396,13 +567,21 @@ public sealed class InputDeviceWatcherTests
             }
         }
 
-        // The quiet period's timer, delivering a tick as the pool would.
-        public void FireTimer() => Assert.Single(Time.Timers).Fire();
+        // The quiet period's timer, delivering a tick as the pool would. The watcher makes it first.
+        public void FireTimer() => Time.Timers[0].Fire();
+
+        // The timer that checks the registration while something listens. The watcher makes it second.
+        public ManualTimer HealthTimer => Time.Timers[1];
 
         private IReadOnlyList<AudioDevice> Read()
         {
             Interlocked.Increment(ref _reads);
             DuringRead?.Invoke();
+            if (FailReads)
+            {
+                throw new COMException("Not running.", AudioServiceFailure.AudioServiceNotRunning);
+            }
+
             return Devices;
         }
     }
