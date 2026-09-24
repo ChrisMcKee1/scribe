@@ -334,6 +334,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     CaptureTriggerBinding, StartupFailureNotice
     Overlay/                        OverlayHelperLifetime (every overlay helper lifetime decision),
                                     OverlayPreviewGate
+    Appearance/                     AccentForegroundChooser, AccentContrastPlanner, WcagContrast, SrgbColor:
+                                    the foreground on every accent and palette fill (see Accent contrast)
     Settings/                       pure builders extracted from the UI: DictionaryEntryBuilder,
                                     SnippetBuilder, ProfileBuilder, DictionaryImportMerger (tested), and
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
@@ -347,7 +349,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Settings/                       the nav-rail settings window (adapters call Core builders)
     Onboarding/                     WelcomeWindow (one-time first-run intro)
     Tray/ History/ Overlay/         tray menu + quick actions; history data/UI; OverlayProcessClient
-    Infrastructure/                 FileLoggerProvider (shared daily log; see Logging mandate)
+    Infrastructure/                 FileLoggerProvider (shared daily log; see Logging mandate),
+                                    AccentContrastResources (writes the accent foregrounds)
     models/                         downloaded ASR/VAD models (gitignored)
   src/Scribe.Overlay/               standalone WinUI 3 transparent pill (Scribe.Overlay.exe)
     OverlayWindow.xaml(.cs)         the pill geometry/visuals (LogicalWidth=264, Height=110)
@@ -913,6 +916,42 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `reasonLength=<n>`, never the reason text. The client's lifetime lines are `Overlay helper suspended
   after N idle minutes`, `Overlay helper released because dictation was paused`, `Overlay relaunch
   retry due after a N ms cooldown` and `Overlay command <verb> failed; tearing down for relaunch.`
+
+## Accent contrast (read before touching theme resources or anything drawn on an accent fill)
+
+- **WPF-UI 4.3.0 never recolours text on the accent.** Its theme dictionaries define every text-on-accent brush
+  (`TextOnAccentFillColorPrimaryBrush`, `AccentButtonForeground`, `CheckBoxCheckGlyphForeground`,
+  `ListBoxItemSelectedForegroundThemeBrush`, `ToggleSwitchKnobFillOn` and their siblings) with a `StaticResource` to
+  the theme's own colour, black in the dark theme and white in the light one, while its accent manager derives the
+  fills from the user's accent with fixed HSV steps. With the maintainer's accent #0E0E70 the dark theme drew black on
+  #42429B (2.48:1) and #59599B (3.33:1); a light accent such as Gold #FFB900 got white on #E6A700 (2.12:1) in the
+  light theme. Windows' own palette does not rescue it: for #0E0E70 it is darker still (`AccentLight2` #14149D).
+- **`AccentContrastResources` (App) decides nothing; `AccentContrastPlanner` (Core) decides.** App attaches it in
+  `StartAsync` before the first theme is applied; it listens to `ApplicationThemeManager.Changed` (every WPF-UI theme
+  or accent application, the `SystemThemeWatcher` ones included) and `SystemParameters` `HighContrast`, reads the
+  fills WPF-UI just wrote, and writes application-level brushes, which beat the theme dictionary's. The planner
+  maps each role (accent button, accent fill, selected item, check glyph, switch knob, badge, danger button) to the
+  fills it sits on at rest and hovered or pressed, and `AccentForegroundChooser` picks black or white: the theme's
+  own whenever it reaches 4.5:1 on every fill, else the other one (one of the two always reaches 4.58:1 on an opaque
+  fill). Glyphs are held to the text minimum too. Where the theme's own reads, WPF-UI's brush is left in place.
+- **Contrast themes are untouched.** With WPF-UI's contrast dictionary loaded, or with Windows in a contrast theme
+  while Scribe applies light or dark itself, the plan is empty: every brush the class wrote is removed and Scribe's
+  own keys hold the theme's own brushes. Offscreen renders of HCWhite, HCBlack, HC1 and HC2 are pixel-identical
+  before and after, except the library list's row geometry (below).
+- **Scribe's own keys** (`AccentContrastKeys`, defaults in App.xaml): per-appearance badge foregrounds (WPF-UI draws
+  every badge appearance in `BadgeForeground`, so the light theme's orange and blue badges were white at 2.16:1 and
+  2.63:1), the danger button's foreground (white on the palette red, 3.68:1, in the dark theme), and the selection
+  cues: a selected library row always gets a 1 DIP strong-stroke outline and a SemiBold name (its WPF-UI fill is
+  1.18:1 and its accent pill 1.63:1 in the dark theme), and a selected list item (the rail, Snippets, Profiles) turns
+  SemiBold only where its accent fill is under 3:1 against the page. The library row template (`LibraryRow` in
+  SettingsWindow.xaml) draws the outline and the pill as overlays, so selecting a row moves nothing and adds no
+  horizontal scroll bar.
+- **Do not put a literal black or white on an accent fill.** Use `TextOnAccentFillColorPrimaryBrush` (now correct),
+  or add a role to the planner and a key to the adapter. A new palette-coloured control needs a role too.
+- **On a WPF-UI upgrade**, re-check the planner's role table and the adapter's key table against the new theme
+  dictionaries and templates: the adapter logs a warning when a key it overrides is missing from the loaded theme
+  dictionary, because a renamed brush quietly brings the old foreground back. It logs one line per distinct outcome
+  (counts and ratios only, never a colour).
 
 ## Azure authentication (read before touching credentials)
 

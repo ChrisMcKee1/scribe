@@ -191,6 +191,11 @@ public partial class App : Application
         _diagnostics.WriteBanner(log);
 
         WireGlobalExceptionLogging(log);
+
+        // Before the first theme is applied, so the foregrounds on accent fills are chosen for it and for every theme
+        // change after it, in time for the first window.
+        AccentContrastResources.Attach(
+            this, services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(AccentContrastResources).FullName!));
         InitializeApplicationTheme(log);
         if (paths.IsFallbackRoot)
         {

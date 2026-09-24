@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Scribe.App"
+             xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <Application.Resources>
         <ResourceDictionary>
@@ -9,6 +10,18 @@
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Scribe's own keys for foregrounds on coloured fills and for its selection cues. AccentContrastResources
+                 writes them for every theme before the first window; until then they hold no selection cue, and black
+                 on WPF-UI's palette fills, which reads on each of them in both themes. -->
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.CautionBadgeForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.InfoBadgeForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.DangerBadgeForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SuccessBadgeForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.DangerButtonForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedRowOutline}" Color="Transparent"/>
+            <FontWeight x:Key="{x:Static infra:AccentContrastKeys.SelectedRowNameWeight}">Normal</FontWeight>
+            <FontWeight x:Key="{x:Static infra:AccentContrastKeys.SelectedItemWeight}">Normal</FontWeight>
 
             <!-- Don't add an implicit style for a type X here with BasedOn="{StaticResource {x:Type X}}". In this
                  compiled application dictionary that reference resolves to the style being defined, which WPF returns

@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:cleanup="clr-namespace:Scribe.Core.Cleanup;assembly=Scribe.Core"
+        xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
         WindowStartupLocation="CenterScreen"
@@ -119,6 +120,40 @@
             <Setter Property="BorderBrush" Value="{DynamicResource ControlStrongStrokeColorDefaultBrush}"/>
         </Style>
 
+        <!-- WPF-UI 4.3.0 writes every badge in its text-on-accent colour, white in the light theme and black in the
+             dark one, whatever the badge's own fill, so the light theme drew the coverage badges white on the
+             palette's orange (2.16:1) and light blue (2.63:1). Each palette fill takes the foreground
+             AccentContrastResources chose for it; a badge on the accent keeps WPF-UI's. -->
+        <Style TargetType="ui:Badge" BasedOn="{StaticResource {x:Type ui:Badge}}">
+            <Style.Triggers>
+                <Trigger Property="Appearance" Value="Caution">
+                    <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.CautionBadgeForeground}}"/>
+                </Trigger>
+                <Trigger Property="Appearance" Value="Info">
+                    <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.InfoBadgeForeground}}"/>
+                </Trigger>
+                <Trigger Property="Appearance" Value="Danger">
+                    <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.DangerBadgeForeground}}"/>
+                </Trigger>
+                <Trigger Property="Appearance" Value="Success">
+                    <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SuccessBadgeForeground}}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- The rail and the Snippets and Profiles lists mark the selected item only with the accent fill, which with a
+             dark accent in the dark theme (or a light one in the light theme) is under the 3:1 a state needs against
+             the page (1.93:1 for #0E0E70). There its text is also SemiBold, so the selection shows without the fill;
+             AccentContrastResources decides, and leaves it Normal wherever the fill is strong and in contrast themes.
+             The rail's own item style is based on this one. -->
+        <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="FontWeight" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemWeight}}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Check boxes in the editable grids. Outside edit mode a check box cell shows a box that takes
              neither the mouse nor focus, as WPF's and WPF-UI's own column styles do, and toggling it is
              left to the column's edit. The grid's own click handling still focuses and selects on every
@@ -192,6 +227,92 @@
             <Setter Property="KeyboardNavigation.TabNavigation" Value="Once"/>
             <Setter Property="CellStyle" Value="{StaticResource KeyboardCell}"/>
             <Setter Property="RowStyle" Value="{StaticResource KeyboardRow}"/>
+        </Style>
+
+        <!-- A library row. The selected library is the one the page's edits apply to, and WPF-UI marks it only with a
+             subtle fill (1.18:1 against the page in the dark theme) and a 3 px accent pill (1.63:1 against that fill
+             with the accent #0E0E70), so it also gets a 1 DIP outline in the strong control stroke and a SemiBold
+             name, whatever the accent. Drawn over the selected fill the stroke measures 5.27:1 against that fill and
+             6.23:1 against the page in the dark theme, 3.19:1 and 3.46:1 in the light one. Both cues are overlays,
+             and so is the pill here, drawn over the first cell's padding instead of in a column of its own: selecting
+             a row moves no cell, and no longer makes the row wider than the list (WPF-UI's column for the pill added
+             a horizontal scroll bar under it). AccentContrastResources supplies the outline and the weight, and
+             leaves both off in contrast themes. Otherwise WPF-UI 4.3.0's DefaultDataGridRowStyle template, less its
+             empty visual states, and based on KeyboardRow as the note above requires. -->
+        <Style x:Key="LibraryRow" TargetType="DataGridRow" BasedOn="{StaticResource KeyboardRow}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="DataGridRow">
+                        <Border x:Name="DGR_Border"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource ControlCornerRadius}"
+                                SnapsToDevicePixels="True">
+                            <Grid>
+                                <SelectiveScrollingGrid>
+                                    <SelectiveScrollingGrid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </SelectiveScrollingGrid.ColumnDefinitions>
+                                    <SelectiveScrollingGrid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </SelectiveScrollingGrid.RowDefinitions>
+                                    <DataGridCellsPresenter Grid.Column="1"
+                                                            ItemsPanel="{TemplateBinding ItemsPanel}"
+                                                            SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                                    <DataGridDetailsPresenter Grid.Row="1" Grid.Column="1"
+                                                              SelectiveScrollingGrid.SelectiveScrollingOrientation="{Binding AreRowDetailsFrozen, ConverterParameter={x:Static SelectiveScrollingOrientation.Vertical}, Converter={x:Static DataGrid.RowDetailsScrollingConverter}, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"
+                                                              Visibility="{TemplateBinding DetailsVisibility}"/>
+                                    <DataGridRowHeader Grid.Row="0" Grid.RowSpan="2" Grid.Column="0"
+                                                       SelectiveScrollingGrid.SelectiveScrollingOrientation="Vertical"
+                                                       Visibility="{Binding HeadersVisibility, ConverterParameter={x:Static DataGridHeadersVisibility.Row}, Converter={x:Static DataGrid.HeadersVisibilityConverter}, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                                    <Rectangle x:Name="ActiveRectangle" Grid.Row="0" Grid.Column="1"
+                                               Width="3" Height="18" Margin="1,0,0,0"
+                                               HorizontalAlignment="Left" VerticalAlignment="Center"
+                                               Fill="{DynamicResource ListViewItemPillFillBrush}"
+                                               RadiusX="2" RadiusY="2" IsHitTestVisible="False"
+                                               Visibility="Collapsed"/>
+                                </SelectiveScrollingGrid>
+                                <Border x:Name="SelectionOutline" BorderThickness="1"
+                                        CornerRadius="{DynamicResource ControlCornerRadius}"
+                                        IsHitTestVisible="False" SnapsToDevicePixels="True"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="AlternationIndex" Value="0">
+                                <Setter TargetName="DGR_Border" Property="Background" Value="{Binding RowBackground, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                            </Trigger>
+                            <Trigger Property="AlternationIndex" Value="1">
+                                <Setter TargetName="DGR_Border" Property="Background" Value="{Binding AlternatingRowBackground, RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}}"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsEnabled" Value="True"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="DGR_Border" Property="Background" Value="{DynamicResource ListViewItemBackgroundPointerOver}"/>
+                            </MultiTrigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ActiveRectangle" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="DGR_Border" Property="Background" Value="{DynamicResource ListViewItemBackgroundPointerOver}"/>
+                                <Setter TargetName="SelectionOutline" Property="BorderBrush" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedRowOutline}}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- The selected library's name, SemiBold with the row's outline (see LibraryRow). Only the name: the other
+             columns size to their content, and a wider SemiBold value there would move them. -->
+        <Style x:Key="LibraryNameText" TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}}}" Value="True">
+                    <Setter Property="FontWeight" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedRowNameWeight}}"/>
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
 
         <!-- The remove button in a Dictionary row is only an icon, so it is named after the entry it removes. -->
@@ -1449,12 +1570,14 @@
                                           SelectionChanged="LibraryGrid_SelectionChanged"
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                           Background="Transparent" BorderThickness="0"
+                                          RowStyle="{StaticResource LibraryRow}"
                                           AutomationProperties.LabeledBy="{Binding ElementName=LibrariesPageTitle}">
                                     <DataGrid.Columns>
                                         <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
                                                                 ElementStyle="{StaticResource LibraryOnCheckBox}"
                                                                 EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
-                                        <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"
+                                                            ElementStyle="{StaticResource LibraryNameText}"/>
                                         <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="Auto" IsReadOnly="True"/>
