@@ -45,26 +45,51 @@ public sealed class LibraryPrecedenceTests
     {
         var shipped = ShippedIds();
         var listed = LibraryPrecedence.BuiltInOrder;
+        var retired = LibraryPrecedence.RetiredBuiltInIds;
 
         var duplicates = listed.GroupBy(id => id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
         var missing = shipped.Where(id => !listed.Contains(id, StringComparer.OrdinalIgnoreCase)).ToList();
-        var stray = listed.Where(id => !shipped.Contains(id, StringComparer.OrdinalIgnoreCase)).ToList();
+        var stray = listed
+            .Where(id => !shipped.Contains(id, StringComparer.OrdinalIgnoreCase) && !retired.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .ToList();
 
         Assert.True(duplicates.Count == 0, "Listed more than once: " + string.Join(", ", duplicates));
         Assert.True(missing.Count == 0,
             "These built-in libraries ship but are not in LibraryPrecedence.BuiltInOrder, so their precedence would fall " +
             "back to their id. Append each id at the end of the list and of tests/fixtures/libraries/built-in-precedence.json: " +
             string.Join(", ", missing));
-        Assert.True(stray.Count == 0, "Listed but not shipped (a typo, or a retired library): " + string.Join(", ", stray));
+        Assert.True(stray.Count == 0,
+            "Listed but not shipped. If the library was retired, keep its id in the order and add it to " +
+            "LibraryPrecedence.RetiredBuiltInIds and to the fixture's \"retired\"; otherwise it is a typo: " + string.Join(", ", stray));
     }
 
     [Fact]
-    public void The_list_matches_the_fixture_the_macOS_port_reads()
+    public void A_retired_built_in_keeps_its_place_and_is_retired_only_while_it_does_not_ship()
+    {
+        var shipped = ShippedIds();
+        var listed = LibraryPrecedence.BuiltInOrder;
+        var retired = LibraryPrecedence.RetiredBuiltInIds;
+
+        var unlisted = retired.Where(id => !listed.Contains(id, StringComparer.OrdinalIgnoreCase)).ToList();
+        var shipping = retired.Where(id => shipped.Contains(id, StringComparer.OrdinalIgnoreCase)).ToList();
+        var duplicates = retired.GroupBy(id => id, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+
+        Assert.True(unlisted.Count == 0,
+            "A retired id stays in LibraryPrecedence.BuiltInOrder for good; put it back where it was: " + string.Join(", ", unlisted));
+        Assert.True(shipping.Count == 0,
+            "These ids are marked retired but ship again; take them out of RetiredBuiltInIds: " + string.Join(", ", shipping));
+        Assert.True(duplicates.Count == 0, "Retired more than once: " + string.Join(", ", duplicates));
+    }
+
+    [Fact]
+    public void The_lists_match_the_fixture_the_macOS_port_reads()
     {
         using var document = JsonDocument.Parse(File.ReadAllText(FixturePath()));
-        var fixture = document.RootElement.GetProperty("order").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        List<string> Read(string property) =>
+            document.RootElement.GetProperty(property).EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
 
-        Assert.Equal(LibraryPrecedence.BuiltInOrder, fixture);
+        Assert.Equal(LibraryPrecedence.BuiltInOrder, Read("order"));
+        Assert.Equal(LibraryPrecedence.RetiredBuiltInIds, Read("retired"));
     }
 
     [Fact]
