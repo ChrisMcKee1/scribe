@@ -3,7 +3,10 @@
 A native Swift menu bar port of [Scribe](../README.md), Windows' offline push-to-talk dictation
 app. Built with Swift Package Manager and bundled into a minimal, ad-hoc-signed `.app` by a shell
 script. Feature parity with the Windows app is close (see `PORTING-PLAN.md` for the parity table, the
-row-by-row checklist and known gaps); this is a working daily-driver app, not a prototype.
+row-by-row checklist and known gaps). The current code passes CI's builds, unit and scenario tests and
+sanitizer runs on macOS 15 and 26, but it has not yet been run on a real Mac: permissions, the
+microphone, the push-to-talk key, insertion into real apps and the overlay still need that check (see
+Tests below).
 
 ## Requirements
 
@@ -56,19 +59,29 @@ privacy/offline promise.
   clipboard history tools skip it, and puts your text back only if nothing replaced it in the meantime.
   With anything else on the clipboard it types the text instead. If focus moves to another app before or
   while the text is going in, Scribe stops and keeps the dictation for recovery
-- The dictation pipeline in the Windows order: raw speech recognition, optional AI cleanup of that raw
-  transcript (with the app profile's writing style, and a one-line request for a terminal), the reply
-  checked and its dashes rewritten, then snippets and your dictionary, then line breaks for the target
-  app. Your snippet templates are never sent to a cleanup provider, and your dictionary has the last word.
-  You can start the next dictation while the last one is still being processed; the text goes in in the
-  order you spoke it
+- The dictation pipeline: raw speech recognition; with AI cleanup on, your dictionary and library
+  spellings applied to that transcript, and the result sent for cleanup (with the app profile's writing
+  style, and a one-line request for a terminal), the reply checked against what was sent and its dashes
+  rewritten, then your snippets and any dictionary entry whose replacement is more than one line,
+  longer than 100 characters or holds an em or en dash; with cleanup off, snippets and then your dictionary, as on Windows; then
+  line breaks for the target app. A cleanup request contains the dictation with your vocabulary
+  corrections applied, never a snippet body or one of those longer replacements, and no rule runs
+  twice. If cleanup fails, the text is exactly what it would be with cleanup off. You can start the
+  next dictation while the last one is still being processed; the text goes in in the order you spoke
+  it
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
   The recognizer runs off the main thread with a deadline and can be cancelled, and the recording it
   reads is a private temporary file that is deleted as soon as it returns
 - Capture that belongs to one recording at a time: every input channel is mixed in, so a microphone on
   any input of an interface is heard; a device change ends the recording and keeps what it captured;
-  Caps Lock (the default key) and the test dictation are toggles that stop on silence the way Windows does,
-  a held key never does; and every recording stops at ten minutes, even if the microphone stops delivering
+  Caps Lock (the default key) is tapped on and off and stops only when you tap it again, unless you turn
+  on "Also stop after a pause" in Settings > Input (off by default, as on Windows, because a pause to
+  think would end the dictation); the tray's test dictation always stops after a pause; a held key never
+  does; and every recording stops at ten minutes, even if the microphone stops delivering. Scribe only
+  listens to Caps Lock and never changes its lock state, so after a dictation that ended some other way
+  than your tap (a pause with the setting on, the ten minute limit, a microphone fault, Pause Dictation,
+  a change of key or a press Scribe turned away) the Caps Lock light can be out of step with dictation;
+  the next tap still starts a new one
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
   that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
   A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
@@ -76,8 +89,9 @@ privacy/offline promise.
   a notification instead. No modal alerts while you dictate
 - Releasing the key never waits for the recording to be finished off: that happens in the background,
   and dictations are still processed in the order you spoke them
-- Quitting waits for a paste in progress to put your clipboard back, and for a running recognizer or a
-  Settings or Usage Insights check that started `az` or `foundry` to be stopped, before Scribe exits
+- Quitting hides the pill at once, then waits for a paste in progress to put your clipboard back, and for a
+  running recognizer or a Settings or Usage Insights check that started `az` or `foundry` to be stopped,
+  before Scribe exits
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
   Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
   shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
@@ -97,14 +111,18 @@ privacy/offline promise.
   notification with Copy Transcript for a dictation that did not go in. After Clear history neither
   an entry already on show nor an earlier notification copies the deleted text
 - Startup problems (a database that could not be read, missing Input Monitoring or Accessibility) are
-  reported once, in a notification that opens the right System Settings pane; granting Input Monitoring
-  takes effect without a relaunch
+  reported once, in a notification that opens the right System Settings pane. Scribe tries the
+  push-to-talk key again whenever it becomes active or its menu opens, so granting Input Monitoring may
+  take effect without a relaunch; that has not been checked on a real Mac yet, so if the key still does
+  nothing, quit and reopen Scribe
 - Dictation history written in the background after the text is delivered, in dictation order. It is
   best-effort until committed: a crash in that moment loses the entry. A new install keeps 90 days of
   text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
-  unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
-  reclaimed only while no dictation is running. Settings > History chooses the limit (7, 30, 90 days,
-  1 year or Forever) and clears all history after a confirmation, which also empties Recent Dictations
+  unreadable setting never deletes anything. Retention is swept at launch and daily, deleted text is
+  overwritten in the database rather than left in its freed space, and freed space is reclaimed only while
+  no dictation is running. Settings > History chooses the limit (7, 30, 90 days,
+  1 year or Forever) and clears all history after a confirmation, which also empties Recent Dictations and
+  the Playground's last dictation and closes an open Quick Add window
 - Scribe removes only what it made: the private recording it hands the recognizer, as soon as the recognizer
   returns, and any a crash left behind, at the next launch. It never deletes Foundry Local's or Ollama's model
   caches, which you installed and which other apps share
@@ -116,7 +134,8 @@ swift test --package-path macos/Scribe --parallel
 ```
 
 runs both test targets, each test in a worker process of its own; CI runs them the same way on macOS 15 and 26
-and under the thread and address sanitizers.
+and under the thread and address sanitizers, fails on any compiler warning, and builds the app bundle, lints its
+Info.plist, verifies its signature and runs its library listing from inside it.
 
 - `Tests/ScribeTests`: the unit tests. Every suite uses a defaults suite, Keychain service, temporary directory
   and pasteboard of its own, so no test reads or changes your settings or credentials.
@@ -155,5 +174,7 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 See `PORTING-PLAN.md` for the parity table and the authoritative, row-by-row feature checklist. As of this writing
 the main outstanding gaps are: the default speech model is English-only; long recordings are transcribed in one
 call rather than split on pauses as Windows does; there is no voice activity detection trimming the capture before
-recognition; and there is no release packaging/notarization or auto-update story yet (dev builds are ad-hoc signed
-for local Accessibility persistence only).
+recognition; AI cleanup is sent no glossary of your dictionary terms (Windows sends up to 5,000 with every cloud
+request; whether macOS should is an open decision, because it changes what leaves the Mac); and there is no release
+packaging/notarization or auto-update story yet (dev builds are ad-hoc signed for local Accessibility persistence
+only).
