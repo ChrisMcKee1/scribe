@@ -1,0 +1,308 @@
+using System.Text.Json;
+using Scribe.Core.Hotkeys;
+using Scribe.Core.Models;
+using Scribe.Core.Persistence;
+using Scribe.Core.Settings;
+
+namespace Scribe.Core.Tests;
+
+/// <summary>
+/// The shipped hotkeys are a first-run default: a new install gets hold Page Down for dictation with AI cleanup and
+/// hold Page Up for dictation only, while an install that already exists keeps what its settings hold, including no
+/// dictation-only key, and a session whose saved settings could not be used keeps the Right Ctrl every earlier release
+/// shipped. Moving someone's push-to-talk key on upgrade would break the key they press dozens of times a day and take
+/// Page Up and Page Down away from all their other apps.
+/// </summary>
+public sealed class DefaultHotkeyTests
+{
+    private const uint PageDown = 0x22; // VK_NEXT
+    private const uint PageUp = 0x21; // VK_PRIOR
+    private const uint RightCtrl = 0xA3; // VK_RCONTROL
+    private const uint LeftCtrl = 0xA2;
+    private const uint DownArrow = 0x28;
+
+    [Fact]
+    public void The_shipped_defaults_are_page_down_and_page_up_held_and_swallowed()
+    {
+        AssertHeldAndSwallowed(HotkeyBinding.DefaultDictation, PageDown, "Page Down");
+        AssertHeldAndSwallowed(HotkeyBinding.DefaultDictationOnly, PageUp, "Page Up");
+        AssertHeldAndSwallowed(HotkeyBinding.Legacy, RightCtrl, "Right Ctrl");
+    }
+
+    [Fact]
+    public void A_fresh_install_starts_with_page_down_and_page_up()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+
+        var loaded = repo.Load();
+
+        Assert.False(repo.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.DefaultDictation, loaded.Hotkey);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, loaded.DictationOnlyHotkey);
+    }
+
+    [Fact]
+    public void The_first_document_a_fresh_install_writes_holds_page_down_and_page_up()
+    {
+        // The welcome records its flag through Update before anything else saves, so this is the document a new
+        // install's next start reads.
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+
+        repo.Update(stored => stored.HasCompletedFirstRun = true);
+        var reloaded = new SettingsRepository(db).Load();
+
+        Assert.NotNull(repo.Get("app_settings"));
+        Assert.True(reloaded.HasCompletedFirstRun);
+        Assert.Equal(HotkeyBinding.DefaultDictation, reloaded.Hotkey);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, reloaded.DictationOnlyHotkey);
+    }
+
+    [Theory]
+    // A 0.4.3 document on the defaults of its day: Right Ctrl and no dictation-only key, both written out.
+    [InlineData("right-ctrl", "null")]
+    // Keys the document does not carry at all come back as what that install had: Right Ctrl, and one hotkey.
+    [InlineData(null, null)]
+    [InlineData("right-ctrl", null)]
+    [InlineData(null, "f9")]
+    // Custom keys on both triggers stay exactly as stored.
+    [InlineData("f8", "f9")]
+    public void An_existing_document_keeps_its_hotkeys_with_or_without_each_key(string? hotkey, string? dictationOnly)
+    {
+        var fields = new List<string> { "\"showOverlay\":false", "\"hasCompletedFirstRun\":true" };
+        if (hotkey is not null)
+        {
+            fields.Add($"\"hotkey\":{Json(Stored(hotkey))}");
+        }
+
+        if (dictationOnly is not null)
+        {
+            fields.Add($"\"dictationOnlyHotkey\":{(Stored(dictationOnly) is { } binding ? Json(binding) : "null")}");
+        }
+
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", "{" + string.Join(",", fields) + "}");
+
+        var loaded = repo.Load();
+
+        Assert.False(repo.LastLoadFailed);
+        Assert.False(loaded.ShowOverlay); // the stored document was read, not replaced
+        Assert.Equal(hotkey is null ? HotkeyBinding.Legacy : Stored(hotkey), loaded.Hotkey);
+        Assert.Equal(dictationOnly is null ? null : Stored(dictationOnly), loaded.DictationOnlyHotkey);
+    }
+
+    [Fact]
+    public void An_existing_document_whose_hotkey_is_null_keeps_right_ctrl()
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", """{"hotkey":null,"dictationOnlyHotkey":null}""");
+
+        var loaded = repo.Load();
+
+        Assert.False(repo.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
+        Assert.Null(loaded.DictationOnlyHotkey);
+    }
+
+    [Fact]
+    public void An_unreadable_document_runs_on_right_ctrl_and_one_hotkey()
+    {
+        // Not a first run: this install's document is still there (and kept as the recovery copy), it just cannot be
+        // read, and the key it most likely held is the one every earlier release shipped.
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", "{\"hotkey\":{\"virtualKey\":163, not json");
+
+        var loaded = repo.Load();
+
+        Assert.True(repo.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
+        Assert.Null(loaded.DictationOnlyHotkey);
+    }
+
+    [Fact]
+    public void A_document_a_repair_recorded_as_lost_runs_on_right_ctrl_and_one_hotkey()
+    {
+        // The start after a repair that lost the document: no document, but the recorded loss says this is no first run.
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set(SettingsRepository.LostMarkerKey, "lost");
+
+        var loaded = repo.Load();
+
+        Assert.True(repo.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
+        Assert.Null(loaded.DictationOnlyHotkey);
+    }
+
+    [Fact]
+    public void Settings_that_could_not_be_used_differ_from_a_first_run_only_in_the_hotkeys()
+    {
+        var fresh = AppSettings.CreateDefault();
+        var existing = AppSettings.CreateForExistingInstall();
+
+        Assert.Equal(HotkeyBinding.Legacy, existing.Hotkey);
+        Assert.Null(existing.DictationOnlyHotkey);
+
+        existing.Hotkey = fresh.Hotkey;
+        existing.DictationOnlyHotkey = fresh.DictationOnlyHotkey;
+        Assert.Equal(JsonSerializer.Serialize(fresh), JsonSerializer.Serialize(existing));
+    }
+
+    [Fact]
+    public void Restore_moves_right_ctrl_to_page_down_and_adds_page_up()
+    {
+        var restored = DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, shownDictationOnly: null);
+
+        Assert.True(restored.Changed);
+        Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
+        Assert.Equal(
+            "Hotkeys set to the defaults: hold Page Down for dictation with AI cleanup and hold Page Up for dictation " +
+            "only. Save to apply them.",
+            restored.Message);
+    }
+
+    [Fact]
+    public void Restore_replaces_toggles_chords_and_unswallowed_keys_with_the_held_defaults()
+    {
+        var chordToggle = new HotkeyBinding(
+            RightCtrl, KeyModifiers.None, HotkeyMode.Toggle, Suppress: true, "Right Ctrl+Right Shift",
+            SecondaryVirtualKey: 0xA1, SuppressChordMembers: true);
+        var loose = new HotkeyBinding(0x78, KeyModifiers.Control, HotkeyMode.Toggle, Suppress: false, "Ctrl+F9");
+
+        var restored = DefaultHotkeyRestore.Restore(chordToggle, loose);
+
+        Assert.True(restored.Changed);
+        AssertHeldAndSwallowed(restored.Dictation, PageDown, "Page Down");
+        AssertHeldAndSwallowed(restored.DictationOnly, PageUp, "Page Up");
+    }
+
+    [Fact]
+    public void Restore_on_the_defaults_changes_nothing_and_says_so()
+    {
+        var restored = DefaultHotkeyRestore.Restore(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+
+        Assert.False(restored.Changed);
+        Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
+        Assert.StartsWith("Your hotkeys already match the defaults", restored.Message);
+    }
+
+    [Fact]
+    public void Default_keys_stored_under_an_old_alias_already_are_the_defaults()
+    {
+        // The name never changed what a key does, so a stored "Next" is still Page Down.
+        var restored = DefaultHotkeyRestore.Restore(
+            HotkeyBinding.DefaultDictation with { DisplayName = "Next" },
+            HotkeyBinding.DefaultDictationOnly with { DisplayName = "Prior" });
+
+        Assert.False(restored.Changed);
+        Assert.Equal("Page Down", restored.Dictation.DisplayName);
+        Assert.Equal("Page Up", restored.DictationOnly.DisplayName);
+    }
+
+    [Theory]
+    [InlineData(HotkeyMode.Toggle, true, HotkeyMode.Hold)]
+    [InlineData(HotkeyMode.Hold, false, HotkeyMode.Hold)]
+    [InlineData(HotkeyMode.Hold, true, HotkeyMode.Toggle)]
+    public void The_default_keys_pressed_another_way_are_not_the_defaults(
+        HotkeyMode dictationMode, bool dictationSuppressed, HotkeyMode dictationOnlyMode)
+    {
+        var restored = DefaultHotkeyRestore.Restore(
+            HotkeyBinding.DefaultDictation with { Mode = dictationMode, Suppress = dictationSuppressed },
+            HotkeyBinding.DefaultDictationOnly with { Mode = dictationOnlyMode });
+
+        Assert.True(restored.Changed);
+        Assert.Equal(HotkeyBinding.DefaultDictation, restored.Dictation);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, restored.DictationOnly);
+    }
+
+    [Fact]
+    public void The_restore_hint_names_the_defaults_and_what_binding_them_costs()
+    {
+        var hint = DefaultHotkeyRestore.Hint;
+
+        Assert.Contains("hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", hint);
+        Assert.Contains("stops reaching other apps", hint);
+        Assert.Contains("even with Ctrl or Shift held", hint);
+        Assert.Contains("Pause dictation from the tray icon to use them in other apps", hint);
+        Assert.Contains("Fn with the Down and Up arrows", hint);
+    }
+
+    [Fact]
+    public void Page_down_and_page_up_start_their_own_dictations_and_never_reach_other_apps()
+    {
+        // Through the engine the hook runs, not just the settings: each default fires its own trigger, its whole
+        // keystroke is swallowed, and a key neither binds passes straight through.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+
+        Assert.True(h.Down(PageDown).Suppress);
+        Assert.True(h.Down(PageDown).Suppress); // autorepeat
+        Assert.True(h.Up(PageDown).Suppress);
+        Assert.True(h.Down(PageUp).Suppress);
+        Assert.True(h.Up(PageUp).Suppress);
+        Assert.False(h.Down(DownArrow).Suppress);
+        Assert.False(h.Up(DownArrow).Suppress);
+
+        var transitions = h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToList();
+        var expected = new List<(HotkeyTransition, HotkeyTrigger)>
+        {
+            (HotkeyTransition.Activated, HotkeyTrigger.Standard),
+            (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+            (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly),
+            (HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly),
+        };
+        Assert.Equal(expected, transitions);
+    }
+
+    [Fact]
+    public void Page_down_is_swallowed_with_ctrl_held_too()
+    {
+        // The trade-off the Settings hint states: a binding without modifiers fires whatever else is held, so
+        // Ctrl+Page Down (switching tabs in most apps) starts a dictation instead. Ctrl itself still reaches the app.
+        // A change that lets modified presses through must update DefaultHotkeyRestore.Hint with this test.
+        var state = new ChordStateMachine(HotkeyBinding.DefaultDictation);
+
+        Assert.False(state.Process(LeftCtrl, isDown: true).ShouldSuppress);
+        var down = state.Process(PageDown, isDown: true);
+        var up = state.Process(PageDown, isDown: false);
+        Assert.False(state.Process(LeftCtrl, isDown: false).ShouldSuppress);
+
+        Assert.Equal(HotkeyTransition.Activated, down.Transition);
+        Assert.True(down.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.Deactivated, up.Transition);
+        Assert.True(up.ShouldSuppress);
+    }
+
+    private static void AssertHeldAndSwallowed(HotkeyBinding binding, uint virtualKey, string name)
+    {
+        Assert.Equal(virtualKey, binding.VirtualKey);
+        Assert.Null(binding.SecondaryVirtualKey);
+        Assert.Equal(KeyModifiers.None, binding.Modifiers);
+        Assert.Equal(HotkeyMode.Hold, binding.Mode);
+        Assert.True(binding.Suppress);
+        Assert.False(binding.SuppressChordMembers);
+        Assert.Equal(name, binding.DisplayName);
+        Assert.Equal(name, HotkeyText.Describe(binding));
+    }
+
+    // The bindings the document tests store, by name; "null" is a key written out as null.
+    private static HotkeyBinding? Stored(string name) => name switch
+    {
+        "right-ctrl" => HotkeyBinding.Legacy,
+        "f8" => new HotkeyBinding(0x77, KeyModifiers.None, HotkeyMode.Toggle, Suppress: true, "F8"),
+        "f9" => new HotkeyBinding(0x78, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F9"),
+        "null" => null,
+        _ => throw new ArgumentOutOfRangeException(nameof(name), name, null),
+    };
+
+    // A hotkey the way the settings document stores it.
+    private static string Json(HotkeyBinding? binding) =>
+        binding is null
+            ? "null"
+            : $$"""{"virtualKey":{{binding.VirtualKey}},"modifiers":"{{binding.Modifiers}}","mode":"{{binding.Mode}}","suppress":{{(binding.Suppress ? "true" : "false")}},"displayName":"{{binding.DisplayName}}","secondaryVirtualKey":null,"suppressChordMembers":false}""";
+}

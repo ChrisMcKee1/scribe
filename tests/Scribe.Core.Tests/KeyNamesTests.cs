@@ -1,5 +1,6 @@
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
+using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests;
 
@@ -176,5 +177,64 @@ public sealed class KeyNamesTests
         var binding = new HotkeyBinding(0xE5, KeyModifiers.None, HotkeyMode.Hold, Suppress: true);
 
         Assert.Equal("Key 0xE5", HotkeyText.Describe(binding));
+    }
+
+    [Fact]
+    public void The_welcome_teaches_both_default_keys()
+    {
+        var (title, body) = HotkeyText.Gesture(AppSettings.CreateDefault());
+
+        Assert.Equal("Hold, speak, release", title);
+        Assert.Equal(
+            "Hold Page Down and start talking. Release when you are done, and the text appears wherever your cursor " +
+            "is. Hold Page Up instead to dictate without AI cleanup.",
+            body);
+    }
+
+    [Fact]
+    public void The_welcome_names_the_keys_this_install_really_uses_and_how_they_are_pressed()
+    {
+        var legacy = AppSettings.CreateForExistingInstall();
+        var toggled = AppSettings.CreateDefault();
+        toggled.Hotkey = toggled.Hotkey with { Mode = HotkeyMode.Toggle, DisplayName = "Next" };
+        toggled.DictationOnlyHotkey = toggled.DictationOnlyHotkey! with { Mode = HotkeyMode.Toggle };
+
+        var (legacyTitle, legacyBody) = HotkeyText.Gesture(legacy);
+        var (toggleTitle, toggleBody) = HotkeyText.Gesture(toggled);
+        var (unknownTitle, unknownBody) = HotkeyText.Gesture(settings: null);
+
+        Assert.Equal("Hold, speak, release", legacyTitle);
+        Assert.StartsWith("Hold Right Ctrl and start talking.", legacyBody);
+        Assert.DoesNotContain("without AI cleanup", legacyBody);
+
+        Assert.Equal("Press, speak, press again", toggleTitle);
+        Assert.StartsWith("Press Page Down and start talking. Press it again when you are done", toggleBody);
+        Assert.EndsWith("Press Page Up instead to dictate without AI cleanup.", toggleBody);
+
+        Assert.Equal("Hold, speak, release", unknownTitle);
+        Assert.StartsWith("Hold your push-to-talk key", unknownBody);
+    }
+
+    [Fact]
+    public void Nothing_this_shows_the_user_carries_a_dash()
+    {
+        var texts = new List<string>
+        {
+            DefaultHotkeyRestore.Hint,
+            DefaultHotkeyRestore.Restore(HotkeyBinding.Legacy, null).Message,
+            DefaultHotkeyRestore.Restore(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly).Message,
+        };
+        texts.AddRange(new AppSettings?[] { AppSettings.CreateDefault(), AppSettings.CreateForExistingInstall(), null }
+            .SelectMany(settings =>
+            {
+                var (title, body) = HotkeyText.Gesture(settings);
+                return new[] { title, body };
+            }));
+
+        Assert.All(texts, text =>
+        {
+            Assert.DoesNotContain('\u2014', text);
+            Assert.DoesNotContain('\u2013', text);
+        });
     }
 }

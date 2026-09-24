@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using Scribe.Core.Feedback;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -989,12 +990,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
-            ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
+            ModeCombo.SelectedIndex = ModeIndex(_pendingBinding.Mode);
             DictationOnlyHotkeyBox.Text = _pendingDictationOnlyBinding is null
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
-            DictationOnlyModeCombo.SelectedIndex =
-                _pendingDictationOnlyBinding?.Mode == HotkeyMode.Toggle ? 1 : 0;
+            DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
+            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Hint;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -2255,6 +2256,55 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _pendingDictationOnlyBinding = null;
         DictationOnlyHotkeyBox.Text = string.Empty;
     }
+
+    // Stages the shipped hotkeys like any other edit on this page: nothing is stored until Save, and Cancel discards
+    // it. No confirmation, because it deletes nothing and both rows show the result at once, where Set changes either
+    // key back. The mode boxes are set too, since Save reads each binding's mode from its box.
+    private void RestoreHotkeysButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_capturing)
+        {
+            CancelCapture();
+        }
+
+        var restored = DefaultHotkeyRestore.Restore(
+            _pendingBinding with { Mode = SelectedMode },
+            _pendingDictationOnlyBinding is null ? null : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode });
+        _pendingBinding = restored.Dictation;
+        _pendingDictationOnlyBinding = restored.DictationOnly;
+        HotkeyBox.Text = HotkeyCapture.Describe(restored.Dictation);
+        ModeCombo.SelectedIndex = ModeIndex(restored.Dictation.Mode);
+        DictationOnlyHotkeyBox.Text = HotkeyCapture.Describe(restored.DictationOnly);
+        DictationOnlyModeCombo.SelectedIndex = ModeIndex(restored.DictationOnly.Mode);
+
+        // The default severity, as for the other "done, now Save" notices here: the bar floats over the page title, and
+        // WPF-UI fills the informational one almost transparently (#08FFFFFF in the dark theme), so the title would
+        // show through the message.
+        ShowInfo(restored.Message);
+        AnnounceFrom(RestoreHotkeysButton, restored.Message);
+    }
+
+    // The notification bar is not read out when it opens, so the outcome is also raised as a UI Automation
+    // notification from the control that caused it, which Narrator speaks while focus stays on that control.
+    private void AnnounceFrom(UIElement source, string message)
+    {
+        try
+        {
+            var peer = UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source);
+            peer?.RaiseNotificationEvent(
+                System.Windows.Automation.AutomationNotificationKind.ActionCompleted,
+                System.Windows.Automation.AutomationNotificationProcessing.ImportantMostRecent,
+                message,
+                "Scribe.SettingsNotice");
+        }
+        catch (Exception ex)
+        {
+            // The same words are on screen; a screen reader that cannot be told must not break the page.
+            TryLog(ex, "Could not announce a settings notice to assistive technology.");
+        }
+    }
+
+    private static int ModeIndex(HotkeyMode mode) => mode == HotkeyMode.Toggle ? 1 : 0;
 
     private void BeginCapture(bool dictationOnly)
     {

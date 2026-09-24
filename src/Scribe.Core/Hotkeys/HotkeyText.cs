@@ -49,6 +49,37 @@ public static class HotkeyText
         return string.Join("+", parts);
     }
 
+    /// <summary>
+    /// What the welcome says about the push-to-talk gesture, for the keys this session actually uses and how they are
+    /// pressed. Null settings (not loaded yet) gives wording that names no key rather than guessing one.
+    /// </summary>
+    public static (string Title, string Body) Gesture(AppSettings? settings, Func<uint, string?>? layoutName = null)
+    {
+        if (settings?.Hotkey is not { } dictation)
+        {
+            return (
+                "Hold, speak, release",
+                "Hold your push-to-talk key and start talking. Release when you are done, and the text appears wherever your cursor is.");
+        }
+
+        var key = Describe(dictation, layoutName);
+        var (title, body) = dictation.Mode == HotkeyMode.Toggle
+            ? ("Press, speak, press again",
+               $"Press {key} and start talking. Press it again when you are done, and the text appears wherever your cursor is.")
+            : ("Hold, speak, release",
+               $"Hold {key} and start talking. Release when you are done, and the text appears wherever your cursor is.");
+
+        if (settings.DictationOnlyHotkey is { } dictationOnly)
+        {
+            body += $" {Verb(dictationOnly.Mode)} {Describe(dictationOnly, layoutName)} instead to dictate without AI cleanup.";
+        }
+
+        return (title, body);
+    }
+
+    /// <summary>"Hold" or "Press", for a sentence that starts with how a binding is used.</summary>
+    internal static string Verb(HotkeyMode mode) => mode == HotkeyMode.Toggle ? "Press" : "Hold";
+
     // The shape older builds produced: a stored name that may or may not already carry the modifiers and the second key.
     private static string FromStoredName(HotkeyBinding binding, string stored, Func<uint, string?>? layoutName)
     {

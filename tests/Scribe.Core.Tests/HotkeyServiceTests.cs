@@ -36,7 +36,7 @@ public class HotkeyServiceTests
     public void UpdateBinding_replaces_active_binding()
     {
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
-        Assert.Equal(HotkeyBinding.DefaultVirtualKey, service.Binding.VirtualKey);
+        Assert.Equal(HotkeyBinding.DefaultDictation.VirtualKey, service.Binding.VirtualKey);
 
         var toggle = new HotkeyBinding(0x20, KeyModifiers.Control, HotkeyMode.Toggle, Suppress: false, "Ctrl+Space");
         service.UpdateBinding(toggle);
@@ -211,7 +211,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Capture_mode_passes_the_bound_key_through_without_activating_or_suppressing()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default); // Right Ctrl, suppressed
+        var state = new ChordStateMachine(HotkeyBinding.Legacy); // Right Ctrl, suppressed
 
         Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(true).Transition);
 
@@ -226,7 +226,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Entering_capture_mode_mid_hold_deactivates_the_recording()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
         Assert.Equal(HotkeyTransition.Deactivated, state.SetCaptureMode(true).Transition);
@@ -235,7 +235,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Leaving_capture_mode_requires_a_fresh_press_to_activate()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
         state.SetCaptureMode(true);
 
         // Key held across the capture-mode boundary must not satisfy the chord on exit.
@@ -249,7 +249,7 @@ public class HotkeyServiceTests
     [Fact]
     public void State_clearing_operations_start_a_new_generation_so_stale_activations_are_detectable()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         // An Activated computed in the old epoch must be distinguishable after a clear: this is
         // what stops a racing hook callback from starting a recording during binding capture.
@@ -264,7 +264,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Reset_reports_the_deactivation_of_an_interrupted_recording()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
 
@@ -282,7 +282,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             leaked.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
-        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy);
 
         Assert.Equal([0xA3u], result.Released);
         Assert.Empty(result.Failed);
@@ -298,7 +298,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             systemDown.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
-        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Default).Released);
+        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy).Released);
         Assert.Empty(released);
     }
 
@@ -322,7 +322,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             leaked.Contains, _ => false, _ => false); // SendInput rejected (e.g. UIPI)
 
-        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy);
 
         Assert.Empty(result.Released);
         Assert.Equal([0xA3u], result.Failed);

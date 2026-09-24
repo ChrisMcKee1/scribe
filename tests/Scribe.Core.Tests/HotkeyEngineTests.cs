@@ -26,7 +26,7 @@ public class HotkeyEngineTests
     public async Task Hook_thread_processes_keys_while_a_configuration_writer_is_stalled_on_the_gate()
     {
         var gate = new object();
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, gate: gate);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, gate: gate);
 
         // A request already queued: applying it on the hook thread must not need the gate either.
         h.Router.CancelToggle();
@@ -58,7 +58,7 @@ public class HotkeyEngineTests
     public void Cross_thread_reads_never_wait_for_the_configuration_gate()
     {
         var gate = new object();
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, gate: gate);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, gate: gate);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -74,7 +74,7 @@ public class HotkeyEngineTests
 
             Assert.True(reads.Current);
             Assert.True(reads.Pressed);
-            Assert.Equal(HotkeyBinding.Default, reads.Binding);
+            Assert.Equal(HotkeyBinding.Legacy, reads.Binding);
             Assert.Null(reads.DictationOnly);
         }
     }
@@ -82,7 +82,7 @@ public class HotkeyEngineTests
     [Fact]
     public async Task Requests_from_another_thread_take_effect_on_the_hook_thread_in_request_order()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         Assert.True(h.Down(RightCtrl).Suppress);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -116,7 +116,7 @@ public class HotkeyEngineTests
     [Fact]
     public void An_activation_computed_before_a_queued_request_is_stale_before_the_hook_applies_it()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
         Assert.True(h.WouldDispatch(activation));
@@ -129,7 +129,7 @@ public class HotkeyEngineTests
     [Fact]
     public async Task A_toggle_reset_requested_before_a_key_event_applies_before_that_event()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default with { Mode = HotkeyMode.Toggle });
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle });
         h.Down(RightCtrl);
         h.Up(RightCtrl);
         Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
@@ -144,7 +144,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Wakes_are_coalesced_until_the_hook_thread_consumes_them()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
 
         // A thread's posted-message queue is finite, so one outstanding wake covers any number of
         // requests made before the hook thread gets to it.
@@ -163,7 +163,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Attaching_the_owner_applies_requests_queued_before_the_hook_existed()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         Assert.Equal(0u, h.Engine.OwnerThreadId);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
@@ -181,7 +181,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Reinstall_stops_the_interrupted_dictation_and_starts_the_replacement_clean()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -204,7 +204,7 @@ public class HotkeyEngineTests
     [Fact]
     public void An_idle_engine_reports_no_interrupted_dictation()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         h.Up(RightCtrl);
 
@@ -216,7 +216,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Replacement_engine_is_built_from_the_published_configuration()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Router.UpdateBindings(F8Hold, null);
         h.Router.SetCaptureMode(true); // queued on the old engine and never applied there
 
@@ -233,7 +233,7 @@ public class HotkeyEngineTests
     [Fact]
     public async Task Rebinding_from_another_thread_stops_whichever_trigger_was_active()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, F9Hold);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, F9Hold);
         h.Down(F9);
         Assert.Equal(HotkeyTrigger.DictationOnly, Assert.Single(h.TakeTransitions()).Trigger);
 
@@ -249,7 +249,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Failed_install_detaches_only_its_own_engine()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
 
         Assert.Null(h.Router.EndEngine(h.Engine));
@@ -266,7 +266,7 @@ public class HotkeyEngineTests
     [Fact]
     public void A_replaced_engine_can_no_longer_stop_a_dictation_started_on_its_replacement()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
 
@@ -298,7 +298,7 @@ public class HotkeyEngineTests
     public void An_interrupted_dictation_is_stopped_exactly_once_whichever_side_takes_it_first(
         bool ownerThreadFirst, bool byStateClear)
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
         if (byStateClear)
@@ -365,7 +365,7 @@ public class HotkeyEngineTests
     [Fact]
     public void A_stopped_engine_passes_keys_through_if_its_hook_thread_outlives_the_stop()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
 
@@ -380,7 +380,7 @@ public class HotkeyEngineTests
     [Fact]
     public void A_reinstall_stops_only_a_dictation_the_app_was_told_about()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default with { Mode = HotkeyMode.Toggle }, F9Hold);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle }, F9Hold);
         h.Down(F9);        // the dictation-only binding starts a dictation
         h.Down(RightCtrl); // the standard toggle latches, but the arbiter refuses a second dictation
         h.Up(RightCtrl);
@@ -397,7 +397,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Requests_while_stopped_only_update_the_published_configuration()
     {
-        var router = new HotkeyCommandRouter(HotkeyBinding.Default);
+        var router = new HotkeyCommandRouter(HotkeyBinding.Legacy);
 
         Assert.Equal((true, (HotkeyEngine?)null), router.UpdateBindings(F8Hold, F9Hold));
         Assert.Null(router.SetCaptureMode(true));
@@ -636,7 +636,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Codes_outside_the_hook_range_pass_through_untouched()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         var update = state.Process(0x1A3, isDown: true);
 

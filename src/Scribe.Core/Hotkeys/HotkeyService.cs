@@ -56,7 +56,7 @@ public sealed class HotkeyService : IHotkeyService
     private readonly HookLivenessProbe _livenessProbe = new();
 
     public HotkeyService(ILogger<HotkeyService> logger)
-        : this(logger, HotkeyBinding.Default)
+        : this(logger, HotkeyBinding.DefaultDictation)
     {
     }
 

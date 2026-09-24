@@ -1425,8 +1425,8 @@ public partial class App : Application
             return;
         }
 
-        var hotkey = _controller?.CurrentSettings.Hotkey.DisplayName ?? "Right Ctrl";
-        _welcomeWindow = new Onboarding.WelcomeWindow(hotkey, OpenSettings);
+        var gesture = HotkeyCapture.Gesture(_controller?.CurrentSettings);
+        _welcomeWindow = new Onboarding.WelcomeWindow(gesture, OpenSettings);
         _welcomeWindow.Closed += (_, _) => _welcomeWindow = null;
         _welcomeWindow.Show();
         _welcomeWindow.Activate();

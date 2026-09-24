@@ -112,9 +112,10 @@ public sealed class SettingsRepository : ISettingsRepository
         if (string.IsNullOrWhiteSpace(json))
         {
             // No document is a first run, unless a repair lost the one the user had. Those defaults are no more
-            // their choice than an unreadable document's, so they are reported the same way until one is saved.
+            // their choice than an unreadable document's, so they are reported the same way until one is saved, and
+            // they are an existing install's: a first run's hotkeys would move a key this person relies on.
             LastLoadFailed = _database.SettingsLostInRepair || Get(LostMarkerKey) is not null;
-            return AppSettings.CreateDefault();
+            return LastLoadFailed ? AppSettings.CreateForExistingInstall() : AppSettings.CreateDefault();
         }
 
         if (TryDeserialize(json) is { } settings)
@@ -125,7 +126,7 @@ public sealed class SettingsRepository : ISettingsRepository
 
         LastLoadFailed = true;
         PreserveRecoveryCopy(json);
-        return AppSettings.CreateDefault();
+        return AppSettings.CreateForExistingInstall();
     }
 
     public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, setting: null, revision: null, out _);
@@ -512,7 +513,8 @@ public sealed class SettingsRepository : ISettingsRepository
 
     private static AppSettings Normalize(AppSettings settings)
     {
-        settings.Hotkey ??= HotkeyBinding.Default;
+        // A stored document is an existing install's, so a missing hotkey is the one it has been using.
+        settings.Hotkey ??= HotkeyBinding.Legacy;
         settings.EnabledDictionaryLibraryIds ??= [];
         settings.Profiles ??= [];
         settings.Profiles = settings.Profiles

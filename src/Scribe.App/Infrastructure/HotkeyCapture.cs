@@ -67,6 +67,9 @@ internal static class HotkeyCapture
     /// <summary>Renders an existing binding (mode included) as user-facing text.</summary>
     public static string Describe(HotkeyBinding binding) => HotkeyText.Describe(binding, LayoutKeyName);
 
+    /// <summary>What the welcome says about the push-to-talk gesture, with keys named as Settings names them.</summary>
+    public static (string Title, string Body) Gesture(AppSettings? settings) => HotkeyText.Gesture(settings, LayoutKeyName);
+
     /// <summary>The name of one key, as the capture box shows it while the user presses it.</summary>
     public static string KeyName(Key key) =>
         HotkeyText.KeyName((uint)KeyInterop.VirtualKeyFromKey(key), LayoutKeyName) ?? key.ToString();
