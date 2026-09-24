@@ -409,7 +409,7 @@ public sealed class SettingsRepository : ISettingsRepository
     {
         try
         {
-            if (Get(RecoveryKey) is null)
+            if (TakesRecoverySlot(json, Get(RecoveryKey)))
             {
                 Set(RecoveryKey, json);
             }
@@ -419,6 +419,13 @@ public sealed class SettingsRepository : ISettingsRepository
             // Recovery metadata must never turn a settings fallback into a startup failure.
         }
     }
+
+    // The recovery copy keeps the first unreadable document that holds something. It is written once and never
+    // overwritten, so a blank document, which holds nothing to recover, must not take the slot: it would shut out the
+    // real document a later failure has to keep. For the same reason a blank copy, which only a hand edit or a
+    // pre-release build could have written, gives way to the first document with content.
+    private static bool TakesRecoverySlot(string json, string? existingCopy) =>
+        !string.IsNullOrWhiteSpace(json) && string.IsNullOrWhiteSpace(existingCopy);
 
     // The settings document the way Load reads it: the same options (so the DPAPI-protected
     // secrets decrypt exactly as they do there) and the same normalization. Null when unreadable.
@@ -436,12 +443,12 @@ public sealed class SettingsRepository : ISettingsRepository
         }
     }
 
-    // Load's rules inside Update's transaction: defaults when nothing is stored. A document that
-    // cannot be read, a blank one included, is never written over, because defaults plus one field would discard
-    // everything else the user saved: it gets Load's recovery copy (written once, never overwritten), committed
-    // on its own, and the change is refused. The copy is written on this connection because a second
-    // one would wait behind this very transaction. A document a repair lost is refused the same way:
-    // defaults plus one field would stand in for it as if the user had chosen them.
+    // Load's rules inside Update's transaction: defaults when nothing is stored. A document that cannot be read, a blank
+    // one included, is never written over, because defaults plus one field would discard everything else the user
+    // saved: it gets Load's recovery copy (kept for the first such document with content, never overwritten),
+    // committed on its own, and the change is refused. The copy is written on this connection because a second one
+    // would wait behind this very transaction. A document a repair lost is refused the same way: defaults plus one
+    // field would stand in for it as if the user had chosen them.
     private AppSettings ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
     {
         var (stored, json) = ReadDocument(connection, transaction);
@@ -465,14 +472,9 @@ public sealed class SettingsRepository : ISettingsRepository
         }
 
         LastLoadFailed = true;
-        using (var recovery = connection.CreateCommand())
+        if (TakesRecoverySlot(json, ReadValue(connection, transaction, RecoveryKey)))
         {
-            recovery.Transaction = transaction;
-            recovery.CommandText =
-                "INSERT INTO settings (key, value) VALUES ($key, $value) ON CONFLICT (key) DO NOTHING;";
-            recovery.Parameters.AddWithValue("$key", RecoveryKey);
-            recovery.Parameters.AddWithValue("$value", json);
-            recovery.ExecuteNonQuery();
+            WriteValue(connection, transaction, RecoveryKey, json);
         }
 
         transaction.Commit();

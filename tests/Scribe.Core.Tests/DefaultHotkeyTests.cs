@@ -142,7 +142,7 @@ public sealed class DefaultHotkeyTests
         Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
         Assert.Null(loaded.DictationOnlyHotkey);
         Assert.Equal(blank, repo.Get("app_settings"));
-        Assert.Equal(blank, repo.Get("app_settings_recovery"));
+        Assert.Null(repo.Get("app_settings_recovery")); // nothing to recover, so the write-once slot stays free
         Assert.True(SettingsRepository.StartsWithoutSavedSettings(new SettingsRepository(db), db));
     }
 
@@ -161,7 +161,7 @@ public sealed class DefaultHotkeyTests
             () => repo.Update(stored => stored.EnableAiCleanup = true, ExternalSwitchSync.NextRevision(), out _));
         Assert.True(repo.LastLoadFailed);
         Assert.Equal(blank, repo.Get("app_settings"));
-        Assert.Equal(blank, repo.Get("app_settings_recovery"));
+        Assert.Null(repo.Get("app_settings_recovery"));
 
         // Saving what the session showed, as the Settings window does, is the explicit choice that ends it.
         repo.SaveBundle(repo.Load(), dictionaryEntries: null, snippets: null);
@@ -173,7 +173,65 @@ public sealed class DefaultHotkeyTests
         Assert.Equal(HotkeyBinding.Legacy, saved.Hotkey);
         Assert.Null(saved.DictationOnlyHotkey);
         Assert.True(reread.Update(stored => stored.HasCompletedFirstRun = true).HasCompletedFirstRun);
-        Assert.Equal(blank, repo.Get("app_settings_recovery")); // written once, kept
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_blank_document_leaves_the_recovery_slot_to_the_next_real_one(bool throughUpdate)
+    {
+        // The copy is written once and never overwritten, so a blank document taking it would lose the unreadable
+        // document that comes after it. Through Load (startup, Settings) and through a refused Update alike.
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        void Read()
+        {
+            if (throughUpdate)
+            {
+                Assert.Throws<InvalidOperationException>(() => repo.Update(stored => stored.HasCompletedFirstRun = true));
+            }
+            else
+            {
+                repo.Load();
+            }
+        }
+
+        repo.Set("app_settings", "  ");
+        Read();
+        Assert.Null(repo.Get("app_settings_recovery"));
+
+        repo.Set("app_settings", "{\"hotkey\":{\"virtualKey\":34, not json");
+        Read();
+        Assert.Equal("{\"hotkey\":{\"virtualKey\":34, not json", repo.Get("app_settings_recovery"));
+
+        // Once a document with content holds the slot, neither a later one nor a blank one replaces it.
+        repo.Set("app_settings", "{\"second\": not json");
+        Read();
+        repo.Set("app_settings", "");
+        Read();
+        Assert.Equal("{\"hotkey\":{\"virtualKey\":34, not json", repo.Get("app_settings_recovery"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_blank_recovery_copy_gives_way_to_a_document_with_content(bool throughUpdate)
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings_recovery", " \t ");
+        repo.Set("app_settings", "{\"unreadable");
+
+        if (throughUpdate)
+        {
+            Assert.Throws<InvalidOperationException>(() => repo.Update(stored => stored.HasCompletedFirstRun = true));
+        }
+        else
+        {
+            repo.Load();
+        }
+
+        Assert.Equal("{\"unreadable", repo.Get("app_settings_recovery"));
     }
 
     [Fact]

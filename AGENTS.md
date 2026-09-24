@@ -748,7 +748,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `AppSettings.CreateForExistingInstall()`, `CreateDefault` with the legacy hotkeys, for an unreadable document and
   for one a repair lost, so the key that person presses keeps working and Page Up and Page Down keep reaching their
   other apps. Only a missing `app_settings` row is a first run: an empty or white-space value is an unreadable
-  document like any other (recovery copy, `LastLoadFailed`, partial updates refused), in `Load` and `Update` alike.
+  document like any other (`LastLoadFailed`, partial updates refused), in `Load` and `Update` alike. It is never
+  kept as the write-once recovery copy, though: it holds nothing to recover and would shut out the next unreadable
+  document that does, so a blank copy also gives way to the first one with content.
   `DefaultHotkeyTests` pins each case.
 - **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
   page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
