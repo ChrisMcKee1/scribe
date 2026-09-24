@@ -1261,9 +1261,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CopilotModelCombo.Text = _settings.AiCleanupCopilotModel ?? string.Empty;
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
 
-        // Open optional details automatically only when its remaining field has a saved value.
-        AzureAdvancedExpander.IsExpanded = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureTenantId);
-
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
 
@@ -2955,11 +2952,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        // A different tenant means a different sign-in, so the verified state goes and the page returns
+        // to its signed-out form until the user signs in again. It deliberately does not request manual
+        // setup (_azureManualConfiguration): that would open the endpoint fields and hide "Use endpoint
+        // instead" for anyone who types a tenant before signing in. The box sits with the sign-in method,
+        // outside every panel this hides, so it stays put while the user types.
         ++_azureSignInProbeVersion;
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         _azureAutoListed = false;
-        _azureManualConfiguration = true;
         _selectedAzureDeployment = null;
         _updatingAzureSubscriptions = true;
         try
@@ -3061,9 +3062,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
                 if (!ok)
                 {
-                    _azureSignInStatus = new AzureSignInStatus(false, null);
-                    ApplyAzureSettingsAccess();
-                    AzureStatusText.Text = message;
+                    // The tenant box stays editable while the browser sign-in is open, and editing it
+                    // retires this attempt; its failure must not replace the newer status.
+                    if (operationVersion == _azureSignInProbeVersion)
+                    {
+                        _azureSignInStatus = new AzureSignInStatus(false, null);
+                        ApplyAzureSettingsAccess();
+                        AzureStatusText.Text = message;
+                    }
+
                     return;
                 }
 
@@ -3207,7 +3214,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _azureManualConfiguration || IsAzureApiKeySelected,
             !string.IsNullOrWhiteSpace(SelectedAzureApiKey),
             SelectedAzureAuthMode,
-            CurrentServicePrincipal is not null);
+            CurrentServicePrincipal is not null,
+            IsAzureApiKeySelected);
 
     private void ApplyAzureSettingsAccess()
     {
@@ -3240,15 +3248,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AzureApiKeyPanel.Visibility = apiKeyMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // The optional CLI tenant box pins the az login account to a tenant. In service principal
-        // mode the app registration names its own tenant, so a second tenant field would be two
-        // controls claiming the same setting, and an API key never asks Entra for a token. The box is
-        // the expander's only content, so the expander goes with it rather than opening onto nothing.
-        if (AzureAdvancedExpander is not null)
+        // The optional CLI tenant sits with the sign-in method, outside every panel that waits for a
+        // sign-in, so this is the only thing that decides whether it shows.
+        if (AzureCliTenantPanel is not null)
         {
-            AzureAdvancedExpander.Visibility = AzureSettingsAccess.ShowCliTenant(SelectedAzureAuthMode, apiKeyMode)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            AzureCliTenantPanel.Visibility = access.ShowCliTenant ? Visibility.Visible : Visibility.Collapsed;
         }
 
         if (AzureStatusTitle is not null)

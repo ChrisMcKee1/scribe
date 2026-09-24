@@ -937,6 +937,21 @@
                                             <TextBlock x:Name="AzureAuthModeHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
                                                        Text="Azure CLI uses whichever account you signed in with. Choose a service principal to pin one identity, which is the reliable option when you belong to more than one tenant."/>
 
+                                            <!-- The Azure CLI identity, beside where a service principal's fields go. The tenant is an input
+                                                 to signing in ("Sign in & find models" passes it to az login when no subscription is
+                                                 selected), so it shows whether or not anyone is signed in: AzureSettingsAccess decides
+                                                 when (State.ShowCliTenant). It shares one tenant setting with SpTenantBox. -->
+                                            <StackPanel x:Name="AzureCliTenantPanel" Visibility="Collapsed">
+                                                <TextBlock x:Name="AzureTenantLabel" Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
+                                                <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                            VerticalContentAlignment="Center"
+                                                            PlaceholderText="Entra tenant GUID"
+                                                            AutomationProperties.LabeledBy="{Binding ElementName=AzureTenantLabel}"
+                                                            TextChanged="AzureTenantBox_TextChanged"/>
+                                                <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                           Text="Leave blank to use the tenant Azure CLI is currently using. If your account belongs to more than one tenant, enter the one that holds your model. Signing in and cleanup use it whenever no subscription is selected."/>
+                                            </StackPanel>
+
                                             <StackPanel x:Name="AzureServicePrincipalPanel" Visibility="Collapsed">
                                                 <TextBlock Text="Directory (tenant) ID" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                                 <ui:TextBox x:Name="SpTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
@@ -1062,29 +1077,6 @@
                                                                Visibility="Collapsed"
                                                                Text="Project endpoints use the account host with API keys. This is expected because project data planes require Entra sign-in."/>
                                                 </StackPanel>
-
-                                                <!-- Shown only for an Azure CLI sign-in (AzureSettingsAccess.ShowCliTenant):
-                                                     the tenant box is all it holds. -->
-                                                <ui:CardExpander x:Name="AzureAdvancedExpander" Margin="0,16,0,0" IsExpanded="False">
-                                                    <ui:CardExpander.Header>
-                                                        <StackPanel>
-                                                            <TextBlock Text="Optional Azure details" Style="{StaticResource SettingTitle}" FontSize="13"/>
-                                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,2,0,0"
-                                                                       Text="Pin Azure CLI authentication to one tenant when no subscription is selected."/>
-                                                        </StackPanel>
-                                                    </ui:CardExpander.Header>
-                                                    <StackPanel Margin="0,4,0,0">
-                                                        <StackPanel>
-                                                            <TextBlock Text="Tenant ID (optional)" Style="{StaticResource SettingTitle}"/>
-                                                            <ui:TextBox x:Name="AzureTenantBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
-                                                                        VerticalContentAlignment="Center"
-                                                                        PlaceholderText="Entra tenant GUID"
-                                                                        TextChanged="AzureTenantBox_TextChanged"/>
-                                                            <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                                       Text="Pins Azure CLI authentication to one tenant when no subscription is selected."/>
-                                                        </StackPanel>
-                                                    </StackPanel>
-                                                </ui:CardExpander>
                                             </StackPanel>
                                         </StackPanel>
 
