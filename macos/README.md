@@ -39,8 +39,8 @@ From Finder, double-click `macos/Scribe/dist/Scribe.app`, or from Terminal:
 open macos/Scribe/dist/Scribe.app
 ```
 
-On first launch you'll be asked to grant Microphone and Accessibility access (System Settings >
-Privacy & Security), and a one-time Welcome window explains the push-to-talk gesture and the
+On first launch you'll be asked to grant Microphone, Accessibility and Input Monitoring access (System
+Settings > Privacy & Security), and a one-time Welcome window explains the push-to-talk gesture and the
 privacy/offline promise.
 
 ## What works today
@@ -48,20 +48,30 @@ privacy/offline promise.
 - Menu bar app shell (`NSStatusItem`, background-only via `LSUIElement`) with tray items for test
   dictation, Settings, AI Cleanup/Pause toggles, Recent Dictations, Quick Add to Dictionary,
   Welcome, and Quit
-- Global push-to-talk hotkey, real audio capture, and text injection into the focused app. Scribe
-  inserts through Accessibility where it can; otherwise it borrows the clipboard only when it is empty
-  or holds plain text, keeps its own copy off Universal Clipboard and marks it so clipboard history
-  tools skip it, and puts your text back only if nothing replaced it in the meantime. With anything
-  else on the clipboard it types the text instead. If focus moves to another app while the text is
-  going in, Scribe stops and keeps the dictation for recovery
+- Global push-to-talk hotkey, real audio capture, and text injection into the app that had focus when the
+  recording started. Scribe inserts through Accessibility where it can; otherwise it borrows the clipboard
+  only when it is empty or holds plain text, keeps its own copy off Universal Clipboard and marks it so
+  clipboard history tools skip it, and puts your text back only if nothing replaced it in the meantime.
+  With anything else on the clipboard it types the text instead. If focus moves to another app before or
+  while the text is going in, Scribe stops and keeps the dictation for recovery
+- The dictation pipeline in the Windows order: raw speech recognition, optional AI cleanup of that raw
+  transcript (with the app profile's writing style, and a one-line request for a terminal), the reply
+  checked and its dashes rewritten, then snippets and your dictionary, then line breaks for the target
+  app. Your snippet templates are never sent to a cleanup provider, and your dictionary has the last word.
+  You can start the next dictation while the last one is still being processed; the text goes in in the
+  order you spoke it
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
   The recognizer runs off the main thread with a deadline and can be cancelled, and the recording it
   reads is a private temporary file that is deleted as soon as it returns
 - Capture that belongs to one recording at a time: every input channel is mixed in, so a microphone on
   any input of an interface is heard; a device change ends the recording and keeps what it captured;
-  the test dictation (a toggle) stops on silence the way Windows does; and every recording stops at ten
-  minutes
-- Overlay pill with a 9-anchor position picker and live recording/processing state
+  Caps Lock (the default key) and the test dictation are toggles that stop on silence the way Windows does,
+  a held key never does; and every recording stops at ten minutes, even if the microphone stops delivering
+- Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
+  that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept");
+  no modal alerts while you dictate
+- Quitting waits for a paste in progress to put your clipboard back and for a running recognizer to be
+  stopped before Scribe exits
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
   Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
   shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
@@ -77,7 +87,11 @@ privacy/offline promise.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, opt-in AI summary)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
-  from persisted history), plus an injection-failure recovery notification
+  from persisted history), in a Recent Dictations submenu that fills itself as it opens, plus a
+  notification with Copy Transcript for a dictation that did not go in
+- Startup problems (a database that could not be read, missing Input Monitoring or Accessibility) are
+  reported once, in a notification that opens the right System Settings pane; granting Input Monitoring
+  takes effect without a relaunch
 - Dictation history written in the background after the text is delivered, in dictation order. It is
   best-effort until committed: a crash in that moment loses the entry. A new install keeps 90 days of
   text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
