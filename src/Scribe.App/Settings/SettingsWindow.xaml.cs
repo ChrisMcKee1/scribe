@@ -3043,7 +3043,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // outcome itself (CliSignInSteps.Publish), right after a last ownership check with nothing awaited in
             // between, because an await can resume in a later dispatcher operation.
             var result = await AzureCliSignIn.RunAndPublishAsync(
-                new CliSignInSteps(this, allowInteractiveLogin),
+                new CliSignInSteps(this, allowInteractiveLogin, _azureSignInAttempts.CancellationOf(operationVersion)),
                 allowInteractiveLogin,
                 () => _azureSignInAttempts.IsCurrent(operationVersion));
 
@@ -3091,9 +3091,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private async Task<AzureSignInStatus> ProbeCurrentAzureSignInAsync()
+    private async Task<AzureSignInStatus> ProbeCurrentAzureSignInAsync(CancellationToken attemptCancellation)
     {
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptCancellation);
+        cts.CancelAfter(TimeSpan.FromSeconds(20));
         var selectedSubscription = SelectedAzureSubscription;
         var tenantId = selectedSubscription is null || string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
             ? NullIfBlank(AzureTenantBox.Text)
@@ -3108,7 +3109,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// The window's steps for <see cref="AzureCliSignIn"/>. Each reads the page when it runs, so a check or a
     /// browser sign-in uses the tenant and subscription shown at that moment.
     /// </summary>
-    private sealed class CliSignInSteps(SettingsWindow window, bool allowInteractiveLogin) : IAzureCliSignInSteps
+    /// <remarks>
+    /// Every Azure CLI wait also ends when the attempt is retired (<paramref name="attemptCancellation"/>). They all
+    /// run inside Azure CLI's single gate (AzureCliProcessCoordinator), which every token request waits on, cleanup's
+    /// included, so a retired az login left running made every later check time out until its sign-in window was
+    /// dismissed or five minutes had passed.
+    /// </remarks>
+    private sealed class CliSignInSteps(
+        SettingsWindow window, bool allowInteractiveLogin, CancellationToken attemptCancellation) : IAzureCliSignInSteps
     {
         public async Task<bool> IsCliInstalledAsync()
         {
@@ -3130,7 +3138,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return false;
             }
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(attemptCancellation);
+            cts.CancelAfter(TimeSpan.FromSeconds(20));
             var (ok, subscriptions, _) = await window._azureCliInstaller.ListSubscriptionsAsync(cts.Token);
             return ok && subscriptions.All(subscription => !string.Equals(
                 subscription.Id,
@@ -3140,13 +3149,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public void ClearSelectedSubscription() => window.ClearSelectedAzureSubscription();
 
-        public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync();
+        public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync(attemptCancellation);
 
         public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Opening Azure sign-in in your browser…";
 
         public async Task<(bool Ok, string Message)> LoginAsync()
         {
-            using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            // Retiring the attempt cancels this, and AzureCliInstaller.RunAsync then kills az login's process tree, so a
+            // tenant edit no longer leaves it holding the gate for up to five minutes. A sign-in window it opened may
+            // stay on screen, but nothing is left to receive its result.
+            using var loginCts = CancellationTokenSource.CreateLinkedTokenSource(attemptCancellation);
+            loginCts.CancelAfter(TimeSpan.FromMinutes(5));
             var selectedSubscription = window.SelectedAzureSubscription;
             var tenantId = selectedSubscription is null || string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
                 ? NullIfBlank(window.AzureTenantBox.Text)

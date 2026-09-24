@@ -1,9 +1,92 @@
+using Scribe.Core.Cleanup;
 using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests;
 
 public sealed class AzureSignInAttemptsTests
 {
+    [Fact]
+    public void A_retired_attempt_is_cancelled_and_a_new_one_is_not()
+    {
+        var attempts = new AzureSignInAttempts();
+        var first = attempts.Begin();
+        var firstWork = attempts.CancellationOf(first);
+        Assert.False(firstWork.IsCancellationRequested);
+
+        attempts.Retire();
+
+        Assert.True(firstWork.IsCancellationRequested);
+        Assert.True(attempts.CancellationOf(first).IsCancellationRequested);
+
+        var second = attempts.Begin();
+        Assert.False(attempts.CancellationOf(second).IsCancellationRequested);
+        Assert.True(attempts.CancellationOf(first).IsCancellationRequested);
+    }
+
+    [Fact]
+    public void Starting_a_check_cancels_the_one_before_it()
+    {
+        var attempts = new AzureSignInAttempts();
+        var first = attempts.Begin();
+        var firstWork = attempts.CancellationOf(first);
+
+        var second = attempts.Begin();
+
+        Assert.True(firstWork.IsCancellationRequested);
+        Assert.False(attempts.CancellationOf(second).IsCancellationRequested);
+    }
+
+    [Fact]
+    public void Finishing_a_check_does_not_cancel_it()
+    {
+        var attempts = new AzureSignInAttempts();
+        var attempt = attempts.Begin();
+        var work = attempts.CancellationOf(attempt);
+
+        attempts.Finish(attempt);
+
+        Assert.False(work.IsCancellationRequested);
+    }
+
+    // O1: az login runs inside Azure CLI's single gate, which every token request waits on, cleanup's included. A
+    // login that outlived its retired attempt made every later check time out until its browser window closed.
+    // The gate here is the real one, and the login is shaped as the window's (the attempt's token, linked, with the
+    // five-minute limit on top).
+    [Fact]
+    public async Task Retiring_an_attempt_ends_its_login_so_the_next_check_gets_the_Azure_CLI_gate()
+    {
+        var attempts = new AzureSignInAttempts();
+        var attempt = attempts.Begin();
+        var holding = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var login = CancellationTokenSource.CreateLinkedTokenSource(attempts.CancellationOf(attempt));
+        login.CancelAfter(TimeSpan.FromMinutes(5));
+        try
+        {
+            Func<CancellationToken, Task<string>> signIn = async token =>
+            {
+                holding.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return "signed in";
+            };
+            var running = AzureCliProcessCoordinator.RunAsync(signIn, login.Token);
+            await holding.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            attempts.Retire();
+
+            // The next check waits on the same gate, with a limit well under the window's 20 s.
+            using var check = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var next = await AzureCliProcessCoordinator.RunAsync(_ => Task.FromResult("checked"), check.Token);
+
+            Assert.Equal("checked", next);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+        }
+        finally
+        {
+            // Releases the shared gate even when an assertion failed, so no other test waits behind it.
+            login.Cancel();
+        }
+    }
+
     [Fact]
     public void A_check_keeps_the_page_busy_until_it_finishes()
     {
