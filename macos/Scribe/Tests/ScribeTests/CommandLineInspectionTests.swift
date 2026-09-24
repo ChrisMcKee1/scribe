@@ -3,8 +3,8 @@ import XCTest
 
 @testable import Scribe
 
-/// The command-line verbs that look at a user's data leave it as it was: they read the database without writing to
-/// it, never create one, and run their verification fixtures in a temporary database of their own, removed
+/// The command-line verbs that look at a user's data leave it as it was: they read the database without changing its
+/// contents, never create one, and run their verification fixtures in a temporary database of their own, removed
 /// afterwards, never in the user's.
 final class CommandLineInspectionTests: XCTestCase {
     private var directory: StorageTestDirectory!

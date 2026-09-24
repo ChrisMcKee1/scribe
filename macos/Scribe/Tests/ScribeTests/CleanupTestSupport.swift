@@ -231,7 +231,8 @@ enum FormDecoding {
 // MARK: - Secrets and settings
 
 /// A `SecretStore` in memory, which counts its reads and writes, records which accounts it was asked for, and can be
-/// told to fail the next read, write or removal, or to hold the next read until the test releases it.
+/// told to fail the next read, write (a rename is one) or removal, or to hold the next read, or the next read of one
+/// account, until the test releases it.
 final class InMemorySecretStore: SecretStore {
     private struct State: Sendable {
         var secrets: [String: String]
@@ -242,6 +243,7 @@ final class InMemorySecretStore: SecretStore {
         var failNextWrite: OSStatus?
         var failNextRemoval: OSStatus?
         var pauseNextRead: ReadPause?
+        var pausedReads: [String: ReadPause] = [:]
     }
 
     private let state: OSAllocatedUnfairLock<State>
@@ -254,8 +256,11 @@ final class InMemorySecretStore: SecretStore {
         let (result, pause) = state.withLock { current -> (Result<String?, KeychainStore.KeychainError>, ReadPause?) in
             current.reads += 1
             current.accountsRead.append(account)
-            let pause = current.pauseNextRead
+            var pause = current.pauseNextRead
             current.pauseNextRead = nil
+            if pause == nil {
+                pause = current.pausedReads.removeValue(forKey: account)
+            }
             if let status = current.failNextRead {
                 current.failNextRead = nil
                 return (.failure(.unhandled(status)), pause)
@@ -274,8 +279,38 @@ final class InMemorySecretStore: SecretStore {
         return pause
     }
 
+    /// Holds the next read of `account` after it has read, until `release()` on what this returns. Reads of other
+    /// accounts go through.
+    func pauseNextRead(of account: String) -> ReadPause {
+        let pause = ReadPause()
+        state.withLock { $0.pausedReads[account] = pause }
+        return pause
+    }
+
     func save(_ secret: String, for account: String) throws {
         try write { $0[account] = secret }
+    }
+
+    /// As the Keychain renames an item: one step under the lock, refused when the old account has nothing or the new
+    /// one already has something.
+    func renameAccount(_ account: String, to newAccount: String) throws -> SecretRename {
+        let result = state.withLock { current -> Result<SecretRename, KeychainStore.KeychainError> in
+            if let status = current.failNextWrite {
+                current.failNextWrite = nil
+                return .failure(.unhandled(status))
+            }
+            guard let secret = current.secrets[account] else {
+                return .success(.sourceGone)
+            }
+            guard current.secrets[newAccount] == nil else {
+                return .success(.destinationTaken)
+            }
+            current.writes += 1
+            current.secrets[account] = nil
+            current.secrets[newAccount] = secret
+            return .success(.renamed)
+        }
+        return try result.get()
     }
 
     func removeSecret(for account: String) throws {
