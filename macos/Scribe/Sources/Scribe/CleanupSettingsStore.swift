@@ -90,7 +90,7 @@ struct CleanupSettingsStore: Sendable {
     }
 
     static let openAIApiKeyKeychainService = "com.scribe.macos.openai-compatible-api-key"
-    /// The account is the client id itself, so switching Entra app registrations never reads a stale secret.
+    /// The account is the trimmed client id, so switching Entra app registrations never reads a stale secret.
     static let azureClientSecretKeychainService = "com.scribe.macos.azure-client-secret"
     /// One OpenAI-compatible key per Mac, under one fixed account.
     static let openAIApiKeyAccount = "default"
@@ -109,7 +109,7 @@ struct CleanupSettingsStore: Sendable {
     let domain: Domain
     /// Holds the OpenAI-compatible API key, under `openAIApiKeyAccount`.
     let apiKeys: any SecretStore
-    /// Holds each service principal's client secret, under its client id.
+    /// Holds each service principal's client secret, under its trimmed client id.
     let clientSecrets: any SecretStore
 
     init(domain: Domain, apiKeys: any SecretStore, clientSecrets: any SecretStore) {
@@ -255,10 +255,34 @@ struct CleanupSettingsStore: Sendable {
 
     /// The client secret saved for `clientId`, or `nil` for a blank client id. Throws when the secret store cannot be
     /// read.
+    ///
+    /// `clientId` is the id as configured, surrounding whitespace included. Builds before this one saved a secret under
+    /// exactly that text, and a Keychain item matches only its own account, so when nothing is saved under the trimmed
+    /// id, the secret is looked for under that one earlier account (`legacySecretAccount(forClientId:)`) and moved to
+    /// the trimmed one. No other account is ever read.
     func readAzureClientSecret(clientId: String) throws -> String? {
         let account = Self.secretAccount(forClientId: clientId)
         guard !account.isEmpty else { return nil }
-        return try clientSecrets.secret(for: account)
+        if let secret = try clientSecrets.secret(for: account) {
+            return secret
+        }
+        guard let legacy = Self.legacySecretAccount(forClientId: clientId),
+            let secret = try clientSecrets.secret(for: legacy)
+        else {
+            return nil
+        }
+        // Saved under the trimmed id before the earlier item goes, so a failure at either step still leaves a copy for
+        // the next read, and neither keeps the secret from being used now. The secret itself is unchanged, so the
+        // revision stays, and a provider built with it is kept.
+        do {
+            try clientSecrets.save(secret, for: account)
+        } catch {
+            ScribeLog.warning(.cleanup, "Could not move a client secret to its trimmed client id", .failure(error))
+            return secret
+        }
+        removeLegacyClientSecret(legacy)
+        ScribeLog.info(.cleanup, "Moved a client secret to its trimmed client id")
+        return secret
     }
 
     /// The saved client secret for the Settings window, where a Keychain that cannot be read shows as no secret.
@@ -268,14 +292,27 @@ struct CleanupSettingsStore: Sendable {
 
     /// Saves the client secret for `clientId`, or removes it when given `nil` or an empty string. A blank client id
     /// stores nothing, so no item is ever keyed by an empty account shared by every unconfigured install.
+    ///
+    /// Either way, the item an earlier build saved under the id exactly as configured goes too: left behind, it would
+    /// come back on the next read after a Clear, and linger beside the new secret after a Save.
     func setAzureClientSecret(_ secret: String?, clientId: String) throws {
         let account = Self.secretAccount(forClientId: clientId)
         guard !account.isEmpty else { return }
+        let legacy = Self.legacySecretAccount(forClientId: clientId)
         if let secret, !secret.isEmpty {
             try clientSecrets.save(secret, for: account)
-        } else {
-            try clientSecrets.removeSecret(for: account)
+            secretsChanged()
+            if let legacy {
+                removeLegacyClientSecret(legacy)
+            }
+            return
         }
+        if let legacy {
+            // First, so a Clear that cannot remove it fails having changed nothing. Left behind once the trimmed
+            // item is gone, it would be moved back by the next read.
+            try clientSecrets.removeSecret(for: legacy)
+        }
+        try clientSecrets.removeSecret(for: account)
         secretsChanged()
     }
 
@@ -283,6 +320,24 @@ struct CleanupSettingsStore: Sendable {
     /// with a stray space still finds its own secret.
     static func secretAccount(forClientId clientId: String) -> String {
         clientId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The account builds before the trimmed one saved `clientId`'s secret under: the id exactly as configured. `nil`
+    /// when that is the trimmed account already, so a client id without surrounding whitespace reads one account only.
+    static func legacySecretAccount(forClientId clientId: String) -> String? {
+        let account = secretAccount(forClientId: clientId)
+        return account.isEmpty || account == clientId ? nil : clientId
+    }
+
+    /// Removes the earlier item once the trimmed account holds the secret. Failing only leaves it where no read looks
+    /// again, since the trimmed account is read first, so it is logged, not thrown.
+    private func removeLegacyClientSecret(_ legacy: String) {
+        do {
+            try clientSecrets.removeSecret(for: legacy)
+        } catch {
+            ScribeLog.warning(
+                .cleanup, "Could not remove a client secret saved under an untrimmed client id", .failure(error))
+        }
     }
 
     // MARK: - Helpers

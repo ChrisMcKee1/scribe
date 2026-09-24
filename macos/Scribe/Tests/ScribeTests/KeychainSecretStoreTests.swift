@@ -83,4 +83,22 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertNil(try second.secret(for: account))
         XCTAssertEqual(try first.secret(for: account), "first-value")
     }
+
+    /// Earlier builds saved a client secret under the client id exactly as typed. The Keychain matches an account
+    /// exactly, so the trimmed account alone never finds that item; the settings store reads it from its own account,
+    /// moves it to the trimmed one, and removes it.
+    func testAClientSecretSavedUnderAnUntrimmedClientIdMovesToTheTrimmedAccount() throws {
+        let service = makeUniqueKeychainService(label: "legacy-client-secret")
+        try KeychainStore.set("legacy-secret", service: service, account: " client-1 ")
+        XCTAssertNil(try KeychainStore.get(service: service, account: "client-1"))
+        let isolated = makeIsolatedDefaults(label: "legacy-client-secret")
+        let store = CleanupSettingsStore(
+            domain: .suite(isolated.suiteName), apiKeys: InMemorySecretStore(),
+            clientSecrets: KeychainSecretStore(service: service))
+
+        XCTAssertEqual(try store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
+
+        XCTAssertEqual(try KeychainStore.get(service: service, account: "client-1"), "legacy-secret")
+        XCTAssertNil(try KeychainStore.get(service: service, account: " client-1 "))
+    }
 }

@@ -67,6 +67,7 @@ jobs:
         run: swift build --package-path macos/Scribe 2>&1 | tee build-debug.log
 
       - name: Build (release)
+        id: release
         run: swift build --package-path macos/Scribe -c release 2>&1 | tee build-release.log
 
       # Each test runs in a worker process of its own. Every suite keeps its state to itself (a
@@ -79,15 +80,46 @@ jobs:
           swift test --package-path macos/Scribe --parallel --xunit-output "$RUNNER_TEMP/xunit.xml" 2>&1 \
             | tee test.log
 
-      - name: Count compiler warnings
+      # The app as users get it, which no test sees: build-app.sh packages the release build above into Scribe.app,
+      # plutil checks the Info.plist it writes, and codesign checks the bundle is sealed. The packaged app then lists
+      # its dictionary libraries, which it must find inside the bundle: the build tree's resource bundle, which
+      # Bundle.module would otherwise fall back to, is moved aside while it runs. It runs after the tests, whatever
+      # they found, whenever the release build succeeded.
+      - name: App bundle
+        if: ${{ !cancelled() && steps.release.outcome == 'success' }}
+        run: |
+          macos/Scribe/scripts/build-app.sh release
+          app=macos/Scribe/dist/Scribe.app
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict --verbose=2 "$app"
+          bin=$(swift build --package-path macos/Scribe -c release --show-bin-path)
+          mv "$bin/ScribeMac_Scribe.bundle" "$RUNNER_TEMP/ScribeMac_Scribe.bundle"
+          trap 'mv "$RUNNER_TEMP/ScribeMac_Scribe.bundle" "$bin/ScribeMac_Scribe.bundle"' EXIT
+          listing=$("$app/Contents/MacOS/Scribe" --list-dictionary-libraries)
+          echo "$listing"
+          expected=$(find macos/Scribe/Sources/Scribe/Resources/Libraries -name '*.csv' | wc -l | tr -d ' ')
+          if ! grep -qxF "$expected built-in dictionary librar(y/ies):" <<< "$listing"; then
+            echo "::error::The packaged app did not find its $expected dictionary libraries inside the bundle."
+            exit 1
+          fi
+
+      # The package builds without a single warning, so any warning fails the job. The step runs even after a failed
+      # build or test, so their warnings are listed too.
+      - name: Compiler warnings
         if: always()
         run: |
+          total=0
           for log in build-debug.log build-release.log test.log; do
             [ -f "$log" ] || continue
             count=$(grep -cE '\.swift:[0-9]+:[0-9]+: warning:' "$log" || true)
             echo "$log: $count compiler warning line(s)"
             grep -E '\.swift:[0-9]+:[0-9]+: warning:' "$log" | sort -u | head -n 50 || true
+            total=$((total + count))
           done
+          if [ "$total" -gt 0 ]; then
+            echo "::error::$total compiler warning line(s). The package builds without warnings, so fix each one."
+            exit 1
+          fi
 
       # A parallel run prints only the output of failing tests, so the scenarios' measurements go to
       # files, which this prints and the next step uploads.

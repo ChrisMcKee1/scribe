@@ -99,6 +99,107 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(fixture.store.secretRevision, "")
     }
 
+    // MARK: - Secrets saved by earlier builds
+
+    /// Earlier builds saved a client secret under the client id exactly as typed, and a Keychain item matches only its
+    /// own account, so the trimmed account alone never finds it. It is read from that one account and moved to the
+    /// trimmed one, and no other item is read or changed. The secret is the same, so the revision stays.
+    func testASecretSavedUnderAnUntrimmedClientIdIsFoundAndMoved() throws {
+        let clientSecrets = InMemorySecretStore([
+            " client-1\t": "legacy-secret",
+            "client-2": "unrelated",
+            " client-2 ": "unrelated-legacy",
+        ])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+        let revision = fixture.store.secretRevision
+
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1\t"), "legacy-secret")
+
+        let expected = [
+            "client-1": "legacy-secret",
+            "client-2": "unrelated",
+            " client-2 ": "unrelated-legacy",
+        ]
+        XCTAssertEqual(clientSecrets.secrets, expected)
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t"])
+        XCTAssertEqual(fixture.store.secretRevision, revision)
+        XCTAssertEqual(fixture.store.azureClientSecret(clientId: " client-1\t"), "legacy-secret")
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t", "client-1"])
+    }
+
+    /// A move that cannot save the trimmed account keeps the earlier item, so nothing is lost, and the secret is still
+    /// used; the next read tries the move again.
+    func testAMoveThatCannotSaveKeepsTheEarlierItem() throws {
+        let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+        clientSecrets.failNextWrite(with: errSecInteractionNotAllowed)
+
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
+        XCTAssertEqual(clientSecrets.secrets, [" client-1 ": "legacy-secret"])
+
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
+        XCTAssertEqual(clientSecrets.secrets, ["client-1": "legacy-secret"])
+    }
+
+    /// The earlier item is removed only after the trimmed account holds the secret. When it cannot be removed, later
+    /// reads find the trimmed account first and never read the earlier one again.
+    func testAnEarlierItemThatCannotBeRemovedIsNotReadAgain() throws {
+        let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+        clientSecrets.failNextRemoval(with: errSecInteractionNotAllowed)
+
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
+        XCTAssertEqual(clientSecrets.secrets, ["client-1": "legacy-secret", " client-1 ": "legacy-secret"])
+
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1 ", "client-1"])
+    }
+
+    /// Clear removes the earlier item too, first: left behind, the next read would move it back.
+    func testClearRemovesASecretSavedUnderAnUntrimmedClientId() throws {
+        let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+
+        try fixture.store.setAzureClientSecret(nil, clientId: " client-1 ")
+
+        XCTAssertEqual(clientSecrets.secrets, [:])
+        XCTAssertNil(try fixture.store.readAzureClientSecret(clientId: " client-1 "))
+        XCTAssertNotEqual(fixture.store.secretRevision, "")
+    }
+
+    /// Save leaves no stale secret beside the new one.
+    func testSaveReplacesASecretSavedUnderAnUntrimmedClientId() throws {
+        let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+
+        try fixture.store.setAzureClientSecret("new-secret", clientId: " client-1 ")
+
+        XCTAssertEqual(clientSecrets.secrets, ["client-1": "new-secret"])
+    }
+
+    /// A client id typed without surrounding whitespace was saved under the trimmed account all along, so that is the
+    /// one account read, and an item under another spelling of the id is left alone.
+    func testAClientIdWithoutSurroundingWhitespaceReadsOneAccount() throws {
+        let clientSecrets = InMemorySecretStore([" client-1 ": "other-spelling"])
+        let fixture = makeCleanupStore(clientSecrets: clientSecrets)
+
+        XCTAssertNil(try fixture.store.readAzureClientSecret(clientId: "client-1"))
+
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1"])
+        XCTAssertEqual(clientSecrets.secrets, [" client-1 ": "other-spelling"])
+    }
+
+    /// Earlier builds kept the OpenAI-compatible key under this same service and account, so it is read where it is.
+    func testTheAPIKeySavedByEarlierBuildsIsReadWhereItIs() throws {
+        let apiKeys = InMemorySecretStore(["default": "sk-earlier"])
+        let fixture = makeCleanupStore(apiKeys: apiKeys)
+
+        XCTAssertEqual(try fixture.store.readOpenAIApiKey(), "sk-earlier")
+        XCTAssertEqual(apiKeys.accountsRead, ["default"])
+        XCTAssertEqual(CleanupSettingsStore.openAIApiKeyAccount, "default")
+        XCTAssertEqual(CleanupSettingsStore.openAIApiKeyKeychainService, "com.scribe.macos.openai-compatible-api-key")
+    }
+
     /// The revision is what tells the provider cache a secret changed, without the secret becoming part of a key.
     func testEverySecretChangeMovesTheRevisionAndNothingElseDoes() throws {
         let fixture = makeCleanupStore()

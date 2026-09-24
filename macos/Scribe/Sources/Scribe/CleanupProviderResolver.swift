@@ -148,7 +148,8 @@ enum CleanupProviderResolver {
                 model: model, apiKey: apiKey, completionsURL: completionsURL, session: factory.session)
         case .microsoftFoundry(let inferenceBase, let deployment, let identity):
             let credential = try credentialSource(identity) {
-                try makeCredential(for: identity, store: store, source: connection.source, factory: factory)
+                try makeCredential(
+                    for: identity, store: store, source: connection.source, environment: environment, factory: factory)
             }
             return MicrosoftFoundryCleanupProvider(
                 inferenceBase: inferenceBase, deployment: deployment, credential: credential, session: factory.session)
@@ -318,6 +319,7 @@ enum CleanupProviderResolver {
         for identity: AzureIdentity,
         store: CleanupSettingsStore,
         source: CleanupConfigurationSource,
+        environment: [String: String],
         factory: CleanupProviderFactory
     ) throws -> any AzureCredentialProvider {
         switch identity {
@@ -326,7 +328,8 @@ enum CleanupProviderResolver {
                 tenantId: tenantId, searchPath: factory.azureCliSearchPath, lane: factory.azureCliLane,
                 launch: factory.azureCliLaunch, now: factory.now)
         case .servicePrincipal(let tenantId, let clientId, _):
-            let secret = try readSecret { try store.readAzureClientSecret(clientId: clientId) }
+            let configured = configuredClientId(clientId, source: source, store: store, environment: environment)
+            let secret = try readSecret { try store.readAzureClientSecret(clientId: configured) }
             guard let secret, !secret.isEmpty else {
                 throw CleanupProviderError.notConfigured(.azureClientSecretMissing, source: source)
             }
@@ -334,6 +337,28 @@ enum CleanupProviderResolver {
                 principal: AzureServicePrincipal(tenantId: tenantId, clientId: clientId, clientSecret: secret),
                 session: factory.session, now: factory.now)
         }
+    }
+
+    /// The client id as configured, surrounding whitespace included, when it trims to the identity's `clientId`: the
+    /// secret store also looks under that exact text for a secret an earlier build saved there. The identity keeps
+    /// only the trimmed id, so this reads it again from where the connection came from.
+    private static func configuredClientId(
+        _ clientId: String,
+        source: CleanupConfigurationSource,
+        store: CleanupSettingsStore,
+        environment: [String: String]
+    ) -> String {
+        let configured: String?
+        switch source {
+        case .settings:
+            configured = store.azureClientId
+        case .environment:
+            configured = environment["SCRIBE_AZURE_CLIENT_ID"]
+        }
+        guard let configured, CleanupSettingsStore.secretAccount(forClientId: configured) == clientId else {
+            return clientId
+        }
+        return configured
     }
 
     /// A secret store read, with a failure to read kept apart from a secret that was never saved.

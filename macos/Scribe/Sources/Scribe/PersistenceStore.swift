@@ -67,6 +67,15 @@ enum ConnectionPurpose: Sendable {
     case maintenance
 }
 
+/// How a `PersistenceStore` opens its database.
+enum PersistenceAccess: Sendable {
+    /// The app's own use: creates the file when it is missing and sets it up for writing.
+    case readWrite
+    /// For looking at a user's data from outside the app, as the command-line verbs do: opens an existing file only,
+    /// sets nothing, and SQLite refuses every write. A missing file fails to open instead of being created.
+    case readOnly
+}
+
 /// Page accounting for space reclamation, read with SQLite's own pragmas.
 struct PersistencePageStats: Equatable, Sendable {
     let pageSize: Int64
@@ -217,23 +226,24 @@ final class PersistenceStore: Sendable {
     init(
         fileManager: FileManager = .default,
         databaseURL overrideDatabaseURL: URL? = nil,
+        access: PersistenceAccess = .readWrite,
         busyTimeoutMilliseconds: Int32 = PersistenceStore.defaultBusyTimeoutMilliseconds,
         testHooks: TestHooks = TestHooks()
     ) {
-        let resolvedURL: URL
-        if let overrideDatabaseURL {
-            resolvedURL = overrideDatabaseURL
-        } else {
-            let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            let scribeDirectoryURL = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
-            resolvedURL = scribeDirectoryURL.appendingPathComponent("scribe.db", isDirectory: false)
-        }
-
+        let resolvedURL = overrideDatabaseURL ?? Self.defaultDatabaseURL(fileManager: fileManager)
         databaseURL = resolvedURL
         owner = ConnectionOwner(
             path: resolvedURL.path(percentEncoded: false),
+            readOnly: access == .readOnly,
             busyTimeoutMilliseconds: busyTimeoutMilliseconds,
             hooks: testHooks)
+    }
+
+    /// Where the app keeps its database: `~/Library/Application Support/Scribe/scribe.db`.
+    static func defaultDatabaseURL(fileManager: FileManager = .default) -> URL {
+        let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let scribeDirectoryURL = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
+        return scribeDirectoryURL.appendingPathComponent("scribe.db", isDirectory: false)
     }
 
     // MARK: - Schema
@@ -1266,6 +1276,7 @@ final class PersistenceStore: Sendable {
 /// the helpers below take the `SQLiteSession` they need instead of reaching for the store.
 private final class ConnectionOwner: @unchecked Sendable {
     let path: String
+    let readOnly: Bool
     let busyTimeoutMilliseconds: Int32
     let progressInterval: Int32
 
@@ -1283,8 +1294,9 @@ private final class ConnectionOwner: @unchecked Sendable {
     private var waiters = 0
     private var activity: UInt64 = 0
 
-    init(path: String, busyTimeoutMilliseconds: Int32, hooks: PersistenceStore.TestHooks) {
+    init(path: String, readOnly: Bool, busyTimeoutMilliseconds: Int32, hooks: PersistenceStore.TestHooks) {
         self.path = path
+        self.readOnly = readOnly
         self.busyTimeoutMilliseconds = busyTimeoutMilliseconds
         self.progressInterval = max(1, hooks.progressInterval)
         self.hooks = hooks
@@ -1416,7 +1428,8 @@ private final class ConnectionOwner: @unchecked Sendable {
         }
 
         var opened: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        var flags = SQLITE_OPEN_FULLMUTEX
+        flags |= readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         let code = sqlite3_open_v2(path, &opened, flags, nil)
         guard code == SQLITE_OK, let opened else {
             if let opened {
@@ -1427,7 +1440,7 @@ private final class ConnectionOwner: @unchecked Sendable {
 
         do {
             let journalMode = try Self.configure(
-                opened, busyTimeoutMilliseconds: busyTimeoutMilliseconds, timestamps: timestamps)
+                opened, readOnly: readOnly, busyTimeoutMilliseconds: busyTimeoutMilliseconds, timestamps: timestamps)
             if journalMode.lowercased() == "wal" {
                 logger.info("Opened the database in WAL mode.")
             } else {
@@ -1446,6 +1459,7 @@ private final class ConnectionOwner: @unchecked Sendable {
 
     private static func configure(
         _ db: OpaquePointer,
+        readOnly: Bool,
         busyTimeoutMilliseconds: Int32,
         timestamps: ISO8601DateFormatter
     ) throws -> String {
@@ -1453,6 +1467,12 @@ private final class ConnectionOwner: @unchecked Sendable {
         sqlite3_busy_timeout(db, busyTimeoutMilliseconds)
 
         let session = SQLiteSession(db: db, timestamps: timestamps)
+
+        // A read-only look at a user's database only asks: each setting below either writes to the file or
+        // governs a connection's own writes.
+        guard !readOnly else {
+            return try session.scalarText("PRAGMA journal_mode;", .open) ?? "unknown"
+        }
 
         // auto_vacuum can only leave NONE while a database has no pages, and journal_mode=WAL writes
         // the first one, so a brand-new file takes incremental mode here, first. StorageMaintenance
@@ -1466,6 +1486,14 @@ private final class ConnectionOwner: @unchecked Sendable {
         // FULL is one fsync per commit in WAL mode. History writes are rare and small, and a dictation
         // that reached the user's document should survive a power cut, not only a crash.
         try session.execute("PRAGMA synchronous = FULL;", .open)
+
+        // Deleted transcripts, rules and profiles are overwritten with zeros where they lay, rather than
+        // left in free space, readable in the file, until a later write reuses it. The system SQLite
+        // defaults to FAST, which clears a deleted row's cell but leaves a page freed whole (the rest of a
+        // cleared table, a long transcript's overflow pages) as it was; ON clears those too. It belongs to
+        // the connection, so it is set on every open. StorageMaintenance describes how the WAL keeps the
+        // old page images.
+        try session.execute("PRAGMA secure_delete = ON;", .open)
         return journalMode
     }
 }

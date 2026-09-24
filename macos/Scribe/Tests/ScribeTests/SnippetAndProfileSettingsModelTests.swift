@@ -85,6 +85,40 @@ final class SnippetAndProfileSettingsModelTests: XCTestCase {
         XCTAssertEqual(drafts.snippetTemplate, "first template")
     }
 
+    /// A Snippets tab built again while its add waits in storage sees that add in the drafts and sends nothing. A
+    /// second add, if one were sent, has its own gate already open, so it could never hang the test.
+    @MainActor
+    func testATabRebuiltDuringAnAddSendsTheSnippetOnce() async {
+        let gates = StorageTestCallGates(count: 2)
+        let inserts = SettingsTestCounter()
+        let access = SnippetSettingsAccess(
+            loadSnippets: { [] },
+            addSnippet: { _ in
+                await inserts.increment()
+                _ = await gates.pass()
+            },
+            setEnabled: { _, _ in },
+            deleteSnippet: { _ in })
+        let drafts = SettingsDrafts()
+        drafts.snippetPhrase = "sign off block"
+        drafts.snippetTemplate = "Best,\nChris"
+        let first = SnippetSettingsModel(access: access, drafts: drafts, onChanged: {})
+        let adding = Task { await first.addFromDrafts() }
+        await gates.gate(0).waitForArrival()
+
+        let rebuilt = SnippetSettingsModel(access: access, drafts: drafts, onChanged: {})
+        XCTAssertTrue(rebuilt.isAdding)
+        XCTAssertFalse(rebuilt.canAdd)
+        await gates.gate(1).open()
+        await rebuilt.addFromDrafts()
+        await gates.gate(0).open()
+        await adding.value
+
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(drafts.snippetPhrase, "")
+        XCTAssertFalse(rebuilt.isAdding)
+    }
+
     @MainActor
     func testSwitchingAndDeletingASnippetGoThroughTheStore() async throws {
         let store = try makeStore()
@@ -222,5 +256,38 @@ final class SnippetAndProfileSettingsModelTests: XCTestCase {
         XCTAssertEqual(drafts.profileName, "Chat")
         XCTAssertEqual(refreshes.count, 0)
         XCTAssertFalse(model.isAdding)
+    }
+
+    /// An App Profiles tab built again while its add waits in storage sees that add in the drafts and sends nothing. A
+    /// second add, if one were sent, has its own gate already open, so it could never hang the test.
+    @MainActor
+    func testATabRebuiltDuringAnAddSendsTheProfileOnce() async {
+        let gates = StorageTestCallGates(count: 2)
+        let inserts = SettingsTestCounter()
+        let access = AppProfileSettingsAccess(
+            loadProfiles: { [] },
+            addProfile: { _ in
+                await inserts.increment()
+                _ = await gates.pass()
+            },
+            deleteProfile: { _ in })
+        let drafts = SettingsDrafts()
+        drafts.profileName = "Chat"
+        drafts.profileBundleIdentifiers = "com.tinyspeck.slackmacgap"
+        let first = AppProfileSettingsModel(access: access, drafts: drafts, onChanged: {})
+        let adding = Task { await first.addFromDrafts() }
+        await gates.gate(0).waitForArrival()
+
+        let rebuilt = AppProfileSettingsModel(access: access, drafts: drafts, onChanged: {})
+        XCTAssertTrue(rebuilt.isAdding)
+        XCTAssertFalse(rebuilt.canAdd)
+        await gates.gate(1).open()
+        await rebuilt.addFromDrafts()
+        await gates.gate(0).open()
+        await adding.value
+
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(drafts.profileName, "")
+        XCTAssertFalse(rebuilt.isAdding)
     }
 }

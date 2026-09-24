@@ -127,6 +127,62 @@ final class PersistenceStoreHistoryTests: XCTestCase {
         XCTAssertEqual(try check.scalarInt("SELECT count(*) FROM sqlite_master WHERE name = 'dictionary_entries';"), 0)
     }
 
+    // MARK: - Deleted text
+
+    /// The bytes of the database and, if it is still there, its WAL, after the store's connection has closed.
+    private func storedBytes(_ store: PersistenceStore) throws -> [Data] {
+        store.closeConnection()
+        var bytes = try [Data(contentsOf: directory.databaseURL)]
+        let wal = URL(fileURLWithPath: directory.databaseURL.path(percentEncoded: false) + "-wal")
+        if FileManager.default.fileExists(atPath: wal.path(percentEncoded: false)) {
+            bytes.append(try Data(contentsOf: wal))
+        }
+        return bytes
+    }
+
+    /// `marker` repeated until the text spills past its row into overflow pages, which SQLite frees whole when the row
+    /// goes.
+    private func longTranscript(_ marker: String) -> String {
+        Array(repeating: marker, count: 400).joined(separator: " ")
+    }
+
+    /// A retention sweep overwrites the text it deletes, overflow pages included. With secure delete off the bytes
+    /// stay in the file until a later write reuses them or a full VACUUM rewrites it; at the system SQLite's own FAST
+    /// setting the row's cell is cleared, but its overflow pages, freed whole, are left as they were.
+    func testTextASweepDeletesIsOverwrittenInTheFile() throws {
+        let store = try makeStore()
+        try store.setHistoryRetention(.days(30))
+        let swept = "secure-delete-swept-\(UUID().uuidString)"
+        let kept = "secure-delete-kept-\(UUID().uuidString)"
+        try record(store, secondsAgo: 60 * 86_400, longTranscript(swept))
+        try record(store, secondsAgo: 60, kept)
+        XCTAssertTrue(try store.checkpointWal())
+
+        XCTAssertEqual(try store.deleteExpiredHistoryBatch(authorizedDays: 30, now: now, limit: 10), .deleted(1))
+        XCTAssertTrue(try store.checkpointWal())
+
+        let files = try storedBytes(store)
+        XCTAssertTrue(files.allSatisfy { $0.range(of: Data(swept.utf8)) == nil }, "the swept text is still stored")
+        XCTAssertNotNil(files[0].range(of: Data(kept.utf8)), "the search missed text that is stored")
+    }
+
+    /// Clear history drops every row at once: SQLite empties the table's first page and frees the rest whole. ON
+    /// overwrites both, where FAST would leave the freed pages as they were.
+    func testTextClearHistoryDeletesIsOverwrittenInTheFile() throws {
+        let store = try makeStore()
+        let cleared = "secure-delete-cleared-\(UUID().uuidString)"
+        for minutes in 1...3 {
+            try record(store, secondsAgo: Double(minutes) * 60, longTranscript(cleared))
+        }
+        XCTAssertTrue(try store.checkpointWal())
+
+        XCTAssertEqual(try store.clearHistory(), 3)
+        XCTAssertTrue(try store.checkpointWal())
+
+        let files = try storedBytes(store)
+        XCTAssertTrue(files.allSatisfy { $0.range(of: Data(cleared.utf8)) == nil }, "the cleared text is still stored")
+    }
+
     // MARK: - Failures
 
     func testAReadThatFailsPartWayThrowsInsteadOfReturningTheRowsSoFar() throws {

@@ -39,6 +39,51 @@ final class DictionarySettingsModelTests: XCTestCase {
         DictionaryEntry(id: id, pattern: pattern, replacement: pattern.uppercased())
     }
 
+    /// Storage with no rules whose adds go to `addEntry`; every other write fails the action that makes it.
+    private static func access(
+        addEntry: @escaping @Sendable (DictionaryEntry) async throws -> Void
+    ) -> DictionarySettingsAccess {
+        var access = Self.access(loadEntries: { [] })
+        access.addEntry = addEntry
+        return access
+    }
+
+    // MARK: - An add that outlives its model
+
+    /// Leaving the section and coming back builds the tab's model again while the add it started is still waiting in
+    /// storage, and the drafts still hold the rule. The new model sees that add in the drafts, so the rule is sent
+    /// once. A second add, if one were sent, has its own gate already open, so it could never hang the test.
+    @MainActor
+    func testATabRebuiltDuringAnAddSendsTheRuleOnce() async {
+        let gates = StorageTestCallGates(count: 2)
+        let inserts = SettingsTestCounter()
+        let access = Self.access(addEntry: { _ in
+            await inserts.increment()
+            _ = await gates.pass()
+        })
+        let drafts = SettingsDrafts()
+        drafts.dictionaryPattern = "kay eight ess"
+        drafts.dictionaryReplacement = "K8s"
+        let first = DictionarySettingsModel(access: access, drafts: drafts, onChanged: {})
+        let adding = Task { await first.addFromDrafts() }
+        await gates.gate(0).waitForArrival()
+
+        let rebuilt = DictionarySettingsModel(access: access, drafts: drafts, onChanged: {})
+        XCTAssertTrue(rebuilt.isAdding)
+        XCTAssertFalse(rebuilt.canAdd)
+        await gates.gate(1).open()
+        await rebuilt.addFromDrafts()
+        await gates.gate(0).open()
+        await adding.value
+
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(drafts.dictionaryPattern, "")
+        XCTAssertFalse(rebuilt.isAdding)
+        drafts.dictionaryPattern = "next rule"
+        drafts.dictionaryReplacement = "Next rule"
+        XCTAssertTrue(rebuilt.canAdd)
+    }
+
     // MARK: - Reads that finish out of order
 
     @MainActor
