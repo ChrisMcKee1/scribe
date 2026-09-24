@@ -65,6 +65,7 @@ internal sealed class HotkeyEngine
     private bool _paused;
     private bool _retired;
     private long _generation;
+    private long _desktopSwitches;
     private int _wakePending;
     private uint _ownerThreadId;
 
@@ -102,6 +103,29 @@ internal sealed class HotkeyEngine
     /// </summary>
     public bool IsPressed(uint virtualKey) =>
         _standard.IsPressed(virtualKey) || Volatile.Read(ref _dictationOnly)?.IsPressed(virtualKey) == true;
+
+    /// <summary>Any thread. How many desktop switches the owner has applied, for a test of the service's wiring.</summary>
+    public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
+
+    /// <summary>
+    /// Owner thread: the input desktop switched, to or from the lock screen or the secure desktop. The hook is not called
+    /// for input there, so a key held as the desktop switched can be released unseen; each machine forgets the Narrator
+    /// keys it holds, the one kind of key nothing else can take out of the hook's view (see
+    /// <see cref="ChordStateMachine.ForgetNarratorKeys"/>). Nothing starts or stops.
+    /// </summary>
+    public void OnDesktopSwitch()
+    {
+        if (IsRetired)
+        {
+            return;
+        }
+
+        // Commands requested before the switch took effect before it, as for a key event.
+        ApplyPendingCommands();
+        _standard.ForgetNarratorKeys();
+        _dictationOnly?.ForgetNarratorKeys();
+        Interlocked.Increment(ref _desktopSwitches);
+    }
 
     /// <summary>
     /// Any thread. Queues a command without blocking. Returns true when the caller must wake the

@@ -48,7 +48,9 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// A Narrator key is judged by the hook's view alone. Narrator keeps its key from the rest of Windows
 /// (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook installed later
 /// runs first, so whenever Scribe installed its hook after Narrator did, Windows would report the key
-/// up while it is held and the press would no longer reach Narrator.
+/// up while it is held and the press would no longer reach Narrator. Its release on another desktop is
+/// handled instead by <see cref="ForgetNarratorKeys"/>, which the engine calls when the input desktop
+/// switches.
 /// </summary>
 internal sealed class ChordStateMachine
 {
@@ -298,6 +300,29 @@ internal sealed class ChordStateMachine
         AnyPressed(generic, left, right) && (_isLogicallyDown is null || _isLogicallyDown(generic));
 
     private bool Held(uint key) => _pressed.Contains(key) && (_isLogicallyDown is null || _isLogicallyDown(key));
+
+    /// <summary>
+    /// Forgets the Narrator keys the hook's view holds, other than one this binding uses. The engine calls it when the
+    /// input desktop switches: the hook is not called for a release made on another desktop, and nothing else can take
+    /// these keys out of the hook's view (see the class summary), so a Narrator key held when the lock screen or the
+    /// secure desktop appeared would otherwise refuse every bare Page Up and Page Down until it was pressed again. A
+    /// Narrator key still held is recorded again by its next autorepeat or press.
+    /// </summary>
+    public void ForgetNarratorKeys()
+    {
+        ForgetUnlessBound(VkCapsLock);
+        ForgetUnlessBound(VkInsert);
+        ForgetUnlessBound(VkNonConvert);
+    }
+
+    // A key this binding uses keeps its state, so a dictation on it is ended by its release as before.
+    private void ForgetUnlessBound(uint key)
+    {
+        if (!IsBindingKey(_binding, key))
+        {
+            _pressed.Remove(key);
+        }
+    }
 
     /// <summary>
     /// Whether a chord member has to be swallowed on its own key-down, before the second key

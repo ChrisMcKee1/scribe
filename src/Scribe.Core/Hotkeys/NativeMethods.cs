@@ -118,6 +118,24 @@ internal static partial class NativeMethods
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
+    internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
+    internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+
+    internal delegate void WinEventProc(
+        nint hWinEventHook, uint eventType, nint hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
+    // Out of context, the callback runs on the thread that set the hook, from its message loop, so on the hook thread it
+    // reaches the engine the way the keyboard hook does. Delegate marshalling uses classic DllImport, as for
+    // SetWindowsHookEx.
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SetWinEventHook(
+        uint eventMin, uint eventMax, nint hmodWinEventProc, WinEventProc pfnWinEventProc, uint idProcess, uint idThread,
+        uint dwFlags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnhookWinEvent(nint hWinEventHook);
+
     private const uint DESKTOP_READOBJECTS = 0x0001;
 
     [LibraryImport("user32.dll", SetLastError = true)]

@@ -33,6 +33,32 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_hands_desktop_switches_to_the_engine()
+    {
+        // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can forget Narrator keys released on
+        // the lock screen. NotifyWinEvent raises the event the way Windows does when the input desktop switches; like the
+        // other Start_ tests this needs an interactive desktop, and the local desktop filter leaves it to CI.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        service.Start();
+
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+
+        Assert.True(
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen > 0, TimeSpan.FromSeconds(10)),
+            "The hook thread never applied the desktop switch.");
+    }
+
+    private const uint EventSystemDesktopSwitch = 0x0020;
+    private const int ObjectIdWindow = 0;
+    private const int ChildIdSelf = 0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void NotifyWinEvent(uint eventId, nint hwnd, int idObject, int idChild);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint GetDesktopWindow();
+
+    [Fact]
     public void UpdateBinding_replaces_active_binding()
     {
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);

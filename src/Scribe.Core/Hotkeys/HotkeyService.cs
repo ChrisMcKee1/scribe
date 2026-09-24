@@ -82,6 +82,9 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>What the hook asks about a modifier its own view holds (see ChordStateMachine); for tests.</summary>
     internal Func<uint, bool>? WindowsKeyState => _router.WindowsKeyState;
 
+    /// <summary>How many desktop switches the current hook's engine has applied; for a test of the wiring.</summary>
+    internal long DesktopSwitchesSeen => _router.CurrentEngine?.DesktopSwitches ?? 0;
+
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
     public event EventHandler<HotkeyTriggerEventArgs>? Deactivated;
@@ -133,6 +136,19 @@ public sealed class HotkeyService : IHotkeyService
             var binding = Binding;
             _logger.LogInformation(
                 "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
+            LogMissingDesktopSwitchHook(installation);
+        }
+    }
+
+    // Only the Narrator keys depend on it, and only after a desktop switch, so its absence is a warning, not a failure.
+    private void LogMissingDesktopSwitchHook(HookInstallation installation)
+    {
+        if (installation.DesktopSwitchHookError is { } error)
+        {
+            _logger.LogWarning(
+                "Desktop switch notifications are unavailable (Win32 error {Error}); a Narrator key released on the lock " +
+                "screen keeps blocking a bare Page Up or Page Down until it is pressed again.",
+                error);
         }
     }
 
@@ -454,6 +470,7 @@ public sealed class HotkeyService : IHotkeyService
         else
         {
             _logger.LogInformation("Keyboard hook reinstalled.");
+            LogMissingDesktopSwitchHook(installation);
         }
     }
 
@@ -476,11 +493,18 @@ public sealed class HotkeyService : IHotkeyService
         // Rooted here for as long as the hook can call it: a collected delegate behind a live
         // hook crashes the process on the next key event.
         private readonly NativeMethods.LowLevelKeyboardProc _proc;
+
+        // Rooted for the same reason, for the desktop-switch notifications set up beside the hook.
+        private readonly NativeMethods.WinEventProc _desktopSwitchProc;
         private readonly ManualResetEventSlim _installed = new(false);
         private readonly Thread _thread;
         private Exception? _installError;
         private nint _hookId;
         private int _abandoned;
+
+        // Written by the hook thread before it sets _installed, read after Install saw it set.
+        private bool _desktopSwitchHooked;
+        private int _desktopSwitchError;
 
         public HookInstallation(HotkeyService service, HotkeyEngine engine, HotkeyReconcileSignal reconcileSignal)
         {
@@ -488,6 +512,7 @@ public sealed class HotkeyService : IHotkeyService
             _engine = engine;
             _reconcileSignal = reconcileSignal;
             _proc = HookCallback;
+            _desktopSwitchProc = DesktopSwitchCallback;
             _thread = new Thread(Run)
             {
                 Name = "Scribe.HotkeyHook",
@@ -497,6 +522,12 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         public Exception? InstallError => _installError;
+
+        /// <summary>
+        /// After <see cref="Install"/> succeeded: null when desktop switches are being reported, otherwise the Win32 error
+        /// SetWinEventHook left (0 when it left none).
+        /// </summary>
+        public int? DesktopSwitchHookError => _desktopSwitchHooked ? null : _desktopSwitchError;
 
         /// <summary>Starts the hook thread and waits for the hook; false when it failed or timed out.</summary>
         public bool Install(TimeSpan timeout)
@@ -533,6 +564,7 @@ public sealed class HotkeyService : IHotkeyService
             // (and got replaced by the watchdog) must unhook ITS hook on exit, never the
             // replacement's.
             nint hookId = 0;
+            nint desktopSwitchHook = 0;
             try
             {
                 // Before the hook exists, so no hook callback can run inside the peek (a peek also
@@ -552,6 +584,20 @@ public sealed class HotkeyService : IHotkeyService
                     // The queue already exists, so publishing the id makes every later wake and
                     // quit deliverable; commands queued before this point apply here.
                     _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
+
+                    // Desktop switches, delivered on this thread by its message loop, so the engine can forget Narrator
+                    // keys released on the lock screen or the secure desktop, where the hook is not called. Optional:
+                    // without it the hook works as before and the service logs that it is missing.
+                    desktopSwitchHook = NativeMethods.SetWinEventHook(
+                        NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
+                        NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
+                        0,
+                        _desktopSwitchProc,
+                        0,
+                        0,
+                        NativeMethods.WINEVENT_OUTOFCONTEXT);
+                    _desktopSwitchHooked = desktopSwitchHook != 0;
+                    _desktopSwitchError = desktopSwitchHook == 0 ? Marshal.GetLastWin32Error() : 0;
                 }
             }
             catch (Exception ex)
@@ -593,7 +639,23 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             _engine.DetachOwner();
+            if (desktopSwitchHook != 0)
+            {
+                NativeMethods.UnhookWinEvent(desktopSwitchHook);
+            }
+
             NativeMethods.UnhookWindowsHookEx(hookId);
+        }
+
+        // Runs on this installation's thread, from GetMessage, when the input desktop switches. Like the keyboard
+        // callback it never waits for another thread and never logs.
+        private void DesktopSwitchCallback(
+            nint hook, uint eventType, nint hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
+        {
+            if (eventType == NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH)
+            {
+                _engine.OnDesktopSwitch();
+            }
         }
 
         // Runs on this installation's thread, inside GetMessage, for every keyboard event on the

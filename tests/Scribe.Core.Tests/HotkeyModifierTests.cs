@@ -9,8 +9,9 @@ namespace Scribe.Core.Tests;
 /// dictates, while Ctrl with them (switching tabs in browsers, editors and Excel), Shift with them (selecting a page),
 /// Alt, Win, Ctrl+Alt (Narrator's table commands) and a Narrator key (Caps Lock, Insert or NonConvert: changing views)
 /// reach the app whole and start nothing. A modifier pressed during a dictation neither ends it nor lets the bound key
-/// through, and a modifier whose release the hook never saw blocks nothing once Windows reports it up. Every other
-/// binding, custom ones an existing install already has included, matches exactly as it did before, whatever else is held.
+/// through; a modifier whose release the hook never saw blocks nothing once Windows reports it up, and a Narrator key
+/// released on another desktop blocks nothing once the desktop switch is seen. Every other binding, custom ones an
+/// existing install already has included, matches exactly as it did before, whatever else is held.
 /// </summary>
 public sealed class HotkeyModifierTests
 {
@@ -383,6 +384,75 @@ public sealed class HotkeyModifierTests
                 (HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly),
             },
             h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+    }
+
+    [Theory]
+    [InlineData(CapsLock)]
+    [InlineData(Insert)]
+    [InlineData(NonConvert)]
+    public void A_narrator_key_released_on_the_lock_screen_stops_blocking_once_the_desktop_switch_is_seen(uint narratorKey)
+    {
+        // Held when Win+L locked the PC and released on the lock screen, where the hook is not called. Windows reports
+        // the key up, as it would while Narrator keeps it, so that does not settle it: the hook's view holds the key and
+        // the bare press is refused until the desktop switch reaches the engine, which forgets it.
+        using var h = new HotkeyEngineHarness(
+            HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly, isLogicallyDown: new WindowsKeyboard().IsDown);
+        h.Down(narratorKey);
+        Assert.False(h.Down(PageDown).Suppress);
+        Assert.False(h.Up(PageDown).Suppress);
+        Assert.Empty(h.TakeTransitions());
+
+        h.Engine.OnDesktopSwitch();
+
+        Assert.True(h.Down(PageDown).Suppress);
+        Assert.True(h.Up(PageDown).Suppress);
+        Assert.True(h.Down(PageUp).Suppress);
+        Assert.True(h.Up(PageUp).Suppress);
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyTrigger.Standard),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+                (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly),
+            },
+            h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+
+        // Pressed again after the switch, the Narrator key counts again.
+        h.Down(narratorKey);
+        Assert.False(h.Down(PageDown).Suppress);
+        Assert.Empty(h.TakeTransitions());
+        Assert.Equal(1, h.Engine.DesktopSwitches);
+    }
+
+    [Fact]
+    public void A_desktop_switch_leaves_a_narrator_key_that_is_itself_the_binding()
+    {
+        // Caps Lock bound as push-to-talk and held through the switch: its dictation is ended by its own release, as
+        // before, and the switch starts or stops nothing.
+        var capsLock = new HotkeyBinding(CapsLock, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Caps Lock");
+        using var h = new HotkeyEngineHarness(capsLock);
+
+        Assert.True(h.Down(CapsLock).Suppress);
+        h.Engine.OnDesktopSwitch();
+        Assert.True(h.Down(CapsLock).Suppress); // an autorepeat, still swallowed
+        Assert.True(h.Up(CapsLock).Suppress);
+
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+    }
+
+    [Fact]
+    public void A_retired_engine_ignores_a_desktop_switch()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        h.Down(CapsLock);
+        h.Router.EndEngine();
+
+        h.Engine.OnDesktopSwitch();
+
+        Assert.Equal(0, h.Engine.DesktopSwitches);
     }
 
     [Theory]
