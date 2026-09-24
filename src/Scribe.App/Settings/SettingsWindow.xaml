@@ -1468,8 +1468,11 @@
                                         <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
                                              up with the Category and Terms text beside it. The two lines carry their own
                                              leading, so a 1 px top and bottom keeps a default window showing every
-                                             shipped library without scrolling, as the one-line rows did. -->
+                                             shipped library without scrolling, as the one-line rows did. A template column,
+                                             unlike a text column, has no binding to fall back on for Ctrl+C or for the cell's
+                                             UI Automation value, so ClipboardContentBinding supplies the name for both. -->
                                         <DataGridTemplateColumn Header="Library" Width="*" IsReadOnly="True"
+                                                                ClipboardContentBinding="{Binding Name}"
                                                                 CellStyle="{StaticResource LibraryNameCell}">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
