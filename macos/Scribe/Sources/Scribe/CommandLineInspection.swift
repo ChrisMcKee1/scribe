@@ -1,8 +1,8 @@
 import Foundation
 
 /// The work behind the command-line verbs that look at a user's data: `--post-process-text`, `--resolve-profile`
-/// and `--diagnostics`. Each reads the user's database without changing it (`PersistenceAccess.readOnly`, which
-/// also never creates a missing one). When the user has no rules or profiles to try, the first two run fixed
+/// and `--diagnostics`. Each reads the user's database without changing its contents (`PersistenceAccess.readOnly`,
+/// which also never creates a missing one). When the user has no rules or profiles to try, the first two run fixed
 /// verification fixtures instead, in a temporary database of their own that is deleted afterwards, never the user's.
 enum CommandLineInspection {
     /// What `--post-process-text` produced.

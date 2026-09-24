@@ -72,7 +72,9 @@ enum PersistenceAccess: Sendable {
     /// The app's own use: creates the file when it is missing and sets it up for writing.
     case readWrite
     /// For looking at a user's data from outside the app, as the command-line verbs do: opens an existing file only,
-    /// sets nothing, and SQLite refuses every write. A missing file fails to open instead of being created.
+    /// sets nothing, and SQLite refuses every write to it, so its contents stay byte for byte as they were. Like any
+    /// reader of a WAL database, it may still create the `-shm` and `-wal` coordination files beside it. A missing file
+    /// fails to open instead of being created.
     case readOnly
 }
 

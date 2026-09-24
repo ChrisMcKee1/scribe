@@ -252,13 +252,16 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 /// shrinks, so the first reclaim converts it with one VACUUM; later ones use bounded `incremental_vacuum`
 /// steps.
 ///
-/// Deleted text does not wait for either step to leave the database: every connection sets
+/// Text deleted now does not wait for either step to leave the database: every connection sets
 /// `secure_delete` to ON (`PersistenceStore`), so SQLite overwrites a deleted row with zeros as it
-/// deletes it, pages freed with it included, and reclaiming is about size, not erasure. In WAL mode the
-/// zeroed pages go to the WAL first: until a checkpoint copies them back, the database file keeps the
-/// old page images, and earlier frames of the WAL keep the text until it is truncated. So any deletion
-/// or reclamation leaves a WAL checkpoint owed, whatever the freelist says, and the checkpoint
-/// truncates the WAL. A checkpoint a reader keeps busy is retried with a doubling backoff.
+/// deletes it, pages freed with it included, and reclaiming is about size, not erasure. It does not
+/// reach back, though: text deleted before it was set can stay in free pages until a later write
+/// reuses them or a reclaim gives them back to the disk, and no setting reaches copies outside the
+/// file, such as backups or APFS snapshots. In WAL mode the zeroed pages go to the WAL first: until a
+/// checkpoint copies them back, the database file keeps the old page images, and earlier frames of the
+/// WAL keep the text until it is truncated. So any deletion or reclamation leaves a WAL checkpoint
+/// owed, whatever the freelist says, and the checkpoint truncates the WAL. A checkpoint a reader keeps
+/// busy is retried with a doubling backoff.
 ///
 /// Logs counts and outcome names only.
 ///

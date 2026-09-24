@@ -15,6 +15,18 @@ protocol SecretStore: Sendable {
     func save(_ secret: String, for account: String) throws
     /// Removes the secret saved for `account`. Removing a secret that is not there is not an error.
     func removeSecret(for account: String) throws
+    /// Moves the secret saved for `account` to `newAccount` in one step, keeping everything else about it. It writes
+    /// nothing when no secret is saved for `account` any more or one is already saved for `newAccount`, and says which.
+    func renameAccount(_ account: String, to newAccount: String) throws -> SecretRename
+}
+
+/// What renaming a secret's account did. Only `renamed` changed anything.
+enum SecretRename: Equatable, Sendable {
+    case renamed
+    /// Nothing was saved under the old account any more.
+    case sourceGone
+    /// Something was already saved under the new account, and the old item was left as it was.
+    case destinationTaken
 }
 
 /// Generic-password items under one Keychain service.
@@ -31,6 +43,10 @@ struct KeychainSecretStore: SecretStore {
 
     func removeSecret(for account: String) throws {
         try KeychainStore.delete(service: service, account: account)
+    }
+
+    func renameAccount(_ account: String, to newAccount: String) throws -> SecretRename {
+        try KeychainStore.rename(service: service, account: account, to: newAccount)
     }
 }
 
@@ -106,6 +122,25 @@ enum KeychainStore {
     static func delete(service: String, account: String) throws {
         let status = SecItemDelete(itemQuery(service: service, account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.unhandled(status)
+        }
+    }
+
+    /// Changes the account of the item saved for `account` to `newAccount`. It is one `SecItemUpdate`, so the item
+    /// keeps its data and access control, and the Keychain itself refuses when the item is gone (`errSecItemNotFound`)
+    /// or the new account already has one (`errSecDuplicateItem`), with nothing changed.
+    static func rename(service: String, account: String, to newAccount: String) throws -> SecretRename {
+        let query = itemQuery(service: service, account: account)
+        let changes: [String: Any] = [kSecAttrAccount as String: newAccount]
+        let status = SecItemUpdate(query as CFDictionary, changes as CFDictionary)
+        switch status {
+        case errSecSuccess:
+            return .renamed
+        case errSecItemNotFound:
+            return .sourceGone
+        case errSecDuplicateItem:
+            return .destinationTaken
+        default:
             throw KeychainError.unhandled(status)
         }
     }

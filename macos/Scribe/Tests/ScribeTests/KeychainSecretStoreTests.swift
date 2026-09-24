@@ -101,4 +101,25 @@ final class KeychainSecretStoreTests: XCTestCase {
         XCTAssertEqual(try KeychainStore.get(service: service, account: "client-1"), "legacy-secret")
         XCTAssertNil(try KeychainStore.get(service: service, account: " client-1 "))
     }
+
+    /// The move's rename is one Keychain operation, and the Keychain refuses it, changing nothing, when the new account
+    /// already has an item or the old one is gone. That refusal is what lets a Save or a Clear win against a move.
+    func testARenameIsRefusedWhenTheNewAccountIsTakenOrTheOldItemIsGone() throws {
+        let store = makeStore()
+        try store.save("earlier", for: " client-1 ")
+        try store.save("replacement", for: "client-1")
+
+        XCTAssertEqual(try store.renameAccount(" client-1 ", to: "client-1"), .destinationTaken)
+        XCTAssertEqual(try store.secret(for: "client-1"), "replacement")
+        XCTAssertEqual(try store.secret(for: " client-1 "), "earlier")
+
+        try store.removeSecret(for: " client-1 ")
+        XCTAssertEqual(try store.renameAccount(" client-1 ", to: "client-1"), .sourceGone)
+        XCTAssertEqual(try store.secret(for: "client-1"), "replacement")
+
+        try store.save("moved", for: "client-2 ")
+        XCTAssertEqual(try store.renameAccount("client-2 ", to: "client-2"), .renamed)
+        XCTAssertEqual(try store.secret(for: "client-2"), "moved")
+        XCTAssertNil(try store.secret(for: "client-2 "))
+    }
 }

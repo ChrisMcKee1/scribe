@@ -259,7 +259,7 @@ struct CleanupSettingsStore: Sendable {
     /// `clientId` is the id as configured, surrounding whitespace included. Builds before this one saved a secret under
     /// exactly that text, and a Keychain item matches only its own account, so when nothing is saved under the trimmed
     /// id, the secret is looked for under that one earlier account (`legacySecretAccount(forClientId:)`) and moved to
-    /// the trimmed one. No other account is ever read.
+    /// the trimmed one by renaming it in place. No other account is ever read.
     func readAzureClientSecret(clientId: String) throws -> String? {
         let account = Self.secretAccount(forClientId: clientId)
         guard !account.isEmpty else { return nil }
@@ -271,18 +271,20 @@ struct CleanupSettingsStore: Sendable {
         else {
             return nil
         }
-        // Saved under the trimmed id before the earlier item goes, so a failure at either step still leaves a copy for
-        // the next read, and neither keeps the secret from being used now. The secret itself is unchanged, so the
-        // revision stays, and a provider built with it is kept.
+        // A rename, which the secret store refuses when the earlier item is gone or the trimmed id already has one. So
+        // a Save or a Clear that ran since the read above, on another thread or in another process, wins: nothing is
+        // written from what was read, and the trimmed id is read again for the answer. The secret itself does not
+        // change, so the revision stays, and a provider built with it is kept.
+        let outcome: SecretRename
         do {
-            try clientSecrets.save(secret, for: account)
+            outcome = try clientSecrets.renameAccount(legacy, to: account)
         } catch {
+            // Nothing moved, so the secret just read is still the one saved; the next read tries the move again.
             ScribeLog.warning(.cleanup, "Could not move a client secret to its trimmed client id", .failure(error))
             return secret
         }
-        removeLegacyClientSecret(legacy)
-        ScribeLog.info(.cleanup, "Moved a client secret to its trimmed client id")
-        return secret
+        ScribeLog.info(.cleanup, "Finished moving a client secret to its trimmed client id", .name("outcome", outcome))
+        return try clientSecrets.secret(for: account)
     }
 
     /// The saved client secret for the Settings window, where a Keychain that cannot be read shows as no secret.

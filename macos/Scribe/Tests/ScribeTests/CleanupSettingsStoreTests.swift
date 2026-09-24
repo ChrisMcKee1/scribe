@@ -102,8 +102,9 @@ final class CleanupSettingsStoreTests: XCTestCase {
     // MARK: - Secrets saved by earlier builds
 
     /// Earlier builds saved a client secret under the client id exactly as typed, and a Keychain item matches only its
-    /// own account, so the trimmed account alone never finds it. It is read from that one account and moved to the
-    /// trimmed one, and no other item is read or changed. The secret is the same, so the revision stays.
+    /// own account, so the trimmed account alone never finds it. It is read from that one account and renamed in place
+    /// to the trimmed one, one write, and no other item is read or changed. The trimmed account is read again for the
+    /// answer. The secret is the same, so the revision stays.
     func testASecretSavedUnderAnUntrimmedClientIdIsFoundAndMoved() throws {
         let clientSecrets = InMemorySecretStore([
             " client-1\t": "legacy-secret",
@@ -121,15 +122,16 @@ final class CleanupSettingsStoreTests: XCTestCase {
             " client-2 ": "unrelated-legacy",
         ]
         XCTAssertEqual(clientSecrets.secrets, expected)
-        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t"])
+        XCTAssertEqual(clientSecrets.writes, 1)
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t", "client-1"])
         XCTAssertEqual(fixture.store.secretRevision, revision)
         XCTAssertEqual(fixture.store.azureClientSecret(clientId: " client-1\t"), "legacy-secret")
-        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t", "client-1"])
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1\t", "client-1", "client-1"])
     }
 
-    /// A move that cannot save the trimmed account keeps the earlier item, so nothing is lost, and the secret is still
-    /// used; the next read tries the move again.
-    func testAMoveThatCannotSaveKeepsTheEarlierItem() throws {
+    /// A rename that fails leaves the earlier item where it is, so nothing is lost, and the secret read from it is
+    /// still used; the next read tries the move again.
+    func testAMoveThatFailsKeepsTheEarlierItem() throws {
         let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
         let fixture = makeCleanupStore(clientSecrets: clientSecrets)
         clientSecrets.failNextWrite(with: errSecInteractionNotAllowed)
@@ -141,18 +143,73 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(clientSecrets.secrets, ["client-1": "legacy-secret"])
     }
 
-    /// The earlier item is removed only after the trimmed account holds the secret. When it cannot be removed, later
-    /// reads find the trimmed account first and never read the earlier one again.
-    func testAnEarlierItemThatCannotBeRemovedIsNotReadAgain() throws {
+    /// A Save that cannot remove the earlier item still saves: the trimmed account is read first, so the leftover is
+    /// never read again.
+    func testASaveThatCannotRemoveTheEarlierItemStillSaves() throws {
         let clientSecrets = InMemorySecretStore([" client-1 ": "legacy-secret"])
         let fixture = makeCleanupStore(clientSecrets: clientSecrets)
         clientSecrets.failNextRemoval(with: errSecInteractionNotAllowed)
 
-        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
-        XCTAssertEqual(clientSecrets.secrets, ["client-1": "legacy-secret", " client-1 ": "legacy-secret"])
+        try fixture.store.setAzureClientSecret("new-secret", clientId: " client-1 ")
 
-        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "legacy-secret")
-        XCTAssertEqual(clientSecrets.accountsRead, ["client-1", " client-1 ", "client-1"])
+        XCTAssertEqual(clientSecrets.secrets, ["client-1": "new-secret", " client-1 ": "legacy-secret"])
+        XCTAssertEqual(try fixture.store.readAzureClientSecret(clientId: " client-1 "), "new-secret")
+        XCTAssertEqual(clientSecrets.accountsRead, ["client-1"])
+    }
+
+    // MARK: - A move racing a Save or a Clear
+
+    /// Reads the secret for `clientId` on a thread of its own, holds that read just after it has read the earlier item
+    /// saved under exactly `clientId`, runs `race` meanwhile, then lets the read finish and returns its answer.
+    private func readRacing(
+        _ fixture: CleanupStoreFixture, clientId: String, race: () throws -> Void
+    ) async throws -> String? {
+        let pause = fixture.clientSecrets.pauseNextRead(of: clientId)
+        let store = fixture.store
+        let reading = Task { try await onBackgroundThread { try store.readAzureClientSecret(clientId: clientId) } }
+        await pause.waitUntilReached()
+        try race()
+        pause.release()
+        return try await reading.value
+    }
+
+    /// A Save that lands after the move read the earlier item, and before it renamed it, wins: the rename finds the
+    /// earlier item gone and writes nothing, and the read answers with the saved secret, not the one it had read.
+    func testASaveDuringAMoveWins() async throws {
+        let fixture = makeCleanupStore(clientSecrets: InMemorySecretStore([" client-1 ": "legacy-secret"]))
+
+        let secret = try await readRacing(fixture, clientId: " client-1 ") {
+            try fixture.store.setAzureClientSecret("replacement", clientId: " client-1 ")
+        }
+
+        XCTAssertEqual(secret, "replacement")
+        XCTAssertEqual(fixture.clientSecrets.secrets, ["client-1": "replacement"])
+    }
+
+    /// A secret saved under the trimmed id while the earlier item is still there, as a Save has done in the moment
+    /// before it removes that item, is not overwritten: the rename is refused, and the saved secret is the answer.
+    func testASecretSavedUnderTheTrimmedIdDuringAMoveIsNotOverwritten() async throws {
+        let fixture = makeCleanupStore(clientSecrets: InMemorySecretStore([" client-1 ": "legacy-secret"]))
+
+        let secret = try await readRacing(fixture, clientId: " client-1 ") {
+            try fixture.clientSecrets.save("replacement", for: "client-1")
+        }
+
+        XCTAssertEqual(secret, "replacement")
+        XCTAssertEqual(fixture.clientSecrets.secrets, ["client-1": "replacement", " client-1 ": "legacy-secret"])
+    }
+
+    /// A Clear that lands while the move is held brings nothing back: the rename finds the earlier item gone, and the
+    /// read answers that no secret is saved.
+    func testAClearDuringAMoveBringsNothingBack() async throws {
+        let fixture = makeCleanupStore(clientSecrets: InMemorySecretStore([" client-1 ": "legacy-secret"]))
+
+        let secret = try await readRacing(fixture, clientId: " client-1 ") {
+            try fixture.store.setAzureClientSecret(nil, clientId: " client-1 ")
+        }
+
+        XCTAssertNil(secret)
+        XCTAssertEqual(fixture.clientSecrets.secrets, [:])
     }
 
     /// Clear removes the earlier item too, first: left behind, the next read would move it back.
