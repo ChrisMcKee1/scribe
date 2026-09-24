@@ -169,9 +169,18 @@ jobs:
     name: style
     runs-on: macos-15
     timeout-minutes: 20
+    # swift-format ships with the toolchain, and another version can format the same code differently,
+    # so the lint runs the Swift 6.1 formatter that macos/Scribe/.swift-format was written for.
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Formatter
+        run: |
+          swift --version
+          swift format --version
 
       # The repository bans U+2014 and U+2013 everywhere (AGENTS.md, Code style).
       - name: No em or en dashes under macos/
@@ -184,14 +193,9 @@ jobs:
       - name: swift format lint
         if: always()
         run: |
-          config=macos/Scribe/.swift-format
-          if [ -f "$config" ]; then
-            swift format lint --strict --recursive --configuration "$config" macos/Scribe/Sources macos/Scribe/Tests
-          else
-            echo "No macos/Scribe/.swift-format yet; reporting against the default style only."
-            swift format lint --recursive macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
-            echo "$(grep -c 'warning:' lint.log || true) lint warning(s)"
-          fi
+          swift format lint --recursive --configuration macos/Scribe/.swift-format \
+            macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
+          echo "$(grep -c 'warning:' lint.log || true) lint warning(s) against macos/Scribe/.swift-format"
 
   # Optional and never required: it runs only when the workflow is dispatched by hand with real_asr,
   # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech
