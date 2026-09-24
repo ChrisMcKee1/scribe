@@ -183,6 +183,48 @@ public sealed class HotkeyDesktopSwitchTests
         Assert.True(h.WouldDispatch(fresh));
     }
 
+    [Theory]
+    [InlineData(PageDown, PageUp)] // Page Down owns the dictation, Page Up is refused, Page Down is released
+    [InlineData(PageUp, PageDown)] // the other way round
+    public void A_switch_after_the_owner_was_released_stops_nothing(uint owner, uint refused)
+    {
+        // The refused key's machine still latches its press; the arbiter owns nothing once the owner is released, so
+        // there is no dictation for the switch to end, whichever machine reports it was active.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+        h.Down(owner);
+        h.Down(refused);
+        h.Up(owner);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+
+        h.Engine.OnDesktopSwitch();
+
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void An_ignored_toggle_on_the_other_key_is_not_stopped_by_a_switch_and_toggles_on_afresh()
+    {
+        var toggledOnly = HotkeyBinding.DefaultDictationOnly with { Mode = HotkeyMode.Toggle };
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, toggledOnly);
+        h.Down(PageDown); // Page Down owns the dictation
+        h.Down(PageUp);
+        h.Up(PageUp); // the toggle latches on in its machine, but the arbiter refuses it
+        h.Up(PageDown);
+        h.TakeTransitions();
+
+        h.Engine.OnDesktopSwitch();
+        Assert.Empty(h.TakeTransitions());
+
+        // The reset dropped the ignored latch, so the next tap turns the toggle on instead of off.
+        h.Down(PageUp);
+        h.Up(PageUp);
+        Assert.Equal(
+            new[] { (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly) },
+            h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+    }
+
     [Fact]
     public void The_consumer_raises_no_activation_queued_before_a_desktop_switch()
     {

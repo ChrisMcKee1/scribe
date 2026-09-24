@@ -111,8 +111,8 @@ internal sealed class HotkeyEngine
     /// Owner thread: the input desktop switched, to or from the lock screen or a secure desktop. The hook is not called
     /// for input there, so any key held as the desktop switched can be released unseen. Every machine forgets its key
     /// state, as a hook reinstall does, so a stale key can neither block a bare Page Up or Page Down (a Narrator key
-    /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and a dictation a held or
-    /// toggled binding had started is ended the way its release or second press would have ended it, reported as
+    /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and the dictation the arbiter
+    /// says this engine started, if any, is ended the way its release or second press would have ended it, reported as
     /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
     /// An Activated still waiting for the dispatcher is invalidated first, through the queue's activation epoch, so it
     /// cannot open the microphone after the lock. A switch with nothing recording starts and stops nothing. The WinEvent
@@ -130,19 +130,14 @@ internal sealed class HotkeyEngine
         // Commands requested before the switch took effect before it, as for a key event.
         ApplyPendingCommands();
         _transitions.AdvanceActivationEpoch();
-        var (transition, _) = _standard.Reset();
-        var secondary = _dictationOnly?.Reset();
 
-        // The same hand-over as a capture-mode or binding change: at most one trigger owns the dictation, and the
-        // arbiter says which, so exactly one stop is sent.
-        if (transition != HotkeyTransition.None)
+        // Both machines are reset whatever they report: one can still hold a press the arbiter refused, or a toggle it
+        // ignored, after the dictation it lost to has ended. Only the arbiter's real owner, if there is one, is stopped.
+        _ = _standard.Reset();
+        _ = _dictationOnly?.Reset();
+        if (_arbiter.TryTakeActive() is { } active)
         {
-            EmitStateClear(transition, _arbiter.TryTake(HotkeyTrigger.Standard), HotkeyDeactivation.DesktopSwitch);
-        }
-        else if (secondary is { Transition: not HotkeyTransition.None } secondaryReset)
-        {
-            EmitStateClear(
-                secondaryReset.Transition, _arbiter.TryTake(HotkeyTrigger.DictationOnly), HotkeyDeactivation.DesktopSwitch);
+            EmitStateClear(HotkeyTransition.Deactivated, active, HotkeyDeactivation.DesktopSwitch);
         }
 
         Interlocked.Increment(ref _desktopSwitches);

@@ -785,6 +785,29 @@ internal sealed class HotkeyTriggerArbiter
     public void Reset() => _ = TryTake(HotkeyTrigger.Standard);
 
     /// <summary>
+    /// Clears the active trigger and returns it; null when no trigger owns a dictation, or once retired. Unlike
+    /// <see cref="TryTake"/>, whose fallback suits a state clear reporting a machine's own deactivation, this names only a
+    /// dictation this engine really started, which a desktop switch needs: a machine can still report itself active
+    /// after the arbiter refused it, or after the owner was released.
+    /// </summary>
+    public HotkeyTrigger? TryTakeActive()
+    {
+        var code = Volatile.Read(ref _activeCode);
+        while (code is not (0 or Retired))
+        {
+            var observed = Interlocked.CompareExchange(ref _activeCode, 0, code);
+            if (observed == code)
+            {
+                return Trigger(code);
+            }
+
+            code = observed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Refuses everything from now on, and returns the trigger that was still active (a dictation
     /// that was started and never stopped), or null.
     /// </summary>

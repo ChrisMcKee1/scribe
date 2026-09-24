@@ -658,9 +658,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
   its message loop and calls `HotkeyEngine.OnDesktopSwitch` (which ignores a call from any other
   thread). Every key held as the desktop switched may be released where the hook cannot see it, so
-  every machine forgets its key state, as a hook reinstall does (`ChordStateMachine.Reset`), and a
-  dictation a held or toggled binding had started is ended the way its release or second press would
-  have ended it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
+  both machines forget their key state, as a hook reinstall does (`ChordStateMachine.Reset`), whatever
+  they report (one can still latch a press or a toggle the arbiter refused), and the dictation the
+  arbiter says this engine started, if any (`HotkeyTriggerArbiter.TryTakeActive`, which names no
+  trigger when none owns a dictation), is ended the way its release or second press would have ended
+  it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
   so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log): the
   audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
   recovery notice as for any failed insertion. An Activated still waiting for the consumer never
