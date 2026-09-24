@@ -534,5 +534,9 @@ public partial class QuickAddWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        // UI Automation names each item of the chip list after its ToString, so without this a screen
+        // reader browsing the list reads the type name once per word instead of the word itself.
+        public override string ToString() => Text;
     }
 }

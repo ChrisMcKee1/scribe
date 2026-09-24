@@ -118,10 +118,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _updatingAzureSubscriptions;
     private bool _foundryModelOp;
     private bool _azureAutoListed;
-    private int _azureSignInProbeVersion;
+    private readonly AzureSignInAttempts _azureSignInAttempts = new();
     private bool _azureCliInstalled;
     private bool _azureConnectionKnown;
-    private bool _azureConnectionBusy;
     private bool _azureManualConfiguration;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
@@ -200,6 +199,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
 
         InitializeComponent();
+
+        // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
+        EditableComboBoxName.ShareWithTextBox(AiModelBox);
+        EditableComboBoxName.ShareWithTextBox(AzureModelBox);
+        EditableComboBoxName.ShareWithTextBox(CopilotModelCombo);
 
         UsagePeriodBox.ItemsSource = UsagePeriodChoice.All;
         UsagePeriodBox.DisplayMemberPath = nameof(UsagePeriodChoice.Label);
@@ -1261,9 +1265,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CopilotModelCombo.Text = _settings.AiCleanupCopilotModel ?? string.Empty;
         CustomApiKeyBox.Password = _settings.AiCleanupCustomApiKey ?? string.Empty;
 
-        // Open optional details automatically only when its remaining field has a saved value.
-        AzureAdvancedExpander.IsExpanded = !string.IsNullOrWhiteSpace(_settings.AiCleanupAzureTenantId);
-
         // Reflect the saved deployment in the Model picker before any sign-in discovery runs.
         SeedAzureModelFromSettings();
 
@@ -1780,7 +1781,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LibraryDetailDesc.Visibility =
             string.IsNullOrWhiteSpace(library.Description) ? Visibility.Collapsed : Visibility.Visible;
 
-        LibraryTermsGrid.ItemsSource = library.Entries;
+        LibraryTermsGrid.ItemsSource = library.Entries.Select(entry => new LibraryTermRow(entry)).ToList();
         LibraryTermsGrid.Visibility = Visibility.Visible;
         LibraryDetailEmpty.Visibility = Visibility.Collapsed;
     }
@@ -1879,7 +1880,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        if (!await ConfirmAsync(
+        if (!await ConfirmRiskyAsync(
                 "Remove library",
                 $"Remove the imported library \"{row.Name}\"? This deletes it from Scribe. " +
                 "You can import it again later from the original file.",
@@ -2919,15 +2920,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        ++_azureSignInProbeVersion;
+        // Retiring any verification still running also ends its busy state (AzureSignInAttempts), which that
+        // verification no longer can, so editing the endpoint mid-probe leaves the Verify button usable.
+        _azureSignInAttempts.Retire();
         _azureApiKeyVerified = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
-
-        // Bumping the version supersedes any in-flight verify, whose finally block then declines to
-        // clear the busy flag because the version no longer matches. Clearing it here keeps the
-        // Verify button usable: editing the endpoint mid-probe would otherwise disable it for the
-        // rest of the settings session, with no way back in API key mode.
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
 
         if (AzureStatusText is not null && CanVerifyAzureApiKey)
         {
@@ -2955,11 +2953,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        ++_azureSignInProbeVersion;
+        // A different tenant means a different sign-in, so the verified state goes and the page returns
+        // to its signed-out form until the user signs in again. It deliberately does not request manual
+        // setup (_azureManualConfiguration): that would open the endpoint fields and hide "Use endpoint
+        // instead" for anyone who types a tenant before signing in. The box sits with the sign-in method,
+        // outside every panel this hides, so it stays put while the user types.
+        _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         _azureAutoListed = false;
-        _azureManualConfiguration = true;
         _selectedAzureDeployment = null;
         _updatingAzureSubscriptions = true;
         try
@@ -2971,7 +2973,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _updatingAzureSubscriptions = false;
         }
 
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Tenant changed. Verify Azure sign-in before browsing subscriptions and models.";
     }
 
@@ -3028,75 +3030,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var operationVersion = ++_azureSignInProbeVersion;
+        var operationVersion = _azureSignInAttempts.Begin();
         var shouldListModels = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
-        SetAzureConnectionBusy(true);
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Checking your Azure CLI sign-in…";
 
         try
         {
-            _azureCliInstalled = await _azureCliInstaller.IsInstalledAsync();
-            _azureConnectionKnown = true;
-            if (!_azureCliInstalled)
-            {
-                _azureSignInStatus = new AzureSignInStatus(false, null);
-                ApplyAzureSettingsAccess();
-                AzureStatusText.Text =
-                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.";
-                return;
-            }
+            // Editing the tenant or switching the method retires this attempt during any of its waits, and
+            // AzureCliSignIn then stops before it changes anything, a browser sign-in included. It also shows the
+            // outcome itself (CliSignInSteps.Publish), right after a last ownership check with nothing awaited in
+            // between, because an await can resume in a later dispatcher operation.
+            var result = await AzureCliSignIn.RunAndPublishAsync(
+                new CliSignInSteps(this, allowInteractiveLogin),
+                allowInteractiveLogin,
+                () => _azureSignInAttempts.IsCurrent(operationVersion));
 
-            await ClearUnavailableSelectedSubscriptionAsync();
-            var status = await ProbeCurrentAzureSignInAsync();
-            if (!status.IsSignedIn && allowInteractiveLogin)
-            {
-                AzureStatusText.Text = "Opening Azure sign-in in your browser…";
-                using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                var selectedSubscription = SelectedAzureSubscription;
-                var tenantId = selectedSubscription is null ||
-                               string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
-                    ? NullIfBlank(AzureTenantBox.Text)
-                    : selectedSubscription.TenantId;
-                var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
-                if (!ok)
-                {
-                    _azureSignInStatus = new AzureSignInStatus(false, null);
-                    ApplyAzureSettingsAccess();
-                    AzureStatusText.Text = message;
-                    return;
-                }
-
-                status = await ProbeCurrentAzureSignInAsync();
-                if (!status.IsSignedIn && SelectedAzureSubscription is not null)
-                {
-                    ClearSelectedAzureSubscription();
-                    status = await ProbeCurrentAzureSignInAsync();
-                }
-            }
-
-            if (operationVersion != _azureSignInProbeVersion)
+            // This continuation is such a later operation too: an attempt retired since must not start a listing.
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
             }
 
-            _azureSignInStatus = status;
-            ApplyAzureSettingsAccess();
-            if (!status.IsSignedIn)
-            {
-                AzureStatusText.Text = allowInteractiveLogin
-                    ? "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again."
-                    : "Not signed in to Azure. Sign in to reveal subscriptions and models.";
-                return;
-            }
-
-            AzureStatusText.Text = $"{DescribeAzureIdentity(status)} Listing compatible deployments…";
-            shouldListModels =
+            shouldListModels = result.Outcome == AzureCliSignIn.Outcome.SignedIn &&
                 listModels && (forceListModels || allowInteractiveLogin || !_azureAutoListed);
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
@@ -3107,7 +3069,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not verify Azure sign-in.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
@@ -3117,13 +3079,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
 
-        if (shouldListModels && operationVersion == _azureSignInProbeVersion)
+        if (shouldListModels && _azureSignInAttempts.IsCurrent(operationVersion))
         {
             await ListAzureDeploymentsAsync();
         }
@@ -3142,22 +3104,73 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             cts.Token);
     }
 
-    private async Task ClearUnavailableSelectedSubscriptionAsync()
+    /// <summary>
+    /// The window's steps for <see cref="AzureCliSignIn"/>. Each reads the page when it runs, so a check or a
+    /// browser sign-in uses the tenant and subscription shown at that moment.
+    /// </summary>
+    private sealed class CliSignInSteps(SettingsWindow window, bool allowInteractiveLogin) : IAzureCliSignInSteps
     {
-        var selectedSubscription = SelectedAzureSubscription;
-        if (selectedSubscription is null)
+        public async Task<bool> IsCliInstalledAsync()
         {
-            return;
+            var installed = await window._azureCliInstaller.IsInstalledAsync();
+
+            // A fact about this PC rather than this attempt's result, so it is kept even when the attempt is retired.
+            window._azureCliInstalled = installed;
+            window._azureConnectionKnown = true;
+            return installed;
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var (ok, subscriptions, _) = await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
-        if (ok && subscriptions.All(subscription => !string.Equals(
+        public bool HasSelectedSubscription => window.SelectedAzureSubscription is not null;
+
+        public async Task<bool> IsSelectedSubscriptionUnavailableAsync()
+        {
+            var selectedSubscription = window.SelectedAzureSubscription;
+            if (selectedSubscription is null)
+            {
+                return false;
+            }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var (ok, subscriptions, _) = await window._azureCliInstaller.ListSubscriptionsAsync(cts.Token);
+            return ok && subscriptions.All(subscription => !string.Equals(
                 subscription.Id,
                 selectedSubscription.Id,
-                StringComparison.OrdinalIgnoreCase)))
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        public void ClearSelectedSubscription() => window.ClearSelectedAzureSubscription();
+
+        public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync();
+
+        public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Opening Azure sign-in in your browser…";
+
+        public async Task<(bool Ok, string Message)> LoginAsync()
         {
-            ClearSelectedAzureSubscription();
+            using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var selectedSubscription = window.SelectedAzureSubscription;
+            var tenantId = selectedSubscription is null || string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
+                ? NullIfBlank(window.AzureTenantBox.Text)
+                : selectedSubscription.TenantId;
+            return await window._azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
+        }
+
+        // Only while the attempt owns the page (AzureCliSignIn.RunAndPublishAsync), never for a retired one.
+        public void Publish(AzureCliSignIn.Result result)
+        {
+            var status = result.Status ?? new AzureSignInStatus(false, null);
+            window._azureSignInStatus = status;
+            window.ApplyAzureSettingsAccess();
+            window.AzureStatusText.Text = result.Outcome switch
+            {
+                AzureCliSignIn.Outcome.CliMissing =>
+                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.",
+                AzureCliSignIn.Outcome.LoginFailed => result.Message,
+                AzureCliSignIn.Outcome.NotSignedIn when allowInteractiveLogin =>
+                    "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again.",
+                AzureCliSignIn.Outcome.NotSignedIn =>
+                    "Not signed in to Azure. Sign in to reveal subscriptions and models.",
+                _ => $"{DescribeAzureIdentity(status)} Listing compatible deployments…",
+            };
         }
     }
 
@@ -3172,12 +3185,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _updatingAzureSubscriptions = false;
         }
-    }
-
-    private void SetAzureConnectionBusy(bool busy)
-    {
-        _azureConnectionBusy = busy;
-        ApplyAzureSettingsAccess();
     }
 
     private bool IsAzureApiKeySelected => AzureAuthModeBox?.SelectedIndex == 2;
@@ -3207,7 +3214,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _azureManualConfiguration || IsAzureApiKeySelected,
             !string.IsNullOrWhiteSpace(SelectedAzureApiKey),
             SelectedAzureAuthMode,
-            CurrentServicePrincipal is not null);
+            CurrentServicePrincipal is not null,
+            IsAzureApiKeySelected);
 
     private void ApplyAzureSettingsAccess()
     {
@@ -3240,15 +3248,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             AzureApiKeyPanel.Visibility = apiKeyMode ? Visibility.Visible : Visibility.Collapsed;
         }
 
-        // The optional CLI tenant box pins the az login account to a tenant. In service principal
-        // mode the app registration names its own tenant, so a second tenant field would be two
-        // controls claiming the same setting, and an API key never asks Entra for a token. The box is
-        // the expander's only content, so the expander goes with it rather than opening onto nothing.
-        if (AzureAdvancedExpander is not null)
+        // The optional CLI tenant sits with the sign-in method, outside every panel that waits for a
+        // sign-in, so this is the only thing that decides whether it shows.
+        if (AzureCliTenantPanel is not null)
         {
-            AzureAdvancedExpander.Visibility = AzureSettingsAccess.ShowCliTenant(SelectedAzureAuthMode, apiKeyMode)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
+            AzureCliTenantPanel.Visibility = access.ShowCliTenant ? Visibility.Visible : Visibility.Collapsed;
         }
 
         if (AzureStatusTitle is not null)
@@ -3267,7 +3271,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
         // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
-        AzureRefreshButton.IsEnabled = !_azureConnectionBusy && (
+        AzureRefreshButton.IsEnabled = !_azureSignInAttempts.IsBusy && (
             apiKeyMode
                 ? CanVerifyAzureApiKey
                 : access.CanStartSignIn && (servicePrincipal || _azureConnectionKnown));
@@ -3334,16 +3338,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         // The previous mode's verification says nothing about this one's identity, so drop it and
-        // make the user verify again instead of showing a stale signed-in state. Bumping the
-        // versions abandons any probe still in flight from the mode being left; that probe's
-        // cleanup is version-guarded and will not run, so busy is released here instead or the
-        // action button would stay disabled forever.
-        ++_azureSignInProbeVersion;
+        // make the user verify again instead of showing a stale signed-in state. Retiring the attempt
+        // abandons any probe still in flight from the mode being left and ends its busy state, which
+        // that probe no longer can (AzureSignInAttempts); bumping the deployment version abandons its
+        // listing.
+        _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         _azureAutoListed = false;
         AzureCredentialInvalidation.Invalidate();
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
         if (AzureStatusText is not null)
         {
             AzureStatusText.Text = IsAzureApiKeySelected
@@ -3370,12 +3374,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Editing the identity retires any verification, in flight or already applied. Bumping
+        // Editing the identity retires any verification, in flight or already applied. Retiring
         // unconditionally matters: a verification started against the previous details must not be
-        // allowed to land on the new ones just because nothing was verified yet.
-        ++_azureSignInProbeVersion;
-        if (_azureSignInStatus.IsSignedIn && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        // allowed to land on the new ones just because nothing was verified yet. Retiring also ends the
+        // busy state, which the retired verification no longer can, so Verify is usable again at once.
+        var verifying = _azureSignInAttempts.IsBusy;
+        _azureSignInAttempts.Retire();
+        if ((_azureSignInStatus.IsSignedIn || verifying) && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
+            // Also replaces "Verifying the service principal…", which nothing would replace any more.
             _azureSignInStatus = new AzureSignInStatus(false, null);
             if (AzureStatusText is not null)
             {
@@ -3579,14 +3586,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var endpoint = AzureEndpointBox.Text.Trim();
         var deployment = AzureDeploymentBox.Text.Trim();
         var apiKey = SelectedAzureApiKey.Trim();
-        var operationVersion = ++_azureSignInProbeVersion;
-        SetAzureConnectionBusy(true);
+        var operationVersion = _azureSignInAttempts.Begin();
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Verifying the API key…";
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, cts.Token);
-            if (operationVersion != _azureSignInProbeVersion)
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
             }
@@ -3599,7 +3606,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
@@ -3609,7 +3616,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not verify the Azure API key.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
@@ -3618,9 +3625,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
     }
@@ -3774,8 +3781,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Guard the completion the same way the CLI probe does. Without this, editing a field or
         // switching modes mid-verification would let the old identity's result land on the new one.
-        var operationVersion = ++_azureSignInProbeVersion;
-        SetAzureConnectionBusy(true);
+        var operationVersion = _azureSignInAttempts.Begin();
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = automatic
             ? "Checking the saved service principal…"
             : "Verifying the service principal…";
@@ -3792,7 +3799,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var status = await _azureDiscovery.GetSignInStatusAsync(
                 principal.TenantId, null, cts.Token, principal);
-            if (operationVersion != _azureSignInProbeVersion)
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
             }
@@ -3804,7 +3811,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 AzureStatusText.Text = "Verifying the service principal timed out. Please try again.";
@@ -3815,7 +3822,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // The exception is logged, never shown: an Entra failure can echo request details, and
             // this path handles a secret.
             TryLog(ex, "Could not verify the Azure service principal.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 AzureStatusText.Text = "The service principal could not be verified. Check the details and try again.";
@@ -3823,9 +3830,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
     }
@@ -3869,14 +3876,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                       : null);
             var (subscriptionsOk, subscriptions, subscriptionsMessage) =
                 await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
-            if (!subscriptionsOk)
+
+            // Before anything is shown: a tenant edit or a newer listing during the wait retires this one, and its
+            // failure must not replace "Tenant changed" either.
+            if (loadVersion != _azureDeploymentLoadVersion)
             {
-                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 
-            if (loadVersion != _azureDeploymentLoadVersion)
+            if (!subscriptionsOk)
             {
+                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 
@@ -4508,19 +4518,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // --- Themed dialogs / inline notifications -------------------------------------------
 
     /// <summary>
-    /// Shows a Fluent-themed confirm dialog (two buttons) and returns true only when the user picks the
-    /// primary action. Used for the individually-confirmed prompt resets so one restore never touches the other.
+    /// Asks a routine question whose default answer is to go ahead, such as restoring one prompt (which
+    /// nothing saves until Save, and which the box's own undo reverses), and returns true only when the user
+    /// picks the primary action.
     /// </summary>
-    private async Task<bool> ConfirmAsync(string title, string content, string confirmText)
+    private Task<bool> ConfirmAsync(string title, string content, string confirmText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: false));
+
+    /// <summary>
+    /// Confirms an action that cannot be taken back, because it deletes data or sends dictation text to a
+    /// cloud provider. Cancel is the default, so Enter, or a click through without reading, does nothing.
+    /// </summary>
+    private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true));
+
+    private async Task<bool> ShowConfirmationAsync(Wpf.Ui.Controls.MessageBox dialog)
     {
-        var dialog = new Wpf.Ui.Controls.MessageBox
-        {
-            Title = title,
-            Content = content,
-            PrimaryButtonText = confirmText,
-            CloseButtonText = "Cancel",
-            Owner = this,
-        };
+        dialog.Owner = this;
         return await dialog.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary;
     }
 
@@ -4787,7 +4801,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             var count = report.RedundantCount;
             var noun = count == 1 ? "entry is" : "entries are";
-            var confirmed = await ConfirmAsync(
+            var confirmed = await ConfirmRiskyAsync(
                 "Some entries are already covered",
                 $"{count:N0} dictionary {noun} already handled identically by a library you have " +
                 $"turned on:\n\n{sample}{more}\n\n" +
@@ -5503,7 +5517,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (_cleanup.Status == CleanupStatus.Ready)
         {
             if (SelectedProvider != CleanupProvider.FoundryLocal &&
-                !await ConfirmAsync(
+                !await ConfirmRiskyAsync(
                     "Send recent dictations to your AI provider?",
                     "To suggest vocabulary, Scribe will send up to 6,000 characters from recent " +
                     "dictation history to the provider endpoint you configured. Audio is never sent.",
@@ -5788,7 +5802,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Where(t => t.Row is { Enabled: true })
             .ToList();
 
-        if (choice.Delete && targets.Count > 0 && !await ConfirmAsync(
+        if (choice.Delete && targets.Count > 0 && !await ConfirmRiskyAsync(
                 "Delete these entries?",
                 $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
                 + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
@@ -6069,7 +6083,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
         UsageSpeechText.Text = FormatDuration(snapshot.Speech);
         UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
-        UsageAppsGrid.ItemsSource = snapshot.TopApps;
+        UsageAppsGrid.ItemsSource = snapshot.TopApps.Select(app => new UsageAppRow(app)).ToList();
 
         var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
         var trendRows = UsageTrendNormalizer.Normalize(snapshot.Trend)
@@ -6417,7 +6431,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private async void HistoryClearButton_Click(object sender, RoutedEventArgs e)
     {
         if (_historyRows.Count == 0 ||
-            !await ConfirmAsync(
+            !await ConfirmRiskyAsync(
                 "Clear history",
                 "Delete all dictation history and stored audio? This cannot be undone.",
                 "Clear all"))
@@ -6664,6 +6678,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ];
     }
 
+    // Every DataGrid row type in this window compares by reference, never by value, which is why the records
+    // below override Equals and the Core records are copied into the row classes after them. When a grid's
+    // items are replaced, WPF reuses an old row's automation peer for any new item that merely Equals an old
+    // one (ItemsControlAutomationPeer.GetChildrenCore, ItemAutomationPeer.ReuseForItem), but the reused peer
+    // keeps the cell peers it made for the old item, and those hold that item only weakly
+    // (DataGridItemAutomationPeer.GetOrCreateCellItemPeer, DataGridCellItemAutomationPeer). A reload builds
+    // equal new rows, so once the old ones were collected every cell was announced as
+    // "Item: , Column Display Index: 0", had no bounds, and focus inside the grid went unannounced.
     private sealed record UsageTrendRow(
         string Period,
         int Dictations,
@@ -6673,12 +6695,43 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string ToolTip =>
             $"{Period}: {Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")}, " +
             $"{Words:N0} word{(Words == 1 ? string.Empty : "s")}";
+
+        // UI Automation names a trend bar and a trend row after ToString(); a record's lists every field.
+        public override string ToString() => ToolTip;
+
+        public bool Equals(UsageTrendRow? other) => ReferenceEquals(this, other);
+
+        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
+    }
+
+    /// <summary>One row of the Top apps grid, copied from Core's <see cref="UsageAnalyzer.AppUsage"/> record.</summary>
+    private sealed class UsageAppRow(UsageAnalyzer.AppUsage app)
+    {
+        public string Name { get; } = app.Name;
+
+        public int Dictations { get; } = app.Dictations;
+
+        public int Words { get; } = app.Words;
+
+        public override string ToString() => Name;
+    }
+
+    /// <summary>One read-only row of a library's term preview, copied from Core's <see cref="DictionaryEntry"/>.</summary>
+    private sealed class LibraryTermRow(DictionaryEntry entry)
+    {
+        public string Pattern { get; } = entry.Pattern;
+
+        public string Replacement { get; } = entry.Replacement;
+
+        public override string ToString() => $"Spoken {Pattern}, written {Replacement}";
     }
 
     private sealed record UsageTermRow(string Text, int Dictations)
     {
         public string DictationLabel =>
             $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
+
+        public override string ToString() => Text;
     }
 
     /// <summary>
@@ -6761,8 +6814,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Coverage == DictionaryRowCoverage.None ? Visibility.Collapsed : Visibility.Visible;
 
         // The check box and badge cells have no text of their own, so UI Automation names them after
-        // ToString(), which would otherwise read out this type's name.
-        public override string ToString() => Pattern;
+        // ToString(), which would otherwise read out this type's name. A row just added has no spoken
+        // form yet, and is named the way its check boxes name it.
+        public override string ToString() => string.IsNullOrWhiteSpace(Pattern) ? "New entry" : Pattern;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -6818,8 +6872,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public string ThumbDownGlyph => Rating == AiRating.NotUseful ? "" : "";
 
+        // The thumbs draw only a glyph, so these name them for UI Automation: each says what its ToolTip says,
+        // and adds whether it is the rating given, which the filled glyph shows.
+        public string ThumbUpName =>
+            Rating == AiRating.Useful ? "This rewrite was useful, selected" : "This rewrite was useful";
+
+        public string ThumbDownName =>
+            Rating == AiRating.NotUseful ? "This rewrite was not useful, selected" : "This rewrite was not useful";
+
         /// <summary>The report path opens only on a thumbs-down, which is where it is wanted.</summary>
         public bool CanReport => ProducedByAi && Rating == AiRating.NotUseful;
+
+        // UI Automation names the row after ToString(), and so the Result cell too, which holds buttons rather
+        // than text. A record's ToString lists every field.
+        public override string ToString() => $"{When}, {Text}";
+
+        // Compared by reference, not by value: see the note above UsageTrendRow.
+        public bool Equals(HistoryRow? other) => ReferenceEquals(this, other);
+
+        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
 
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
@@ -6936,5 +7007,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string When { get; set; } = string.Empty;
         public string Model { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
+
+        // UI Automation names a row after ToString(), which would otherwise read out this type's name.
+        public override string ToString() => $"{When}, {Model}, {Reason}";
     }
 }

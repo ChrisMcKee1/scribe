@@ -1,6 +1,3 @@
-using System.Windows;
-using System.Windows.Media;
-
 namespace Scribe.App.Infrastructure;
 
 /// <summary>
@@ -25,27 +22,13 @@ internal static class ThemedNotice
             IsSecondaryButtonEnabled = false,
             IsCloseButtonEnabled = false,
         };
-        dialog.Loaded += (_, _) => TakeCloseButtonOutOfTabOrder(dialog);
-        return dialog;
-    }
-
-    private static bool TakeCloseButtonOutOfTabOrder(DependencyObject node)
-    {
-        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(node); index++)
+        dialog.Loaded += (_, _) =>
         {
-            var child = VisualTreeHelper.GetChild(node, index);
-            if (child is System.Windows.Controls.Button { CommandParameter: Wpf.Ui.Controls.MessageBoxButton.Close } close)
+            if (MessageBoxTemplate.FindButton(dialog, Wpf.Ui.Controls.MessageBoxButton.Close) is { } close)
             {
                 close.IsTabStop = false;
-                return true;
             }
-
-            if (TakeCloseButtonOutOfTabOrder(child))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        };
+        return dialog;
     }
 }

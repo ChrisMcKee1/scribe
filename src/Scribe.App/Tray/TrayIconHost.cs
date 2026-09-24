@@ -201,6 +201,14 @@ internal sealed class TrayIconHost : IDisposable
 
     private void FocusMenu()
     {
+        // The event follows two synchronous steps (opening the menu, then activating its popup, with a fallback
+        // to the icon's message window), so the menu is checked to still be open, and the host still alive,
+        // before it takes focus.
+        if (_disposed || !_menu.IsOpen)
+        {
+            return;
+        }
+
         try
         {
             _menu.Focus();

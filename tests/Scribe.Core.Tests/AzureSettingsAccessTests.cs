@@ -326,8 +326,9 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowServicePrincipalFields);
     }
 
-    // The "Optional Azure details" expander holds only the CLI tenant field. It used to stay on screen
-    // in the other two sign-in methods and expand onto an empty panel.
+    // The optional Azure CLI tenant field shows for the Azure CLI method only. A service principal names its
+    // own tenant among its fields, and an API key (stored as Azure CLI plus a key) never asks Entra for a
+    // token.
     [Theory]
     [InlineData(AzureAuthMode.AzureCli, false, true)]
     [InlineData(AzureAuthMode.AzureCli, true, false)]
@@ -338,7 +339,52 @@ public sealed class AzureSettingsAccessTests
         bool apiKeySelected,
         bool expected)
     {
-        Assert.Equal(expected, AzureSettingsAccess.ShowCliTenant(authMode, apiKeySelected));
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: apiKeySelected,
+            hasApiKey: false,
+            authMode: authMode,
+            apiKeySelected: apiKeySelected);
+
+        Assert.Equal(expected, state.ShowCliTenant);
+    }
+
+    // The reported defect: the tenant box sat inside the configuration that waits for a sign-in, so someone
+    // not signed in (or signed in to the wrong tenant) could never reach the value that signing in uses.
+    [Fact]
+    public void A_signed_out_azure_cli_user_can_set_the_tenant_before_signing_in()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false);
+
+        Assert.False(state.ShowConfiguration);
+        Assert.True(state.CanStartSignIn);
+        Assert.True(state.ShowCliTenant);
+    }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void The_cli_tenant_does_not_depend_on_the_sign_in_state(
+        bool cliInstalled,
+        bool signedIn,
+        bool manualConfigurationRequested)
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled,
+            signedIn,
+            manualConfigurationRequested,
+            hasApiKey: false);
+
+        Assert.True(state.ShowCliTenant);
     }
 
     [Fact]
