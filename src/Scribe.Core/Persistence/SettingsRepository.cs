@@ -36,14 +36,15 @@ public sealed class SettingsRepository : ISettingsRepository
     private readonly Lock _updateLock = new();
     private int _updatingThread;
 
-    // The AI cleanup switch follows one invariant: the newest intent wins, ordered by when the user made it, from the
-    // tray or in the Settings window, and a whole-document save never writes over a stored value its window neither
-    // showed nor changed. So a save carries the revision of its window's newest intent for the switch (a click there,
-    // or a tray change the window took; see ExternalSwitchSync) and, carrying none, keeps the stored value. A tray
-    // change is superseded by a committed save whose intent is at least as new. This is the newest intent a committed
-    // save carried. It changes only after that commit has succeeded, under the write lock, so no writer can ever act
-    // on a save that did not happen.
-    private long _savedThrough;
+    // The settings the tray can change follow one invariant each: the newest intent wins, ordered by when the user made
+    // it, from the tray or in the Settings window, and a whole-document save never writes over a stored value its window
+    // neither showed nor changed. So a save carries the revision of its window's newest intent for each of them (a change
+    // there, or a tray change the window took; see ExternalChoiceSync) and, carrying none for one, keeps that stored
+    // value. A tray change is superseded by a committed save whose intent for the same setting is at least as new; an
+    // intent for another setting never supersedes it. These are the newest intents committed saves carried. They change
+    // only after that commit has succeeded, under the write lock, so no writer can ever act on a save that did not happen.
+    private long _aiCleanupSavedThrough;
+    private long _microphoneSavedThrough;
 
     public SettingsRepository(ScribeDatabase database) => _database = database;
 
@@ -127,12 +128,15 @@ public sealed class SettingsRepository : ISettingsRepository
         return AppSettings.CreateDefault();
     }
 
-    public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, revision: null, out _);
+    public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, setting: null, revision: null, out _);
 
     public AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded) =>
-        UpdateCore(mutate, revision, out superseded);
+        UpdateCore(mutate, ExternalSetting.AiCleanup, revision, out superseded);
 
-    private AppSettings UpdateCore(Action<AppSettings> mutate, long? revision, out bool superseded)
+    public AppSettings Update(Action<AppSettings> mutate, ExternalSetting setting, long revision, out bool superseded) =>
+        UpdateCore(mutate, setting, revision, out superseded);
+
+    private AppSettings UpdateCore(Action<AppSettings> mutate, ExternalSetting? setting, long? revision, out bool superseded)
     {
         ArgumentNullException.ThrowIfNull(mutate);
 
@@ -152,7 +156,7 @@ public sealed class SettingsRepository : ISettingsRepository
 
             // Decided inside the transaction the change would be written in. Every save that could supersede it has
             // already committed and recorded its intent, or has not begun: saves take the write lock this change holds.
-            if (revision is { } asked && asked <= _savedThrough)
+            if (revision is { } asked && setting is { } which && asked <= SavedThrough(which))
             {
                 return (ReadForUpdate(connection, transaction), true);
             }
@@ -194,7 +198,24 @@ public sealed class SettingsRepository : ISettingsRepository
         AppSettings settings,
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
         IReadOnlyList<Snippet>? snippets,
-        long aiCleanupIntent = 0)
+        long aiCleanupIntent = 0) =>
+        SaveBundleCore(settings, dictionaryEntries, snippets, aiCleanupIntent, microphoneIntent: null);
+
+    public void SaveBundle(
+        AppSettings settings,
+        IReadOnlyList<DictionaryEntry>? dictionaryEntries,
+        IReadOnlyList<Snippet>? snippets,
+        ExternalIntents intents) =>
+        SaveBundleCore(settings, dictionaryEntries, snippets, intents.AiCleanup, intents.Microphone);
+
+    // A null microphone intent is a caller that does not track one, which writes the microphone as given and records
+    // nothing, exactly as every save did before the tray could change the microphone.
+    private void SaveBundleCore(
+        AppSettings settings,
+        IReadOnlyList<DictionaryEntry>? dictionaryEntries,
+        IReadOnlyList<Snippet>? snippets,
+        long aiCleanupIntent,
+        long? microphoneIntent)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -205,22 +226,36 @@ public sealed class SettingsRepository : ISettingsRepository
             _database.RequestYield();
             using var connection = _database.Open();
 
-            // IMMEDIATE, so the stored switch read below cannot change before this transaction writes.
+            // IMMEDIATE, so the stored values read below cannot change before this transaction writes.
             using var transaction = connection.BeginTransaction(deferred: false);
 
-            // Without an intent for the switch, the window neither changed it nor took a tray change, so what it shows
-            // can be older than what is stored: a tray change that committed before word of it reached the window. The
-            // stored value stays. With no readable document there is nothing to keep, and the window's value is saved.
+            // Without an intent for a setting, the window neither changed it nor took a tray change, so what it shows can
+            // be older than what is stored: a tray change that committed before word of it reached the window. The stored
+            // value stays. With no readable document there is nothing to keep, and the window's value is saved.
+            var keepAiCleanup = aiCleanupIntent <= 0;
+            var keepMicrophone = microphoneIntent is <= 0;
             var document = settings;
-            bool? kept = null;
-            if (aiCleanupIntent <= 0 &&
+            bool? keptAiCleanup = null;
+            (string? Id, string? Name)? keptMicrophone = null;
+            if ((keepAiCleanup || keepMicrophone) &&
                 ReadValue(connection, transaction, SettingsKey) is { } storedJson &&
-                TryDeserialize(storedJson) is { } stored &&
-                stored.EnableAiCleanup != settings.EnableAiCleanup)
+                TryDeserialize(storedJson) is { } stored)
             {
-                kept = stored.EnableAiCleanup;
-                document = settings.Clone();
-                document.EnableAiCleanup = stored.EnableAiCleanup;
+                if (keepAiCleanup && stored.EnableAiCleanup != settings.EnableAiCleanup)
+                {
+                    keptAiCleanup = stored.EnableAiCleanup;
+                }
+
+                if (keepMicrophone && !SameMicrophone(stored, settings))
+                {
+                    keptMicrophone = (stored.InputDeviceId, stored.InputDeviceName);
+                }
+
+                if (keptAiCleanup is not null || keptMicrophone is not null)
+                {
+                    document = settings.Clone();
+                    Keep(document, keptAiCleanup, keptMicrophone);
+                }
             }
 
             if (dictionaryEntries is not null)
@@ -240,28 +275,70 @@ public sealed class SettingsRepository : ISettingsRepository
             WriteStep?.Invoke("save committed", connection, null);
 
             // Only now that the commit has succeeded, and still under the write lock: no writer can ever see an intent
-            // carried by a save that failed, however SQLite rolled it back. The caller's document takes the value kept,
+            // carried by a save that failed, however SQLite rolled it back. The caller's document takes the values kept,
             // so what it shows and applies is what is stored.
-            RecordSavedThrough(aiCleanupIntent);
-            if (kept is { } keptValue)
+            RecordSavedThrough(ExternalSetting.AiCleanup, aiCleanupIntent);
+            if (microphoneIntent is { } microphone)
             {
-                settings.EnableAiCleanup = keptValue;
+                RecordSavedThrough(ExternalSetting.Microphone, microphone);
             }
 
+            Keep(settings, keptAiCleanup, keptMicrophone);
             LastLoadFailed = false;
         });
     }
 
     /// <summary>
-    /// Records the intent a committed save carried, keeping the newest. <see cref="SaveBundle"/> calls it once its
-    /// commit has succeeded; tests call it to stand for such a save. Only on a thread that holds the write lock, as
-    /// inside a <see cref="WriteStep"/> callback.
+    /// Records the AI cleanup intent a committed save carried, keeping the newest. Tests call it to stand for such a save.
+    /// Only on a thread that holds the write lock, as inside a <see cref="WriteStep"/> callback.
     /// </summary>
-    internal void RecordSavedThrough(long revision)
+    internal void RecordSavedThrough(long revision) => RecordSavedThrough(ExternalSetting.AiCleanup, revision);
+
+    /// <summary>
+    /// Records the intent a committed save carried for one setting, keeping the newest. <see cref="SaveBundleCore"/>
+    /// calls it once its commit has succeeded; tests call it to stand for such a save. Only on a thread that holds the
+    /// write lock, as inside a <see cref="WriteStep"/> callback.
+    /// </summary>
+    internal void RecordSavedThrough(ExternalSetting setting, long revision)
     {
-        if (revision > _savedThrough)
+        switch (setting)
         {
-            _savedThrough = revision;
+            case ExternalSetting.AiCleanup when revision > _aiCleanupSavedThrough:
+                _aiCleanupSavedThrough = revision;
+                break;
+            case ExternalSetting.Microphone when revision > _microphoneSavedThrough:
+                _microphoneSavedThrough = revision;
+                break;
+        }
+    }
+
+    // Caller holds the write lock.
+    private long SavedThrough(ExternalSetting setting) => setting switch
+    {
+        ExternalSetting.AiCleanup => _aiCleanupSavedThrough,
+        ExternalSetting.Microphone => _microphoneSavedThrough,
+        _ => 0,
+    };
+
+    // The microphone is one choice: its endpoint ID and the name it had when chosen, the ID blank for the Windows default.
+    private static bool SameMicrophone(AppSettings a, AppSettings b) =>
+        string.Equals(NullIfBlank(a.InputDeviceId), NullIfBlank(b.InputDeviceId), StringComparison.Ordinal) &&
+        (NullIfBlank(a.InputDeviceId) is null ||
+         string.Equals(a.InputDeviceName, b.InputDeviceName, StringComparison.Ordinal));
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static void Keep(AppSettings target, bool? aiCleanup, (string? Id, string? Name)? microphone)
+    {
+        if (aiCleanup is { } enabled)
+        {
+            target.EnableAiCleanup = enabled;
+        }
+
+        if (microphone is { } kept)
+        {
+            target.InputDeviceId = kept.Id;
+            target.InputDeviceName = kept.Name;
         }
     }
 

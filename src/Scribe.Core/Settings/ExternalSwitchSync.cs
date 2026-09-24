@@ -24,8 +24,9 @@ public sealed class ExternalSwitchSync
 {
     private static long s_lastRevision;
 
-    private bool? _waiting;
-    private long _newest;
+    // The same rules for a switch as for any setting changed from outside the window; this keeps the bool-shaped API the
+    // AI cleanup switch and its tests use.
+    private readonly ExternalChoiceSync<bool> _choice = new();
 
     /// <summary>
     /// A revision later than every one handed out before it in this process. An outside change takes one when it is
@@ -34,7 +35,7 @@ public sealed class ExternalSwitchSync
     public static long NextRevision() => Interlocked.Increment(ref s_lastRevision);
 
     /// <summary>True while an outside change is waiting to be shown.</summary>
-    public bool HasWaitingChange => _waiting.HasValue;
+    public bool HasWaitingChange => _choice.HasWaitingChange;
 
     /// <summary>
     /// The window's intent for the switch: the revision of the newest change it holds, the user's own click or an
@@ -42,7 +43,7 @@ public sealed class ExternalSwitchSync
     /// (<see cref="Scribe.Core.Persistence.ISettingsRepository.SaveBundle"/>). Every outside change up to it is then
     /// superseded, and with zero the save keeps the stored value instead of writing a switch nobody set in the window.
     /// </summary>
-    public long NewestRevision => _newest;
+    public long NewestRevision => _choice.NewestRevision;
 
     /// <summary>
     /// An outside change, or word of how it ended (stored, or failed and put back), with the revision the change was
@@ -50,37 +51,17 @@ public sealed class ExternalSwitchSync
     /// user's own or a later outside one. Otherwise <paramref name="showNow"/> says whether the switch can show
     /// <paramref name="value"/> now; if not, it waits for <see cref="Release"/>, and a save writes it meanwhile.
     /// </summary>
-    public bool TryAdopt(bool value, long revision, bool canShowNow, out bool showNow)
-    {
-        if (revision < _newest)
-        {
-            showNow = false;
-            return false;
-        }
-
-        _newest = revision;
-        _waiting = canShowNow ? null : value;
-        showNow = canShowNow;
-        return true;
-    }
+    public bool TryAdopt(bool value, long revision, bool canShowNow, out bool showNow) =>
+        _choice.TryAdopt(value, revision, canShowNow, out showNow);
 
     /// <summary>The switch can show changes again: returns the change that waited, once, or null.</summary>
-    public bool? Release()
-    {
-        var waiting = _waiting;
-        _waiting = null;
-        return waiting;
-    }
+    public bool? Release() => _choice.Release();
 
     /// <summary>
     /// The user set the switch in the window: newer than every outside change made before it, including one whose
     /// word has yet to arrive.
     /// </summary>
-    public void UserChanged()
-    {
-        _waiting = null;
-        _newest = NextRevision();
-    }
+    public void UserChanged() => _choice.UserChanged();
 
     /// <summary>
     /// The window saved its whole document, this switch included, so it holds nothing newer than what is stored. Word
@@ -88,8 +69,8 @@ public sealed class ExternalSwitchSync
     /// lane reads them again when a save lands while a change is on its way), which are the truth even when that
     /// change's write reached the database after the save.
     /// </summary>
-    public void Saved() => _newest = 0;
+    public void Saved() => _choice.Saved();
 
     /// <summary>What a save writes: an outside change still waiting to be shown, otherwise what the switch shows.</summary>
-    public bool ForSave(bool shown) => _waiting ?? shown;
+    public bool ForSave(bool shown) => _choice.ForSave(shown);
 }

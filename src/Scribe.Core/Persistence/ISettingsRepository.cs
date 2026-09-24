@@ -47,19 +47,52 @@ public interface ISettingsRepository
     AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded);
 
     /// <summary>
+    /// <see cref="Update(Action{AppSettings}, long, out bool)"/> for any setting the tray can change, checked against that
+    /// setting's own record of intent: a committed whole-document save (<see cref="SaveBundle"/> with
+    /// <see cref="ExternalIntents"/>) whose intent for <paramref name="setting"/> is at least <paramref name="revision"/>
+    /// supersedes the change, and an intent for another setting never does. This default checks only the AI cleanup
+    /// switch and treats any other setting as an unchecked <see cref="Update(Action{AppSettings})"/>;
+    /// <see cref="SettingsRepository"/> checks every one.
+    /// </summary>
+    AppSettings Update(Action<AppSettings> mutate, ExternalSetting setting, long revision, out bool superseded)
+    {
+        if (setting == ExternalSetting.AiCleanup)
+        {
+            return Update(mutate, revision, out superseded);
+        }
+
+        superseded = false;
+        return Update(mutate);
+    }
+
+    /// <summary>
     /// Atomically persists settings plus any changed dictionary and snippet collections.
     /// A null collection leaves that section untouched. <paramref name="aiCleanupIntent"/> is the revision of the
     /// window's newest intent for the AI cleanup switch: the user's click there, or a tray change the window took.
     /// Once the save commits, every tray change up to it is superseded
     /// (<see cref="Update(Action{AppSettings}, long, out bool)"/>). Zero means the window has no intent, so its switch
     /// may be older than what is stored: the stored value is kept, and <paramref name="settings"/> takes it once the
-    /// save has succeeded, so the caller shows and applies what is stored.
+    /// save has succeeded, so the caller shows and applies what is stored. The microphone is written as given.
     /// </summary>
     void SaveBundle(
         AppSettings settings,
         IReadOnlyList<DictionaryEntry>? dictionaryEntries,
         IReadOnlyList<Snippet>? snippets,
         long aiCleanupIntent = 0);
+
+    /// <summary>
+    /// The whole-document save above with the window's intent for every setting the tray can change. Each works as the AI
+    /// cleanup switch does there: zero keeps that setting's stored value (and <paramref name="settings"/> takes it once the
+    /// save has succeeded), and once the save commits every tray change to that setting up to its intent is superseded
+    /// (<see cref="Update(Action{AppSettings}, ExternalSetting, long, out bool)"/>). This default passes on only the AI
+    /// cleanup intent; <see cref="SettingsRepository"/> honors every one.
+    /// </summary>
+    void SaveBundle(
+        AppSettings settings,
+        IReadOnlyList<DictionaryEntry>? dictionaryEntries,
+        IReadOnlyList<Snippet>? snippets,
+        ExternalIntents intents) =>
+        SaveBundle(settings, dictionaryEntries, snippets, intents.AiCleanup);
 
     /// <summary>Reads a single raw value by key, or <see langword="null"/> when absent.</summary>
     string? Get(string key);

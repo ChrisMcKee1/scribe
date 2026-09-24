@@ -85,6 +85,7 @@ public sealed class SessionDiagnostics(
         // Read once. Every consumer below wants the same snapshot, and Load() is a database round
         // trip that would otherwise run three times and log three separate warnings for one fault.
         var current = TryLoadSettings();
+        var inputs = TryListInputs();
 
         return SessionBanner.Compose(
             Session,
@@ -94,9 +95,13 @@ public sealed class SessionDiagnostics(
             current,
             WindowsPackageIdentity.TryGetPackageFamilyName(),
             DescribeModel(current),
-            TryGetDefaultDeviceName(out var deviceCount),
-            deviceCount,
-            TryDescribeCapability());
+            defaultAudioDevice: inputs?.FirstOrDefault(d => d.IsDefault)?.Name,
+            audioDeviceCount: inputs?.Count,
+            computeCapability: TryDescribeCapability(),
+            communicationsAudioDevice: inputs?.FirstOrDefault(d => d.IsCommunicationsDefault && !d.IsDefault)?.Name,
+            selectedAudioDeviceAvailable: current?.InputDeviceId is { Length: > 0 } chosen && inputs is not null
+                ? inputs.Any(d => string.Equals(d.Id, chosen, StringComparison.Ordinal))
+                : null);
     }
 
     private AppSettings? TryLoadSettings()
@@ -116,14 +121,11 @@ public sealed class SessionDiagnostics(
         }
     }
 
-    private string? TryGetDefaultDeviceName(out int? deviceCount)
+    private IReadOnlyList<AudioDevice>? TryListInputs()
     {
-        deviceCount = null;
         try
         {
-            var devices = audio.GetInputDevices();
-            deviceCount = devices.Count;
-            return devices.FirstOrDefault(d => d.IsDefault)?.Name;
+            return audio.GetInputDevices();
         }
         catch (Exception ex)
         {

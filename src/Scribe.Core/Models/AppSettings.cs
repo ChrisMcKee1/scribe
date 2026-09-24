@@ -9,10 +9,16 @@ using Scribe.Core.Security;
 /// </summary>
 public sealed class AppSettings
 {
-    /// <summary>WASAPI capture device id; <see langword="null"/> uses the system default.</summary>
+    /// <summary>
+    /// The chosen microphone's endpoint ID; <see langword="null"/> follows the Windows default input device, resolved
+    /// afresh for every dictation (see <see cref="Audio.DefaultInputDevice"/>).
+    /// </summary>
     public string? InputDeviceId { get; set; }
 
-    /// <summary>Friendly name of the selected device (for display only).</summary>
+    /// <summary>
+    /// Friendly name of the chosen microphone when it was chosen, for display only: it names the device while it is
+    /// unavailable.
+    /// </summary>
     public string? InputDeviceName { get; set; }
 
     public HotkeyBinding Hotkey { get; set; } = HotkeyBinding.Default;

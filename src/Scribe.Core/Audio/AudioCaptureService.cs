@@ -1,16 +1,11 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
-using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
+using Scribe.Core.Diagnostics;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
-
-// WasapiCapture is obsoleted by NAudio 3 in favor of WasapiRecorder, and this file stays on it by
-// informed choice: the recorder produced two live capture regressions on real hardware (an
-// un-unwrapped extensible mix format and ~20 dB quieter capture). See the comment in
-// WasapiCaptureDevices, where the capture is created.
-#pragma warning disable CS0618
 
 namespace Scribe.Core.Audio;
 
@@ -19,6 +14,12 @@ namespace Scribe.Core.Audio;
 /// (commonly 32-bit float, 44.1/48 kHz, 1-2 channels), then on stop downmixes to mono and
 /// resamples to 16 kHz using the managed WDL resampler; no MediaFoundation dependency.
 /// </summary>
+/// <remarks>
+/// The device is resolved on every <see cref="Start"/>: the chosen microphone when one is chosen and available, otherwise
+/// the Windows default as it is at that moment (see <see cref="DefaultInputDevice"/>). Nothing about the devices is kept
+/// from one capture to the next, so a new Windows default applies from the next dictation without a restart, while a
+/// capture already running stays on the device it opened.
+/// </remarks>
 public sealed class AudioCaptureService : IAudioCaptureService
 {
     private const int TargetSampleRate = 16000;
@@ -30,9 +31,14 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     private readonly ILogger<AudioCaptureService> _logger;
     private readonly ICaptureDevices _devices;
+    private readonly InputDeviceWatcher? _watcher;
     private readonly TimeSpan _disposeOpenWait;
     private readonly CaptureBufferPool _buffers = new();
     private readonly object _sync = new();
+
+    // The listeners for InputDevicesChanged, kept here so the watcher knows whether anything is listening.
+    private readonly object _subscriptionGate = new();
+    private Action<IReadOnlyList<AudioDevice>>? _inputDevicesChanged;
 
     private IWaveIn? _capture;
     private ICaptureDevice? _device;
@@ -59,22 +65,36 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     /// <summary>
     /// How long disposal waits for a device open in progress. Opens have been measured at over five seconds on the first
-    /// press after launch; past this bound the device enumerator is left for the process to release at exit, rather than
-    /// released under the open that is still using it. It bounds only that wait, not the stop that follows it.
+    /// press after launch; past this bound the capture endpoints are left for the process to release at exit, rather than
+    /// released under the open that is still using them. It bounds only that wait, not the stop that follows it.
     /// </summary>
     internal static readonly TimeSpan DisposeOpenWait = TimeSpan.FromSeconds(10);
 
     public AudioCaptureService(ILogger<AudioCaptureService> logger)
-        : this(logger, new WasapiCaptureDevices(logger), DisposeOpenWait)
+        : this(logger, new WasapiCaptureDevices(logger), DisposeOpenWait, WatchWindowsEndpoints(logger))
     {
     }
 
-    /// <summary>Test seam: the capture endpoints, and the bound disposal waits for an open in progress.</summary>
-    internal AudioCaptureService(ILogger<AudioCaptureService> logger, ICaptureDevices devices, TimeSpan disposeOpenWait)
+    /// <summary>
+    /// Test seam: the capture endpoints, the bound disposal waits for an open in progress, and what watches the endpoints
+    /// for changes (nothing when null).
+    /// </summary>
+    internal AudioCaptureService(
+        ILogger<AudioCaptureService> logger,
+        ICaptureDevices devices,
+        TimeSpan disposeOpenWait,
+        Func<ICaptureDevices, InputDeviceWatcher>? watch = null)
     {
         _logger = logger;
         _devices = devices;
         _disposeOpenWait = disposeOpenWait;
+        if (watch is not null)
+        {
+            // Start never throws: a watcher that cannot register logs it and tries again when the list is next read.
+            _watcher = watch(devices);
+            _watcher.Changed += RaiseInputDevicesChanged;
+            _watcher.Start();
+        }
     }
 
     public bool IsCapturing { get; private set; }
@@ -84,6 +104,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
     public string? LastDeviceName { get; private set; }
 
     public bool LastDeviceMuted { get; private set; }
+
+    public bool LastRequestedDeviceUnavailable { get; private set; }
 
     public bool LastCaptureWasSilent => _capturePeak < SilentCapturePeak;
 
@@ -98,10 +120,46 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
     public event EventHandler<Exception>? CaptureFaulted;
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// While anything listens, the watcher also checks its registration on its recovery interval (see
+    /// <see cref="InputDeviceWatcher.SetWatched"/>), so a registration lost to an audio service restart comes back without
+    /// the list being read again; the shell listens only while a Settings window is open.
+    /// </remarks>
+    public event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged
+    {
+        add
+        {
+            lock (_subscriptionGate)
+            {
+                _inputDevicesChanged += value;
+                _watcher?.SetWatched(_inputDevicesChanged is not null);
+            }
+        }
+
+        remove
+        {
+            lock (_subscriptionGate)
+            {
+                _inputDevicesChanged -= value;
+                _watcher?.SetWatched(_inputDevicesChanged is not null);
+            }
+        }
+    }
+
     public IReadOnlyList<AudioDevice> GetInputDevices()
     {
         ObjectDisposedException.ThrowIf(Disposing, this);
-        return _devices.GetInputDevices();
+
+        // Whoever asks is about to show the list, so it is the moment to make sure the list keeps up afterwards too, and
+        // the reading goes through the watcher's baseline so a list shown earlier hears about anything this one finds.
+        if (_watcher is null)
+        {
+            return _devices.GetInputDevices();
+        }
+
+        _watcher.EnsureListening();
+        return _watcher.Read();
     }
 
     public bool Start(string? deviceId = null, long owner = 0)
@@ -127,8 +185,11 @@ public sealed class AudioCaptureService : IAudioCaptureService
 
             try
             {
-                _device = ResolveDevice(deviceId);
-                _capture = _device.CreateCapture();
+                LastRequestedDeviceUnavailable = false;
+                var opened = OpenCapture(deviceId);
+                _device = opened.Device;
+                _capture = opened.Capture;
+                LastRequestedDeviceUnavailable = opened.Source == CaptureSource.WindowsDefaultInsteadOfChosen;
                 _captureFormat = NormalizeFormat(_capture.WaveFormat);
 
                 // The previous capture's working buffer when it is still retained, otherwise a
@@ -155,8 +216,9 @@ public sealed class AudioCaptureService : IAudioCaptureService
                 }
 
                 _logger.LogInformation(
-                    "Starting capture on '{Device}' at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",
+                    "Starting capture on '{Device}' ({Source}) at {Rate} Hz, {Channels} ch, {Bits}-bit {Encoding}.",
                     _device.FriendlyName,
+                    opened.Source,
                     _captureFormat.SampleRate,
                     _captureFormat.Channels,
                     _captureFormat.BitsPerSample,
@@ -642,23 +704,91 @@ public sealed class AudioCaptureService : IAudioCaptureService
         }
     }
 
-    private ICaptureDevice ResolveDevice(string? deviceId)
+    /// <summary>Where a capture's device came from, for the log and for telling the user once.</summary>
+    private enum CaptureSource
     {
+        /// <summary>No microphone was chosen, so the capture follows the Windows default.</summary>
+        WindowsDefault,
+
+        /// <summary>The microphone the user chose.</summary>
+        Chosen,
+
+        /// <summary>A microphone was chosen but could not be opened, so the Windows default recorded instead.</summary>
+        WindowsDefaultInsteadOfChosen,
+    }
+
+    private readonly record struct OpenedCapture(ICaptureDevice Device, IWaveIn Capture, CaptureSource Source);
+
+    /// <summary>
+    /// Opens the chosen device and a capture on it, or, when there is no choice or the chosen device cannot be opened,
+    /// the Windows default as it is now. Whatever it opened and could not hand back is released before it throws.
+    /// </summary>
+    /// <remarks>
+    /// The chosen device's capture is created inside the fallback on purpose. Windows keeps an unplugged, disabled or
+    /// not present endpoint by its ID, so looking it up succeeds and it is creating the capture, which activates the
+    /// audio client, that fails (AUDCLNT_E_DEVICE_INVALIDATED). With only the lookup inside the fallback, a chosen USB
+    /// microphone that was unplugged turned every press into "microphone unavailable" instead of recording from the
+    /// default.
+    /// </remarks>
+    private OpenedCapture OpenCapture(string? deviceId)
+    {
+        var source = CaptureSource.WindowsDefault;
         if (!string.IsNullOrEmpty(deviceId))
         {
+            ICaptureDevice? chosen = null;
             try
             {
-                return _devices.Open(deviceId);
+                chosen = _devices.Open(deviceId);
+                return new OpenedCapture(chosen, chosen.CreateCapture(), CaptureSource.Chosen);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Requested device '{DeviceId}' unavailable; falling back to default.", deviceId);
+                ReleaseQuietly(chosen);
+                source = CaptureSource.WindowsDefaultInsteadOfChosen;
+                _logger.LogWarning(
+                    "The chosen microphone could not be opened ({Failure}); recording from the Windows default instead.",
+                    DescribeUnavailable(ex));
             }
         }
 
-        return _devices.OpenDefault()
+        var device = _devices.OpenDefault()
             ?? throw new InvalidOperationException("No active microphone (capture) device was found.");
+        try
+        {
+            return new OpenedCapture(device, device.CreateCapture(), source);
+        }
+        catch
+        {
+            ReleaseQuietly(device);
+            throw;
+        }
     }
+
+    // The state Windows reports says what happened to the device; any other failure is described by its shape.
+    private static string DescribeUnavailable(Exception ex) =>
+        ex is CaptureDeviceUnavailableException unavailable ? $"it is {unavailable.State}" : FailureShape.Describe(ex);
+
+    private void ReleaseQuietly(ICaptureDevice? device)
+    {
+        try
+        {
+            device?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            TryLog(log => log.LogDebug("Releasing a microphone that could not be used failed ({Failure}).", FailureShape.Describe(ex)));
+        }
+    }
+
+    private void RaiseInputDevicesChanged(IReadOnlyList<AudioDevice> devices) =>
+        ResilientEvent.InvokeAll(
+            Volatile.Read(ref _inputDevicesChanged),
+            devices,
+            ex => TryLog(log => log.LogWarning(
+                "An input device change handler threw ({Failure}).", FailureShape.DescribeWithStack(ex))));
+
+    private static Func<ICaptureDevices, InputDeviceWatcher> WatchWindowsEndpoints(ILogger logger) =>
+        devices => new InputDeviceWatcher(WasapiEndpointNotifications.Register, devices.GetInputDevices, logger);
 
     private void Cleanup(
         IWaveIn? capture,
@@ -710,17 +840,19 @@ public sealed class AudioCaptureService : IAudioCaptureService
     private bool OwnsCapture(long owner) => owner == 0 || owner == _captureOwner;
 
     /// <summary>
-    /// Stops a live capture and releases the device enumerator. Never throws, and only the first call does anything.
+    /// Stops watching the endpoints, stops a live capture and releases the capture endpoints. Never throws, and only the
+    /// first call does anything.
     /// </summary>
     /// <remarks>
-    /// <see cref="Start"/> holds the lock for the whole device open and uses the enumerator throughout it, and the host can
+    /// <see cref="Start"/> holds the lock for the whole device open and uses the endpoints throughout it, and the host can
     /// dispose this service while an open is still under way (the keyboard hook's thread outlives its bounded join at
-    /// shutdown). So disposal waits for the lock, with a bound, before it touches anything: no new open starts once it has
-    /// begun, and the capture an open in progress started is stopped once the lock is free. Past the bound the enumerator
-    /// is left for the process to release at exit, since releasing it under the open would be a use after release inside
-    /// the audio stack; the controller stops that capture itself when its open returns during shutdown. The bound covers
-    /// only that wait for the open: stopping a capture afterwards still ends in NAudio's disposal of it, which joins the
-    /// capture thread without a bound.
+    /// shutdown). So disposal waits for the lock, with a bound, before it touches them: no new open starts once it has
+    /// begun, and the capture an open in progress started is stopped once the lock is free. Past the bound the endpoints
+    /// are left for the process to release at exit, since releasing them under the open could be a use after release
+    /// inside the audio stack; the controller stops that capture itself when its open returns during shutdown. The bound
+    /// covers only that wait for the open: stopping a capture afterwards still ends in NAudio's disposal of it, which joins
+    /// the capture thread without a bound. The device watcher goes first and unconditionally: it shares nothing with an
+    /// open or a capture, and its registration must not outlive the service.
     /// </remarks>
     public void Dispose()
     {
@@ -729,14 +861,20 @@ public sealed class AudioCaptureService : IAudioCaptureService
             return;
         }
 
+        if (_watcher is not null)
+        {
+            _watcher.Changed -= RaiseInputDevicesChanged;
+            _watcher.Dispose();
+        }
+
         if (!Monitor.TryEnter(_sync, _disposeOpenWait))
         {
             // The retained buffer is safe to drop while an open runs (the pool never hands out a buffer in use); the
-            // enumerator is not.
+            // endpoints are not.
             _buffers.ReleaseRetained();
             TryLog(log => log.LogWarning(
-                "A microphone was still opening {Seconds:F0} s into shutdown; the audio device enumerator was left for " +
-                "the process to release at exit instead of being released while in use.",
+                "A microphone was still opening {Seconds:F0} s into shutdown; the audio devices were left for the " +
+                "process to release at exit instead of being released while in use.",
                 _disposeOpenWait.TotalSeconds));
             return;
         }
@@ -787,124 +925,5 @@ public sealed class AudioCaptureService : IAudioCaptureService
         {
             // Nothing useful is left to do.
         }
-    }
-}
-
-/// <summary>
-/// The capture endpoints behind <see cref="AudioCaptureService"/>: the one seam between it and the audio stack, so its
-/// locking and disposal can be tested without a microphone. The production implementation is
-/// <see cref="WasapiCaptureDevices"/>.
-/// </summary>
-internal interface ICaptureDevices : IDisposable
-{
-    /// <summary>Opens the endpoint with this id; throws when it is unavailable.</summary>
-    ICaptureDevice Open(string deviceId);
-
-    /// <summary>Opens the default capture endpoint, communications role first, then multimedia; null when there is none.</summary>
-    ICaptureDevice? OpenDefault();
-
-    /// <summary>Lists the active capture endpoints, flagging the default communications one.</summary>
-    IReadOnlyList<AudioDevice> GetInputDevices();
-}
-
-/// <summary>One opened capture endpoint. Disposing it releases the endpoint.</summary>
-internal interface ICaptureDevice : IDisposable
-{
-    string FriendlyName { get; }
-
-    /// <summary>True when the endpoint is muted or its volume is at zero. May throw for a driver with no endpoint volume.</summary>
-    bool IsMuted { get; }
-
-    /// <summary>A capture on this endpoint, not yet started.</summary>
-    IWaveIn CreateCapture();
-}
-
-/// <summary>The real endpoints, through NAudio's WASAPI wrappers.</summary>
-internal sealed class WasapiCaptureDevices(ILogger logger) : ICaptureDevices
-{
-    private readonly MMDeviceEnumerator _enumerator = new();
-
-    public ICaptureDevice Open(string deviceId) => new Endpoint(_enumerator.GetDevice(deviceId));
-
-    public ICaptureDevice? OpenDefault()
-    {
-        if (_enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Communications))
-        {
-            return new Endpoint(_enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications));
-        }
-
-        if (_enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia))
-        {
-            return new Endpoint(_enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Multimedia));
-        }
-
-        return null;
-    }
-
-    public IReadOnlyList<AudioDevice> GetInputDevices()
-    {
-        string? defaultId = TryGetDefaultCaptureId();
-        var devices = new List<AudioDevice>();
-
-        foreach (MMDevice device in _enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
-        {
-            try
-            {
-                devices.Add(new AudioDevice(device.ID, device.FriendlyName, device.ID == defaultId));
-            }
-            finally
-            {
-                device.Dispose();
-            }
-        }
-
-        return devices;
-    }
-
-    public void Dispose() => _enumerator.Dispose();
-
-    private string? TryGetDefaultCaptureId()
-    {
-        try
-        {
-            if (_enumerator.HasDefaultAudioEndpoint(DataFlow.Capture, Role.Communications))
-            {
-                using MMDevice device = _enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-                return device.ID;
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Unable to resolve default capture device.");
-        }
-
-        return null;
-    }
-
-    private sealed class Endpoint(MMDevice device) : ICaptureDevice
-    {
-        public string FriendlyName => device.FriendlyName;
-
-        public bool IsMuted
-        {
-            get
-            {
-                var volume = device.AudioEndpointVolume;
-                return volume.Mute || volume.MasterVolumeLevelScalar <= 0.0001f;
-            }
-        }
-
-        // Deliberately the obsoleted WasapiCapture, not NAudio 3's WasapiRecorder. The
-        // recorder was tried (0.3.16) and produced two live capture regressions in one
-        // day on the same microphone: the mix format arrived with its extensible header
-        // intact (blinding every Encoding-switch consumer), and captured speech came in
-        // roughly 20 dB quieter than WasapiCapture on the same endpoint (peaks that were
-        // -14 dBFS became -35 dBFS, so VAD rejected real dictations as silence - the
-        // recorder evidently taps the stream at a different point in the effects/AGC
-        // chain). Correct levels beat one saved buffer copy; do not swap this back
-        // without A/B-ing recorded peaks on real hardware.
-        public IWaveIn CreateCapture() => new WasapiCapture(device, useEventSync: true);
-
-        public void Dispose() => device.Dispose();
     }
 }

@@ -28,7 +28,7 @@ leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu
 failure raises a recovery notification); **tray quick add to dictionary** (chip-style word picker
 over a recent dictation that saves the fix and repairs that transcript in place); **dictionary
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
-disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause) and a
+disables them by default rather than deleting); tray quick toggles (microphone, AI cleanup on/off, pause) and a
 first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
@@ -730,6 +730,39 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   data was created by a newer version of Scribe. Please install the latest version." (from `StartAsync`,
   or from `AbandonStartup` if `NewerDatabaseSchemaException` surfaces anywhere else), and a data folder
   that cannot be created shows its own notice. Both then shut down cleanly.
+
+## Microphone choice and the Windows default (read before touching capture devices)
+
+- **"Windows default" means the console role.** Windows keeps one default capture endpoint per device role, and the
+  communications default (the Sound control panel's "Default Communication Device") can be a different device from
+  the one Windows Settings shows under Sound, Input. Scribe used to ask for `Role.Communications` first, so on a machine
+  whose defaults differed it recorded from the call device, and a default changed in Windows Settings never reached it,
+  restart or not. `DefaultInputDevice.RolePreference` is console, multimedia, communications; keep that order. The
+  session banner names the communications default when it is a different device.
+- **Nothing about the devices is kept between presses.** `WasapiCaptureDevices` opens a fresh `MMDeviceEnumerator` for
+  every operation (the open, the default lookup, the listing) and releases it before returning; a device keeps working
+  after its enumerator is released (measured). The one long-lived enumerator is the `InputDeviceWatcher` registration,
+  which `EnsureListening` replaces when COM reports the audio service gone (`AudioServiceFailure`), bounded and logged
+  once per episode. It is checked whenever a list is shown, and on the recovery interval only while something listens
+  for changes (the shell listens only while a Settings window is open).
+- **Every list reading shares the watcher's one baseline.** `AudioCaptureService.GetInputDevices` reads through
+  `InputDeviceWatcher.Read`, serialized with the watcher's own readings, and whichever reading finds a different picture
+  announces it. A baseline the watcher kept for itself swallowed a change that landed before its first reading, so a
+  Settings window opened earlier kept the old default.
+- **`GetDevice` hands back unplugged, disabled and not present endpoints.** Only an ID Windows does not know fails
+  (E_NOTFOUND); creating a capture on such an endpoint then fails at audio client activation with
+  AUDCLNT_E_DEVICE_INVALIDATED (both measured). So a chosen microphone's lookup and its capture creation both sit
+  inside the fallback to the Windows default. `UnavailableMicrophoneNotice` tells the user once per episode: it is fed
+  every committed microphone choice (a different ID ends the episode) and every capture that opened, whatever owned it
+  afterwards, with the fallback read from that capture's own start (`RecordingOpen.RequestedDeviceUnavailable`).
+- **NAudio 3.0.1 keeps `IMMNotificationClient` and `RegisterEndpointNotificationCallback` internal.** The public route
+  is `MMDeviceEnumerator.CreateNotificationClient(useSynchronizationContext: false)`, whose events run on the audio
+  worker thread. Microsoft's rules for those callbacks are strict (never block, never register or unregister in one,
+  never release an MMDevice API object in one), so the watcher's callback only flips a flag and queues one work item per
+  burst; the quiet period, the reading and the event all happen on the thread pool.
+- **A tray microphone change follows the AI cleanup switch's intent rules.** `SettingsRepository` keeps one record of
+  intent per `ExternalSetting`, a Settings save passes `ExternalIntents`, and the window tracks its side with
+  `ExternalChoiceSync<MicrophoneSelection>`. An intent for one setting never supersedes a tray change to the other.
 
 ## Overlay architecture (read before touching the pill)
 
