@@ -18,7 +18,8 @@ within its budget), whether or not the dictation mentions them; see
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
-suggestions); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
+suggestions); **dictionary libraries** (eleven built-in packs plus imported CSVs, shown as one A to Z
+list; see the libraries section below); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
 (writing style + newline mode by focused process); **AI cleanup** across four providers
 (Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
 any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
@@ -328,6 +329,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     (TranscriptionChunker plans long-capture seams)
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor
+    Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
+                                    (which library wins a spoken form: frozen built-in ids, then file names)
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -354,6 +357,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
+  tests/fixtures/libraries/         built-in-precedence.json (shared with the macOS port) and
+                                    composition-golden.txt (what the libraries decide, captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -772,6 +777,32 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+
+## Dictionary libraries: order and precedence (read before touching library order)
+
+- **What the list shows and what wins are separate.** The Libraries page lists built-in and custom libraries in one
+  A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with `IgnoreCase | NumericOrdering`, then
+  ordinal name, then ordinal id), with the ordering captured when the page loads, the source ("Built-in" or "Your
+  library") under each name, no sortable column, and no row that moves when its box is ticked. Which library supplies
+  a spoken form is `LibraryPrecedence`: the built-ins in the frozen `BuiltInOrder`, then custom libraries by file
+  name. Never derive a winner from the list's order.
+- **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
+  ids so that a rename or a new category moves nothing. It decides which built-in supplies a spoken form two of them
+  share and which terms fill a default install's 80 on-device glossary slots, so never reorder it. Append a new
+  built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`, which the macOS port reads;
+  `LibraryPrecedenceTests` fails until every shipped id appears exactly once and the two lists agree.
+- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
+  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
+  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
+  `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges) and `AnalyzeEnabledLibraries` (the Save
+  prompt) apply it to whatever order they are given. The window hands the glossary hint (`GlossaryHint`) and the
+  cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids in precedence order,
+  never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and random orders.
+- **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
+  winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
+  quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
+  turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
