@@ -111,7 +111,10 @@
                 <Grid>
                     <ScrollViewer x:Name="TranscriptScroll" VerticalScrollBarVisibility="Auto"
                                   Padding="10,10,10,6">
-                        <ItemsControl x:Name="Chips">
+                        <!-- Not a Tab stop: an ItemsControl is focusable by default, and the chips inside it
+                             deliberately are not (the boxes below are the keyboard path), so it was an empty
+                             stop between the dictation picker and the first box. -->
+                        <ItemsControl x:Name="Chips" Focusable="False">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel Orientation="Horizontal"/>

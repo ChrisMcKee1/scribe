@@ -1315,6 +1315,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     {
         DictionaryGrid.ItemsSource = _rows;
         DataGridCheckBoxClick.Attach(DictionaryGrid);
+        DataGridTypingTab.Attach(DictionaryGrid);
         _rows.CollectionChanged += DictionaryRows_CollectionChanged;
         DictionaryGrid.CellEditEnding += (_, _) => Dispatcher.BeginInvoke(RefreshDictionaryStatus);
         SetDictionaryEditable(false);
@@ -4628,15 +4629,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// </summary>
     private void ShowThemedMessage(string title, string content)
     {
-        var dialog = new Wpf.Ui.Controls.MessageBox
-        {
-            Title = title,
-            Content = content,
-            PrimaryButtonText = "OK",
-            IsSecondaryButtonEnabled = false,
-            IsCloseButtonEnabled = false,
-            Owner = this,
-        };
+        var dialog = ThemedNotice.Create(title, content);
+        dialog.Owner = this;
         _ = dialog.ShowDialogAsync();
     }
 

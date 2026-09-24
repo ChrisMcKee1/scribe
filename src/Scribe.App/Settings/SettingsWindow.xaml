@@ -85,12 +85,20 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
-        <Style TargetType="ui:Card" x:Key="SettingCard">
+        <!-- SettingCard and FillCard replace ui:Card's own style instead of extending it, so they also drop the
+             two setters that make a WPF-UI card a plain container (Card.xaml in WPF-UI 4.3.0: Focusable and
+             KeyboardNavigation.IsTabStop, both False). Without them each card was a Tab stop of its own, an
+             empty focus rectangle before the controls inside it. -->
+        <Style TargetType="ui:Card" x:Key="PlainCard">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+        </Style>
+        <Style TargetType="ui:Card" x:Key="SettingCard" BasedOn="{StaticResource PlainCard}">
             <Setter Property="Margin" Value="0,0,0,10"/>
             <Setter Property="Padding" Value="18,14"/>
         </Style>
         <!-- Master-detail cards must fill their grid cell; ui:Card centres by default. -->
-        <Style TargetType="ui:Card" x:Key="FillCard">
+        <Style TargetType="ui:Card" x:Key="FillCard" BasedOn="{StaticResource PlainCard}">
             <Setter Property="VerticalAlignment" Value="Stretch"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="VerticalContentAlignment" Value="Stretch"/>
@@ -152,6 +160,35 @@
             <Setter Property="Focusable" Value="False"/>
         </Style>
 
+        <!-- Every grid on these pages is one Tab stop whose cells the arrow keys move between, as in a Windows
+             list. WPF-UI's cell style (DefaultDataGridCellStyle, DataGrid.xaml in WPF-UI 4.3.0) makes no cell a
+             Tab stop, so a grid of text had no Tab stop at all (the Libraries, History, Usage and Diagnostics
+             grids could not be reached from the keyboard, and after Space on a check box the arrow keys had no
+             cell to move to), while a grid whose cells hold buttons put every row's button in the Tab order.
+             Cells take focus again, and TabNavigation Once enters a grid on the cell that last had focus (the
+             first cell before that) and leaves it on the next Tab. WPF's row panel, DataGridCellsPanel, is a
+             Local navigation group of its own, which would still walk Tab along the row and keep the grid from
+             remembering its cell, so the rows lay their cells out in one that continues to the grid instead. A
+             cell navigates its own content locally, so Tab from a cell that holds a button reaches the button
+             first. -->
+        <Style x:Key="KeyboardCell" TargetType="DataGridCell" BasedOn="{StaticResource DefaultDataGridCellStyle}">
+            <Setter Property="IsTabStop" Value="True"/>
+        </Style>
+        <Style x:Key="KeyboardRow" TargetType="DataGridRow" BasedOn="{StaticResource DefaultDataGridRowStyle}">
+            <Setter Property="ItemsPanel">
+                <Setter.Value>
+                    <ItemsPanelTemplate>
+                        <DataGridCellsPanel KeyboardNavigation.TabNavigation="Continue"/>
+                    </ItemsPanelTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="DataGrid" BasedOn="{StaticResource {x:Type DataGrid}}">
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Once"/>
+            <Setter Property="CellStyle" Value="{StaticResource KeyboardCell}"/>
+            <Setter Property="RowStyle" Value="{StaticResource KeyboardRow}"/>
+        </Style>
+
         <!-- One clickable zone of the overlay-position picker: an invisible cell that reveals a
              ghost pill on hover and an accent-coloured pill when selected. -->
         <Style TargetType="RadioButton" x:Key="OverlayZone">
@@ -207,7 +244,9 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Left navigation rail -->
+            <!-- Left navigation rail. A ListBox is one Tab stop and the arrow keys move along it. Each item
+                 names itself for screen readers: an item that holds a panel instead of text is otherwise
+                 announced by its type name, "System.Windows.Controls.ListBoxItem". -->
             <ListBox x:Name="NavList" Grid.Column="0" Margin="8,4,4,16"
                      Background="Transparent" BorderThickness="0"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
@@ -218,79 +257,79 @@
                         <Setter Property="Margin" Value="0,2"/>
                     </Style>
                 </ListBox.ItemContainerStyle>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="General">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Settings24" FontSize="18"/>
                         <TextBlock Text="General" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Dictation">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Mic24" FontSize="18"/>
                         <TextBlock Text="Dictation" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Overlay">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Desktop24" FontSize="18"/>
                         <TextBlock Text="Overlay" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="AI cleanup">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Wand24" FontSize="18"/>
                         <TextBlock Text="AI cleanup" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Dictionary">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Book24" FontSize="18"/>
                         <TextBlock Text="Dictionary" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Libraries">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Library24" FontSize="18"/>
                         <TextBlock Text="Libraries" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Snippets">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
                         <TextBlock Text="Snippets" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Profiles">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Apps24" FontSize="18"/>
                         <TextBlock Text="Profiles" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Playground">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
                         <TextBlock Text="Playground" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="History">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="History24" FontSize="18"/>
                         <TextBlock Text="History" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Usage">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="DataTrending24" FontSize="18"/>
                         <TextBlock Text="Usage" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="Diagnostics">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Pulse24" FontSize="18"/>
                         <TextBlock Text="Diagnostics" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
-                <ListBoxItem>
+                <ListBoxItem AutomationProperties.Name="About">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Info24" FontSize="18"/>
                         <TextBlock Text="About" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
@@ -724,7 +763,13 @@
                                             </Grid.ColumnDefinitions>
 
                                             <!-- Mini monitor: a 16:9 screen mock-up with nine clickable
-                                                 anchor zones and a taskbar strip for orientation. -->
+                                                 anchor zones and a taskbar strip for orientation. Each zone
+                                                 stays a Tab stop of its own, in reading order, rather than one
+                                                 stop for the group: an arrow key cannot move focus between the
+                                                 zones, because the page's scroll viewer takes it and only
+                                                 scrolls. WPF moves focus on an arrow key only through a
+                                                 PART_ScrollContentPresenter, which WPF-UI 4.3.0's ScrollViewer
+                                                 template does not name. -->
                                             <Border Grid.Column="0" Width="300" Height="170" CornerRadius="8"
                                                     BorderThickness="2"
                                                     BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}"
@@ -1808,7 +1853,12 @@
                                     <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
                                         <StackPanel>
                                             <TextBlock Text="Trend" Style="{StaticResource SettingTitle}"/>
-                                            <ItemsControl x:Name="UsageTrendChart" Height="72" Margin="0,10,0,2">
+                                            <!-- An ItemsControl is a Control, so WPF makes it a Tab stop of its own, an
+                                                 empty focus rectangle around its items; neither the Aero2 theme nor
+                                                 WPF-UI 4.3.0 turns that off. These lists only display, so they take no
+                                                 focus, and anything inside them that acts still does. -->
+                                            <ItemsControl x:Name="UsageTrendChart" Height="72" Margin="0,10,0,2"
+                                                          Focusable="False">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <UniformGrid Rows="1"/>
@@ -1865,7 +1915,7 @@
                                             <TextBlock Text="Recognized technologies" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Text="Terms already covered by your enabled dictionary and libraries."
                                                        Style="{StaticResource SettingHint}"/>
-                                            <ItemsControl x:Name="UsageKnownTerms" Margin="0,10,0,0"/>
+                                            <ItemsControl x:Name="UsageKnownTerms" Margin="0,10,0,0" Focusable="False"/>
                                         </StackPanel>
                                     </ui:Card>
                                     <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
@@ -1877,7 +1927,7 @@
                                                        Text="No recurring uncovered jargon in this period."
                                                        Style="{StaticResource SettingHint}" Margin="0,10,0,0"/>
                                             <ItemsControl x:Name="UsageNovelTerms" Margin="0,7,0,0"
-                                                          Visibility="Collapsed">
+                                                          Visibility="Collapsed" Focusable="False">
                                                 <ItemsControl.ItemContainerStyle>
                                                     <Style TargetType="ContentPresenter">
                                                         <Setter Property="HorizontalAlignment" Value="Stretch"/>
