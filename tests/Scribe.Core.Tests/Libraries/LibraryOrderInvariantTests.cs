@@ -11,7 +11,7 @@ namespace Scribe.Core.Tests.Libraries;
 /// <summary>
 /// The Libraries list now shows an A to Z order that is not the order libraries compete in. These tests hand every
 /// consumer that picks a winner the libraries in that display order, in reverse, and in many random orders, and
-/// require the same winners, glossary, badges, Save prompt and saved enabled list each time.
+/// require the same winners, glossary, badges, Save prompt, saved enabled list and cleanup copies each time.
 /// </summary>
 public sealed class LibraryOrderInvariantTests
 {
@@ -82,6 +82,15 @@ public sealed class LibraryOrderInvariantTests
         var report = DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(personal, libraries, enabledIds);
         var saved = LibraryPrecedence.Order(libraries.Where(l => enabled.Contains(l.Id)), l => l.Id, l => l.BuiltIn);
 
+        // The dictionary cleanup switching off every enabled custom library while the built-ins stay on, with the review
+        // listing them in whatever order they arrive here.
+        var cleanup = LibrarySwitchOffCopy.Plan(
+            personal.Select(e => new LibrarySwitchOffCopy.Row(e.Pattern, e.Enabled)),
+            libraries.Where(l => enabled.Contains(l.Id)),
+            libraries
+                .Where(l => enabled.Contains(l.Id) && !l.BuiltIn)
+                .Select(l => new LibraryUsage(l.Id, l.Name, [.. l.EnabledEntries], UnusedCount: 1, l.BuiltIn)));
+
         var text = new StringBuilder();
         text.AppendLine("rules, in the order dictation and the glossary walk them:");
         foreach (var entry in composed)
@@ -103,7 +112,15 @@ public sealed class LibraryOrderInvariantTests
             text.AppendLine($"{overlap.Kind}|{overlap.Pattern}|{overlap.Replacement}|{overlap.LibraryReplacement}|{overlap.LibraryId}");
         }
 
+        // The order the window's one-line collector saves the enabled ids in (it calls the same LibraryPrecedence.Order).
         text.AppendLine("saved enabled list:").AppendLine(string.Join(",", saved.Select(l => l.Id)));
+        text.AppendLine("cleanup copies:");
+        foreach (var entry in cleanup.Copies)
+        {
+            text.Append(entry.Pattern).Append('|').Append(entry.Replacement).Append('|').Append(entry.WholeWord).AppendLine();
+        }
+
+        text.AppendLine($"cleanup collisions: {cleanup.Collided}");
         return text.ToString();
     }
 }
