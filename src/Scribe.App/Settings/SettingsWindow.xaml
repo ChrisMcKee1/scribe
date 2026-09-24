@@ -170,7 +170,11 @@
              Local navigation group of its own, which would still walk Tab along the row and keep the grid from
              remembering its cell, so the rows lay their cells out in one that continues to the grid instead. A
              cell navigates its own content locally, so Tab from a cell that holds a button reaches the button
-             first. -->
+             first.
+
+             Watch out: a grid's own RowStyle, or a grid's or a column's own CellStyle, silently replaces
+             KeyboardRow or KeyboardCell, and the grid quietly loses this keyboard behaviour. Base such a style on
+             KeyboardRow or KeyboardCell instead. -->
         <Style x:Key="KeyboardCell" TargetType="DataGridCell" BasedOn="{StaticResource DefaultDataGridCellStyle}">
             <Setter Property="IsTabStop" Value="True"/>
         </Style>

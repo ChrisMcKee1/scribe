@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Infrastructure;
 
 namespace Scribe.App.Infrastructure;
 
@@ -82,7 +83,7 @@ public sealed class AzureCliInstaller
         string stderr;
         try
         {
-            (exit, stdout, stderr) = await RunAsync("winget", args, ct).ConfigureAwait(false);
+            (exit, stdout, stderr) = await RunAsync("winget", args, CancelScope.EntireTree, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -156,6 +157,7 @@ public sealed class AzureCliInstaller
                 token => RunAsync(
                     azureCliPath,
                     loginArguments,
+                    CancelScope.AzureCliOnly,
                     token,
                     disableLoginSubscriptionSelector: true),
                 ct).ConfigureAwait(false);
@@ -198,6 +200,7 @@ public sealed class AzureCliInstaller
                 token => RunAsync(
                     azureCliPath,
                     ["account", "list", "--all", "--output", "json"],
+                    CancelScope.AzureCliOnly,
                     token),
                 ct).ConfigureAwait(false);
             if (exit != 0)
@@ -324,9 +327,25 @@ public sealed class AzureCliInstaller
                value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-');
     }
 
+    // How long the output may take to end once the process has exited (ProcessExit): what it wrote is read by then,
+    // and something it started that holds the pipe must not hold Azure CLI's gate with it.
+    private static readonly TimeSpan OutputLimit = TimeSpan.FromSeconds(2);
+
+    // What a cancelled process takes down with it.
+    private enum CancelScope
+    {
+        // winget often hands the install to a separate installer child, which must not keep running after a timeout.
+        EntireTree,
+
+        // Only az's own processes (AzureCliProcessTree): a browser az opened for sign-in is the user's, and may hold
+        // their other tabs.
+        AzureCliOnly,
+    }
+
     private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
+        CancelScope cancelScope,
         CancellationToken ct,
         bool disableLoginSubscriptionSelector = false)
     {
@@ -351,28 +370,42 @@ public sealed class AzureCliInstaller
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        process.OutputDataReceived += (_, e) => { if (e.Data is not null) stdout.AppendLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data is not null) stderr.AppendLine(e.Data); };
+
+        // Locked because the output can now still be arriving when the text is read: the wait no longer lasts until
+        // the end of the output when something az started holds it open (ProcessExit).
+        process.OutputDataReceived += (_, e) => Append(stdout, e.Data);
+        process.ErrorDataReceived += (_, e) => Append(stderr, e.Data);
 
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         try
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            await ProcessExit.WaitAsync(process, OutputLimit, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            // The caller's timeout (or an explicit cancel) fired. winget often spawns a separate
-            // installer child, so terminate the whole tree; otherwise the install keeps running in
-            // the background after we've reported a timeout, and a retry would overlap a live install.
             try
             {
                 if (!process.HasExited)
                 {
-                    process.Kill(entireProcessTree: true);
-                    // Bounded reap so the OS releases the handles before we surface the cancellation.
-                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (cancelScope == CancelScope.EntireTree)
+                    {
+                        // The caller's timeout (or an explicit cancel) fired. winget often spawns a separate installer
+                        // child, so terminate the whole tree; otherwise the install keeps running in the background
+                        // after we've reported a timeout, and a retry would overlap a live install.
+                        process.Kill(entireProcessTree: true);
+
+                        // Bounded reap so the OS releases the handles before we surface the cancellation: the exit,
+                        // and at most OutputLimit for the end of the output.
+                        await ProcessExit.WaitAsync(process, OutputLimit, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Ends az's own processes, awaiting the root's exit but not the end of the output, which
+                        // something az started and left running may hold.
+                        AzureCliProcessTree.End(process);
+                    }
                 }
             }
             catch
@@ -383,7 +416,28 @@ public sealed class AzureCliInstaller
             throw;
         }
 
-        return (process.ExitCode, stdout.ToString(), stderr.ToString());
+        return (process.ExitCode, Read(stdout), Read(stderr));
+    }
+
+    private static void Append(StringBuilder text, string? line)
+    {
+        if (line is null)
+        {
+            return;
+        }
+
+        lock (text)
+        {
+            text.AppendLine(line);
+        }
+    }
+
+    private static string Read(StringBuilder text)
+    {
+        lock (text)
+        {
+            return text.ToString();
+        }
     }
 
     private static string Truncate(string value, int max) =>

@@ -9,6 +9,14 @@
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Don't add an implicit style for a type X here with BasedOn="{StaticResource {x:Type X}}". In this
+                 compiled application dictionary that reference resolves to the style being defined, which WPF returns
+                 as null, so X silently loses WPF-UI's whole style (every title bar button once shrank to an 8 px
+                 square with no command). Moving the style into a dictionary of its own under MergedDictionaries does
+                 not help either: the compiled App.xaml then also holds an empty entry under the same key, and the
+                 first X created gets no style. Build such a style in code on WPF-UI's own instance, as
+                 Infrastructure/TitleBarButtonNames.cs does. -->
         </ResourceDictionary>
     </Application.Resources>
 </Application>
