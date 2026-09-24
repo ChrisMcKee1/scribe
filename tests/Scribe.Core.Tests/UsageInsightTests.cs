@@ -72,38 +72,6 @@ public sealed class UsageInsightTests
         Assert.DoesNotContain("Contoso", UsageInsight.BuildSummary(snapshot), StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData("Kubernetes", true)]
-    [InlineData("GitHub Actions", true)]
-    [InlineData("tab\tseparated", true)]
-    [InlineData("two\nlines", false)]
-    [InlineData("two\rlines", false)]
-    [InlineData("two\r\nlines", false)]
-    [InlineData("vertical\u000Btab", false)]
-    [InlineData("form\u000Cfeed", false)]
-    [InlineData("next\u0085line", false)]
-    [InlineData("line\u2028separator", false)]
-    [InlineData("paragraph\u2029separator", false)]
-    [InlineData("trailing break\n", false)]
-    [InlineData("", false)]
-    [InlineData("   ", false)]
-    [InlineData(null, false)]
-    public void Only_a_single_line_replacement_is_shareable(string? replacement, bool shareable)
-    {
-        Assert.Equal(shareable, UsageInsight.IsShareableReplacement(replacement));
-    }
-
-    [Fact]
-    public void The_length_limit_is_the_glossary_term_cap_counted_before_any_trimming()
-    {
-        var cap = Scribe.Core.Cleanup.CleanupPrompt.MaxGlossaryTermChars;
-
-        Assert.True(UsageInsight.IsShareableReplacement(new string('a', cap)));
-        Assert.False(UsageInsight.IsShareableReplacement(new string('a', cap + 1)));
-        Assert.False(UsageInsight.IsShareableReplacement("Fabrikam" + new string(' ', cap)));
-        Assert.False(UsageInsight.IsShareableReplacement(new string(' ', cap) + "Fabrikam"));
-    }
-
     [Fact]
     public void A_term_marked_shareable_by_hand_still_cannot_add_lines_to_the_payload()
     {

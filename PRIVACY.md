@@ -185,10 +185,13 @@ or GitHub Copilot, every cleanup request sends that provider:
   dictionary library, each as its written form and, where that differs, its
   spoken form. Scribe includes this vocabulary whether or not the dictation
   mentions any of it, and whether or not post-processing is switched on, since
-  that switch only decides whether the dictionary is applied on this PC. Your
-  own entries come first, and the list holds up to 5,000 terms and 24,000
-  characters (80 terms when the Local prompt style is in use), with each form
-  put on one line and shortened to 100 characters.
+  that switch only decides whether the dictionary is applied on this PC. An
+  entry whose written form spans more than one line or runs past 100
+  characters, such as a signature or an address, is not vocabulary: the
+  dictionary still applies it on this PC, but it is not sent. Your own entries
+  come first, and the list holds up to 5,000 terms and 24,000 characters (80
+  terms when the Local prompt style is in use), with each spoken form put on one
+  line and shortened to 100 characters.
 
 Each time AI cleanup connects to such a provider, for example when Scribe starts
 with AI cleanup on, when you turn AI cleanup on, or when you save a different

@@ -26,7 +26,9 @@ public static class CleanupDisclosure
         "matching app profile's), and your enabled dictionary and library terms as vocabulary: up to " +
         $"{Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms and {Count(CleanupPrompt.MaxGlossaryChars)} " +
         $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms with the Local prompt style, " +
-        "whether or not the dictation mentions them.";
+        "whether or not the dictation mentions them. An entry whose written form spans more than one line or " +
+        $"runs past {Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature, is not " +
+        "vocabulary and is not sent.";
 
     /// <summary>The same card's second paragraph: the connection check, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =

@@ -188,9 +188,12 @@ anything was dictated.
 
 - **Every cleanup request carries the glossary**: every enabled dictionary and library term, merged
   personal first (`DictationController.BuildGlossary`), up to 5,000 terms and 24,000 characters (80
-  terms under the Local prompt style), whether or not the dictation mentions them. There is no relevance
-  filter; do not describe one until there is one, and do not add one without the eval harness showing it
-  does not hurt cleanup.
+  terms under the Local prompt style), whether or not the dictation mentions them. A template (a written
+  form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
+  by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
+  (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
+  glossaries are unchanged). There is no relevance filter; do not describe one until there is one, and
+  do not add one without the eval harness showing it does not hurt cleanup.
 - **The readiness probe carries no vocabulary.** `ProbeAgentAsync` builds its own agent from the factory
   the initialization connected, with `BuildProbeSystemPrompt` (the real guardrails and writing style,
   without the glossary), so it still reasons like a cleanup call. Never hand it the serving agent.

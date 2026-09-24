@@ -145,7 +145,8 @@ menu** with no settings trip required.
 The dictionary replaces spoken words and phrases with the spelling you actually want, and feeds the
 AI cleanup a glossary of your preferred vocabulary. With a provider other than Foundry Local, that
 glossary, your enabled dictionary and library terms up to 5,000 of them, goes with every cleanup
-request whether or not you said them, so turn off any entry or library you would rather keep to
+request whether or not you said them (a replacement longer than one line or 100 characters, such as a
+signature, stays out), so turn off any entry or library you would rather keep to
 yourself. Build it in seconds: **import a CSV** your team
 shares, grab the self-documenting **template**, or let **Learn from history** spot the acronyms
 and product names you keep saying and add them for you.

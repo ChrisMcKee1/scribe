@@ -1,5 +1,6 @@
 namespace Scribe.Core.Cleanup;
 
+using System.Buffers;
 using System.Text;
 using Scribe.Core.Models;
 
@@ -36,9 +37,24 @@ public static class CleanupPrompt
 
     /// <summary>
     /// Per-term character cap so one oversized dictionary entry can't bloat every request. Also the
-    /// longest dictionary replacement the opt-in AI usage insight will share as a term label.
+    /// longest written form that counts as vocabulary (<see cref="IsVocabularyReplacement"/>).
     /// </summary>
     internal const int MaxGlossaryTermChars = 100;
+
+    // Every character .NET treats as a line break (string.ReplaceLineEndings), plus the vertical tab.
+    private static readonly SearchValues<char> LineBreaks = SearchValues.Create("\r\n\u000B\u000C\u0085\u2028\u2029");
+
+    /// <summary>
+    /// Whether a dictionary replacement is vocabulary: one line of at most <see cref="MaxGlossaryTermChars"/>
+    /// characters, judged exactly as the user wrote it, before any trimming. A replacement that spans lines
+    /// or runs longer is a template (a signature, an address, a footer). The dictionary still applies it on
+    /// this PC, but it is neither sent in the AI cleanup glossary nor shared as a usage insight label: the
+    /// glossary would carry its first hundred characters out with every request, and a label all of it.
+    /// </summary>
+    internal static bool IsVocabularyReplacement(string? replacement) =>
+        !string.IsNullOrWhiteSpace(replacement) &&
+        replacement.Length <= MaxGlossaryTermChars &&
+        replacement.AsSpan().IndexOfAny(LineBreaks) < 0;
 
     /// <summary>
     /// The default writing-style guidance shown in settings and used whenever the user has not
@@ -203,8 +219,9 @@ public static class CleanupPrompt
     /// the cleanup system prompt as its own paragraph, <b>after</b> the writing style. This keeps the
     /// vocabulary feature independent of the tone instructions (e.g. "write like a pirate" and the
     /// glossary coexist). Casing-only fixes render as the canonical term; genuine substitutions also
-    /// show the likely transcription so the model can map a mis-heard phrase to the right term.
-    /// Returns an empty string when there is nothing to add.
+    /// show the likely transcription so the model can map a mis-heard phrase to the right term. An entry
+    /// whose written form is a template rather than vocabulary (<see cref="IsVocabularyReplacement"/>) is
+    /// left out. Returns an empty string when there is nothing to add.
     /// </summary>
     /// <param name="entries">
     /// Enabled entries in priority order. The caller puts the user's own dictionary first, because
@@ -245,8 +262,9 @@ public static class CleanupPrompt
             Eligible: SelectGlossaryLines(list, int.MaxValue, long.MaxValue).Count());
     }
 
-    // The glossary's lines in order: enabled entries with a written form, normalized and de-duplicated,
-    // stopping at the term budget or before the line that would take the list past the size budget.
+    // The glossary's lines in order: enabled entries whose written form is vocabulary, normalized and
+    // de-duplicated, stopping at the term budget or before the line that would take the list past the size
+    // budget.
     private static IEnumerable<string> SelectGlossaryLines(
         IEnumerable<DictionaryEntry>? entries, int maxTerms, long maxChars)
     {
@@ -261,7 +279,7 @@ public static class CleanupPrompt
 
         foreach (var entry in entries)
         {
-            if (entry is null || !entry.Enabled)
+            if (entry is null || !entry.Enabled || !IsVocabularyReplacement(entry.Replacement))
             {
                 continue;
             }

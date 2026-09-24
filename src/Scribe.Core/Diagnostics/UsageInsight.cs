@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Text;
 using Scribe.Core.Cleanup;
 
@@ -13,27 +12,12 @@ public static class UsageInsight
         "sentiment, productivity, intent, or time saved. Do not judge the user. Do not invent " +
         "terms or facts that are not present. Return plain text only.";
 
-    // Every character .NET treats as a line break (string.ReplaceLineEndings), plus the vertical tab.
-    private static readonly SearchValues<char> LineBreaks = SearchValues.Create("\r\n\u000B\u000C\u0085\u2028\u2029");
-
-    /// <summary>
-    /// Whether a dictionary replacement may be shared as a term label: one line of at most
-    /// <see cref="CleanupPrompt.MaxGlossaryTermChars"/> characters, the glossary's own per-term cap,
-    /// judged exactly as the user wrote it, before any trimming. A replacement that spans lines or
-    /// runs longer is a template (a signature, an address, a footer), and a label would carry it out
-    /// verbatim, where the glossary at least flattens and shortens it.
-    /// </summary>
-    internal static bool IsShareableReplacement(string? replacement) =>
-        !string.IsNullOrWhiteSpace(replacement) &&
-        replacement.Length <= CleanupPrompt.MaxGlossaryTermChars &&
-        replacement.AsSpan().IndexOfAny(LineBreaks) < 0;
-
     /// <summary>
     /// Builds the payload sent to the user's configured AI endpoint. Guarantee: only terms with
-    /// <c>Covered == true</c> (dictionary-canonical labels) whose replacements are shareable
-    /// (<see cref="UsageAnalyzer.TermUsage.Shareable"/>) are ever included; novel mined tokens are
-    /// verbatim words from the user's dictations and never enter the payload, and neither does a
-    /// replacement that is really a template.
+    /// <c>Covered == true</c> (dictionary-canonical labels) whose replacements are vocabulary
+    /// (<see cref="UsageAnalyzer.TermUsage.Shareable"/>, the rule the AI cleanup glossary applies) are ever
+    /// included; novel mined tokens are verbatim words from the user's dictations and never enter the
+    /// payload, and neither does a replacement that is really a template.
     /// </summary>
     public static string BuildSummary(UsageAnalyzer.Snapshot snapshot, int maxChars = 4000)
     {
@@ -54,7 +38,7 @@ public static class UsageInsight
             // codenames); only dictionary-canonical labels may leave the machine, and only short,
             // single-line ones. The label itself is checked too, so a term marked shareable by
             // mistake still cannot add lines to this payload.
-            if (!term.Covered || !term.Shareable || !IsShareableReplacement(term.Text))
+            if (!term.Covered || !term.Shareable || !CleanupPrompt.IsVocabularyReplacement(term.Text))
             {
                 continue;
             }

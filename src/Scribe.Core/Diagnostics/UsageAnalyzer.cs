@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 
@@ -17,10 +18,10 @@ public static partial class UsageAnalyzer
         /// <summary>
         /// Whether <see cref="Text"/> may leave this PC as a term label in the opt-in AI usage insight
         /// (<see cref="UsageInsight.BuildSummary"/>). True only for a covered term whose every
-        /// replacement is a single line within the glossary's per-term cap as the user wrote it, before
-        /// it was trimmed into this label (<see cref="UsageInsight.IsShareableReplacement"/>). False by
-        /// default, so a term built anywhere else shares nothing. The local Usage page shows every term
-        /// either way.
+        /// replacement is vocabulary as the user wrote it, before it was trimmed into this label
+        /// (<see cref="CleanupPrompt.IsVocabularyReplacement"/>, the rule the AI cleanup glossary applies).
+        /// False by default, so a term built anywhere else shares nothing. The local Usage page shows every
+        /// term either way.
         /// </summary>
         public bool Shareable { get; init; }
     }
@@ -165,7 +166,7 @@ public static partial class UsageAnalyzer
                 // Judged on every replacement behind the label as written: the trim above can hide a
                 // trailing line break, or the padding that takes one past the cap, and either one
                 // marks a template (a signature, a footer) rather than a term.
-                Shareable = group.All(entry => UsageInsight.IsShareableReplacement(entry.Replacement)),
+                Shareable = group.All(entry => CleanupPrompt.IsVocabularyReplacement(entry.Replacement)),
                 Forms = group
                     .SelectMany(entry => new[] { entry.Pattern.Trim(), entry.Replacement.Trim() })
                     .Where(form => form.Length >= 2)

@@ -36,6 +36,10 @@ public sealed class CleanupDisclosureTests
             text, StringComparison.Ordinal);
         Assert.Contains($"{N(CleanupPrompt.MaxGlossaryTermsLocal)} terms with the Local prompt style", text, StringComparison.Ordinal);
         Assert.Contains("whether or not the dictation mentions them", text, StringComparison.Ordinal);
+        Assert.Contains(
+            $"An entry whose written form spans more than one line or runs past {N(CleanupPrompt.MaxGlossaryTermChars)} " +
+            "characters, such as a signature, is not vocabulary and is not sent.",
+            text, StringComparison.Ordinal);
         Assert.DoesNotContain("relevant", text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -138,7 +142,12 @@ public sealed class CleanupDisclosureTests
             $"({N(CleanupPrompt.MaxGlossaryTermsLocal)} terms when the Local prompt style is in use)",
             policy, StringComparison.Ordinal);
         Assert.Contains(
-            $"each form put on one line and shortened to {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
+            $"each spoken form put on one line and shortened to {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
+            policy, StringComparison.Ordinal);
+        Assert.Contains(
+            $"An entry whose written form spans more than one line or runs past {N(CleanupPrompt.MaxGlossaryTermChars)} " +
+            "characters, such as a signature or an address, is not vocabulary: the dictionary still applies it on this " +
+            "PC, but it is not sent.",
             policy, StringComparison.Ordinal);
         Assert.Contains("with none of your vocabulary", policy, StringComparison.Ordinal);
         Assert.Contains("AI cleanup never sends audio, your snippet templates", policy, StringComparison.Ordinal);
