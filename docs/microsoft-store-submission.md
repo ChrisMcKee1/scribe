@@ -307,8 +307,9 @@ Paste and adjust the following text. Keep the date current:
 
 > July 27, 2026. Scribe AI is a Windows tray application and requires no account or network
 > connection for its primary dictation workflow. After launch, open the Scribe microphone icon in
-> the notification area and choose Settings. Hold Right Ctrl, speak, and release to test dictation.
-> The key can be changed in Settings. Speech recognition runs locally and audio is never
+> the notification area and choose Settings. Hold Page Down, speak, and release to test dictation
+> (Page Up does the same without AI cleanup; on a keyboard without those keys, hold Fn with the
+> Down arrow). The keys can be changed in Settings. Speech recognition runs locally and audio is never
 > transmitted. Optional AI cleanup is off by default and is not required for certification.
 >
 > The package declares microphone access for user-initiated dictation. It declares runFullTrust

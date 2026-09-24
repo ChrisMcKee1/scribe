@@ -143,8 +143,9 @@ enum values stored **by name**. Four consequences, all of which the diff can tri
 - **A renamed or removed enum member reachable from `AppSettings` resets the user's entire settings
   document. 🔴** The stored string no longer matches any member, `JsonStringEnumConverter` raises a
   `JsonException`, and `SettingsRepository.Load` catches it (`:46`), sets `LastLoadFailed`, preserves
-  the old document under `app_settings_recovery`, and returns `AppSettings.CreateDefault()`. The user
-  does not lose one setting, they lose all of them. `PersistenceTests.cs:107` pins that fallback path
+  the old document under `app_settings_recovery`, and returns `AppSettings.CreateForExistingInstall()`
+  (the first-run defaults with the legacy Right Ctrl hotkey, since an unreadable document is no first run).
+  The user does not lose one setting, they lose all of them. `PersistenceTests.cs:107` pins that fallback path
   for malformed JSON. Adding a member at the end is safe; renaming or deleting one is not. Confirm the
   enum is actually reachable from a persisted property before flagging, because plenty of enums in
   Core never touch the settings document.

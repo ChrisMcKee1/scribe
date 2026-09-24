@@ -307,8 +307,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
-    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); Right Ctrl push-to-talk
-                                    (HotkeyEngine, HotkeyCommandRouter)
+    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); push-to-talk hotkeys
+                                    (HotkeyEngine, HotkeyCommandRouter; KeyNames and HotkeyText name the keys)
     Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
     Security/ Infrastructure/ Models/ DependencyInjection/
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
@@ -718,6 +718,32 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+
+## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
+
+- **The shipped hotkeys are a first-run default.** `AppSettings.CreateDefault` sets hold Page Down
+  (`HotkeyBinding.DefaultDictation`, VK_NEXT 0x22) for dictation with AI cleanup and hold Page Up
+  (`DefaultDictationOnly`, VK_PRIOR 0x21) for dictation only, both suppressed. The `Hotkey` initializer and
+  `SettingsRepository.Normalize` stay `HotkeyBinding.Legacy` (hold Right Ctrl, what every release up to 0.4.3
+  shipped) and `DictationOnlyHotkey` stays null, so a stored document keeps what that install had, keys it never
+  wrote included. Never move the new defaults into an initializer (pattern P-7).
+- **A session whose saved settings could not be used is not a first run.** `SettingsRepository.Load` returns
+  `AppSettings.CreateForExistingInstall()`, `CreateDefault` with the legacy hotkeys, for an unreadable document and
+  for one a repair lost, so the key that person presses keeps working and Page Up and Page Down keep reaching their
+  other apps. `DefaultHotkeyTests` pins each case.
+- **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
+  page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
+  the result at once.
+- **Keys are named by virtual-key code, never by WPF's `Key.ToString()`.** That enum gives Page Down the alias
+  `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), and .NET does not promise which name
+  comes back. `KeyNames` holds the layout-independent names, the punctuation keys are named by the current layout
+  (`MapVirtualKeyW` with MAPVK_VK_TO_CHAR, in `HotkeyCapture`), and `HotkeyText.Describe` prefers both over a
+  stored `DisplayName`, which only stands for a key nothing else can name. The hook matches virtual-key codes and
+  never reads the name.
+- **The trade-off is stated in Settings.** A suppressed binding never reaches other apps, and a binding without
+  modifiers also fires with Ctrl or Shift held, so the defaults take Page Up, Page Down and Ctrl+Page Up or Down
+  (tab switching) away from every other app while Scribe runs unpaused. Letting a tap or a modified press through
+  would be a change to `ChordStateMachine` with tests of its own, not a tweak.
 
 ## Startup (read before touching OnStartup)
 
