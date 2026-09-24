@@ -327,7 +327,8 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
     }
 
-    /// The same, when the notice's end had already fallen due and was queued when the recording started.
+    /// The same, when the notice's end had already fallen due and was queued when the recording started: when it runs,
+    /// while the microphone is still opening, it presents nothing at all.
     func testANoticesEndQueuedBeforeARecordingStartedChangesNothing() async throws {
         let harness = DictationHarness()
         harness.fakeInjector.result = InjectionResult(delivery: .targetChanged)
@@ -335,8 +336,17 @@ final class DictationControllerTests: XCTestCase {
         await harness.dictate()
         await harness.waitUntilProcessed()
         await waitUntil("the notice's end is scheduled") { harness.clock.sleeperCount == 1 }
+        harness.capture.holdsOpens = true
+        // The end falls due and waits on the main actor; the press runs first.
         harness.clock.advance(by: .seconds(5))
         XCTAssertTrue(harness.controller.hotkeyPressed(DictationHarness.holdKey))
+        let id = try XCTUnwrap(harness.controller.currentRecording)
+        let presentedAtPress = harness.presenter.presentations.count
+        await waitUntil("the open is pending") { harness.capture.pendingOpens == 1 }
+        await drainMainActor()
+        XCTAssertEqual(harness.presenter.presentations.count, presentedAtPress, "the stale end presented a change")
+
+        harness.capture.completeOpen(id, .live)
         await harness.waitUntilLive()
         await drainMainActor()
 
