@@ -793,6 +793,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   freed page. It is per connection, costs one more write of each freed page (as zeros) on delete, and
   does not reach content deleted before it, stale frames in the WAL before a `TRUNCATE` checkpoint, or
   copies outside the file. `SecureDeleteTests` pins both the setting and the bytes on disk.
+- **A deletion owes a `TRUNCATE` checkpoint.** Deleting or clearing history, deleting a recording, and
+  clearing or retiring cleanup failure samples each count a deletion (`StorageMaintenance.NoteDeletion`),
+  and the next pass that reaches reclamation truncates the WAL even with nothing worth reclaiming, so
+  PRIVACY.md's "emptied within about a minute" holds. It is heavy work: a pass that yields skips it and
+  the pass after the backoff pays it. `StorageMaintenanceWalTests` reads the WAL after real passes.
 - **`StorageMaintenance` owns all retention**: history text follows the retention setting (90 days by
   default), recordings at most 7 days and 250 MB, oldest first, cleanup failure samples 7 days, and
   damaged-copy files 14 days after they are first seen, except that the newest damaged copy is never

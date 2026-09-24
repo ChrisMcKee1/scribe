@@ -269,15 +269,19 @@ receive the additional Windows Data Protection API protection described above.
 
 When Scribe deletes a history entry, a recording, or a cleanup failure sample,
 whether you delete it or its retention period ends, the database overwrites the
-deleted content inside its file with zeros (SQLite's secure delete). This has
-limits. Scribe versions up to 0.4.3 did not do it, so content they deleted can
-remain in unused space inside the database file until the database writes over
-that space or removes it from the file. The database's write-ahead log
-(`scribe.db-wal`) can hold an earlier copy of deleted content until Scribe
-empties it, which storage maintenance does shortly after you delete history and
-on its regular passes, and Scribe does again when it exits. And deletion inside
-the database does not reach copies made elsewhere, such as the damaged copies
-described below, backups, or data the storage device itself keeps.
+deleted content inside its file with zeros (SQLite's secure delete). The
+database's write-ahead log (`scribe.db-wal`) can still hold an earlier copy of
+deleted content until Scribe empties it. Storage maintenance empties it in its
+first pass after the deletion: normally within a minute of your deleting
+history or clearing the cleanup failure samples, and at the end of any pass that
+removed something because its retention period ended. If you start dictating
+while that pass runs, it waits a few minutes and tries again, and Scribe empties
+the log again when it exits. This has limits. Scribe versions up to 0.4.3 did
+not overwrite deleted content, so what they deleted can remain in unused space
+inside the database file until the database writes over that space or removes
+it from the file. And deletion inside the database does not reach copies made
+elsewhere, such as the damaged copies described below, backups, or data the
+storage device itself keeps.
 
 If Scribe finds its database damaged when it starts, it rebuilds the database
 from whatever can still be read and keeps the damaged file beside it, named

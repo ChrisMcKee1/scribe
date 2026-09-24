@@ -151,6 +151,12 @@ public sealed class CleanupDisclosureTests
             $"spans more than one line or is longer than {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
             policy, StringComparison.Ordinal);
         Assert.Contains("overwrites the deleted content inside its file with zeros", policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "Storage maintenance empties it in its first pass after the deletion: normally within a minute of your " +
+            "deleting history or clearing the cleanup failure samples",
+            policy, StringComparison.Ordinal);
+        Assert.Contains("Scribe versions up to 0.4.3 did not overwrite deleted content", policy, StringComparison.Ordinal);
+        Assert.Contains("does not reach copies made elsewhere", policy, StringComparison.Ordinal);
     }
 
     public static TheoryData<string> UserFacingDocuments => new()
