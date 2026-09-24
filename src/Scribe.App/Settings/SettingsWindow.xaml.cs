@@ -1876,7 +1876,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        if (!await ConfirmAsync(
+        if (!await ConfirmRiskyAsync(
                 "Remove library",
                 $"Remove the imported library \"{row.Name}\"? This deletes it from Scribe. " +
                 "You can import it again later from the original file.",
@@ -4512,19 +4512,23 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // --- Themed dialogs / inline notifications -------------------------------------------
 
     /// <summary>
-    /// Shows a Fluent-themed confirm dialog (two buttons) and returns true only when the user picks the
-    /// primary action. Used for the individually-confirmed prompt resets so one restore never touches the other.
+    /// Asks a routine question whose default answer is to go ahead, such as restoring one prompt (which
+    /// nothing saves until Save, and which the box's own undo reverses), and returns true only when the user
+    /// picks the primary action.
     /// </summary>
-    private async Task<bool> ConfirmAsync(string title, string content, string confirmText)
+    private Task<bool> ConfirmAsync(string title, string content, string confirmText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: false));
+
+    /// <summary>
+    /// Confirms an action that cannot be taken back, because it deletes data or sends dictation text to a
+    /// cloud provider. Cancel is the default, so Enter, or a click through without reading, does nothing.
+    /// </summary>
+    private Task<bool> ConfirmRiskyAsync(string title, string content, string confirmText) =>
+        ShowConfirmationAsync(ThemedConfirmation.Create(title, content, confirmText, cancelIsDefault: true));
+
+    private async Task<bool> ShowConfirmationAsync(Wpf.Ui.Controls.MessageBox dialog)
     {
-        var dialog = new Wpf.Ui.Controls.MessageBox
-        {
-            Title = title,
-            Content = content,
-            PrimaryButtonText = confirmText,
-            CloseButtonText = "Cancel",
-            Owner = this,
-        };
+        dialog.Owner = this;
         return await dialog.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary;
     }
 
@@ -4791,7 +4795,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             var count = report.RedundantCount;
             var noun = count == 1 ? "entry is" : "entries are";
-            var confirmed = await ConfirmAsync(
+            var confirmed = await ConfirmRiskyAsync(
                 "Some entries are already covered",
                 $"{count:N0} dictionary {noun} already handled identically by a library you have " +
                 $"turned on:\n\n{sample}{more}\n\n" +
@@ -5507,7 +5511,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (_cleanup.Status == CleanupStatus.Ready)
         {
             if (SelectedProvider != CleanupProvider.FoundryLocal &&
-                !await ConfirmAsync(
+                !await ConfirmRiskyAsync(
                     "Send recent dictations to your AI provider?",
                     "To suggest vocabulary, Scribe will send up to 6,000 characters from recent " +
                     "dictation history to the provider endpoint you configured. Audio is never sent.",
@@ -5792,7 +5796,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Where(t => t.Row is { Enabled: true })
             .ToList();
 
-        if (choice.Delete && targets.Count > 0 && !await ConfirmAsync(
+        if (choice.Delete && targets.Count > 0 && !await ConfirmRiskyAsync(
                 "Delete these entries?",
                 $"{targets.Count} {(targets.Count == 1 ? "entry" : "entries")} will be removed from your "
                 + "dictionary when you save. This cannot be undone once saved. Turning them off instead "
@@ -6421,7 +6425,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private async void HistoryClearButton_Click(object sender, RoutedEventArgs e)
     {
         if (_historyRows.Count == 0 ||
-            !await ConfirmAsync(
+            !await ConfirmRiskyAsync(
                 "Clear history",
                 "Delete all dictation history and stored audio? This cannot be undone.",
                 "Clear all"))
