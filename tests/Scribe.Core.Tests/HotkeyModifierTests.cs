@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 
@@ -418,6 +419,16 @@ public sealed class HotkeyModifierTests
         Assert.Equal(
             new[] { (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly) },
             h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+    }
+
+    [Fact]
+    public void The_hook_service_gives_its_engines_get_async_key_state()
+    {
+        // The service builds the router every engine comes from; without Windows' view there, a modifier released on
+        // the lock screen would block the bare key again. Constructing the service installs no hook.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+
+        Assert.Equal((Func<uint, bool>)NativeMethods.IsKeyLogicallyDown, service.WindowsKeyState);
     }
 
     // A fresh machine, the given keys pressed in order, and the update for the last key's press.

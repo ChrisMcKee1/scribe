@@ -79,6 +79,9 @@ public sealed class HotkeyService : IHotkeyService
 
     public HotkeyBinding? DictationOnlyBinding => _router.DictationOnlyBinding;
 
+    /// <summary>What the hook asks about a modifier its own view holds (see ChordStateMachine); for tests.</summary>
+    internal Func<uint, bool>? WindowsKeyState => _router.WindowsKeyState;
+
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
     public event EventHandler<HotkeyTriggerEventArgs>? Deactivated;

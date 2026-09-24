@@ -56,6 +56,9 @@ internal sealed class HotkeyCommandRouter
 
     public HotkeyBinding? DictationOnlyBinding => _dictationOnlyBinding;
 
+    /// <summary>Windows' view of a key that every engine is given, or null; for a test of the service's wiring.</summary>
+    internal Func<uint, bool>? WindowsKeyState => _isLogicallyDown;
+
     /// <summary>The engine that owns the hook right now, or null while the service is stopped.</summary>
     public HotkeyEngine? CurrentEngine => Volatile.Read(ref _engine);
 
