@@ -46,8 +46,9 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   most 7 days and 250 MB.
 - **⚡ Two keys, your choice.** Hold **Page Down** (or any key you pick), talk, release. **Page Up**
   is set up too, for dictation that always skips AI cleanup. No Page Down key on your laptop? Most
-  put it on Fn with the Down arrow. Prefer hands-free? Toggle mode ends the dictation by itself when
-  you stop talking.
+  put it on Fn with the Down arrow. Present with a clicker? Its buttons send those same two keys, so
+  pick other keys in Settings. Prefer hands-free? Toggle mode ends the dictation by itself when you
+  stop talking.
 - **🌍 Speaks your language.** The bundled model transcribes about 25 European languages out of the
   box, no setup: dictate in English, German, Spanish, French, Italian and more, and it just works.
 - **🧠 It understands how people actually talk.** Say *"send it Wednesday… I mean Thursday"* and,
@@ -206,8 +207,10 @@ and keeps the text ready to copy from the tray. Review history and local Usage f
 
 > **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
 > Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
-> they are bound, Page Down and Page Up no longer page through documents in other apps; pick any
-> other key or chord in Settings if you would rather keep them.
+> they are bound, Page Down and Page Up pressed on their own no longer page through documents in
+> other apps, and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held
+> they work there as before. Pick any other key or chord in Settings if you would rather keep them,
+> or if you present.
 
 ## 🎛️ How it works
 

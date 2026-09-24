@@ -280,9 +280,11 @@ public sealed class DefaultHotkeyTests
         var hint = DefaultHotkeyRestore.Hint;
 
         Assert.Contains("hold Page Down for dictation with AI cleanup and hold Page Up for dictation only", hint);
-        Assert.Contains("stops reaching other apps", hint);
-        Assert.Contains("even with Ctrl or Shift held", hint);
-        Assert.Contains("Pause dictation from the tray icon to use them in other apps", hint);
+        Assert.Contains("Page Down and Page Up pressed on their own no longer reach other apps", hint);
+        Assert.Contains("a presentation remote stops changing slides", hint);
+        Assert.Contains("With Ctrl, Shift, Alt, Win or the Narrator key held they work in other apps as before", hint);
+        Assert.Contains("Pause dictation from the tray icon to use them for a while", hint);
+        Assert.Contains("choose other keys here if you present", hint);
         Assert.Contains("Fn with the Down and Up arrows", hint);
         Assert.Contains("the keypad's Page Down and Page Up with Num Lock off also work", hint);
     }
@@ -314,11 +316,11 @@ public sealed class DefaultHotkeyTests
     }
 
     [Fact]
-    public void Page_down_is_swallowed_with_ctrl_held_too()
+    public void Ctrl_page_down_reaches_the_app_and_starts_nothing()
     {
-        // The trade-off the Settings hint states: a binding without modifiers fires whatever else is held, so
-        // Ctrl+Page Down (switching tabs in most apps) starts a dictation instead. Ctrl itself still reaches the app.
-        // A change that lets modified presses through must update DefaultHotkeyRestore.Hint with this test.
+        // Ctrl+Page Down switches tabs in browsers, editors and Excel, so a binding of the bare key must not take it:
+        // Ctrl and Page Down both reach the app, nothing starts, and a bare press still dictates afterwards.
+        // HotkeyModifierTests covers every other modifier and the Narrator keys.
         var state = new ChordStateMachine(HotkeyBinding.DefaultDictation);
 
         Assert.False(state.Process(LeftCtrl, isDown: true).ShouldSuppress);
@@ -326,10 +328,11 @@ public sealed class DefaultHotkeyTests
         var up = state.Process(PageDown, isDown: false);
         Assert.False(state.Process(LeftCtrl, isDown: false).ShouldSuppress);
 
-        Assert.Equal(HotkeyTransition.Activated, down.Transition);
-        Assert.True(down.ShouldSuppress);
-        Assert.Equal(HotkeyTransition.Deactivated, up.Transition);
-        Assert.True(up.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.None, down.Transition);
+        Assert.False(down.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.None, up.Transition);
+        Assert.False(up.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.Activated, state.Process(PageDown, isDown: true).Transition);
     }
 
     private static void AssertHeldAndSwallowed(HotkeyBinding binding, uint virtualKey, string name)

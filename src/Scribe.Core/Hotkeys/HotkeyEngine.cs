@@ -58,6 +58,7 @@ internal sealed class HotkeyEngine
     private readonly LockFreeInbox<HotkeyCommand> _commands = new();
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
+    private readonly Func<uint, bool>? _isLogicallyDown;
     private readonly ChordStateMachine _standard;
     private ChordStateMachine? _dictationOnly;
     private bool _captureMode;
@@ -67,15 +68,21 @@ internal sealed class HotkeyEngine
     private int _wakePending;
     private uint _ownerThreadId;
 
+    /// <param name="isLogicallyDown">
+    /// Windows' view of a key, which each binding's machine asks about a modifier its own view holds (see
+    /// <see cref="ChordStateMachine"/>). Null trusts the hook's view alone.
+    /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnlyBinding,
         bool captureMode,
         bool paused,
         long generation,
-        HotkeyTransitionQueue transitions)
+        HotkeyTransitionQueue transitions,
+        Func<uint, bool>? isLogicallyDown = null)
     {
         _transitions = transitions;
+        _isLogicallyDown = isLogicallyDown;
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
@@ -279,7 +286,7 @@ internal sealed class HotkeyEngine
     // in force instead of starting live while Settings is capturing or dictation is paused.
     private ChordStateMachine CreateMachine(HotkeyBinding binding)
     {
-        var machine = new ChordStateMachine(binding);
+        var machine = new ChordStateMachine(binding, _isLogicallyDown);
         if (_captureMode)
         {
             _ = machine.SetCaptureMode(true);

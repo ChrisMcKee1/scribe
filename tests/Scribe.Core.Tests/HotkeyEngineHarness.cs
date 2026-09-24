@@ -12,9 +12,13 @@ namespace Scribe.Core.Tests;
 /// </summary>
 internal sealed class HotkeyEngineHarness : IDisposable
 {
-    public HotkeyEngineHarness(HotkeyBinding binding, HotkeyBinding? dictationOnly = null, object? gate = null)
+    public HotkeyEngineHarness(
+        HotkeyBinding binding,
+        HotkeyBinding? dictationOnly = null,
+        object? gate = null,
+        Func<uint, bool>? isLogicallyDown = null)
     {
-        Router = new HotkeyCommandRouter(binding, gate ?? new object());
+        Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown);
         if (dictationOnly is not null)
         {
             Router.UpdateBindings(binding, dictationOnly);

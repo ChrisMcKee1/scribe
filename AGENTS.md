@@ -634,6 +634,23 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
+- **A binding of ordinary keys fires only with exactly its own modifiers.** `ChordStateMachine` refuses
+  the press that would complete Page Down, F9 or Ctrl+Shift+X while any other Ctrl, Alt, Shift or Win
+  key is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that
+  whole keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
+  Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
+  dictation neither ends it nor lets the key through. A binding that includes a modifier key (Right
+  Ctrl, Right Alt, Left Win+H) keeps the old lenient match, because Windows reports a Left Ctrl with
+  every AltGr press and an exact rule would never let a Right Alt binding fire.
+- **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
+  own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
+  prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
+  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`, the one native
+  query the callback makes besides `CallNextHookEx`: only on such a press, never on a bare one, and
+  never about the key the callback is for, whose async state Windows updates only after the callback
+  returns. The Narrator keys go by the hook's view alone, because Narrator keeps them from Windows
+  (a single Caps Lock press does not toggle Caps Lock while Narrator runs). `HotkeyModifierTests` pins
+  every combination.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 
@@ -743,12 +760,14 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   the table, then the layout, then that key's own part of the stored `DisplayName`, then its code. So a chord of a
   known key and one only the stored name can name reads "Page Down+Oem1", never "Next+Oem1", and the modifiers always
   come from the binding. The hook matches virtual-key codes and never reads the name.
-- **The trade-off is stated in Settings.** A suppressed binding never reaches other apps, and a binding without
-  modifiers also fires with Ctrl or Shift held, so the defaults take Page Up, Page Down and Ctrl+Page Up or Down
-  (tab switching) away from every other app while Scribe runs unpaused. The hook reads only the virtual-key code
-  (never `LLKHF_EXTENDED`), so the numeric keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys
-  to it, and the hint says so. Letting a tap or a modified press through would be a change to `ChordStateMachine` with
-  tests of its own, not a tweak.
+- **The trade-off is stated in Settings.** While Scribe runs unpaused, Page Up and Page Down pressed on their own
+  never reach other apps: documents, web pages and terminals stop paging, and a presentation remote stops changing
+  slides, because clickers such as the Logitech R400 are keyboards whose Next and Back buttons send Page Down and Page
+  Up, so the hint says to choose other keys if you present. With a modifier or a Narrator key held they do reach other
+  apps (see the hook section). The hook reads only the virtual-key code (never `LLKHF_EXTENDED`), so the numeric
+  keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
+  short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
+  maintainer.
 
 ## Startup (read before touching OnStartup)
 

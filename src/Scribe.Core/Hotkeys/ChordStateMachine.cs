@@ -25,12 +25,37 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// monitor shared with settings reads, rebinding and toggle resets made every key event wait behind
 /// whichever of them held it. Other threads change this state only through engine commands that
 /// the owner applies. <see cref="IsPressed"/> is the one member any thread may call.
+///
+/// A binding made only of ordinary keys (Page Down, F9, Ctrl+Shift+X, where Ctrl and Shift are named
+/// modifiers and X the key) starts only when the modifiers held are exactly the ones it names. Pressed
+/// with any other Ctrl, Alt, Shift or Windows key, or with a Narrator key held (Caps Lock or Insert, or
+/// NonConvert, which a Japanese 106 keyboard uses instead of Caps Lock), it is another command
+/// (Ctrl+Page Down switches tabs, Shift+Page Down selects a page, Narrator with Page Down changes views),
+/// so that keystroke reaches the app whole and starts nothing.
+/// The check is made only as the binding becomes satisfied: a modifier pressed during a dictation
+/// neither ends it nor stops the binding's own key being swallowed. A binding that includes a
+/// modifier key (Right Ctrl, Right Alt, Right Ctrl+Right Shift, Left Win+H) keeps matching as it
+/// always has: it is a modifier combination itself, and on layouts with AltGr Windows reports a Left
+/// Ctrl press with every Right Alt press, which an exact check would count against a Right Alt binding.
+///
+/// A Ctrl, Alt, Shift or Windows key counts as held only while Windows agrees it is down, when the
+/// machine is given Windows' view (<c>isLogicallyDown</c>, GetAsyncKeyState in the service). A hook is
+/// called only for input on its own desktop, so it never sees a release made on the lock screen or the
+/// secure desktop (Ctrl+Alt+Del, a UAC prompt), and after Win+L its own view would keep that modifier
+/// held and refuse every bare press until the key was pressed again. Windows' view is asked only when
+/// the hook's view shows such a modifier on the press that completes the binding, and never about that
+/// press's own key, whose asynchronous state Windows updates only after the callback returns. A Narrator
+/// key is judged by the hook's view alone: a single Caps Lock press does not toggle Caps Lock while
+/// Narrator runs, so Windows' view of it cannot be relied on, and the press must still reach Narrator.
 /// </summary>
 internal sealed class ChordStateMachine
 {
     private const uint VkShift = 0x10;
     private const uint VkControl = 0x11;
     private const uint VkAlt = 0x12;
+    private const uint VkCapsLock = 0x14;
+    private const uint VkNonConvert = 0x1D;
+    private const uint VkInsert = 0x2D;
     private const uint VkLeftShift = 0xA0;
     private const uint VkRightShift = 0xA1;
     private const uint VkLeftControl = 0xA2;
@@ -42,6 +67,7 @@ internal sealed class ChordStateMachine
 
     private readonly KeySet _pressed = new();
     private readonly KeySet _suppressed = new();
+    private readonly Func<uint, bool>? _isLogicallyDown;
     private HotkeyBinding _binding;
     private bool _satisfied;
     private bool _active;
@@ -49,7 +75,16 @@ internal sealed class ChordStateMachine
     private bool _paused;
     private long _generation;
 
-    public ChordStateMachine(HotkeyBinding binding) => _binding = binding;
+    /// <param name="binding">The binding to match.</param>
+    /// <param name="isLogicallyDown">
+    /// Windows' view of a key (the high bit of GetAsyncKeyState), asked only as described in the class summary. Null
+    /// trusts the hook's own view alone, as the deterministic tests do unless they script Windows' view.
+    /// </param>
+    public ChordStateMachine(HotkeyBinding binding, Func<uint, bool>? isLogicallyDown = null)
+    {
+        _binding = binding;
+        _isLogicallyDown = isLogicallyDown;
+    }
 
     /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
     public long Generation => _generation;
@@ -80,9 +115,12 @@ internal sealed class ChordStateMachine
         // Paused, the binding stands down: nothing activates and no new press is swallowed. Key
         // tracking carries on regardless, because the physical view has to stay true for the
         // leak reconciler, and because a chord still held when dictation resumes must wait for a
-        // fresh press rather than firing on the next autorepeat.
+        // fresh press rather than firing on the next autorepeat. A binding satisfied while another
+        // modifier is held stands down the same way for that press (see the class summary); paused,
+        // there is nothing to refuse, so Windows is not asked.
         var satisfied = IsSatisfied(_binding);
-        var transition = _paused ? HotkeyTransition.None : NextTransition(satisfied);
+        var otherCommand = !_paused && !wasSatisfied && satisfied && OtherModifierHeld(_binding);
+        var transition = _paused || otherCommand ? HotkeyTransition.None : NextTransition(satisfied);
         _satisfied = satisfied;
 
         // A keystroke is swallowed or passed whole, paused or not: its autorepeats and its release
@@ -94,7 +132,7 @@ internal sealed class ChordStateMachine
         var shouldSuppress = false;
         if (isDown && _binding.Suppress && isBindingKey &&
             ((!repeated && !_paused && _binding.SuppressChordMembers && NeedsPreemptiveSuppression(virtualKey)) ||
-             (!_paused && !wasSatisfied && satisfied) ||
+             (!_paused && !otherCommand && !wasSatisfied && satisfied) ||
              (repeated && _suppressed.Contains(virtualKey))))
         {
             _suppressed.Add(virtualKey);
@@ -228,6 +266,38 @@ internal sealed class ChordStateMachine
 
     private bool AnyPressed(uint generic, uint left, uint right) =>
         _pressed.Contains(generic) || _pressed.Contains(left) || _pressed.Contains(right);
+
+    // Whether a modifier the binding does not name is held, making this press another command. Only a binding of ordinary
+    // keys is judged (see the class summary), so none of its own keys is a modifier, and the key this press is for is
+    // never one of those asked about.
+    private bool OtherModifierHeld(HotkeyBinding binding) =>
+        !IncludesModifierKey(binding) &&
+        ((!binding.Modifiers.HasFlag(KeyModifiers.Control) && Held(VkControl, VkLeftControl, VkRightControl)) ||
+         (!binding.Modifiers.HasFlag(KeyModifiers.Alt) && Held(VkAlt, VkLeftAlt, VkRightAlt)) ||
+         (!binding.Modifiers.HasFlag(KeyModifiers.Shift) && Held(VkShift, VkLeftShift, VkRightShift)) ||
+         (!binding.Modifiers.HasFlag(KeyModifiers.Win) && (Held(VkLeftWin) || Held(VkRightWin))) ||
+         NarratorKeyHeld(binding, VkCapsLock) ||
+         NarratorKeyHeld(binding, VkInsert) ||
+         NarratorKeyHeld(binding, VkNonConvert));
+
+    // Held in the hook's view and in Windows' (see the class summary). A generic code asks about either side at once:
+    // GetAsyncKeyState gives VK_CONTROL, VK_MENU and VK_SHIFT without telling left from right.
+    private bool Held(uint generic, uint left, uint right) =>
+        AnyPressed(generic, left, right) && (_isLogicallyDown is null || _isLogicallyDown(generic));
+
+    private bool Held(uint key) => _pressed.Contains(key) && (_isLogicallyDown is null || _isLogicallyDown(key));
+
+    // A Narrator key held, by the hook's view alone (see the class summary). One bound as push-to-talk (Caps Lock or
+    // Insert on its own) does not count against its own binding.
+    private bool NarratorKeyHeld(HotkeyBinding binding, uint key) => _pressed.Contains(key) && !IsOwnKey(binding, key);
+
+    private static bool IncludesModifierKey(HotkeyBinding binding) =>
+        IsModifierKey(binding.VirtualKey) || (binding.SecondaryVirtualKey is { } second && IsModifierKey(second));
+
+    private static bool IsOwnKey(HotkeyBinding binding, uint key) =>
+        binding.VirtualKey == key || binding.SecondaryVirtualKey == key;
+
+    private static bool IsModifierKey(uint key) => IsControl(key) || IsAlt(key) || IsShift(key) || IsWin(key);
 
     /// <summary>
     /// Whether a chord member has to be swallowed on its own key-down, before the second key

@@ -63,7 +63,10 @@ public sealed class HotkeyService : IHotkeyService
     public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
     {
         _logger = logger;
-        _router = new HotkeyCommandRouter(binding);
+
+        // GetAsyncKeyState on the hook path, rarely: only on a press that completes a binding of ordinary keys while the
+        // hook's view shows another modifier held, and only about that modifier (see ChordStateMachine).
+        _router = new HotkeyCommandRouter(binding, NativeMethods.IsKeyLogicallyDown);
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,
             _router.IsPressed,
@@ -297,10 +300,10 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    // Runs the leak check off the hook and consumer threads: GetAsyncKeyState is meaningless
-    // inside the hook callback (async state updates after it returns), and the input queue needs
-    // a beat to settle after the final suppressed key-up. The hook callback never calls this
-    // itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
+    // Runs the leak check off the hook and consumer threads: GetAsyncKeyState cannot tell inside the
+    // hook callback whether the key being processed is down (its async state updates after the callback
+    // returns), and the input queue needs a beat to settle after the final suppressed key-up. The hook
+    // callback never calls this itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
     private void ScheduleReconcile() => Task.Run(async () =>
     {
         try
@@ -592,7 +595,8 @@ public sealed class HotkeyService : IHotkeyService
 
         // Runs on this installation's thread, inside GetMessage, for every keyboard event on the
         // desktop. It never waits for another thread and never logs: the only shared state it
-        // touches is interlocked counters, lock-free queues and kernel events.
+        // touches is interlocked counters, lock-free queues and kernel events. Its one native query
+        // besides CallNextHookEx is GetAsyncKeyState, made only as ChordStateMachine describes.
         private nint HookCallback(int nCode, nint wParam, nint lParam)
         {
             // The watchdog's liveness signal. Incremented before any filtering so the synthetic

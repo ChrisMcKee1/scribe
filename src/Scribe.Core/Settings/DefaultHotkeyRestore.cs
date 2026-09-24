@@ -32,10 +32,11 @@ public static class DefaultHotkeyRestore
     }
 
     /// <summary>
-    /// The hint above the button: what it restores, and what binding those keys costs. The hook swallows a bound key,
-    /// so other apps never see it, and a binding without modifiers fires whatever else is held, so Ctrl or Shift with
-    /// the key is swallowed too. The hook matches the virtual-key code alone, so the numeric keypad's Page Down and
-    /// Page Up (its 3 and 9 with Num Lock off) are the same keys to it.
+    /// The hint above the button: what it restores, and what binding those keys costs. The hook swallows a bound key
+    /// pressed on its own, so other apps never see it, while the same key pressed with a modifier the binding does not
+    /// name, or with Narrator's key, reaches the app as before (see <c>ChordStateMachine</c>). A presentation remote is
+    /// a keyboard whose buttons send Page Down and Page Up, so it stops changing slides. The hook matches the virtual-key
+    /// code alone, so the numeric keypad's Page Down and Page Up (its 3 and 9 with Num Lock off) are the same keys to it.
     /// </summary>
     public static string Hint
     {
@@ -43,11 +44,12 @@ public static class DefaultHotkeyRestore
         {
             var dictation = HotkeyText.Describe(HotkeyBinding.DefaultDictation);
             var dictationOnly = HotkeyText.Describe(HotkeyBinding.DefaultDictationOnly);
-            return $"Restores the defaults: {Defaults}. While Scribe runs, a key bound here stops reaching other apps, " +
-                $"so with the defaults {dictation} and {dictationOnly} no longer page through documents, web pages or " +
-                "terminals, even with Ctrl or Shift held. Pause dictation from the tray icon to use them in other apps " +
-                $"for a while. Most laptops without {dictation} and {dictationOnly} have them on Fn with the Down and Up " +
-                $"arrows, and the keypad's {dictation} and {dictationOnly} with Num Lock off also work.";
+            return $"Restores the defaults: {Defaults}. While Scribe runs, {dictation} and {dictationOnly} pressed on " +
+                "their own no longer reach other apps: they stop paging through documents, web pages and terminals, and " +
+                "a presentation remote stops changing slides. With Ctrl, Shift, Alt, Win or the Narrator key held they " +
+                "work in other apps as before. Pause dictation from the tray icon to use them for a while, or choose " +
+                $"other keys here if you present. Most laptops without {dictation} and {dictationOnly} have them on Fn " +
+                $"with the Down and Up arrows, and the keypad's {dictation} and {dictationOnly} with Num Lock off also work.";
         }
     }
 
