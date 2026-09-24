@@ -426,24 +426,6 @@ public sealed class HotkeyModifierTests
     }
 
     [Fact]
-    public void A_desktop_switch_leaves_a_narrator_key_that_is_itself_the_binding()
-    {
-        // Caps Lock bound as push-to-talk and held through the switch: its dictation is ended by its own release, as
-        // before, and the switch starts or stops nothing.
-        var capsLock = new HotkeyBinding(CapsLock, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Caps Lock");
-        using var h = new HotkeyEngineHarness(capsLock);
-
-        Assert.True(h.Down(CapsLock).Suppress);
-        h.Engine.OnDesktopSwitch();
-        Assert.True(h.Down(CapsLock).Suppress); // an autorepeat, still swallowed
-        Assert.True(h.Up(CapsLock).Suppress);
-
-        Assert.Equal(
-            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
-            h.TakeTransitions().Select(t => t.Transition).ToArray());
-    }
-
-    [Fact]
     public void A_retired_engine_ignores_a_desktop_switch()
     {
         using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);

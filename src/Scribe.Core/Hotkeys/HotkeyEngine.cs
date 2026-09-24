@@ -108,12 +108,15 @@ internal sealed class HotkeyEngine
     public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
 
     /// <summary>
-    /// Owner thread: the input desktop switched, to or from the lock screen or the secure desktop. The hook is not called
-    /// for input there, so a key held as the desktop switched can be released unseen; each machine forgets the Narrator
-    /// keys it holds, the one kind of key nothing else can take out of the hook's view (see
-    /// <see cref="ChordStateMachine.ForgetNarratorKeys"/>). Nothing starts or stops. The WinEvent callback that calls
-    /// this runs on the thread that set the hook, which is the owner; a call from any other thread once an owner is
-    /// attached is ignored rather than allowed to race the keyboard callback.
+    /// Owner thread: the input desktop switched, to or from the lock screen or a secure desktop. The hook is not called
+    /// for input there, so any key held as the desktop switched can be released unseen. Every machine forgets its key
+    /// state, as a hook reinstall does, so a stale key can neither block a bare Page Up or Page Down (a Narrator key
+    /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and a dictation a held or
+    /// toggled binding had started is ended the way its release or second press would have ended it, reported as
+    /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
+    /// A switch with nothing recording starts and stops nothing. The WinEvent callback that calls this runs on the thread
+    /// that set the hook, which is the owner; a call from any other thread once an owner is attached is ignored rather
+    /// than allowed to race the keyboard callback.
     /// </summary>
     public void OnDesktopSwitch()
     {
@@ -125,8 +128,21 @@ internal sealed class HotkeyEngine
 
         // Commands requested before the switch took effect before it, as for a key event.
         ApplyPendingCommands();
-        _standard.ForgetNarratorKeys();
-        _dictationOnly?.ForgetNarratorKeys();
+        var (transition, _) = _standard.Reset();
+        var secondary = _dictationOnly?.Reset();
+
+        // The same hand-over as a capture-mode or binding change: at most one trigger owns the dictation, and the
+        // arbiter says which, so exactly one stop is sent.
+        if (transition != HotkeyTransition.None)
+        {
+            EmitStateClear(transition, _arbiter.TryTake(HotkeyTrigger.Standard), HotkeyDeactivation.DesktopSwitch);
+        }
+        else if (secondary is { Transition: not HotkeyTransition.None } secondaryReset)
+        {
+            EmitStateClear(
+                secondaryReset.Transition, _arbiter.TryTake(HotkeyTrigger.DictationOnly), HotkeyDeactivation.DesktopSwitch);
+        }
+
         Interlocked.Increment(ref _desktopSwitches);
     }
 
@@ -353,12 +369,13 @@ internal sealed class HotkeyEngine
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.
-    private void EmitStateClear(HotkeyTransition transition, HotkeyTrigger? trigger)
+    private void EmitStateClear(
+        HotkeyTransition transition, HotkeyTrigger? trigger, HotkeyDeactivation deactivation = HotkeyDeactivation.Released)
     {
         if (trigger is { } owner)
         {
             _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-                transition, owner, _generation, AllowReconcile: false));
+                transition, owner, _generation, AllowReconcile: false, deactivation));
         }
     }
 }

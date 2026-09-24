@@ -50,8 +50,8 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook installed later
 /// runs first, so whenever Scribe installed its hook after Narrator did, Windows would report the key
 /// up while it is held and the press would no longer reach Narrator. Its release on another desktop is
-/// handled instead by <see cref="ForgetNarratorKeys"/>, which the engine calls when the input desktop
-/// switches.
+/// handled instead by the engine, which resets every machine (<see cref="Reset"/>) when the input
+/// desktop switches.
 /// </summary>
 internal sealed class ChordStateMachine
 {
@@ -192,8 +192,9 @@ internal sealed class ChordStateMachine
 
     /// <summary>
     /// Clears all key state, reporting the deactivation the caller must dispatch when an
-    /// activation was in flight (e.g. a hook reinstall mid-recording must stop the recording,
-    /// because the held key's eventual release can no longer be matched to cleared state).
+    /// activation was in flight (e.g. a hook reinstall or a desktop switch mid-recording must stop
+    /// the recording, because the held key's eventual release can no longer be matched to cleared
+    /// state, and on the other desktop the hook would not see it at all).
     /// </summary>
     public (HotkeyTransition Transition, long Generation) Reset()
     {
@@ -301,29 +302,6 @@ internal sealed class ChordStateMachine
         AnyPressed(generic, left, right) && (_isLogicallyDown is null || _isLogicallyDown(generic));
 
     private bool Held(uint key) => _pressed.Contains(key) && (_isLogicallyDown is null || _isLogicallyDown(key));
-
-    /// <summary>
-    /// Forgets the Narrator keys the hook's view holds, other than one this binding uses. The engine calls it when the
-    /// input desktop switches: the hook is not called for a release made on another desktop, and nothing else can take
-    /// these keys out of the hook's view (see the class summary), so a Narrator key held when the lock screen or the
-    /// secure desktop appeared would otherwise refuse every bare Page Up and Page Down until it was pressed again. A
-    /// Narrator key still held is recorded again by its next autorepeat or press.
-    /// </summary>
-    public void ForgetNarratorKeys()
-    {
-        ForgetUnlessBound(VkCapsLock);
-        ForgetUnlessBound(VkInsert);
-        ForgetUnlessBound(VkNonConvert);
-    }
-
-    // A key this binding uses keeps its state, so a dictation on it is ended by its release as before.
-    private void ForgetUnlessBound(uint key)
-    {
-        if (!IsBindingKey(_binding, key))
-        {
-            _pressed.Remove(key);
-        }
-    }
 
     /// <summary>
     /// Whether a chord member has to be swallowed on its own key-down, before the second key

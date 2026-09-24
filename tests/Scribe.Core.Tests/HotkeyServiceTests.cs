@@ -35,10 +35,11 @@ public class HotkeyServiceTests
     [Fact]
     public void Start_hands_desktop_switches_to_the_engine()
     {
-        // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can forget Narrator keys released on
-        // the lock screen. NotifyWinEvent raises the event the way Windows does when the input desktop switches, and the
-        // engine counts a switch only on its owner thread, so this also proves the callback runs on the hook thread. Like
-        // the other Start_ tests it needs an interactive desktop, and the local desktop filter leaves it to CI.
+        // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can end a recording and reset its key
+        // state when the lock screen or a secure desktop appears. NotifyWinEvent raises the event the way Windows does when
+        // the input desktop switches, and the engine counts a switch only on its owner thread, so this also proves the
+        // callback runs on the hook thread. Like the other Start_ tests it needs an interactive desktop, and the local
+        // desktop filter leaves it to CI.
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
         service.Start();
 

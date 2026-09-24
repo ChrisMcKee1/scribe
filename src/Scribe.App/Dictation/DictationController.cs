@@ -777,8 +777,12 @@ internal sealed class DictationController : IDisposable
         }
     }
 
+    // A desktop switch ends a recording the way its binding would have (see HotkeyEngine.OnDesktopSwitch); it goes the
+    // same way as a release from here on, and only its logged reason differs.
     private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) =>
-        StopAndProcess(DictationStopReason.HotkeyReleased);
+        StopAndProcess(e.Deactivation == HotkeyDeactivation.DesktopSwitch
+            ? DictationStopReason.DesktopSwitch
+            : DictationStopReason.HotkeyReleased);
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {
@@ -847,6 +851,12 @@ internal sealed class DictationController : IDisposable
 
         /// <summary>The recording reached the MaxDictationMinutes ceiling and was ended cleanly.</summary>
         DurationLimit,
+
+        /// <summary>
+        /// The input desktop switched (the lock screen, a secure desktop) while the key was held or the toggle was on. The
+        /// hook cannot see the key's release there, so it ended the recording as the binding would have.
+        /// </summary>
+        DesktopSwitch,
     }
 
     // Fired on a timer thread when a recording has run for the full MaxDictationMinutes. Ends the
@@ -885,10 +895,10 @@ internal sealed class DictationController : IDisposable
     }
 
     /// <summary>
-    /// Shared stop path for the hotkey release/toggle-off, the silence auto-stop, a capture fault
-    /// and pause. The reason is logged with the hold duration, because "it stopped after about ten
-    /// seconds" is the single most common way a dictation problem gets reported and the four causes
-    /// are indistinguishable from the outside.
+    /// Shared stop path for the hotkey release/toggle-off, the silence auto-stop, a capture fault,
+    /// pause, the duration ceiling and a desktop switch. The reason is logged with the hold
+    /// duration, because "it stopped after about ten seconds" is the single most common way a
+    /// dictation problem gets reported and the causes are indistinguishable from the outside.
     /// </summary>
     /// <param name="expectedId">When set, only this dictation may be stopped; a stop meant for an earlier one is ignored.</param>
     private void StopAndProcess(DictationStopReason reason, long expectedId = 0)

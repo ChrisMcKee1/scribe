@@ -42,10 +42,14 @@ public sealed class HotkeyService : IHotkeyService
     /// while capture mode is armed. Deactivations always dispatch (a redundant stop is harmless, a
     /// missed stop is not). AllowReconcile is false for transitions born from a state clear: right
     /// after a clear the reconciler cannot distinguish a genuinely held key from a leaked one and
-    /// could release a key the user is holding.
+    /// could release a key the user is holding. Deactivation says why a Deactivated happened.
     /// </summary>
     internal readonly record struct QueuedTransition(
-        HotkeyTransition Transition, HotkeyTrigger Trigger, long Generation, bool AllowReconcile);
+        HotkeyTransition Transition,
+        HotkeyTrigger Trigger,
+        long Generation,
+        bool AllowReconcile,
+        HotkeyDeactivation Deactivation = HotkeyDeactivation.Released);
 
     private HotkeyTransitionQueue? _transitions;
     private HotkeyReconcileSignal? _reconcileSignal;
@@ -140,14 +144,15 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    // Only the Narrator keys depend on it, and only after a desktop switch, so its absence is a warning, not a failure.
+    // A warning, not a failure: without it the hook still works, but a switch goes unnoticed.
     private void LogMissingDesktopSwitchHook(HookInstallation installation)
     {
         if (installation.DesktopSwitchHookError is { } error)
         {
             _logger.LogWarning(
-                "Desktop switch notifications are unavailable (Win32 error {Error}); a Narrator key released on the lock " +
-                "screen keeps blocking a bare Page Up or Page Down until it is pressed again.",
+                "Desktop switch notifications are unavailable (Win32 error {Error}); a dictation whose key is held as " +
+                "the PC locks keeps recording until the key is pressed again, and a Narrator key released on the lock " +
+                "screen keeps blocking a bare Page Up or Page Down.",
                 error);
         }
     }
@@ -282,7 +287,8 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    private void DispatchTransition(QueuedTransition item)
+    // The consumer thread's step for one transition; internal so a test can dispatch one without a hook.
+    internal void DispatchTransition(QueuedTransition item)
     {
         try
         {
@@ -303,7 +309,16 @@ public sealed class HotkeyService : IHotkeyService
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
-                Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
+                // Shape only: that the desktop switched mid-dictation, never anything about the keys or the text.
+                if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
+                {
+                    _logger.LogInformation(
+                        "Hotkey dictation ({Trigger}) stopped by a desktop switch: the lock screen or a secure desktop " +
+                        "appeared while its key was held or its toggle was on.",
+                        item.Trigger);
+                }
+
+                Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, item.Deactivation));
 
                 // Every release is a cheap moment to verify no suppressed key leaked into the
                 // system's logical "down" state (a hook deadline miss lets single events through).
@@ -585,9 +600,10 @@ public sealed class HotkeyService : IHotkeyService
                     // quit deliverable; commands queued before this point apply here.
                     _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
 
-                    // Desktop switches, delivered on this thread by its message loop, so the engine can forget Narrator
-                    // keys released on the lock screen or the secure desktop, where the hook is not called. Optional:
-                    // without it the hook works as before and the service logs that it is missing.
+                    // Desktop switches, delivered on this thread by its message loop, so the engine can reset its key
+                    // state and end a recording whose key is released on the lock screen or a secure desktop, where the
+                    // hook is not called. Optional: without it the hook works as before and the service logs that it
+                    // is missing.
                     desktopSwitchHook = NativeMethods.SetWinEventHook(
                         NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
                         NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,

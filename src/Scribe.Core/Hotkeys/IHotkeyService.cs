@@ -82,7 +82,28 @@ public enum HotkeyTrigger
     DictationOnly,
 }
 
-public sealed class HotkeyTriggerEventArgs(HotkeyTrigger trigger) : EventArgs
+/// <summary>Why the hook ended a dictation it had started.</summary>
+public enum HotkeyDeactivation
+{
+    /// <summary>
+    /// The hold key was released or the toggle key pressed again, or a change to the hook itself (capture mode, a new
+    /// binding, a reinstall) ended it.
+    /// </summary>
+    Released,
+
+    /// <summary>
+    /// The input desktop switched (the lock screen, a secure desktop) while the key was held or the toggle was on. The
+    /// hook is not called for input there, so it cannot see the key's release, and it ends the recording the way the
+    /// binding would have ended it.
+    /// </summary>
+    DesktopSwitch,
+}
+
+public sealed class HotkeyTriggerEventArgs(HotkeyTrigger trigger, HotkeyDeactivation deactivation = HotkeyDeactivation.Released)
+    : EventArgs
 {
     public HotkeyTrigger Trigger { get; } = trigger;
+
+    /// <summary>For <see cref="IHotkeyService.Deactivated"/>, why the dictation ended.</summary>
+    public HotkeyDeactivation Deactivation { get; } = deactivation;
 }

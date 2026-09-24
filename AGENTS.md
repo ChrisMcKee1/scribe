@@ -472,7 +472,8 @@ matter are intermittent and hardware‑specific.
   over frequently has no record of how the process started. `OnExit` writes the matching
   `session end` line; its absence before the next banner means the process died.
 - **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app),
-  its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`)
+  its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`,
+  `DurationLimit`, `DesktopSwitch`)
   and the hold duration. `DictationController` warns when the captured audio is shorter
   than the hold, because WASAPI ends a stream cleanly with **no exception** when the endpoint is
   reconfigured mid‑capture and nothing else in the pipeline can see it.
@@ -653,16 +654,25 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   query the keyboard callback makes besides `CallNextHookEx`: only on such a press, never on a bare
   one, and never about the key the callback is for, whose async state Windows updates only after the
   callback returns.
-- **A Narrator key is forgotten when the input desktop switches.** Narrator keeps its key from
+- **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
+  out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
+  its message loop and calls `HotkeyEngine.OnDesktopSwitch` (which ignores a call from any other
+  thread). Every key held as the desktop switched may be released where the hook cannot see it, so
+  every machine forgets its key state, as a hook reinstall does (`ChordStateMachine.Reset`), and a
+  dictation a held or toggled binding had started is ended the way its release or second press would
+  have ended it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
+  so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log): the
+  audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
+  recovery notice as for any failed insertion. Without this a key held through Win+L or a UAC prompt
+  kept the microphone recording while the PC was locked, and its stale state swallowed the next press
+  as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
+  Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
-  would report the key up while it is held; the Narrator keys therefore go by the hook's view alone.
-  To keep one released on the lock screen from blocking bare Page Up and Page Down, the hook thread
-  also sets an out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that
-  thread from its message loop and calls `HotkeyEngine.OnDesktopSwitch`, which forgets the Narrator
-  keys every machine holds (not a binding's own key). If the WinEvent hook cannot be set, the service
-  logs a warning and everything else works as before. `HotkeyModifierTests` pins every combination,
-  and `HotkeyServiceTests.Start_hands_desktop_switches_to_the_engine` (desktop filter, so CI) the wiring.
+  would report the key up while it is held, and the Narrator keys therefore go by the hook's view
+  alone. If the WinEvent hook cannot be set, the service logs a warning and everything else works as
+  before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and
+  `HotkeyServiceTests.Start_hands_desktop_switches_to_the_engine` (desktop filter, so CI) the wiring.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 
