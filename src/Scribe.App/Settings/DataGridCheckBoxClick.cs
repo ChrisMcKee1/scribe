@@ -7,22 +7,21 @@ using System.Windows.Media.Media3D;
 namespace Scribe.App.Settings;
 
 /// <summary>
-/// Makes one click toggle a <see cref="DataGridCheckBoxColumn"/> check box, through the grid's own edit.
+/// Makes one click on a <see cref="DataGridCheckBoxColumn"/> check box toggle it, through the grid's own edit.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A stock check box cell starts its edit, the only thing that toggles its box, on a click that lands
-/// while the cell already has keyboard focus and is selected; the first click only selects. Toggling
-/// the box outside that edit is no better: the row's edit transaction is what a sorted view moves an
-/// item on when it commits, so a row ticked that way kept its old place in a view sorted on the column.
+/// while the cell already has keyboard focus and is selected; a first click only focuses and selects.
+/// This handler runs after that stock handling, so the grid has already focused the cell, selected the
+/// row and recorded its range anchor exactly as for any other click. It must be registered for handled
+/// events because the cell marks the press handled. For a plain press on the box of a cell that is not
+/// editing, it then begins the edit with that same press, and the column toggles the box once while
+/// preparing it, inside the row's edit transaction, so a sorted view places the row when it commits.
 /// </para>
 /// <para>
-/// So a plain press on a check box cell that is not editing makes the cell current and selected, then
-/// begins the edit with that same press, and the column toggles the box once while preparing the edit
-/// (it does so for a left press over the box). Handling the preview means the mouse device raises no
-/// press for anything else to act on. Ctrl and Shift keep their stock selection gestures, and a cell
-/// already editing leaves its box to handle its own clicks. The display check box must not be hit
-/// testable, or a press this skips would reach it and toggle it outside the edit.
+/// Presses beside the box and Ctrl or Shift presses are left to the stock handling, exactly as before.
+/// The display check box must not take hit tests, or its own button logic would take the press first.
 /// </para>
 /// </remarks>
 public static class DataGridCheckBoxClick
@@ -30,41 +29,52 @@ public static class DataGridCheckBoxClick
     public static void Attach(DataGrid grid)
     {
         ArgumentNullException.ThrowIfNull(grid);
-        grid.PreviewMouseLeftButtonDown += OnPreviewMouseLeftButtonDown;
+        grid.AddHandler(UIElement.MouseLeftButtonDownEvent, new MouseButtonEventHandler(OnMouseLeftButtonDown), handledEventsToo: true);
     }
 
-    private static void OnPreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// Whether a press falls on the box: inside the area its template draws, which is also where the
+    /// column's own hit test finds the box once it is editing and takes the mouse. The display box takes
+    /// no hit tests, so this is measured rather than hit tested.
+    /// </summary>
+    /// <param name="positionRelativeTo">
+    /// The press position relative to a given element, as <see cref="MouseEventArgs.GetPosition"/> reports it.
+    /// </param>
+    public static bool IsOverBox(CheckBox box, Func<IInputElement, Point> positionRelativeTo)
     {
-        // The selection made below is a whole row, which is all these grids use.
+        ArgumentNullException.ThrowIfNull(box);
+        ArgumentNullException.ThrowIfNull(positionRelativeTo);
+        if (VisualTreeHelper.GetChildrenCount(box) == 0 || VisualTreeHelper.GetChild(box, 0) is not FrameworkElement drawn)
+        {
+            return false;
+        }
+
+        var point = positionRelativeTo(drawn);
+        return point.X >= 0 && point.Y >= 0 && point.X < drawn.ActualWidth && point.Y < drawn.ActualHeight;
+    }
+
+    private static void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
         if (sender is not DataGrid grid ||
-            grid.SelectionUnit != DataGridSelectionUnit.FullRow ||
             (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0 ||
             FindCell(e.OriginalSource as DependencyObject) is not { IsEditing: false, IsReadOnly: false } cell ||
             cell.Column is not DataGridCheckBoxColumn ||
+            cell.Content is not CheckBox box ||
             DataGridRow.GetRowContainingElement(cell) is not { } row ||
-            !ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), grid))
+            !ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(row), grid) ||
+            !IsOverBox(box, e.GetPosition))
         {
             return;
         }
 
-        // BeginEdit edits the current cell, and setting it commits an edit pending elsewhere, just as
-        // moving focus there would. Focus follows so Space and the arrow keys carry on from this cell.
-        var item = row.Item;
-        grid.CurrentCell = new DataGridCellInfo(item, cell.Column);
-        if (!cell.IsKeyboardFocusWithin)
+        // Focusing the cell made it current. Should focus not have landed, BeginEdit would edit whichever
+        // cell was current instead, so point it at this one.
+        if (!ReferenceEquals(grid.CurrentCell.Item, row.Item) || grid.CurrentCell.Column != cell.Column)
         {
-            cell.Focus();
+            grid.CurrentCell = new DataGridCellInfo(row.Item, cell.Column);
         }
 
-        if (grid.SelectedItems.Count != 1 || !ReferenceEquals(grid.SelectedItem, item))
-        {
-            grid.SelectedItem = item;
-        }
-
-        if (grid.BeginEdit(e))
-        {
-            e.Handled = true;
-        }
+        grid.BeginEdit(e);
     }
 
     private static DataGridCell? FindCell(DependencyObject? node)
