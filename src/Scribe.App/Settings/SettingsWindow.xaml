@@ -351,14 +351,23 @@
             </Setter>
         </Style>
 
-        <!-- The selected library's name, SemiBold with the row's outline (see LibraryRow). Only the name: the other
-             columns size to their content, and a wider SemiBold value there would move them. -->
-        <Style x:Key="LibraryNameText" TargetType="TextBlock" BasedOn="{x:Static DataGridTextColumn.DefaultElementStyle}">
+        <!-- The selected library's name, SemiBold with the row's outline (see LibraryRow). Only the name line of the name
+             cell: its source line and the other columns stay as they are, because the other columns size to their
+             content and a wider SemiBold value there would move them. The name sits in the cell template's panel, which
+             gives it the 2 px margin a text column's text gets, so the style adds no margin of its own. -->
+        <Style x:Key="LibraryNameText" TargetType="TextBlock">
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType={x:Type DataGridRow}}}" Value="True">
                     <Setter Property="FontWeight" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedRowNameWeight}}"/>
                 </DataTrigger>
             </Style.Triggers>
+        </Style>
+
+        <!-- The Libraries list's name cell shows the name over its source ("Built-in" or "Your library"). A template cell
+             has no text of its own, so UI Automation would read it as "Item: GitHub, Column Display Index: 1"; it is named
+             after both lines instead. Based on KeyboardCell, as the warning above requires. -->
+        <Style x:Key="LibraryNameCell" TargetType="DataGridCell" BasedOn="{StaticResource KeyboardCell}">
+            <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}"/>
         </Style>
 
         <!-- The remove button in a Dictionary row is only an icon, so it is named after the entry it removes. -->
@@ -1610,9 +1619,13 @@
                                 <ColumnDefinition Width="2*" MinWidth="240"/>
                             </Grid.ColumnDefinitions>
                             <ui:Card Grid.Column="0" Padding="0" Style="{StaticResource FillCard}">
+                                <!-- One A to Z list of built-in and custom libraries, placed by the window when the page
+                                     loads (LibraryOrdering). No column sorts: a header click would re-sort it, and a sorted
+                                     view moves a row the moment its box is ticked. -->
                                 <DataGrid x:Name="LibraryGrid"
                                           AutoGenerateColumns="False"
                                           CanUserAddRows="False" CanUserDeleteRows="False"
+                                          CanUserSortColumns="False"
                                           SelectionMode="Single"
                                           SelectionChanged="LibraryGrid_SelectionChanged"
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
@@ -1623,11 +1636,25 @@
                                         <DataGridCheckBoxColumn Header="On" Binding="{Binding Enabled, UpdateSourceTrigger=PropertyChanged}" Width="Auto"
                                                                 ElementStyle="{StaticResource LibraryOnCheckBox}"
                                                                 EditingElementStyle="{StaticResource LibraryOnCheckBoxEditing}"/>
-                                        <DataGridTextColumn Header="Library" Binding="{Binding Name}" Width="*" IsReadOnly="True"
-                                                            ElementStyle="{StaticResource LibraryNameText}"/>
+                                        <!-- The 2 px side margin is the one WPF gives a text column's text, so the name lines
+                                             up with the Category and Terms text beside it. The two lines carry their own
+                                             leading, so a 1 px top and bottom keeps a default window showing every
+                                             shipped library without scrolling, as the one-line rows did. The name line,
+                                             and only it, takes LibraryNameText's SemiBold cue for the selected row. -->
+                                        <DataGridTemplateColumn Header="Library" Width="*" IsReadOnly="True"
+                                                                CellStyle="{StaticResource LibraryNameCell}">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="2,1" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource LibraryNameText}"/>
+                                                        <TextBlock Text="{Binding Source}" FontSize="12"
+                                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Header="Category" Binding="{Binding Category}" Width="Auto" IsReadOnly="True"/>
                                         <DataGridTextColumn Header="Terms" Binding="{Binding Terms}" Width="Auto" IsReadOnly="True"/>
-                                        <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="Auto" IsReadOnly="True"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </ui:Card>
