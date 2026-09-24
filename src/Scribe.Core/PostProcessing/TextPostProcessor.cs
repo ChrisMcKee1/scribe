@@ -282,7 +282,10 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     [GeneratedRegex(@"[ \t\f\v]+")]
     private static partial Regex HorizontalWhitespace();
 
-    [GeneratedRegex(@"[ \t]+([,.!?;:])")]
+    // The space before punctuation goes only when the mark ends a word. A mark followed by a letter or
+    // digit starts one (".NET", ".gitignore", ".5"), and a cleanup model answering "we use .NET" must
+    // not come out as "we use.NET", which also stops the dictionary's own ".net maui" rule from matching.
+    [GeneratedRegex(@"[ \t]+([,.!?;:])(?![\p{L}\p{N}])")]
     private static partial Regex SpaceBeforePunctuation();
 
     private static string ApplySinglePass(
