@@ -34,8 +34,11 @@ public static class CleanupPrompt
     /// </summary>
     private const int MaxGlossaryChars = 24_000;
 
-    /// <summary>Per-term character cap so one oversized dictionary entry can't bloat every request.</summary>
-    private const int MaxGlossaryTermChars = 100;
+    /// <summary>
+    /// Per-term character cap so one oversized dictionary entry can't bloat every request. Also the
+    /// longest dictionary replacement the opt-in AI usage insight will share as a term label.
+    /// </summary>
+    internal const int MaxGlossaryTermChars = 100;
 
     /// <summary>
     /// The default writing-style guidance shown in settings and used whenever the user has not
