@@ -9,6 +9,9 @@ namespace Scribe.Core.Tests;
 /// released where the hook cannot see it. A desktop switch therefore ends a recording the way its binding would have
 /// ended it (a hold as if released, a toggle as if toggled off), once, reported as a desktop switch through the same
 /// queue every stop takes, and leaves the hook ready for a fresh press. A switch with nothing recording does nothing.
+/// A desktop-switch notice is only a reason to check again: it is applied only when this desktop has stopped receiving
+/// input, so the notice for the switch back, a stray one any process can raise, and one that cannot be checked end
+/// nothing.
 /// </summary>
 public sealed class HotkeyDesktopSwitchTests
 {
@@ -25,7 +28,8 @@ public sealed class HotkeyDesktopSwitchTests
         Assert.True(h.Down(PageDown).Suppress); // autorepeat while dictating
 
         h.Engine.OnDesktopSwitch(); // Win+L: Page Down is released on the lock screen
-        h.Engine.OnDesktopSwitch(); // and the desktop switches back after unlocking
+        h.Engine.OnDesktopSwitch(); // applied again, as for a second switch this desktop has no input for either
+        h.Engine.OnDesktopSwitchNotice(() => true); // and the notice for the switch back after unlocking
 
         var transitions = h.TakeTransitions();
         Assert.Equal(
@@ -90,7 +94,7 @@ public sealed class HotkeyDesktopSwitchTests
         using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
         h.Down(PageDown);
         h.Engine.OnDesktopSwitch(); // locked; the release happens on the lock screen, unseen
-        h.Engine.OnDesktopSwitch(); // unlocked
+        h.Engine.OnDesktopSwitchNotice(() => true); // unlocked: this desktop has the input back, nothing more applies
         h.TakeTransitions();
 
         // Without the reset, this press would look like an autorepeat of the key the hook still believed held, and it
@@ -223,6 +227,130 @@ public sealed class HotkeyDesktopSwitchTests
         Assert.Equal(
             new[] { (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly) },
             h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray());
+    }
+
+    [Fact]
+    public void A_notice_while_this_desktop_still_receives_input_leaves_a_held_dictation_running()
+    {
+        // Any process can raise EVENT_SYSTEM_DESKTOPSWITCH with NotifyWinEvent, this repository's own wiring test
+        // included. While this desktop still receives input nothing can have been released unseen, so the dictation
+        // carries on: its queued start stays dispatchable, the autorepeat stays a repeat and the real release ends it.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+        Assert.True(h.Down(PageDown).Suppress);
+
+        h.Engine.OnDesktopSwitchNotice(() => true);
+
+        Assert.True(h.Down(PageDown).Suppress);
+        Assert.True(h.Up(PageDown).Suppress);
+        var transitions = h.TakeTransitions();
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyDeactivation.Released),
+            },
+            transitions.Select(t => (t.Transition, t.Deactivation)).ToArray());
+        Assert.True(h.WouldDispatch(transitions[0]));
+        Assert.Equal(1, h.Engine.DesktopSwitchNotices);
+        Assert.Equal(0, h.Engine.DesktopSwitches);
+    }
+
+    [Fact]
+    public void A_notice_while_this_desktop_still_receives_input_leaves_a_toggle_on()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation with { Mode = HotkeyMode.Toggle });
+        h.Down(PageDown);
+        h.Up(PageDown); // toggled on
+
+        h.Engine.OnDesktopSwitchNotice(() => true);
+
+        h.Down(PageDown);
+        h.Up(PageDown); // and off, by the second press as usual
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyDeactivation.Released),
+            },
+            h.TakeTransitions().Select(t => (t.Transition, t.Deactivation)).ToArray());
+        Assert.Equal(0, h.Engine.DesktopSwitches);
+    }
+
+    [Fact]
+    public void A_real_switch_notice_stops_once_and_the_notice_for_the_switch_back_does_nothing()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+        h.Down(PageDown);
+
+        var desktopReceivesInput = false;
+        h.Engine.OnDesktopSwitchNotice(() => desktopReceivesInput); // Win+L: the lock screen has the input now
+        desktopReceivesInput = true;
+        h.Engine.OnDesktopSwitchNotice(() => desktopReceivesInput); // unlocked: this desktop has it back
+
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyTrigger.Standard, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.Standard, HotkeyDeactivation.DesktopSwitch),
+            },
+            h.TakeTransitions().Select(t => (t.Transition, t.Trigger, t.Deactivation)).ToArray());
+        Assert.Equal(2, h.Engine.DesktopSwitchNotices);
+        Assert.Equal(1, h.Engine.DesktopSwitches);
+
+        // The switch reset the key state, so the first press after unlocking starts a new dictation.
+        Assert.True(h.Down(PageDown).Suppress);
+        var fresh = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Activated, fresh.Transition);
+        Assert.True(h.WouldDispatch(fresh));
+    }
+
+    [Fact]
+    public void A_notice_whose_desktop_cannot_be_checked_applies_nothing()
+    {
+        // GetThreadDesktop or GetUserObjectInformation failed. Ending a live dictation on an unproven switch loses what
+        // is being said, so the notice is treated like a stray one.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        h.Down(PageDown);
+
+        h.Engine.OnDesktopSwitchNotice(() => null);
+
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+        Assert.Equal(1, h.Engine.DesktopSwitchNotices);
+        Assert.Equal(0, h.Engine.DesktopSwitches);
+    }
+
+    [Fact]
+    public void A_notice_off_the_owner_thread_or_after_retirement_is_neither_counted_nor_checked()
+    {
+        var asked = 0;
+        bool? LostInput()
+        {
+            asked++;
+            return false;
+        }
+
+        using (var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation))
+        {
+            h.Down(PageDown);
+            h.Engine.AttachOwner(NativeMethods.GetCurrentThreadId() + 1); // this test thread stands in for any other
+            h.Engine.OnDesktopSwitchNotice(LostInput);
+            Assert.Equal(0, h.Engine.DesktopSwitchNotices);
+            Assert.Equal(0, h.Engine.DesktopSwitches);
+            Assert.True(h.Engine.IsPressed(PageDown));
+        }
+
+        using (var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation))
+        {
+            h.Down(PageDown);
+            h.Router.EndEngine();
+            h.Engine.OnDesktopSwitchNotice(LostInput);
+            Assert.Equal(0, h.Engine.DesktopSwitchNotices);
+            Assert.Equal(0, h.Engine.DesktopSwitches);
+        }
+
+        Assert.Equal(0, asked);
     }
 
     [Fact]

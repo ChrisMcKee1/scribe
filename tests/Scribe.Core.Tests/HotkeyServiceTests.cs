@@ -33,21 +33,69 @@ public class HotkeyServiceTests
     }
 
     [Fact]
-    public void Start_hands_desktop_switches_to_the_engine()
+    public void Start_hands_desktop_switch_notices_to_the_engine()
     {
         // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can end a recording and reset its key
-        // state when the lock screen or a secure desktop appears. NotifyWinEvent raises the event the way Windows does when
-        // the input desktop switches, and the engine counts a switch only on its owner thread, so this also proves the
-        // callback runs on the hook thread. Like the other Start_ tests it needs an interactive desktop, and the local
-        // desktop filter leaves it to CI.
+        // state when the lock screen or a secure desktop appears. NotifyWinEvent raises exactly the kind of notice any
+        // process can raise, which the engine counts on its owner thread only, so this proves the callback runs on the
+        // hook thread; it then checks again and applies the switch only if this thread's desktop has lost input, so on a
+        // desktop that still receives input (an installed Scribe dictating beside this test included) nothing stops.
+        // Like the other Start_ tests it needs an interactive desktop, and the local desktop filter leaves it to CI.
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
         service.Start();
+        var receivesInput = NativeMethods.ThreadDesktopReceivesInput(); // the hook thread shares this thread's desktop
 
+        // Two notices: callbacks run one at a time, so once the second is counted the first has finished.
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
         NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
 
         Assert.True(
-            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen > 0, TimeSpan.FromSeconds(10)),
-            "The hook thread never applied the desktop switch.");
+            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, TimeSpan.FromSeconds(10)),
+            "The hook thread never received the desktop-switch notices.");
+        if (receivesInput == false)
+        {
+            // A desktop that is not the input desktop, such as one created for a test run and never switched to.
+            Assert.True(
+                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, TimeSpan.FromSeconds(10)),
+                "The hook thread did not apply a notice on a desktop that is not receiving input.");
+        }
+        else
+        {
+            Assert.Equal(0, service.DesktopSwitchesSeen);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)] // a stray notice, or the switch back: this desktop still has the input
+    [InlineData(null)] // the check itself failed
+    [InlineData(false)] // the lock screen, Ctrl+Alt+Del or a UAC prompt has the input
+    public void Start_applies_a_desktop_switch_notice_only_when_the_desktop_lost_input(bool? receivesInput)
+    {
+        // The same real hook and WinEvent path, with the input-desktop query replaced, so each answer is proved whatever
+        // desktop the test runs on. The query is asked on the hook thread, whose desktop it is about.
+        var askedOn = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        using var service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance,
+            HotkeyBinding.DefaultDictation,
+            () =>
+            {
+                askedOn.Enqueue(Thread.CurrentThread.Name);
+                return receivesInput;
+            });
+        service.Start();
+
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+
+        Assert.True(
+            SpinWait.SpinUntil(() => askedOn.Count >= 2, TimeSpan.FromSeconds(10)),
+            "The hook thread never asked whether its desktop receives input.");
+        var expected = receivesInput == false ? 2 : 0;
+        Assert.True(
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, TimeSpan.FromSeconds(10)),
+            $"Expected {expected} applied switch(es), saw {service.DesktopSwitchesSeen}.");
+        Assert.Equal(2, service.DesktopSwitchNoticesSeen);
+        Assert.All(askedOn, name => Assert.Equal("Scribe.HotkeyHook", name));
     }
 
     private const uint EventSystemDesktopSwitch = 0x0020;

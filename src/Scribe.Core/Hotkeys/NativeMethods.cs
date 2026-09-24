@@ -136,6 +136,35 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool UnhookWinEvent(nint hWinEventHook);
 
+    private const int UOI_IO = 6;
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial nint GetThreadDesktop(uint dwThreadId);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetUserObjectInformationW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetUserObjectInformationBool(
+        nint hObj, int nIndex, out int pvInfo, int nLength, out int lpnLengthNeeded);
+
+    /// <summary>
+    /// Whether the calling thread's desktop is the one receiving input: false while the lock screen or a secure desktop
+    /// has it, null when that cannot be told. Two quick calls that wait for nothing, safe on the hook thread; the handle
+    /// GetThreadDesktop returns needs no closing. This is the check Raymond Chen gives for a desktop-switch notice
+    /// ("How can I detect that the system is no longer showing a UAC prompt?", The Old New Thing, 2020).
+    /// </summary>
+    internal static bool? ThreadDesktopReceivesInput()
+    {
+        var desktop = GetThreadDesktop(GetCurrentThreadId());
+        if (desktop == 0)
+        {
+            return null;
+        }
+
+        return GetUserObjectInformationBool(desktop, UOI_IO, out var receivesInput, sizeof(int), out _)
+            ? receivesInput != 0
+            : null;
+    }
+
     private const uint DESKTOP_READOBJECTS = 0x0001;
 
     [LibraryImport("user32.dll", SetLastError = true)]

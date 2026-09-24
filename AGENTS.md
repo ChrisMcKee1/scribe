@@ -656,14 +656,21 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   callback returns.
 - **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
-  its message loop and calls `HotkeyEngine.OnDesktopSwitch` (which ignores a call from any other
-  thread). Every key held as the desktop switched may be released where the hook cannot see it, so
+  its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
+  thread). A notice is only a reason to check again: it also arrives for the switch back, and any
+  process can raise one with `NotifyWinEvent` (the wiring tests do), so the switch is applied only
+  when the hook thread's own desktop has stopped receiving input,
+  `GetUserObjectInformation(GetThreadDesktop(GetCurrentThreadId()), UOI_IO)` reporting FALSE, which
+  the lock screen, Ctrl+Alt+Del and the UAC secure desktop all cause. The switch back, a stray notice
+  and a check that fails apply nothing, so a notice while the desktop still has the input never cuts a
+  dictation short. Every key held as the desktop switched may be released where the hook cannot see it, so
   both machines forget their key state, as a hook reinstall does (`ChordStateMachine.Reset`), whatever
   they report (one can still latch a press or a toggle the arbiter refused), and the dictation the
   arbiter says this engine started, if any (`HotkeyTriggerArbiter.TryTakeActive`, which names no
   trigger when none owns a dictation), is ended the way its release or second press would have ended
   it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
-  so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log): the
+  so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log, at the
+  lock rather than at unlock): the
   audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
   recovery notice as for any failed insertion. An Activated still waiting for the consumer never
   starts a recording after the switch: before anything it queues for the switch, the hook thread
@@ -678,8 +685,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
   would report the key up while it is held, and the Narrator keys therefore go by the hook's view
   alone. If the WinEvent hook cannot be set, the service logs a warning and everything else works as
-  before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and
-  `HotkeyServiceTests.Start_hands_desktop_switches_to_the_engine` (desktop filter, so CI) the wiring.
+  before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and the
+  `HotkeyServiceTests.Start_` desktop-switch tests (desktop filter, so CI) the wiring and the check.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 

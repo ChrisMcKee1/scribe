@@ -66,6 +66,7 @@ internal sealed class HotkeyEngine
     private bool _retired;
     private long _generation;
     private long _desktopSwitches;
+    private long _desktopSwitchNotices;
     private int _wakePending;
     private uint _ownerThreadId;
 
@@ -104,29 +105,70 @@ internal sealed class HotkeyEngine
     public bool IsPressed(uint virtualKey) =>
         _standard.IsPressed(virtualKey) || Volatile.Read(ref _dictationOnly)?.IsPressed(virtualKey) == true;
 
-    /// <summary>Any thread. How many desktop switches the owner has applied, for a test of the service's wiring.</summary>
+    /// <summary>Any thread. How many desktop switches the owner has applied.</summary>
     public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
 
     /// <summary>
-    /// Owner thread: the input desktop switched, to or from the lock screen or a secure desktop. The hook is not called
+    /// Any thread. How many desktop-switch notices reached the owner, applied or not, for a test of the service's wiring.
+    /// </summary>
+    public long DesktopSwitchNotices => Interlocked.Read(ref _desktopSwitchNotices);
+
+    /// <summary>
+    /// Owner thread: an <c>EVENT_SYSTEM_DESKTOPSWITCH</c> notice arrived. It is only a reason to check again: it also
+    /// arrives for the switch back, and any process can raise it with <c>NotifyWinEvent</c> (this repository's own wiring
+    /// test does). So the switch is applied (<see cref="OnDesktopSwitch"/>) only when this thread's desktop has stopped
+    /// receiving input, which the lock screen, Ctrl+Alt+Del and the UAC secure desktop all cause; the switch back, a stray
+    /// notice while this desktop still receives input, and an answer <paramref name="desktopReceivesInput"/> cannot give
+    /// (null) apply nothing. The notice is counted before the check, and only on the owner thread.
+    /// </summary>
+    /// <param name="desktopReceivesInput">
+    /// Whether this thread's desktop is receiving input (GetUserObjectInformation with UOI_IO in the service), or null
+    /// when that cannot be told.
+    /// </param>
+    public void OnDesktopSwitchNotice(Func<bool?> desktopReceivesInput)
+    {
+        if (!IsOwnerCall())
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _desktopSwitchNotices);
+        if (desktopReceivesInput() == false)
+        {
+            ApplyDesktopSwitch();
+        }
+    }
+
+    /// <summary>
+    /// Owner thread: the input desktop switched away, to the lock screen or a secure desktop. The hook is not called
     /// for input there, so any key held as the desktop switched can be released unseen. Every machine forgets its key
     /// state, as a hook reinstall does, so a stale key can neither block a bare Page Up or Page Down (a Narrator key
     /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and the dictation the arbiter
     /// says this engine started, if any, is ended the way its release or second press would have ended it, reported as
     /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
     /// An Activated still waiting for the dispatcher is invalidated first, through the queue's activation epoch, so it
-    /// cannot open the microphone after the lock. A switch with nothing recording starts and stops nothing. The WinEvent
-    /// callback that calls this runs on the thread that set the hook, which is the owner; a call from any other thread
-    /// once an owner is attached is ignored rather than allowed to race the keyboard callback.
+    /// cannot open the microphone after the lock. A switch with nothing recording starts and stops nothing. The service
+    /// reaches this through <see cref="OnDesktopSwitchNotice"/>, from the WinEvent callback that runs on the thread that
+    /// set the hook, which is the owner; a call from any other thread once an owner is attached is ignored rather than
+    /// allowed to race the keyboard callback.
     /// </summary>
     public void OnDesktopSwitch()
     {
-        var owner = OwnerThreadId;
-        if (IsRetired || (owner != 0 && owner != NativeMethods.GetCurrentThreadId()))
+        if (IsOwnerCall())
         {
-            return;
+            ApplyDesktopSwitch();
         }
+    }
 
+    // Not retired, and on the owner thread once one is attached (the harness has none, and calls as the owner).
+    private bool IsOwnerCall()
+    {
+        var owner = OwnerThreadId;
+        return !IsRetired && (owner == 0 || owner == NativeMethods.GetCurrentThreadId());
+    }
+
+    private void ApplyDesktopSwitch()
+    {
         // Commands requested before the switch took effect before it, as for a key event.
         ApplyPendingCommands();
         _transitions.AdvanceActivationEpoch();

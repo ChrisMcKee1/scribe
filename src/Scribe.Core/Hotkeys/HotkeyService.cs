@@ -31,6 +31,7 @@ public sealed class HotkeyService : IHotkeyService
     private static readonly TimeSpan JoinTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILogger<HotkeyService> _logger;
+    private readonly Func<bool?> _desktopReceivesInput;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -68,8 +69,18 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
+        : this(logger, binding, NativeMethods.ThreadDesktopReceivesInput)
+    {
+    }
+
+    /// <param name="desktopReceivesInput">
+    /// Asked on the hook thread when a desktop-switch notice arrives: whether that thread's desktop is receiving input, or
+    /// null when that cannot be told (see <see cref="HotkeyEngine.OnDesktopSwitchNotice"/>). Tests replace the real query.
+    /// </param>
+    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding, Func<bool?> desktopReceivesInput)
     {
         _logger = logger;
+        _desktopReceivesInput = desktopReceivesInput;
 
         // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding
         // while the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
@@ -89,8 +100,11 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>What the hook asks about a modifier its own view holds (see ChordStateMachine); for tests.</summary>
     internal Func<uint, bool>? WindowsKeyState => _router.WindowsKeyState;
 
-    /// <summary>How many desktop switches the current hook's engine has applied; for a test of the wiring.</summary>
+    /// <summary>How many desktop switches the current hook's engine has applied.</summary>
     internal long DesktopSwitchesSeen => _router.CurrentEngine?.DesktopSwitches ?? 0;
+
+    /// <summary>How many desktop-switch notices reached the current hook's engine on its own thread; for the wiring test.</summary>
+    internal long DesktopSwitchNoticesSeen => _router.CurrentEngine?.DesktopSwitchNotices ?? 0;
 
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
@@ -530,6 +544,10 @@ public sealed class HotkeyService : IHotkeyService
 
         // Rooted for the same reason, for the desktop-switch notifications set up beside the hook.
         private readonly NativeMethods.WinEventProc _desktopSwitchProc;
+
+        // The check a desktop-switch notice needs (see HotkeyEngine.OnDesktopSwitchNotice), one delegate for the whole
+        // installation, so a notice allocates nothing.
+        private readonly Func<bool?> _desktopReceivesInput;
         private readonly ManualResetEventSlim _installed = new(false);
         private readonly Thread _thread;
         private Exception? _installError;
@@ -545,6 +563,7 @@ public sealed class HotkeyService : IHotkeyService
             _service = service;
             _engine = engine;
             _reconcileSignal = reconcileSignal;
+            _desktopReceivesInput = service._desktopReceivesInput;
             _proc = HookCallback;
             _desktopSwitchProc = DesktopSwitchCallback;
             _thread = new Thread(Run)
@@ -619,10 +638,10 @@ public sealed class HotkeyService : IHotkeyService
                     // quit deliverable; commands queued before this point apply here.
                     _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
 
-                    // Desktop switches, delivered on this thread by its message loop, so the engine can reset its key
-                    // state and end a recording whose key is released on the lock screen or a secure desktop, where the
-                    // hook is not called. Optional: without it the hook works as before and the service logs that it
-                    // is missing.
+                    // Desktop-switch notices, delivered on this thread by its message loop. On one that finds this
+                    // desktop no longer receiving input, the engine resets its key state and ends a recording whose key
+                    // is released on the lock screen or a secure desktop, where the hook is not called. Optional: without
+                    // it the hook works as before and the service logs that it is missing.
                     desktopSwitchHook = NativeMethods.SetWinEventHook(
                         NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
                         NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
@@ -682,14 +701,16 @@ public sealed class HotkeyService : IHotkeyService
             NativeMethods.UnhookWindowsHookEx(hookId);
         }
 
-        // Runs on this installation's thread, from GetMessage, when the input desktop switches. Like the keyboard
-        // callback it never waits for another thread and never logs.
+        // Runs on this installation's thread, from GetMessage, for every desktop-switch notice. Like the keyboard callback
+        // it never waits for another thread and never logs; the engine checks again whether this desktop has actually
+        // lost input before it ends anything. The real check is two user32 calls that wait for nothing and report a
+        // failure by their return value, which the engine takes as "do nothing".
         private void DesktopSwitchCallback(
             nint hook, uint eventType, nint hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
         {
             if (eventType == NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH)
             {
-                _engine.OnDesktopSwitch();
+                _engine.OnDesktopSwitchNotice(_desktopReceivesInput);
             }
         }
 
