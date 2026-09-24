@@ -4,8 +4,8 @@ namespace Scribe.Core.Hotkeys;
 
 /// <summary>
 /// How Scribe states a hotkey to the user and in the log. Every key is named from its virtual-key code through
-/// <see cref="KeyNames"/>, the way the hook matches it, never from a name stored with the binding, so an old binding
-/// stored as "Next" reads "Page Down" everywhere it is shown.
+/// <see cref="KeyNames"/>, the way the hook matches it; a name stored with the binding only stands in for a key nothing
+/// else can name, so an old binding stored as "Next" reads "Page Down" everywhere it is shown.
 /// </summary>
 public static class HotkeyText
 {
@@ -17,33 +17,21 @@ public static class HotkeyText
         KeyNames.Of(virtualKey) ?? NullIfBlank(layoutName?.Invoke(virtualKey));
 
     /// <summary>
-    /// Describes a binding the way Settings shows it: "Page Down", "Ctrl+Shift+Space", "Right Ctrl+Right Shift". Only a
-    /// binding with a key that neither the table nor <paramref name="layoutName"/> can name falls back to the name stored
-    /// when it was bound, and one with no stored name to the key's code.
+    /// Describes a binding the way Settings shows it: "Page Down", "Ctrl+Shift+Space", "Right Ctrl+Right Shift". Each
+    /// key is named on its own: by the table, then by <paramref name="layoutName"/>, then by its own part of the name
+    /// stored when it was bound, then by its code. So a chord of a known key and one only the stored name can name keeps
+    /// the known key's true name ("Page Down+Oem1", never "Next+Oem1"), and the modifiers always come from the binding.
     /// </summary>
     public static string Describe(HotkeyBinding binding, Func<uint, string?>? layoutName = null)
     {
         ArgumentNullException.ThrowIfNull(binding);
 
-        var primary = KeyName(binding.VirtualKey, layoutName);
-        string? secondary = null;
-        var named = primary is not null;
+        var (storedPrimary, storedSecondary) = StoredKeyNames(binding);
+        var parts = ModifierNames(binding.Modifiers);
+        parts.Add(KeyName(binding.VirtualKey, layoutName) ?? storedPrimary ?? Code(binding.VirtualKey));
         if (binding.SecondaryVirtualKey is { } second)
         {
-            secondary = KeyName(second, layoutName);
-            named &= secondary is not null;
-        }
-
-        if (!named && !string.IsNullOrWhiteSpace(binding.DisplayName))
-        {
-            return FromStoredName(binding, binding.DisplayName.Trim(), layoutName);
-        }
-
-        var parts = ModifierNames(binding.Modifiers);
-        parts.Add(primary ?? Code(binding.VirtualKey));
-        if (binding.SecondaryVirtualKey is { } secondKey)
-        {
-            parts.Add(secondary ?? Code(secondKey));
+            parts.Add(KeyName(second, layoutName) ?? storedSecondary ?? Code(second));
         }
 
         return string.Join("+", parts);
@@ -80,23 +68,32 @@ public static class HotkeyText
     /// <summary>"Hold" or "Press", for a sentence that starts with how a binding is used.</summary>
     internal static string Verb(HotkeyMode mode) => mode == HotkeyMode.Toggle ? "Press" : "Hold";
 
-    // The shape older builds produced: a stored name that may or may not already carry the modifiers and the second key.
-    private static string FromStoredName(HotkeyBinding binding, string stored, Func<uint, string?>? layoutName)
+    // Each key's part of the stored name, for a key nothing else can name. Every build stored the keys in the order they
+    // were pressed, joined by "+", after any modifiers ("Ctrl+X"), and none put a "+" inside a key's name. The modifiers
+    // are named from the binding itself, so the stored words for them are skipped and the last parts belong to the keys.
+    // A name with fewer parts than keys named only the first key: older builds added the second key's name when they
+    // showed the binding, not when they stored it.
+    private static (string? Primary, string? Secondary) StoredKeyNames(HotkeyBinding binding)
     {
-        var text = stored;
-        if (binding.Modifiers != KeyModifiers.None && !text.Contains('+'))
+        var parts = (binding.DisplayName ?? string.Empty)
+            .Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var modifierWords = ModifierNames(binding.Modifiers);
+        var skip = 0;
+        while (skip < parts.Length && skip < modifierWords.Count &&
+               modifierWords.Contains(parts[skip], StringComparer.OrdinalIgnoreCase))
         {
-            var parts = ModifierNames(binding.Modifiers);
-            parts.Add(text);
-            text = string.Join("+", parts);
+            skip++;
         }
 
-        if (binding.SecondaryVirtualKey is { } second && !text.Contains('+'))
+        var keyParts = parts[skip..];
+        var keys = binding.SecondaryVirtualKey is null ? 1 : 2;
+        return keyParts.Length switch
         {
-            text += "+" + (KeyName(second, layoutName) ?? Code(second));
-        }
-
-        return text;
+            0 => (null, null),
+            _ when keyParts.Length < keys => (keyParts[0], null),
+            _ when keys == 1 => (keyParts[^1], null),
+            _ => (keyParts[^2], keyParts[^1]),
+        };
     }
 
     private static List<string> ModifierNames(KeyModifiers modifiers)

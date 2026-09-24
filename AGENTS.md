@@ -739,9 +739,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **Keys are named by virtual-key code, never by WPF's `Key.ToString()`.** That enum gives Page Down the alias
   `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), and .NET does not promise which name
   comes back. `KeyNames` holds the layout-independent names, the punctuation keys are named by the current layout
-  (`MapVirtualKeyW` with MAPVK_VK_TO_CHAR, in `HotkeyCapture`), and `HotkeyText.Describe` prefers both over a
-  stored `DisplayName`, which only stands for a key nothing else can name. The hook matches virtual-key codes and
-  never reads the name.
+  (`MapVirtualKeyW` with MAPVK_VK_TO_CHAR, in `HotkeyCapture`), and `HotkeyText.Describe` names each key on its own:
+  the table, then the layout, then that key's own part of the stored `DisplayName`, then its code. So a chord of a
+  known key and one only the stored name can name reads "Page Down+Oem1", never "Next+Oem1", and the modifiers always
+  come from the binding. The hook matches virtual-key codes and never reads the name.
 - **The trade-off is stated in Settings.** A suppressed binding never reaches other apps, and a binding without
   modifiers also fires with Ctrl or Shift held, so the defaults take Page Up, Page Down and Ctrl+Page Up or Down
   (tab switching) away from every other app while Scribe runs unpaused. Letting a tap or a modified press through

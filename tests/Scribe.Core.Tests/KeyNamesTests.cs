@@ -159,7 +159,7 @@ public sealed class KeyNamesTests
     }
 
     [Fact]
-    public void Without_a_name_for_every_key_the_name_it_was_stored_with_stands()
+    public void A_key_nothing_else_can_name_keeps_its_part_of_the_stored_name()
     {
         var single = new HotkeyBinding(0xBA, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "OemSemicolon");
         var withModifier = new HotkeyBinding(0xBA, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true, "OemSemicolon");
@@ -169,6 +169,58 @@ public sealed class KeyNamesTests
         Assert.Equal("OemSemicolon", HotkeyText.Describe(single));
         Assert.Equal("Ctrl+OemSemicolon", HotkeyText.Describe(withModifier));
         Assert.Equal("Oem1+Right Shift", HotkeyText.Describe(chord));
+    }
+
+    [Theory]
+    // A known key beside one only the stored name can name keeps its true name: the reported "Next+Oem1".
+    [InlineData(0x22u, 0xBAu, "Next+Oem1", "Page Down+Oem1")]
+    [InlineData(0x22u, 0x1Cu, "Next+ImeConvert", "Page Down+ImeConvert")] // VK_CONVERT, an IME key
+    [InlineData(0xBAu, 0x22u, "Oem1+Next", "Oem1+Page Down")]
+    [InlineData(0x21u, 0xDEu, " Prior + OemQuotes ", "Page Up+OemQuotes")]
+    // Older builds stored only the first key's name and added the second when they showed it.
+    [InlineData(0x22u, 0xBAu, "Next", "Page Down+Key 0xBA")]
+    [InlineData(0xBAu, 0x22u, "Oem1", "Oem1+Page Down")]
+    // Nothing stored: the unnamed key reads as its code, the named one by its name.
+    [InlineData(0x22u, 0xBAu, null, "Page Down+Key 0xBA")]
+    [InlineData(0xBAu, 0xDEu, "Oem1+Oem7", "Oem1+Oem7")]
+    public void A_chord_names_each_key_on_its_own_without_the_layout(uint primary, uint secondary, string? stored, string shown)
+    {
+        var chord = new HotkeyBinding(
+            primary, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, stored, SecondaryVirtualKey: secondary);
+
+        // As the session banner and the hook and controller logs see it: no layout to ask.
+        Assert.Equal(shown, HotkeyText.Describe(chord));
+    }
+
+    [Theory]
+    [InlineData(0x22u, 0xBAu, "Next+Oem1", "Page Down+;")]
+    [InlineData(0x22u, 0x1Cu, "Next+ImeConvert", "Page Down+ImeConvert")] // the layout types nothing for an IME key
+    [InlineData(0xBAu, 0x22u, "Oem1+Next", ";+Page Down")]
+    [InlineData(0x22u, 0xBAu, "Next", "Page Down+;")]
+    [InlineData(0x1Cu, 0xBAu, null, "Key 0x1C+;")]
+    public void A_chord_names_each_key_on_its_own_with_the_layout(uint primary, uint secondary, string? stored, string shown)
+    {
+        string? Layout(uint key) => key == 0xBA ? ";" : null;
+        var chord = new HotkeyBinding(
+            primary, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, stored, SecondaryVirtualKey: secondary);
+
+        Assert.Equal(shown, HotkeyText.Describe(chord, Layout));
+    }
+
+    [Fact]
+    public void Modifier_words_in_a_stored_name_are_not_taken_for_keys()
+    {
+        // The modifiers are named from the binding itself; a stored name that spelled them out still names its keys.
+        string? Layout(uint key) => key == 0xBA ? ";" : null;
+        var withModifier = new HotkeyBinding(0xBA, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true, "Ctrl+OemSemicolon");
+        var chordWithModifier = new HotkeyBinding(
+            0xBA, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true, "Ctrl+Oem1", SecondaryVirtualKey: 0xDE);
+        var staleModifier = new HotkeyBinding(0x7B, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Ctrl+F12");
+
+        Assert.Equal("Ctrl+OemSemicolon", HotkeyText.Describe(withModifier));
+        Assert.Equal("Ctrl+;", HotkeyText.Describe(withModifier, Layout));
+        Assert.Equal("Ctrl+Oem1+Key 0xDE", HotkeyText.Describe(chordWithModifier));
+        Assert.Equal("F12", HotkeyText.Describe(staleModifier));
     }
 
     [Fact]
