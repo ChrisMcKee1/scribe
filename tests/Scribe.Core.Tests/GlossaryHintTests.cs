@@ -133,7 +133,13 @@ public sealed class GlossaryHintTests
         var loaded = service.GetLibraries().Where(l => !l.BuiltIn).ToList();
         Assert.Equal(loaded.Select(l => l.Id), GlossaryHint.InLoadOrder(inPageOrder).Select(l => l.Id));
         var sent = SentByDictation([], loaded);
-        Assert.NotEqual(sent, CleanupPrompt.CountGlossary(DictionaryLibraryComposer.ComposeLibraries(inPageOrder)).Included);
+
+        // The fixture must separate the orders: the page's order, first spoken form winning, which is how the composer
+        // took libraries before it put them in precedence order itself, counts differently. The composer now gives the
+        // same rows whatever order it is handed.
+        var inPageOrderAsGiven = DictionaryLibraryComposer.Merge(inPageOrder.SelectMany(l => l.EnabledEntries), []);
+        Assert.NotEqual(sent, CleanupPrompt.CountGlossary(inPageOrderAsGiven).Included);
+        Assert.Equal(DictionaryLibraryComposer.ComposeLibraries(loaded), DictionaryLibraryComposer.ComposeLibraries(inPageOrder));
         Assert.Contains($"receives the first {N(sent)} of 1,200 terms", text, StringComparison.Ordinal);
     }
 
