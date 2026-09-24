@@ -13,6 +13,8 @@ final class UsageSummaryModel: ObservableObject {
 
     private let readCleanupEnabled: @MainActor () -> Bool
     private let summarize: @Sendable (String) async throws -> String
+    /// Where the summary request runs, so Quit can cancel it and wait for any `az` or `foundry` it started.
+    private let operations: AuxiliaryOperations
     /// Advances for every attempt and every cancellation, so only the newest attempt's reply is shown.
     private var request = 0
     private var observation: SettingsNotificationObservation?
@@ -23,10 +25,12 @@ final class UsageSummaryModel: ObservableObject {
         summarize: @escaping @Sendable (String) async throws -> String = { payload in
             try await UsageSummaryModel.summarizeWithConfiguredProvider(payload)
         },
-        center: NotificationCenter = .default
+        center: NotificationCenter = .default,
+        operations: AuxiliaryOperations = .shared
     ) {
         self.readCleanupEnabled = readCleanupEnabled
         self.summarize = summarize
+        self.operations = operations
         isCleanupEnabled = readCleanupEnabled()
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
@@ -46,10 +50,11 @@ final class UsageSummaryModel: ObservableObject {
         isGenerating = true
         errorMessage = nil
         let summarize = self.summarize
+        let operations = self.operations
         inFlight = Task { [weak self] in
             let outcome: Result<String, any Error>
             do {
-                outcome = .success(try await summarize(payload))
+                outcome = .success(try await operations.run { try await summarize(payload) })
             } catch {
                 outcome = .failure(error)
             }

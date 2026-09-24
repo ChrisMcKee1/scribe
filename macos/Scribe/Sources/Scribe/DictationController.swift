@@ -32,7 +32,7 @@ enum DictationStopReason: String, Equatable, Sendable {
     case paused
     /// The push-to-talk key was rebound while it held a recording.
     case bindingChanged
-    /// The event tap was disabled and, re-read afterwards, the key was no longer down.
+    /// The event tap was disabled and, re-read afterwards, the key had been released meanwhile.
     case tapResynchronized
     /// Scribe is quitting; the recording is discarded.
     case shutdown
@@ -101,13 +101,14 @@ private struct LiveRecording {
     var deadline: Task<Void, Never>?
 }
 
-/// A stopped recording admitted to processing, with everything captured when it started.
+/// A stopped recording admitted to processing, with everything captured when it started. Its samples are sealed off
+/// the main actor after the stop (`sealing`); it holds its place in both turn queues meanwhile.
 private struct AdmittedDictation: Sendable {
     let id: RecordingID
     let trigger: DictationTrigger
     let target: DictationTarget?
     let profiles: [AppProfile]?
-    let captured: CapturedAudio
+    let sealing: Task<CapturedAudio?, Never>
     let stopReason: DictationStopReason
     let lease: ForegroundActivity.Lease
 }
@@ -155,7 +156,12 @@ extension Duration {
 /// the press arrives and checked again when the microphone is asked for, so a pause that lands in between wins. Only a
 /// toggle (Caps Lock, the tray) stops on silence; a held key never does. Both stop at the duration ceiling, which is a
 /// deadline of this controller's own (Windows' `ArmDurationLimit` and `TryAcceptDurationLimit`), since the capture
-/// engine's own ceiling and silence clock only move while buffers arrive.
+/// engine's own ceiling and silence clock only move while buffers arrive. A toggle whose recording ends any other way
+/// than by its key (a failed open, silence, a fault) is settled, so the key's next change starts a new recording.
+///
+/// **Stopping.** A stop can arrive in the event tap's callback, so it only retires the recording: the recording lets
+/// go of the microphone, takes its place in both turn queues, and its samples are sealed on the capture engine's
+/// control queue, off the main actor, while its processing waits for them.
 ///
 /// **Processing.** A stopped recording is admitted to processing in the order recordings stopped, and a new recording
 /// can start while earlier ones are processed. Each dictation runs raw speech recognition (one recognizer at a time),
@@ -167,9 +173,10 @@ extension Duration {
 /// after it. Cancellation and admission are checked again before cleanup, recovery and delivery, because the
 /// recognizer returns a transcript it has already produced even when the cancellation arrives just after it exited.
 ///
-/// **Presentation.** Every change to what the tray and the pill show takes the next revision (`DictationPresentation`),
-/// and a notice's timed end is tagged with the revision that showed it, so a stale end, or one that arrives after a
-/// newer recording started, changes nothing. A live recording always owns the pill.
+/// **Presentation.** Every change to what the tray and the pill show takes the next revision (`DictationPresentation`).
+/// Outcomes go through one schedule (`DictationNoticeSchedule`): a recording owns the pill, one notice shows at a time,
+/// an outcome that cannot show yet waits rather than being lost or replacing a newer failure, and a notice's timed end
+/// is tagged with the revision that showed it, so a stale end changes nothing.
 ///
 /// **Shutdown** (`shutDown`): nothing new is admitted, the live recording is discarded, every dictation in processing
 /// is cancelled, a delivery in progress is awaited to completion (`TextInjector.waitUntilIdle`, which puts a borrowed
@@ -210,6 +217,35 @@ final class DictationController {
         var reports: PipelineReportStore
     }
 
+    /// Counts of steps the controller took that change nothing visible, so a test can wait for the step it checks
+    /// instead of guessing how many turns of the main actor that takes. Counts only.
+    struct Checkpoints: Equatable, Sendable {
+        /// Scheduled microphone requests that ran their admission check, whether they opened anything or not.
+        var admissionChecks = 0
+        /// Opens that came back, live, stopped or failed, whether their recording was still current or not.
+        var openAnswers = 0
+        /// Releases that ended nothing: another key, or nothing recording.
+        var ignoredReleases = 0
+        /// Capture events of a recording that no longer holds the microphone, or that arrived at shutdown.
+        var ignoredCaptureEvents = 0
+        /// Duration deadlines that ended nothing.
+        var ignoredDeadlines = 0
+        /// Timed notice ends that found their notice already gone.
+        var ignoredNoticeEnds = 0
+        /// Outcomes the notice schedule rejected.
+        var rejectedNotices = 0
+    }
+
+    /// How far shutdown has got.
+    enum ShutdownProgress: Equatable, Sendable {
+        case notStarted
+        case awaitingDelivery
+        case awaitingDictations
+        case awaitingDevice
+        case drainingHistory
+        case finished
+    }
+
     private let services: Services
     private let configuration: Configuration
     /// The push-to-talk key, told when a toggle's recording ended some other way than by the key.
@@ -217,13 +253,16 @@ final class DictationController {
 
     private(set) var isPaused: Bool
     private(set) var isClosing = false
+    private(set) var checkpoints = Checkpoints()
+    private(set) var shutdownProgress = ShutdownProgress.notStarted
     private var recording: LiveRecording?
     private var dictations: [RecordingID: Task<Void, Never>] = [:]
     private let transcriptionTurns = DictationTurns()
     private let deliveryTurns = DictationTurns()
     private var revision: UInt64 = 0
     private var levelDbfs = AudioLevelMeasurement.toDbfs(0)
-    private var notice: (kind: OverlayNotice, revision: UInt64)?
+    private var notices = DictationNoticeSchedule()
+    private var nextNoticeID: UInt64 = 0
     private var noticeTimer: Task<Void, Never>?
     private var shutdown: Task<DictationShutdownReport, Never>?
     private lazy var captureEvents = CaptureEventRelay { [weak self] event in
@@ -251,9 +290,19 @@ final class DictationController {
         dictations.count
     }
 
+    /// Dictations waiting for an earlier dictation's recognizer to finish.
+    var dictationsWaitingToTranscribe: Int {
+        transcriptionTurns.waitingCount
+    }
+
     /// Dictations whose text is ready and waiting for an earlier dictation's delivery to finish.
     var dictationsWaitingToDeliver: Int {
         deliveryTurns.waitingCount
+    }
+
+    /// The notice on the pill and the outcomes waiting for it.
+    var noticeSchedule: DictationNoticeSchedule {
+        notices
     }
 
     // MARK: - Inputs
@@ -266,10 +315,11 @@ final class DictationController {
     }
 
     /// The push-to-talk key came up (Caps Lock: turned off), or its listener settled it. Ends the recording only when
-    /// that key started it.
+    /// that key started it. Runs in the event tap's callback, so it only retires the recording.
     func hotkeyReleased(_ binding: HotkeyBinding, cause: HotkeyReleaseCause) {
         guard let current = recording, case .hotkey(let started) = current.trigger, started.keyCode == binding.keyCode
         else {
+            checkpoints.ignoredReleases += 1
             return
         }
         let reason: DictationStopReason
@@ -312,13 +362,28 @@ final class DictationController {
         services.cleanup.invalidate()
     }
 
+    /// Clear history started a new recovery generation: a notice about text kept before it, on the pill or waiting
+    /// for it, offers text that is gone, and leaves.
+    func recoveryWasCleared() {
+        guard notices.recoveryCleared(current: services.recovery.generation) else { return }
+        noticeTimer?.cancel()
+        noticeTimer = nil
+        showNextNoticeOrPresent()
+    }
+
     /// A meter reading or a stop request from the capture engine, on the main actor. Events of a recording that no
     /// longer holds the microphone are ignored: its owner has moved on.
     func handleCaptureEvent(_ event: CaptureEvent) {
-        guard !isClosing, let current = recording, current.id == event.owner else { return }
+        guard !isClosing, let current = recording, current.id == event.owner else {
+            checkpoints.ignoredCaptureEvents += 1
+            return
+        }
         switch event.kind {
         case .level(let level):
-            guard current.phase == .live else { return }
+            guard current.phase == .live else {
+                checkpoints.ignoredCaptureEvents += 1
+                return
+            }
             levelDbfs = level.rmsDbfs
             present()
         case .stopRequested(let ending):
@@ -340,6 +405,7 @@ final class DictationController {
             let limit = current.policy.maximumDuration,
             current.admittedAt.duration(to: services.clock.now) >= limit
         else {
+            checkpoints.ignoredDeadlines += 1
             ScribeLog.debug(
                 .dictation, "A duration deadline arrived with nothing to stop", .integer("dictation", id.rawValue))
             return
@@ -365,7 +431,7 @@ final class DictationController {
                 ScribeLog.info(
                     .dictation, "An activation was turned away while earlier dictations are processed",
                     .count("processing", dictations.count))
-                showNotice(.stillProcessing)
+                postOutcome(.stillProcessing, about: nil, stage: .admission)
             }
             return false
         }
@@ -375,7 +441,10 @@ final class DictationController {
             gesture: trigger.gesture,
             autoStopOnSilence: configuration.autoStopOnSilence,
             maximumDuration: configuration.maximumDuration)
-        clearNotice()
+        // The recording owns the pill from its admission; the notice on it has been seen.
+        notices.yieldToRecording()
+        noticeTimer?.cancel()
+        noticeTimer = nil
         levelDbfs = AudioLevelMeasurement.toDbfs(0)
         recording = LiveRecording(
             id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin())
@@ -401,6 +470,7 @@ final class DictationController {
     /// Asks for the microphone, then captures the target while it opens. The admission is checked again first: a
     /// pause, a stop or shutdown that arrived after the press has already ended this recording, and nothing opens.
     private func openMicrophone(for id: RecordingID) async {
+        checkpoints.admissionChecks += 1
         guard !isClosing, let admitted = recording, admitted.id == id, admitted.phase == .admitted else { return }
         let opening = services.capture.startOpening(owner: id, policy: admitted.policy, events: captureEvents.sink)
         let target = services.targeting.captureTarget()
@@ -416,9 +486,11 @@ final class DictationController {
         do {
             outcome = try await opening.value
         } catch {
+            checkpoints.openAnswers += 1
             microphoneFailedToOpen(id, error)
             return
         }
+        checkpoints.openAnswers += 1
 
         // A stop that arrived while the device opened took the recording, and the engine closes or never opened the
         // device for it.
@@ -435,10 +507,11 @@ final class DictationController {
             // saw a stop from somewhere else: nothing is open and nothing was recorded.
             recording = nil
             opened.lease.end()
+            settleToggle(of: opened)
             ScribeLog.warning(
                 .dictation, "The microphone reported a stop this recording never asked for",
                 .integer("dictation", id.rawValue), .name("outcome", outcome))
-            present()
+            showNextNoticeOrPresent()
         }
     }
 
@@ -449,12 +522,18 @@ final class DictationController {
         recording = nil
         failed.deadline?.cancel()
         failed.lease.end()
+        settleToggle(of: failed)
+        // Outcomes that waited for this recording go first; this one queues behind them.
+        let shown: Bool
         if let captureError = error as? AudioCaptureEngineError, case .microphoneNotAuthorized = captureError {
-            showNotice(.microphoneAccessNeeded)
-            notify(.microphoneAccessNeeded)
+            shown = postOutcome(
+                .microphoneAccessNeeded, about: id, stage: .capture, notification: .microphoneAccessNeeded)
         } else {
-            showNotice(.microphoneUnavailable)
-            notify(.microphoneUnavailable)
+            shown = postOutcome(
+                .microphoneUnavailable, about: id, stage: .capture, notification: .microphoneUnavailable)
+        }
+        if !shown {
+            showNextNoticeOrPresent()
         }
     }
 
@@ -474,42 +553,46 @@ final class DictationController {
         }
     }
 
-    /// Ends recording `id` once, whatever ended it, and admits what it captured to processing. A recording that
-    /// captured nothing (stopped before or while its microphone opened) ends quietly.
+    /// Ends recording `id` once, whatever ended it. It only retires the recording, since a release can arrive in
+    /// the event tap's callback: the recording gives up the microphone, and a recording that holds one takes its
+    /// place in both turn queues now, in the order recordings stopped, while its samples are sealed off the main
+    /// actor. A recording that never held the microphone (stopped before it was asked for) ends quietly.
     private func endRecording(_ id: RecordingID, reason: DictationStopReason) {
         guard let ended = recording, ended.id == id else { return }
         recording = nil
         ended.deadline?.cancel()
-        let stoppedAudio = services.capture.stop(owner: id)
-        // A toggle whose recording ended some other way than by its key is still on; its next tap has to start a
-        // new recording rather than count as the second tap of this one (Windows' `CancelToggle`).
-        if case .hotkey(let binding) = ended.trigger, binding.gesture == .toggle, reason != .hotkeyReleased {
-            triggers?.cancelToggle()
+        let sealing = services.capture.retire(owner: id)
+        if reason != .hotkeyReleased {
+            settleToggle(of: ended)
         }
         ScribeLog.info(
             .dictation, "Recording stopped", .integer("dictation", id.rawValue), .name("reason", reason),
             .duration("held", ended.admittedAt.duration(to: services.clock.now)),
-            .count("samples", stoppedAudio?.samples.count ?? 0))
+            .flag("heldMicrophone", sealing != nil))
 
-        guard !isClosing, let captured = stoppedAudio, !captured.samples.isEmpty else {
+        guard !isClosing, let sealing else {
             ended.lease.end()
-            if !isClosing, reason == .deviceFault {
-                showNotice(.microphoneUnavailable)
-            } else {
-                present()
-            }
+            showNextNoticeOrPresent()
             return
         }
 
         let dictation = AdmittedDictation(
-            id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles, captured: captured,
+            id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles, sealing: sealing,
             stopReason: reason, lease: ended.lease)
         transcriptionTurns.enroll(id)
         deliveryTurns.enroll(id)
         dictations[id] = Task { [weak self] in
             await self?.process(dictation)
         }
-        present()
+        showNextNoticeOrPresent()
+    }
+
+    /// A toggle whose recording ended some other way than by its key is still on; its next change has to start a
+    /// new recording rather than count as the second tap of this one (Windows' `CancelToggle`). Called only for the
+    /// recording that was current, and the key's listener ignores a binding it no longer has.
+    private func settleToggle(of ended: LiveRecording) {
+        guard case .hotkey(let binding) = ended.trigger, binding.gesture == .toggle else { return }
+        triggers?.cancelToggle(binding)
     }
 
     // MARK: - Processing, in Windows' order
@@ -522,7 +605,17 @@ final class DictationController {
         defer { finishProcessing(dictation) }
         let id = dictation.id
         let clock = services.clock
-        let summary = dictation.captured.summary
+
+        // The samples, sealed off the main actor. Sealing always finishes, and quickly: a buffer in flight and the
+        // resampler's tail.
+        let sealed = await dictation.sealing.value
+        guard mayContinue else { return stopped(dictation, at: .beforeTranscription) }
+        guard let captured = sealed, !captured.samples.isEmpty else {
+            return capturedNothing(dictation)
+        }
+        let summary = captured.summary
+        ScribeLog.debug(
+            .dictation, "Capture sealed", .integer("dictation", id.rawValue), .count("samples", captured.samples.count))
         var report = PipelineReport(
             dictationID: id.rawValue, capturedAt: summary.startedAt, trigger: dictation.trigger,
             stopReason: dictation.stopReason, captureDuration: summary.durationSeconds)
@@ -535,7 +628,7 @@ final class DictationController {
         let transcription: TranscriptionResult
         do {
             transcription = try await services.transcriber.transcribe(
-                samples: dictation.captured.samples, sampleRate: summary.sampleRate)
+                samples: captured.samples, sampleRate: summary.sampleRate)
         } catch {
             transcriptionTurns.finish(id)
             guard mayContinue else { return stopped(dictation, at: .duringTranscription) }
@@ -582,7 +675,7 @@ final class DictationController {
                 report.cleanedText = cleaned
             }
             if stage.outcome == .fellBack {
-                showNotice(.cleanupFellBack)
+                postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
             }
         }
 
@@ -602,6 +695,7 @@ final class DictationController {
         // no suspension in between.
         guard await deliveryTurns.waitForTurn(id), mayContinue else { return stopped(dictation, at: .beforeDelivery) }
         services.recovery.set(insertion)
+        let recoveryGeneration = services.recovery.generation
         let deliveryStarted = clock.now
         let injection: InjectionResult
         if let destination = target?.injection {
@@ -638,7 +732,7 @@ final class DictationController {
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
-        announce(injection, of: dictation, transcript: insertion)
+        announce(injection, of: dictation, transcript: insertion, recoveryGeneration: recoveryGeneration)
     }
 
     private func cleanUp(
@@ -696,10 +790,10 @@ final class DictationController {
         }
     }
 
-    private func recognitionFailed(_ dictation: AdmittedDictation, _ error: any Error, report: PipelineReport) {
+    private func recognitionFailed(_ dictation: AdmittedDictation, _ error: any Error, report failure: PipelineReport) {
         ScribeLog.error(
             .dictation, "Speech recognition failed", .integer("dictation", dictation.id.rawValue), .failure(error))
-        var failed = report
+        var failed = failure
         failed.failureStage = .decode
         // Scribe's own words (`TranscriptionError`), shown only in Settings' Playground.
         failed.failureReason = error.localizedDescription
@@ -707,10 +801,20 @@ final class DictationController {
         if let transcriptionError = error as? TranscriptionError,
             case .backendMissing(let issue) = transcriptionError
         {
-            showNotice(.recognizerMissing)
-            notify(.recognizerMissing(issue))
+            postOutcome(
+                .recognizerMissing, about: dictation.id, stage: .recognition,
+                notification: .recognizerMissing(issue))
         } else {
-            showNotice(.transcriptionFailed)
+            postOutcome(.transcriptionFailed, about: dictation.id, stage: .recognition)
+        }
+    }
+
+    /// The recording held the microphone and captured nothing, such as a quick tap. Nothing to transcribe; a device
+    /// fault says the microphone was lost.
+    private func capturedNothing(_ dictation: AdmittedDictation) {
+        ScribeLog.info(.dictation, "The recording captured nothing", .integer("dictation", dictation.id.rawValue))
+        if dictation.stopReason == .deviceFault {
+            postOutcome(.microphoneUnavailable, about: dictation.id, stage: .capture)
         }
     }
 
@@ -726,30 +830,37 @@ final class DictationController {
             .name("at", point))
     }
 
-    /// The pill's notice and, when the text did not go in, a notice with the transcript to copy.
-    private func announce(_ injection: InjectionResult, of dictation: AdmittedDictation, transcript: String) {
+    /// The pill's notice and, when the text did not go in, a notification with the transcript to copy. Both are
+    /// refused when Clear history has removed that transcript since it was kept.
+    private func announce(
+        _ injection: InjectionResult, of dictation: AdmittedDictation, transcript: String, recoveryGeneration: UInt64
+    ) {
+        let id = dictation.id
         switch injection.delivery {
         case .accessibility, .pasted, .typed, .nothingToInsert:
             if dictation.stopReason == .deviceFault {
-                showNotice(.microphoneStoppedEarly)
+                postOutcome(.microphoneStoppedEarly, about: id, stage: .capture)
             } else if dictation.stopReason == .durationLimit {
-                showNotice(.durationLimitReached)
+                postOutcome(.durationLimitReached, about: id, stage: .capture)
             }
-            return
         case .cancelled:
             return
         case .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .failed:
-            showNotice(.textKept)
-            notify(.notInserted(transcript))
+            postOutcome(
+                .textKept, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
+                notification: .notInserted(transcript, recoveryGeneration: recoveryGeneration))
         case .typedPartially:
-            showNotice(.partlyInserted)
-            notify(.partlyInserted(transcript))
+            postOutcome(
+                .partlyInserted, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
+                notification: .partlyInserted(transcript, recoveryGeneration: recoveryGeneration))
         case .accessibilityUnconfirmed:
-            showNotice(.mayNotBeInserted)
-            notify(.mayNotBeInserted(transcript))
+            postOutcome(
+                .mayNotBeInserted, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
+                notification: .mayNotBeInserted(transcript, recoveryGeneration: recoveryGeneration))
         case .accessibilityDenied:
-            showNotice(.accessibilityNeeded)
-            notify(.accessibilityNeeded(transcript))
+            postOutcome(
+                .accessibilityNeeded, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
+                notification: .accessibilityNeeded(transcript, recoveryGeneration: recoveryGeneration))
         }
     }
 
@@ -764,14 +875,105 @@ final class DictationController {
         deliveryTurns.finish(dictation.id)
         dictations[dictation.id] = nil
         dictation.lease.end()
-        present()
+        showNextNoticeOrPresent()
     }
 
     private static func isBlank(_ text: String) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    // MARK: - Presentation
+    // MARK: - Outcomes and the pill
+
+    /// One outcome, through the notice schedule. `notification`, when given, is posted whatever the pill does (it is
+    /// the lasting record of something that needs the user), unless the outcome is rejected; a cleanup fallback or a
+    /// failed recognition the pill cannot show at once is posted as a notification instead. Returns whether the
+    /// outcome went on the pill.
+    @discardableResult
+    private func postOutcome(
+        _ kind: OverlayNotice, about source: RecordingID?, stage: DictationNoticeStage,
+        recoveryGeneration: UInt64? = nil, notification: DictationNotice? = nil
+    ) -> Bool {
+        nextNoticeID &+= 1
+        let outcome = DictationOutcomeNotice(
+            id: nextNoticeID, kind: kind, source: source, stage: stage, recoveryGeneration: recoveryGeneration)
+        let arrival = notices.arrive(
+            outcome, pillIsOwned: recording != nil, isClosing: isClosing,
+            recoveryGeneration: services.recovery.generation)
+        var shown = false
+        switch arrival {
+        case .show:
+            show(outcome)
+            shown = true
+        case .waiting:
+            ScribeLog.debug(
+                .overlay, "A notice waits for the pill", .name("kind", kind), .name("stage", stage),
+                .count("waiting", notices.waiting.count))
+        case .notify:
+            ScribeLog.info(
+                .overlay, "The pill is taken, so a notice is posted as a notification", .name("kind", kind),
+                .name("stage", stage))
+            if let fallback = Self.fallbackNotification(for: kind) {
+                notify(fallback)
+            }
+        case .rejected(let rejection):
+            checkpoints.rejectedNotices += 1
+            ScribeLog.debug(
+                .overlay, "A notice was dropped", .name("kind", kind), .name("stage", stage),
+                .name("because", rejection))
+            return false
+        }
+        if let notification {
+            notify(notification)
+        }
+        return shown
+    }
+
+    private static func fallbackNotification(for kind: OverlayNotice) -> DictationNotice? {
+        switch kind {
+        case .cleanupFellBack: return .cleanupFellBack
+        case .transcriptionFailed: return .transcriptionFailed
+        default: return nil
+        }
+    }
+
+    /// Puts `outcome` on the pill for `configuration.noticeDuration`, under the revision `present()` allocates now.
+    private func show(_ outcome: DictationOutcomeNotice) {
+        noticeTimer?.cancel()
+        // `present()` takes exactly the next revision, which becomes this notice's token.
+        notices.didShow(outcome, token: revision &+ 1)
+        let token = present()
+        let clock = services.clock
+        let until = clock.now.advanced(by: configuration.noticeDuration)
+        noticeTimer = Task { [weak self] in
+            do {
+                try await clock.sleep(until: until)
+            } catch {
+                return
+            }
+            self?.noticeExpired(token: token)
+        }
+    }
+
+    /// The timed end of the notice shown under `token`. Stale when that notice is no longer on the pill (a recording
+    /// took the pill, a Clear removed it, or feedback was refreshed): then it changes nothing.
+    private func noticeExpired(token: UInt64) {
+        guard notices.expire(token: token) else {
+            checkpoints.ignoredNoticeEnds += 1
+            ScribeLog.debug(.overlay, "A notice's timed end arrived after the notice was gone; it changes nothing")
+            return
+        }
+        noticeTimer = nil
+        showNextNoticeOrPresent()
+    }
+
+    /// Shows the next waiting outcome when the pill is free, or presents what the pill shows otherwise.
+    private func showNextNoticeOrPresent() {
+        if let next = notices.takeNext(pillIsOwned: recording != nil) {
+            show(next)
+        } else {
+            present()
+        }
+    }
 
     /// What the pill shows now: a live recording's meter first, then a notice, then processing while any dictation
     /// is still being processed.
@@ -782,8 +984,8 @@ final class DictationController {
             }
             return dictations.isEmpty ? .hidden : .processing
         }
-        if let notice {
-            return .notice(notice.kind)
+        if let shown = notices.shown {
+            return .notice(shown.notice.kind)
         }
         return dictations.isEmpty ? .hidden : .processing
     }
@@ -797,43 +999,6 @@ final class DictationController {
             DictationPresentation(
                 revision: revision, overlay: overlayState, isRecording: recording != nil, isPaused: isPaused))
         return revision
-    }
-
-    /// Shows `kind` for `configuration.noticeDuration`. A recording owns the pill from its admission, so a notice
-    /// that arrives meanwhile is dropped rather than covering the meter.
-    private func showNotice(_ kind: OverlayNotice) {
-        guard !isClosing, recording == nil else { return }
-        noticeTimer?.cancel()
-        notice = (kind, 0)
-        let shown = present()
-        notice = (kind, shown)
-        let clock = services.clock
-        let until = clock.now.advanced(by: configuration.noticeDuration)
-        noticeTimer = Task { [weak self] in
-            do {
-                try await clock.sleep(until: until)
-            } catch {
-                return
-            }
-            self?.noticeExpired(shownAt: shown)
-        }
-    }
-
-    /// The timed end of the notice shown at revision `shownAt`. Stale when that notice is no longer the one held (a
-    /// newer notice replaced it, or a recording started and cleared it): then it changes nothing.
-    private func noticeExpired(shownAt: UInt64) {
-        guard let held = notice, held.revision == shownAt else {
-            ScribeLog.debug(.overlay, "A notice's timed end arrived after the notice was replaced; it changes nothing")
-            return
-        }
-        notice = nil
-        present()
-    }
-
-    private func clearNotice() {
-        notice = nil
-        noticeTimer?.cancel()
-        noticeTimer = nil
     }
 
     // MARK: - Shutdown
@@ -859,12 +1024,15 @@ final class DictationController {
 
     private func runShutdown(stoppingMaintenance: (@Sendable () -> Void)?) async -> DictationShutdownReport {
         isClosing = true
-        clearNotice()
+        notices.close()
+        noticeTimer?.cancel()
+        noticeTimer = nil
         let discarded = recording
+        var discardedSeal: Task<CapturedAudio?, Never>?
         if let discarded {
             recording = nil
             discarded.deadline?.cancel()
-            _ = services.capture.stop(owner: discarded.id)
+            discardedSeal = services.capture.retire(owner: discarded.id)
             discarded.lease.end()
             ScribeLog.info(
                 .dictation, "Recording stopped", .integer("dictation", discarded.id.rawValue),
@@ -878,18 +1046,25 @@ final class DictationController {
             dictation.cancel()
         }
 
+        shutdownProgress = .awaitingDelivery
         await services.injector.waitUntilIdle()
+        shutdownProgress = .awaitingDictations
         for dictation in running {
             await dictation.value
         }
+        shutdownProgress = .awaitingDevice
+        // The discarded recording's audio is dropped; its seal is awaited so its device has closed.
+        _ = await discardedSeal?.value
         await services.capture.waitUntilIdle()
 
+        shutdownProgress = .drainingHistory
         let history = services.history
         let timeout = configuration.historyDrainTimeout
         let drained = await Task.detached(priority: .userInitiated) { () -> HistoryDrainResult in
             stoppingMaintenance?()
             return history.complete(timeout: timeout)
         }.value
+        shutdownProgress = .finished
         ScribeLog.info(
             .dictation, "Shutdown finished", .flag("historyDrained", drained.drained),
             .count("historyStillWriting", drained.stillWriting), .count("historyAbandoned", drained.abandoned))

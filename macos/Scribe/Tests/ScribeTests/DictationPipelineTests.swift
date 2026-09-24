@@ -21,7 +21,7 @@ final class DictationPipelineTests: XCTestCase {
     /// Cleanup is sent the raw transcript, trigger phrase and all, never the snippet's template; snippets and the
     /// dictionary run on the model's reply, so the user's rules have the final say.
     func testCleanupSeesTheRawTranscriptAndTheRulesRunOnItsReply() async throws {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         loadRules(into: harness)
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -46,7 +46,7 @@ final class DictationPipelineTests: XCTestCase {
     /// Line breaks are formatted last, for the target captured at activation: a terminal gets one line, with the
     /// snippet's own line break flattened, and its cleanup request asks the model for a single line.
     func testATerminalTargetGetsOneLineAndCleanupIsAskedForOne() async throws {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         loadRules(into: harness)
         harness.targeting.next = FakeTargeting.terminal
         harness.cleanup.isEnabled = true
@@ -67,7 +67,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// The same dictation into an editor keeps its line breaks, and its request carries no single-line instruction.
     func testAnEditorTargetKeepsLineBreaks() async throws {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         loadRules(into: harness)
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -83,7 +83,7 @@ final class DictationPipelineTests: XCTestCase {
     /// The model's dashes are normalized away, and the user's own text keeps its dash: dash normalization applies to
     /// the model's reply only, before the snippets run.
     func testDashesAreNormalizedInTheReplyButKeptInTheUsersOwnSnippet() async throws {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         harness.load(snippets: [Snippet(phrase: "sign off", template: "Pat \u{2013} Support")])
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -101,7 +101,7 @@ final class DictationPipelineTests: XCTestCase {
     /// The reply is checked against the raw transcript it was given; a reply that answers the dictation instead of
     /// cleaning it is rejected, the raw transcript goes in, and the pill says cleanup fell back.
     func testARejectedReplyFallsBackToTheRawTranscriptVisibly() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
         provider.reply = { _ in "Absolutely, I can help with that. What would you like me to do next?" }
@@ -118,7 +118,7 @@ final class DictationPipelineTests: XCTestCase {
     /// A provider that fails, or cannot be built, falls back to the raw transcript with the pill's own "raw text
     /// used" notice, never the insertion failure's.
     func testACleanupFailureFallsBackToTheRawTranscriptWithItsOwnNotice() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
         provider.reply = { _ in throw DictationTestFailure(code: 7) }
@@ -140,7 +140,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// With cleanup switched off nothing is sent, and the switch is read when the dictation reaches cleanup.
     func testCleanupSwitchedOffSendsNothing() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         let provider = try XCTUnwrap(harness.cleanup.gated)
 
         await harness.dictate()
@@ -162,7 +162,7 @@ final class DictationPipelineTests: XCTestCase {
         let otherProfile = AppProfile(
             name: "Other", bundleIdentifiers: [FakeTargeting.otherBundle], processNames: [],
             writingStylePrompt: "Write for the other app.", newlineHandling: nil)
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         harness.load(profiles: [editorProfile, otherProfile])
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
@@ -189,7 +189,7 @@ final class DictationPipelineTests: XCTestCase {
     /// A target that could not be captured is never delivered to "wherever focus is": the transcript is kept for
     /// recovery and a notice offers it.
     func testATargetThatCouldNotBeCapturedIsNeverDeliveredElsewhere() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.targeting.next = FakeTargeting.unknown
 
         await harness.dictate()
@@ -214,7 +214,7 @@ final class DictationPipelineTests: XCTestCase {
             (.accessibilityDenied, .accessibilityNeeded, .accessibilityNeeded),
         ]
         for (delivery, notice, kind) in cases {
-            let harness = DictationHarness()
+            let harness = makeHarness()
             harness.fakeInjector.result = InjectionResult(delivery: delivery)
             await harness.dictate()
             await harness.waitUntilProcessed()
@@ -228,7 +228,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// An empty transcript is nothing to insert: no delivery, no history entry, no notice, no notification.
     func testAnEmptyTranscriptIsNothingToInsertAndQuiet() async {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.transcriber.defaultText = "   "
 
         await harness.dictate()
@@ -244,7 +244,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// A missing recognizer says so without an alert, and the next dictation looks for it again.
     func testAMissingRecognizerIsANoticeAndTheNextDictationTriesAgain() async {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.transcriber.steps = [.failure(TranscriptionError.backendMissing(.foundryCliNotFound))]
 
         await harness.dictate()
@@ -264,7 +264,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// Dictation A's cleanup finishes after dictation B's; A still goes in first, and B's text waits for it.
     func testCleanupFinishingInReverseOrderStillDeliversInDictationOrder() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
         let replyA = DictationGate<String>()
@@ -297,7 +297,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// One recognizer at a time: B's recognition waits for A's, in dictation order.
     func testOneRecognizerRunsAtATimeInDictationOrder() async {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         let first = DictationGate<String>()
         let second = DictationGate<String>()
         harness.transcriber.steps = [.gate(first), .gate(second)]
@@ -305,7 +305,7 @@ final class DictationPipelineTests: XCTestCase {
         await harness.dictate()
         await harness.dictate()
         await waitUntil("A's recognizer runs") { first.waitingCount == 1 }
-        await drainMainActor()
+        await waitUntil("B waits for its turn") { harness.controller.dictationsWaitingToTranscribe == 1 }
         XCTAssertEqual(harness.transcriber.calls, 1, "B's recognizer started while A's ran")
 
         first.open("first")
@@ -321,7 +321,7 @@ final class DictationPipelineTests: XCTestCase {
     /// A dictation that finishes before startup's first rule load waits for it, and is processed with the user's
     /// rules, never the empty set the app starts with.
     func testADictationWaitsForTheFirstRuleLoad() async {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         harness.transcriber.defaultText = "deploy it with cube flow"
 
         await harness.dictate()
@@ -335,7 +335,7 @@ final class DictationPipelineTests: XCTestCase {
 
     /// A first rule load that failed opens the gate degraded: dictation still works, without stored rules.
     func testADegradedStartupStillDictates() async {
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         await harness.dictate()
         harness.gate.open(.withoutStoredRules)
         await harness.waitUntilProcessed()
@@ -356,7 +356,7 @@ final class DictationPipelineTests: XCTestCase {
         let profile = AppProfile(
             name: "Canary profile", bundleIdentifiers: ["com.canary.editor"], processNames: ["Canary Editor"],
             writingStylePrompt: "Canary style for Dana.", newlineHandling: .keepNewlines)
-        let harness = DictationHarness(rulesLoaded: false)
+        let harness = makeHarness(rulesLoaded: false)
         harness.load(
             dictionary: [DictionaryEntry(pattern: "quarterly", replacement: "canary-quarterly")],
             snippets: [Snippet(phrase: "friday", template: "Canary snippet body for Dana")],

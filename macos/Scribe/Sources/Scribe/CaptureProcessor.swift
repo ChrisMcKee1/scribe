@@ -120,9 +120,10 @@ struct CapturedAudio: Sendable {
 ///
 /// It is the only owner of the recording's samples, counters and converter, all behind one lock, so the tap
 /// thread and whichever thread stops the recording never touch them at the same time. Once the recording has
-/// ended, by its owner's `finish()` or by itself, a buffer the tap delivers late is counted and dropped, so the
-/// samples `finish()` returns are exactly those of the buffers accepted before the end, and `finish()` returns
-/// them once. Silence and the ceiling are judged on capture time counted in samples, never on a clock.
+/// ended, by its owner's `retire()` or `finish()` or by itself, a buffer the tap delivers late is counted and
+/// dropped, so the samples `finish()` returns are exactly those of the buffers accepted before the end, and
+/// `finish()` returns them once. Silence and the ceiling are judged on capture time counted in samples, never on a
+/// clock.
 final class CaptureProcessor: Sendable {
     static let targetSampleRate: Double = 16_000
 
@@ -153,6 +154,11 @@ final class CaptureProcessor: Sendable {
     // leaves a `withLockUnchecked` body except finished Sendable values (event kinds, counts and the captured
     // audio), which is why the lock is created with unchecked state.
     private let state: OSAllocatedUnfairLock<State>
+
+    /// Set by `retire()`. A lock of its own, so the owner's stop never waits for the recording's lock, which the
+    /// tap holds while it converts a buffer and `finish()` holds while it drains the resampler. `process` reads it
+    /// inside the recording's lock; `retire()` never takes that lock.
+    private let retirement = OSAllocatedUnfairLock(initialState: false)
 
     init(
         owner: RecordingID,
@@ -230,9 +236,10 @@ final class CaptureProcessor: Sendable {
     /// but this recording's own lock.
     func process(_ buffer: AVAudioPCMBuffer) -> [CaptureEvent.Kind] {
         let flush = tailFlush
+        let retirement = retirement
         return state.withLockUnchecked { state -> [CaptureEvent.Kind] in
             state.received += 1
-            guard case .recording = state.phase, let input = state.input else {
+            guard case .recording = state.phase, !retirement.withLock({ $0 }), let input = state.input else {
                 state.dropped += 1
                 return []
             }
@@ -326,6 +333,13 @@ final class CaptureProcessor: Sendable {
             }
             return events
         }
+    }
+
+    /// The owner's stop, taken at once: every buffer the tap delivers from now on is counted and dropped, and a
+    /// buffer already being converted is kept. Seals nothing and waits for nothing; `finish()` seals afterwards,
+    /// on another thread (`AudioCaptureEngine.retire(owner:)`).
+    func retire() {
+        retirement.withLock { $0 = true }
     }
 
     /// Ends a recording still in progress, keeping what it captured. True only for the call that ended it.

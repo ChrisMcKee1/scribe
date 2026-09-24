@@ -7,7 +7,8 @@ enum HotkeyReleaseCause: Equatable, Sendable {
     case keyReleased
     /// The key was rebound while it held a recording; its own release would never match the new binding.
     case bindingChanged
-    /// The event tap was disabled and re-enabled, and the key, read again, was no longer down.
+    /// The event tap was disabled and re-enabled, and the key, read again, had been released meanwhile: a held key
+    /// was no longer down, or Caps Lock's lock had changed an odd number of times.
     case tapResynchronized
 }
 
@@ -32,12 +33,18 @@ enum HotkeyKeyAction: Equatable, Sendable {
 /// tap. A held key (every key but Caps Lock) presses on its way down and releases on its way up. Caps Lock toggles: it
 /// counts only a change of its lock state, so a flags event that repeats the state (a second event for one tap, or
 /// one after the tap was re-enabled) is never taken for a tap, and each change alternates press and release.
+/// After the tap was disabled, `resynchronize` settles what the lost events would have done without ever making up
+/// a press: a held key found up releases, Caps Lock releases when its lock changed an odd number of times, and a held
+/// key found down with nothing engaged must come up and go down again before it presses.
 struct HotkeyKeyState: Equatable, Sendable {
     let binding: HotkeyBinding
     /// A press the owner accepted and nothing has released: the key is held, or the toggle is on.
     private(set) var isEngaged = false
     /// Caps Lock's lock state as last seen.
     private(set) var lockIsOn: Bool
+    /// A held key that `resynchronize` found down with nothing engaged. Its down may still be queued behind the tap's
+    /// re-enable, so nothing presses until the key has come up.
+    private(set) var awaitsRelease = false
 
     init(binding: HotkeyBinding, lockIsOn: Bool) {
         self.binding = binding
@@ -51,13 +58,21 @@ struct HotkeyKeyState: Equatable, Sendable {
             lockIsOn = isOn
             return isEngaged ? .release : .press
         case (.hold, .modifierChanged(let isDown)):
+            if awaitsRelease {
+                awaitsRelease = isDown
+                return .none
+            }
             if isDown {
                 return isEngaged ? .none : .press
             }
             return isEngaged ? .release : .none
         case (.hold, .keyDown(let isRepeat)):
-            return isRepeat || isEngaged ? .none : .press
+            return isRepeat || isEngaged || awaitsRelease ? .none : .press
         case (.hold, .keyUp):
+            if awaitsRelease {
+                awaitsRelease = false
+                return .none
+            }
             return isEngaged ? .release : .none
         default:
             return .none
@@ -82,16 +97,26 @@ struct HotkeyKeyState: Equatable, Sendable {
         isEngaged = false
     }
 
-    /// After the event tap was disabled and re-enabled, when events may have been lost, with the key as read now. A
-    /// held key that is no longer down releases. Nothing presses: a key found down that was not engaged needs a fresh
-    /// press, and a Caps Lock whose state changed meanwhile only takes that state as its new baseline.
+    /// After the event tap was disabled and re-enabled, when events may have been lost, with the key as read now.
+    /// Nothing ever presses. A held key that is no longer down releases; one found down with nothing engaged waits
+    /// for its release (`awaitsRelease`), so a down still queued behind the re-enable is not taken for a fresh
+    /// press. Caps Lock releases once when it is engaged and its lock changed, which means an odd number of taps
+    /// was missed; an even number (none, or a stop and a start) leaves the recording as it is. Either way the lock
+    /// state found becomes the baseline.
     mutating func resynchronize(isDown: Bool, lockIsOn: Bool) -> HotkeyKeyAction {
         switch binding.gesture {
         case .toggle:
+            let changed = lockIsOn != self.lockIsOn
             self.lockIsOn = lockIsOn
-            return .none
+            guard isEngaged, changed else { return .none }
+            isEngaged = false
+            return .release
         case .hold:
-            guard isEngaged, !isDown else { return .none }
+            guard isEngaged else {
+                awaitsRelease = isDown
+                return .none
+            }
+            guard !isDown else { return .none }
             isEngaged = false
             return .release
         }
@@ -256,7 +281,8 @@ final class HotkeyManager: DictationTriggerSource {
         state.released()
     }
 
-    func cancelToggle() {
+    func cancelToggle(_ binding: HotkeyBinding) {
+        guard binding == state.binding else { return }
         state.cancelToggle()
     }
 
@@ -339,16 +365,21 @@ final class HotkeyManager: DictationTriggerSource {
         resynchronizeHeldState()
     }
 
-    /// Reads the bound key's state now and settles what events lost meanwhile would have: a held key found up
-    /// releases its recording. Nothing presses; a key found down needs a fresh press.
+    /// Reads the bound key's state now and settles what events lost meanwhile would have (`HotkeyKeyState.resynchronize`):
+    /// a held key found up, or a Caps Lock whose lock changed an odd number of times, releases its recording. Nothing
+    /// presses; a key found down needs a fresh press.
     func resynchronizeHeldState() {
         let binding = state.binding
         let flags = readModifierFlags()
         let action = state.resynchronize(
             isDown: isDown(binding.keyCode, flags: flags), lockIsOn: flags.contains(.maskAlphaShift))
         if action == .release {
-            ScribeLog.info(.hotkey, "The push-to-talk key was found up after the event tap came back")
+            ScribeLog.info(
+                .hotkey, "The push-to-talk key was released while the event tap was off",
+                .name("gesture", binding.gesture))
             onReleased?(binding, .tapResynchronized)
+        } else if state.awaitsRelease {
+            ScribeLog.info(.hotkey, "The push-to-talk key was found down; it has to come up before it starts anything")
         }
     }
 

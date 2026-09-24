@@ -19,9 +19,11 @@ protocol DictationCapturing {
         events: @escaping @Sendable (CaptureEvent) -> Void
     ) -> Task<CaptureOpenOutcome, Error>
 
-    /// Ends `owner`'s recording and returns what it captured, or nil when `owner` holds nothing. Never waits on the
-    /// device.
-    func stop(owner: RecordingID) -> CapturedAudio?
+    /// Ends `owner`'s recording without waiting for anything and returns the task that yields its samples once they
+    /// are sealed, off the main actor, or nil when `owner` holds nothing. A release can arrive in the event tap's
+    /// callback, which must return at once, so neither a buffer being converted nor the resampler's tail is waited
+    /// for here.
+    func retire(owner: RecordingID) -> Task<CapturedAudio?, Never>?
 
     /// Returns once the device work queued so far (opens and closes) has run.
     func waitUntilIdle() async
@@ -120,8 +122,9 @@ protocol DictationNotifying: AnyObject {
 @MainActor
 protocol DictationTriggerSource: AnyObject {
     /// A toggle's recording ended by some other way than the key: the key's next change starts a new recording
-    /// instead of being taken as the toggle's second tap. Windows' `CancelToggle`.
-    func cancelToggle()
+    /// instead of being taken as the toggle's second tap. Windows' `CancelToggle`. Ignored unless `binding` is the
+    /// toggle bound now, so a recording started by a key since rebound settles nothing.
+    func cancelToggle(_ binding: HotkeyBinding)
 }
 
 /// Time for the duration ceiling and the pill's notices. Main-actor isolated like the controller that reads it, so a
@@ -152,8 +155,13 @@ struct LiveDictationCapture: DictationCapturing {
         }
     }
 
-    func stop(owner: RecordingID) -> CapturedAudio? {
-        engine.stop(owner: owner)
+    func retire(owner: RecordingID) -> Task<CapturedAudio?, Never>? {
+        // The engine queues the seal on its control queue before this returns, so it runs ahead of the next
+        // recording's open; the task only waits for it.
+        guard let seal = engine.retire(owner: owner) else { return nil }
+        return Task.detached(priority: .userInitiated) {
+            await seal.audio
+        }
     }
 
     func waitUntilIdle() async {

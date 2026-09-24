@@ -42,6 +42,61 @@ enum CaptureOpenOutcome: Sendable, Equatable {
     case stoppedWhileOpening
 }
 
+/// The samples of a recording its owner retired (`AudioCaptureEngine.retire(owner:)`), sealed on the engine's
+/// control queue after the stop has returned. Every awaiter of `audio` gets the same value, one that arrives after
+/// the seal at once.
+final class CaptureSeal: Sendable {
+    let owner: RecordingID
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    private struct State: Sendable {
+        var isSealed = false
+        var audio: CapturedAudio?
+        var waiters: [CheckedContinuation<CapturedAudio?, Never>] = []
+    }
+
+    fileprivate init(owner: RecordingID) {
+        self.owner = owner
+    }
+
+    /// Whether the samples have been sealed.
+    var isSealed: Bool {
+        state.withLock { $0.isSealed }
+    }
+
+    /// What the recording captured, once sealed; nil when its samples had already been handed over. Sealing always
+    /// finishes, so this is not cancellable.
+    var audio: CapturedAudio? {
+        get async {
+            await withCheckedContinuation { (continuation: CheckedContinuation<CapturedAudio?, Never>) in
+                let sealed = state.withLock { state -> CapturedAudio?? in
+                    guard state.isSealed else {
+                        state.waiters.append(continuation)
+                        return .none
+                    }
+                    return .some(state.audio)
+                }
+                if case .some(let audio) = sealed {
+                    continuation.resume(returning: audio)
+                }
+            }
+        }
+    }
+
+    fileprivate func fulfill(_ audio: CapturedAudio?) {
+        let waiters = state.withLock { state -> [CheckedContinuation<CapturedAudio?, Never>] in
+            state.isSealed = true
+            state.audio = audio
+            let waiting = state.waiters
+            state.waiters = []
+            return waiting
+        }
+        for waiter in waiters {
+            waiter.resume(returning: audio)
+        }
+    }
+}
+
 enum AudioCaptureEngineError: LocalizedError {
     case microphoneNotAuthorized(AVAuthorizationStatus)
     case missingInputNodeFormat
@@ -95,7 +150,8 @@ protocol CaptureDevice: AnyObject {
 ///
 /// A recording is admitted by `start(owner:policy:events:)`, which opens the device off the caller's thread,
 /// and ends when its owner calls `stop(owner:)`, which returns everything the recording captured at once,
-/// without waiting for the device. The samples live in the recording's `CaptureProcessor` (see there), and
+/// without waiting for the device, or `retire(owner:)`, which returns before even the samples are sealed and
+/// seals them on the control queue. The samples live in the recording's `CaptureProcessor` (see there), and
 /// every capture gets a generation of its own, so a tap buffer, a configuration change or a stall check that
 /// arrives late can only reach the capture it was meant for, which by then has ended and ignores it.
 ///
@@ -208,17 +264,13 @@ final class AudioCaptureEngine: Sendable {
     /// Ends `owner`'s recording and returns everything it captured, or `nil` when `owner` does not hold the
     /// microphone (it was never started, a stop already took it, or a later recording has it). Returns without
     /// waiting for the device, which closes on the control queue, always before a later recording's device opens
-    /// (see `open`); a tap buffer that arrives meanwhile is dropped. Safe to call from any thread, the main actor
-    /// included; never call it from `events`.
+    /// (see `open`); a tap buffer that arrives meanwhile is dropped. Seals the samples on the calling thread, which
+    /// waits for a buffer the tap is converting and for the resampler's tail, so the dictation lifecycle, whose stop
+    /// can come from an event tap's callback, calls `retire(owner:)` instead. Safe to call from any thread; never
+    /// call it from `events`.
     @discardableResult
     func stop(owner: RecordingID) -> CapturedAudio? {
-        let taken = state.withLock { state -> ActiveCapture? in
-            state.stoppedThrough = max(state.stoppedThrough, owner.rawValue)
-            guard let current = state.current, current.owner == owner else { return nil }
-            state.current = nil
-            return current
-        }
-        guard let capture = taken else { return nil }
+        guard let capture = take(owner) else { return nil }
 
         let captured = capture.processor.finish()
         let generation = capture.generation
@@ -229,6 +281,39 @@ final class AudioCaptureEngine: Sendable {
             Self.logCompletion(captured)
         }
         return captured
+    }
+
+    /// Ends `owner`'s recording without waiting for anything: it gives up the microphone at once (a later start is
+    /// admitted, and this recording's own pending start opens nothing), its processor drops every buffer the tap
+    /// delivers from now on, and its samples are sealed afterwards on the control queue, ahead of any device work
+    /// queued after this call, where its device then closes. Returns the seal to await, or `nil` when `owner` does
+    /// not hold the microphone. Takes only the engine's own lock, never the recording's, so it returns while the tap
+    /// converts a buffer or a resampler drains. Safe to call from any thread; never call it from `events`.
+    func retire(owner: RecordingID) -> CaptureSeal? {
+        guard let capture = take(owner) else { return nil }
+
+        capture.processor.retire()
+        let seal = CaptureSeal(owner: owner)
+        let stoppedAt = Date()
+        controlQueue.async {
+            let captured = capture.processor.finish(at: stoppedAt)
+            self.closeDevice(generation: capture.generation)
+            if let captured {
+                Self.logCompletion(captured)
+            }
+            seal.fulfill(captured)
+        }
+        return seal
+    }
+
+    /// Records that `owner` has stopped and takes its capture off the microphone, if it holds it.
+    private func take(_ owner: RecordingID) -> ActiveCapture? {
+        state.withLock { state -> ActiveCapture? in
+            state.stoppedThrough = max(state.stoppedThrough, owner.rawValue)
+            guard let current = state.current, current.owner == owner else { return nil }
+            state.current = nil
+            return current
+        }
     }
 
     /// Returns once everything already queued for the device (opening or closing it) has run.

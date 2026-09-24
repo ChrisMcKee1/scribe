@@ -34,6 +34,8 @@ struct DictationNotice: Equatable, Sendable {
         case microphoneAccessNeeded
         case microphoneUnavailable
         case recognizerMissing
+        case cleanupFellBack
+        case transcriptionFailed
         case startup
     }
 
@@ -42,47 +44,82 @@ struct DictationNotice: Equatable, Sendable {
     let body: String
     /// The dictation the notice is about, for its Copy Transcript action. Kept in memory only.
     let recoveryText: String?
+    /// `LastTranscriptStore.generation` when `recoveryText` was kept for recovery. After a Clear the notice is
+    /// obsolete: it is not posted, and its Copy Transcript action copies nothing.
+    let recoveryGeneration: UInt64?
     /// The privacy pane its Open System Settings action opens.
     let settingsPane: PrivacyPane?
 
-    static func notInserted(_ transcript: String) -> DictationNotice {
+    init(
+        kind: Kind, title: String, body: String, recoveryText: String?, recoveryGeneration: UInt64? = nil,
+        settingsPane: PrivacyPane?
+    ) {
+        self.kind = kind
+        self.title = title
+        self.body = body
+        self.recoveryText = recoveryText
+        self.recoveryGeneration = recoveryGeneration
+        self.settingsPane = settingsPane
+    }
+
+    static func notInserted(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .notInserted,
             title: "Dictation could not be inserted",
             body: "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it.",
             recoveryText: transcript,
+            recoveryGeneration: recoveryGeneration,
             settingsPane: nil)
     }
 
-    static func partlyInserted(_ transcript: String) -> DictationNotice {
+    static func partlyInserted(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .partlyInserted,
             title: "Dictation was only partly inserted",
             body: "Scribe stopped part way through typing it. Use \u{201C}Copy Transcript\u{201D} below or the "
                 + "Recent Dictations menu to recover the full text.",
             recoveryText: transcript,
+            recoveryGeneration: recoveryGeneration,
             settingsPane: nil)
     }
 
-    static func mayNotBeInserted(_ transcript: String) -> DictationNotice {
+    static func mayNotBeInserted(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .mayNotBeInserted,
             title: "Dictation may not have been inserted",
             body: "The app stopped responding while Scribe was inserting it, so the text may still appear. If it "
                 + "does not, use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu.",
             recoveryText: transcript,
+            recoveryGeneration: recoveryGeneration,
             settingsPane: nil)
     }
 
-    static func accessibilityNeeded(_ transcript: String) -> DictationNotice {
+    static func accessibilityNeeded(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .accessibilityNeeded,
             title: "Scribe needs Accessibility access",
             body: "Allow Scribe in System Settings > Privacy & Security > Accessibility to insert dictations. This "
                 + "one is kept: use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu.",
             recoveryText: transcript,
+            recoveryGeneration: recoveryGeneration,
             settingsPane: .accessibility)
     }
+
+    /// Posted only when the pill could not say so at the time (`OverlayNotice.notifiesWhenThePillIsBusy`).
+    static let cleanupFellBack = DictationNotice(
+        kind: .cleanupFellBack,
+        title: "AI cleanup was skipped",
+        body: "AI cleanup failed or gave an unusable reply, so the dictation was inserted as it was recognized.",
+        recoveryText: nil,
+        settingsPane: nil)
+
+    /// Posted only when the pill could not say so at the time (`OverlayNotice.notifiesWhenThePillIsBusy`).
+    static let transcriptionFailed = DictationNotice(
+        kind: .transcriptionFailed,
+        title: "A dictation could not be transcribed",
+        body: "The speech recognizer failed, so nothing was inserted. Please dictate it again.",
+        recoveryText: nil,
+        settingsPane: nil)
 
     static let microphoneAccessNeeded = DictationNotice(
         kind: .microphoneAccessNeeded,
@@ -181,21 +218,28 @@ final class StartupNotices {
 }
 
 /// The Copy Transcript texts of recent notices, kept in memory only and never in the notification itself, which
-/// macOS stores on disk. Bounded, so an old notice's text is let go.
+/// macOS stores on disk. Bounded, so an old notice's text is let go. Each text carries the recovery generation it was
+/// kept in, and a Copy Transcript after Clear history finds nothing.
 struct NotificationRecoveryTexts: Sendable {
     static let capacity = 5
 
-    private var entries: [(identifier: String, text: String)] = []
+    private var entries: [(identifier: String, text: String, generation: UInt64?)] = []
 
-    mutating func remember(_ text: String, for identifier: String) {
-        entries.append((identifier, text))
+    mutating func remember(_ text: String, generation: UInt64?, for identifier: String) {
+        entries.append((identifier, text, generation))
         if entries.count > Self.capacity {
             entries.removeFirst(entries.count - Self.capacity)
         }
     }
 
-    func text(for identifier: String) -> String? {
-        entries.last(where: { $0.identifier == identifier })?.text
+    /// The text of the notice `identifier`, unless a Clear has started a generation other than the one it was kept
+    /// in.
+    func text(for identifier: String, currentGeneration: UInt64) -> String? {
+        guard let entry = entries.last(where: { $0.identifier == identifier }) else { return nil }
+        if let generation = entry.generation, generation != currentGeneration {
+            return nil
+        }
+        return entry.text
     }
 
     mutating func removeAll() {
@@ -223,11 +267,14 @@ final class DictationNotificationCenter: DictationNotifying {
     private static let paneKey = "pane"
 
     private let center: UNUserNotificationCenter
+    /// `LastTranscriptStore.generation` now, to refuse text a Clear has removed.
+    private let recoveryGeneration: @MainActor () -> UInt64
     private var responder: NotificationResponder?
     private var recoveryTexts = NotificationRecoveryTexts()
 
-    init(center: UNUserNotificationCenter) {
+    init(center: UNUserNotificationCenter, recoveryGeneration: @escaping @MainActor () -> UInt64) {
         self.center = center
+        self.recoveryGeneration = recoveryGeneration
     }
 
     /// Registers the actions, becomes the delegate and asks for permission. `settled` runs on the main actor once
@@ -274,6 +321,10 @@ final class DictationNotificationCenter: DictationNotifying {
     }
 
     func notify(_ notice: DictationNotice) {
+        if let generation = notice.recoveryGeneration, generation != recoveryGeneration() {
+            ScribeLog.info(.app, "A notice about text Clear history removed was not shown", .name("kind", notice.kind))
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = notice.title
         content.body = notice.body
@@ -294,7 +345,7 @@ final class DictationNotificationCenter: DictationNotifying {
 
         let identifier = UUID().uuidString
         if let text = notice.recoveryText {
-            recoveryTexts.remember(text, for: identifier)
+            recoveryTexts.remember(text, generation: notice.recoveryGeneration, for: identifier)
         }
         let kind = notice.kind
         center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil)) { @Sendable error in
@@ -307,7 +358,10 @@ final class DictationNotificationCenter: DictationNotifying {
     private func handle(_ answer: NotificationAnswer) {
         switch answer.actionIdentifier {
         case Self.copyTranscriptActionIdentifier:
-            guard let text = recoveryTexts.text(for: answer.requestIdentifier) else {
+            guard
+                let text = recoveryTexts.text(
+                    for: answer.requestIdentifier, currentGeneration: recoveryGeneration())
+            else {
                 ScribeLog.info(.app, "Copy Transcript was chosen for a dictation Scribe no longer holds")
                 return
             }

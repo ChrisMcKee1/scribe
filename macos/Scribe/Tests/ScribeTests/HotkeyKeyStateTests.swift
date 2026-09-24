@@ -100,13 +100,61 @@ final class HotkeyKeyStateTests: XCTestCase {
 
         var free = HotkeyKeyState(binding: rightOption, lockIsOn: false)
         XCTAssertEqual(free.resynchronize(isDown: true, lockIsOn: false), .none, "a press was made up")
+        XCTAssertTrue(free.awaitsRelease)
+        // The key's own down, still queued behind the re-enable, arrives after the resync: not a fresh press.
+        XCTAssertEqual(free.receive(.modifierChanged(isDown: true)), .none, "a queued down pressed")
         XCTAssertEqual(free.receive(.modifierChanged(isDown: false)), .none)
+        XCTAssertFalse(free.awaitsRelease)
+        XCTAssertEqual(free.receive(.modifierChanged(isDown: true)), .press, "the fresh press after the release")
+
+        var freeKey = HotkeyKeyState(binding: f13, lockIsOn: false)
+        XCTAssertEqual(freeKey.resynchronize(isDown: true, lockIsOn: false), .none)
+        XCTAssertEqual(freeKey.receive(.keyDown(isRepeat: false)), .none, "a queued down pressed")
+        XCTAssertEqual(freeKey.receive(.keyUp), .none)
+        XCTAssertEqual(freeKey.receive(.keyDown(isRepeat: false)), .press)
+
+        // Found up at a later resync, a key waiting for its release is free again.
+        var lost = HotkeyKeyState(binding: rightOption, lockIsOn: false)
+        XCTAssertEqual(lost.resynchronize(isDown: true, lockIsOn: false), .none)
+        XCTAssertEqual(lost.resynchronize(isDown: false, lockIsOn: false), .none)
+        XCTAssertEqual(lost.receive(.modifierChanged(isDown: true)), .press)
 
         var toggle = HotkeyKeyState(binding: capsLock, lockIsOn: false)
         XCTAssertEqual(toggle.resynchronize(isDown: false, lockIsOn: true), .none)
         XCTAssertTrue(toggle.lockIsOn)
         XCTAssertEqual(toggle.receive(.lockChanged(isOn: true)), .none, "the new baseline counted as a tap")
         XCTAssertEqual(toggle.receive(.lockChanged(isOn: false)), .press)
+    }
+
+    /// A Caps Lock recording whose stop tap was lost while the tap was off: the lock changed an odd number of times,
+    /// so the resync releases it once. An even number (a stop and a start) leaves the recording as it is, and a lock
+    /// change while nothing records only becomes the baseline. Both starting polarities of the light.
+    func testResynchronizingACapsLockRecordingReleasesItOnlyWhenTheLockChangedAnOddNumberOfTimes() {
+        for initial in [false, true] {
+            var state = HotkeyKeyState(binding: capsLock, lockIsOn: initial)
+            XCTAssertEqual(state.receive(.lockChanged(isOn: !initial)), .press, "light on at launch: \(initial)")
+            state.pressAnswered(started: true)
+
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: !initial), .none, "no tap was missed")
+            XCTAssertTrue(state.isEngaged)
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: initial), .release, "one tap was missed")
+            XCTAssertFalse(state.isEngaged)
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: initial), .none, "released twice")
+
+            // Idle now: a lock change missed while nothing records is not a made-up press.
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: !initial), .none, "a press was made up")
+            XCTAssertEqual(state.receive(.lockChanged(isOn: initial)), .press, "the next real tap")
+        }
+    }
+
+    /// Two taps missed while recording: the lock is back where it was, and the recording goes on.
+    func testResynchronizingACapsLockRecordingAfterAnEvenNumberOfMissedTapsKeepsIt() {
+        var state = HotkeyKeyState(binding: capsLock, lockIsOn: false)
+        XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
+        state.pressAnswered(started: true)
+        XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: true), .none)
+        XCTAssertTrue(state.isEngaged)
+        XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .release)
     }
 }
 
@@ -238,11 +286,55 @@ final class HotkeyManagerEventTests: XCTestCase {
 
         manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
         XCTAssertEqual(recorder.presses.count, 1)
-        manager.cancelToggle()
+        manager.cancelToggle(HotkeyBinding(keyCode: 57))
         manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
         XCTAssertEqual(recorder.presses.count, 2)
         XCTAssertTrue(recorder.releases.isEmpty)
         manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
         XCTAssertEqual(recorder.causes, [.keyReleased])
+    }
+
+    /// A cancel for a binding the manager no longer has (the key was rebound since) settles nothing.
+    func testACancelForAnotherBindingLeavesTheToggleEngaged() {
+        let recorder = Recorder()
+        let manager = makeManager(keyCode: 57, recorder: recorder)
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        manager.cancelToggle(HotkeyBinding(keyCode: 61))
+        XCTAssertTrue(manager.isEngaged)
+    }
+
+    /// The stop tap for a Caps Lock recording was lost while the tap was off: read again, the lock has changed, and
+    /// the recording is released once, as `tapResynchronized`.
+    func testResynchronizingAfterTheTapCameBackReleasesACapsLockWhoseLockChanged() {
+        let recorder = Recorder()
+        let manager = makeManager(keyCode: 57, recorder: recorder)
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        XCTAssertTrue(manager.isEngaged)
+
+        recorder.flags = [.maskAlphaShift]
+        manager.resynchronizeHeldState()
+        XCTAssertTrue(recorder.releases.isEmpty, "released with the lock unchanged")
+
+        recorder.flags = []
+        manager.resynchronizeHeldState()
+        XCTAssertEqual(recorder.causes, [.tapResynchronized])
+        XCTAssertFalse(manager.isEngaged)
+        XCTAssertEqual(recorder.presses.count, 1)
+    }
+
+    /// A held key found down at the resync with nothing engaged: its own down, queued behind the re-enable, is not a
+    /// fresh press; the key has to come up and go down again.
+    func testAKeyFoundDownAtTheResyncNeedsAFreshPress() {
+        let recorder = Recorder()
+        let manager = makeManager(keyCode: 61, recorder: recorder)
+        recorder.flags = rightOptionDown
+        manager.resynchronizeHeldState()
+
+        manager.receive(event(.flagsChanged, keyCode: 61, flags: rightOptionDown))
+        XCTAssertTrue(recorder.presses.isEmpty, "the queued down pressed")
+        manager.receive(event(.flagsChanged, keyCode: 61, flags: []))
+        XCTAssertTrue(recorder.releases.isEmpty)
+        manager.receive(event(.flagsChanged, keyCode: 61, flags: rightOptionDown))
+        XCTAssertEqual(recorder.presses, [HotkeyBinding(keyCode: 61)])
     }
 }

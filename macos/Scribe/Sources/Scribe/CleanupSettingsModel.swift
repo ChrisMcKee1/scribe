@@ -110,6 +110,8 @@ final class CleanupSettingsModel: ObservableObject {
 
     let drafts: SettingsDrafts
     private let access: CleanupSettingsAccess
+    /// Where Test Connection runs, so Quit can cancel it and wait for its `az` or `foundry` to be reaped.
+    private let operations: AuxiliaryOperations
     private var isReloading = false
     private var isSaving = false
     /// Advances on every change to `values` and every stored credential change, so a connection test can tell its
@@ -123,9 +125,13 @@ final class CleanupSettingsModel: ObservableObject {
     /// for the model to be freed would wait for the check.
     private var closeObservation: SettingsNotificationObservation?
 
-    init(access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default) {
+    init(
+        access: CleanupSettingsAccess, drafts: SettingsDrafts, center: NotificationCenter = .default,
+        operations: AuxiliaryOperations = .shared
+    ) {
         self.access = access
         self.drafts = drafts
+        self.operations = operations
         values = access.load()
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
@@ -230,7 +236,7 @@ final class CleanupSettingsModel: ObservableObject {
 
     /// Runs Test Connection through the provider the pipeline would use, environment overrides included. A result that
     /// arrives after the settings or a stored credential changed is dropped rather than shown against them.
-    /// `cancelConnectionTest()` stops it while it runs.
+    /// `cancelConnectionTest()` stops it while it runs, and so does Quit (`AuxiliaryOperations`).
     func testConnection() async {
         guard !isDisabled(.connectionTest) else { return }
         let started = revision
@@ -239,7 +245,15 @@ final class CleanupSettingsModel: ObservableObject {
         errorMessage = nil
         checkCancelledByUser = false
         let checkConnection = access.checkConnection
-        let check = Task { await checkConnection() }
+        let operations = operations
+        let check = Task { () -> CleanupConnectionCheck in
+            do {
+                return try await operations.run { await checkConnection() }
+            } catch {
+                return CleanupConnectionCheck(
+                    reachable: false, message: "Test Connection did not run, because Scribe is quitting.")
+            }
+        }
         runningCheck = check
         let result = await withTaskCancellationHandler {
             await check.value

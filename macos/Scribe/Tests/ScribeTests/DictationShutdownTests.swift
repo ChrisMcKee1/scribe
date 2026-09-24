@@ -60,7 +60,10 @@ final class DictationShutdownTests: XCTestCase {
         defer { injection.releasePasteboard() }
         injection.copyAsAnotherApplication(usersClipboard)
         injection.pacer.holdNext = .afterPaste
-        let harness = DictationHarness(injector: injection.injector)
+        let harness = makeHarness(injector: injection.injector)
+        // Registered after the harness, so it runs first: a failed test's paste is let go before the harness shuts
+        // down and waits for it.
+        addTeardownBlock { await MainActor.run { injection.pacer.releaseHeldPause() } }
         harness.transcriber.steps = [.text("first dictation"), .engine(engine)]
 
         await harness.dictate()
@@ -82,8 +85,11 @@ final class DictationShutdownTests: XCTestCase {
             return report
         }
 
-        // Nothing moves shutdown past a paste in progress: it waits for the delivery to finish, however long.
-        await drainMainActor(yields: 500)
+        // Nothing moves shutdown past a paste in progress: it has reached the delivery barrier and waits there for the
+        // delivery to finish, however long.
+        await waitUntil("shutdown waits at the delivery barrier") {
+            harness.controller.shutdownProgress == .awaitingDelivery
+        }
         XCTAssertFalse(probe.isDone, "shutdown returned while a paste was still in progress")
         XCTAssertTrue(injection.pacer.isHolding)
         XCTAssertFalse(harness.controller.hotkeyPressed(DictationHarness.holdKey), "a press was admitted at quit")
@@ -112,7 +118,7 @@ final class DictationShutdownTests: XCTestCase {
     /// dictation checks its own cancellation before using it: no cleanup request, no recovery entry, no delivery, no
     /// history.
     func testATranscriptThatArrivesAfterTheCancellationIsNeverUsed() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
         let late = DictationGate<String>()
@@ -123,7 +129,7 @@ final class DictationShutdownTests: XCTestCase {
         let shutdown = Task { @MainActor in await harness.controller.shutDown() }
         await waitUntil("shutdown began") { harness.controller.isClosing }
         late.open("words the recognizer finished anyway")
-        _ = await shutdown.value
+        _ = await bounded("shutdown") { await shutdown.value }
 
         XCTAssertTrue(provider.requests.isEmpty)
         XCTAssertTrue(harness.recovery.recent().isEmpty)
@@ -136,12 +142,15 @@ final class DictationShutdownTests: XCTestCase {
 
     /// A dictation waiting for startup's first rule load does not hold up the quit: that wait is cancellable here,
     /// although `StartupGate` itself is not, and the gate may never open.
-    func testShutdownDoesNotWaitForARuleLoadThatNeverFinishes() async {
-        let harness = DictationHarness(rulesLoaded: false)
+    func testShutdownDoesNotWaitForARuleLoadThatNeverFinishes() async throws {
+        let harness = makeHarness(rulesLoaded: false)
 
         await harness.dictate()
         await waitUntil("the dictation waits for the rules") { harness.gate.waitingCount == 1 }
-        let report = await harness.controller.shutDown()
+        let shutdown = await bounded("shutdown while a dictation waits for the rules") {
+            await harness.controller.shutDown()
+        }
+        let report = try XCTUnwrap(shutdown)
 
         XCTAssertEqual(report.cancelledDictations, 1)
         XCTAssertTrue(harness.fakeInjector.deliveries.isEmpty)
@@ -152,11 +161,12 @@ final class DictationShutdownTests: XCTestCase {
 
     /// The live recording is discarded (its audio is never processed), its lease ends, and nothing new starts.
     func testShutdownDiscardsTheLiveRecordingAndAdmitsNothingNew() async throws {
-        let harness = DictationHarness()
+        let harness = makeHarness()
         let id = try await harness.pressAdmitted()
         await harness.waitUntilLive()
 
-        let report = await harness.controller.shutDown()
+        let shutdown = await bounded("shutdown") { await harness.controller.shutDown() }
+        let report = try XCTUnwrap(shutdown)
 
         XCTAssertTrue(report.discardedRecording)
         XCTAssertEqual(report.cancelledDictations, 0)
@@ -171,13 +181,16 @@ final class DictationShutdownTests: XCTestCase {
     }
 
     /// A second call, such as a second Quit, waits for the same shutdown instead of starting another.
-    func testShutdownRunsOnce() async {
-        let harness = DictationHarness()
+    func testShutdownRunsOnce() async throws {
+        let harness = makeHarness()
         await harness.dictate()
 
-        async let first = harness.controller.shutDown()
-        async let second = harness.controller.shutDown()
-        let reports = await [first, second]
+        let both = await bounded("both shutdowns") {
+            async let first = harness.controller.shutDown()
+            async let second = harness.controller.shutDown()
+            return await [first, second]
+        }
+        let reports = try XCTUnwrap(both)
 
         XCTAssertEqual(reports[0], reports[1])
         XCTAssertEqual(harness.fakeInjector.barrierCalls, 1)

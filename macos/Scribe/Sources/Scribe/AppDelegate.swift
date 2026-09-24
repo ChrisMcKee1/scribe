@@ -47,19 +47,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
     private lazy var trayPresenter = TrayPresenter(overlay: overlayPanelController)
-    private lazy var notifier: any DictationNotifying = Self.makeNotifier()
+    private lazy var notifier: any DictationNotifying = Self.makeNotifier(recovery: lastTranscriptStore)
     private lazy var startupNotices = StartupNotices { [weak self] notice in
         self?.notifier.notify(notice)
     }
     private lazy var recentDictationsMenu = RecentDictationsMenu(store: lastTranscriptStore)
     private lazy var dictationController = makeDictationController()
+    private lazy var termination = makeTermination()
     private var dictationMenuItem: NSMenuItem?
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
     private var overlayPositionMenu: NSMenu?
     private var cleanupSettings = CleanupSettingsStore.live.snapshot()
     private var observations: [SettingsNotificationObservation] = []
-    private var isTerminating = false
 
     private var isAiCleanupEnabled: Bool {
         CleanupSettingsStore.live.isEnabled
@@ -84,25 +84,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showWelcomeIfFirstRun()
     }
 
-    /// Quitting waits for dictation to shut down in order (`DictationController.shutDown`): a paste in progress puts
-    /// the user's pasteboard back, and a recognizer still running is stopped and reaped, before Scribe replies and
-    /// exits. `applicationWillTerminate` alone would be too late for either.
+    /// Quitting waits for Scribe to shut down in order (`ApplicationTermination`): a paste in progress puts the user's
+    /// pasteboard back, and a recognizer, or an `az` or `foundry` a Settings check started, is stopped and reaped,
+    /// before Scribe replies and exits. `applicationWillTerminate` alone would be too late for any of it. A second
+    /// Quit while that runs changes nothing: the first one replies.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !isTerminating else { return .terminateLater }
-        isTerminating = true
-        hotkeyManager.stop()
+        termination.request()
+    }
+
+    private func makeTermination() -> ApplicationTermination {
         let maintenance = storageMaintenance
-        let controller = dictationController
-        Task { @MainActor in
-            // Maintenance stops first: a reclaim in progress rolls back and frees the connection for the last
-            // history writes.
-            _ = await controller.shutDown(stoppingMaintenance: { _ = maintenance.stop(timeout: 2) })
-            await Task.detached(priority: .userInitiated) {
-                _ = ScratchAudioDirectory.live.removeFilesOfThisProcess()
-            }.value
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
-        return .terminateLater
+        let hotkeyManager = hotkeyManager
+        return ApplicationTermination(
+            work: ApplicationTermination.Work(
+                stopListening: { hotkeyManager.stop() },
+                operations: .shared,
+                dictation: dictationController,
+                // Maintenance stops first: a reclaim in progress rolls back and frees the connection for the last
+                // history writes.
+                stopMaintenance: { _ = maintenance.stop(timeout: 2) },
+                removeScratchAudio: { _ = ScratchAudioDirectory.live.removeFilesOfThisProcess() }),
+            reply: { NSApp.reply(toApplicationShouldTerminate: true) })
     }
 
     private func makeDictationController() -> DictationController {
@@ -126,10 +128,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return controller
     }
 
-    private static func makeNotifier() -> any DictationNotifying {
+    private static func makeNotifier(recovery: LastTranscriptStore) -> any DictationNotifying {
         // The notification center needs an app bundle; a bare `swift run` binary has none.
         guard Bundle.main.bundleIdentifier != nil else { return SilentNotifier() }
-        return DictationNotificationCenter(center: .current())
+        return DictationNotificationCenter(center: .current(), recoveryGeneration: { recovery.generation })
     }
 
     // MARK: - Startup
@@ -422,10 +424,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// A successful Clear history empties everything that could bring the deleted text back: the Recent Dictations
-    /// ring (beyond Windows, whose tray list survives a Clear) and the transcripts earlier notices would copy.
+    /// ring (beyond Windows, whose tray list survives a Clear) and its submenu if it is open, the transcripts earlier
+    /// notices would copy, and a pill notice that offers one.
     private func historyWasCleared() {
         lastTranscriptStore.removeAll()
         (notifier as? DictationNotificationCenter)?.forgetRecoveryTexts()
+        dictationController.recoveryWasCleared()
+        recentDictationsMenu.invalidate()
     }
 
     /// Opens the quick "Add to Dictionary" popup, mirroring Windows' `ShowQuickAdd()`. Seeds `LastTranscriptStore`

@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import XCTest
 import os
@@ -7,7 +8,9 @@ import os
 
 // Fakes for every service `DictationController` drives, and a harness that wires them together. Everything a test
 // orders runs on the main actor: fakes hold their calls at gates the test opens, the clock moves only when the test
-// moves it, and waits are bounded counts of `Task.yield()`, never sleeps.
+// moves it, and a test waits for an explicit signal (a gate's waiter, a controller checkpoint, a count) before it
+// checks what did or did not happen. Waits a regression could strand run under a watchdog, and a harness releases
+// everything its test left held and shuts its controller down in the test's teardown.
 
 /// Yields until `condition` holds, and fails the test instead of hanging when it never does. Each yield lets the
 /// main actor run whatever is queued on it (tasks, and the capture relay's main-queue deliveries).
@@ -30,18 +33,69 @@ func waitUntil(
     }
 }
 
-/// Lets the main actor run what is queued on it, a bounded number of times, for a test that checks nothing happens.
+/// Waits until `condition` holds while work on other threads (the capture engine's control queue, a child process)
+/// makes progress, checking between short sleeps, and fails the test instead of hanging when `seconds` pass first.
+/// The sleeps only pace the checks; the order is still decided by `condition`.
 @MainActor
-func drainMainActor(yields: Int = 200) async {
-    for _ in 0..<yields {
-        await Task.yield()
+func pollUntil(
+    _ description: String,
+    within seconds: Double = 10,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ condition: () -> Bool
+) async {
+    let deadline = ContinuousClock.now.advanced(by: .milliseconds(Int(seconds * 1_000)))
+    while !condition() {
+        guard ContinuousClock.now < deadline else {
+            XCTFail("Timed out polling until \(description)", file: file, line: line)
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(2))
     }
+}
+
+/// Awaits `operation` under a watchdog (`finishes(within:)`): fails the test and returns nil, instead of hanging,
+/// when it has not finished within `seconds`.
+@MainActor
+func bounded<Value: Sendable>(
+    _ description: String,
+    within seconds: Double = 30,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ operation: @escaping @MainActor @Sendable () async -> Value
+) async -> Value? {
+    let result = Collected<Value>()
+    let finished = await finishes(within: seconds) { @MainActor in
+        result.values.append(await operation())
+    }
+    XCTAssertTrue(finished, "Timed out waiting for \(description)", file: file, line: line)
+    return result.values.first
 }
 
 /// Values a test's callbacks collect, on the main actor.
 @MainActor
 final class Collected<Value> {
     var values: [Value] = []
+}
+
+/// Every `DictationGate` made since the last release, so a harness's teardown can let go of whatever its test left
+/// waiting at one.
+@MainActor
+enum HeldGates {
+    private static var releases: [@MainActor () -> Void] = []
+
+    static func register(_ release: @escaping @MainActor () -> Void) {
+        releases.append(release)
+    }
+
+    /// Fails every waiter still parked at a gate made since the last call.
+    static func releaseAll() {
+        let pending = releases
+        releases = []
+        for release in pending {
+            release()
+        }
+    }
 }
 
 /// A point a fake waits at until the test opens it with a value or fails it. A waiter whose task is cancelled throws
@@ -52,6 +106,12 @@ final class DictationGate<Value: Sendable> {
     private var waiters: [UInt64: CheckedContinuation<Value, any Error>] = [:]
     private var nextWaiter: UInt64 = 0
     private(set) var arrivals = 0
+
+    init() {
+        HeldGates.register { [weak self] in
+            self?.releaseWaiters()
+        }
+    }
 
     var waitingCount: Int {
         waiters.count
@@ -101,6 +161,15 @@ final class DictationGate<Value: Sendable> {
         settle(.failure(error))
     }
 
+    /// Teardown: every waiter still here throws `CancellationError`.
+    func releaseWaiters() {
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending.values {
+            waiter.resume(throwing: CancellationError())
+        }
+    }
+
     private func settle(_ result: Result<Value, any Error>) {
         outcome = result
         let pending = waiters
@@ -111,8 +180,9 @@ final class DictationGate<Value: Sendable> {
     }
 }
 
-/// The microphone. An open succeeds at once unless `holdsOpens`, when it waits for `completeOpen`; a stop returns
-/// `samples` for a recording whose open succeeded and nil for one that never opened, as the engine does.
+/// The microphone. An open succeeds at once unless `holdsOpens`, when it waits for `completeOpen`; a retire hands
+/// back `samples` for a recording whose open succeeded and nil for one that never opened, as the engine does, sealed
+/// at once unless `holdsSeals`, when the seal waits for `releaseSeal`.
 @MainActor
 final class FakeCapture: DictationCapturing {
     struct Start {
@@ -122,12 +192,14 @@ final class FakeCapture: DictationCapturing {
     }
 
     var holdsOpens = false
+    var holdsSeals = false
     var openError: (any Error)?
     var samples = [Float](repeating: 0.25, count: 8_000)
     private(set) var starts: [Start] = []
     private(set) var stops: [RecordingID] = []
     private(set) var idleWaits = 0
     private var gates: [RecordingID: DictationGate<CaptureOpenOutcome>] = [:]
+    private var sealGates: [RecordingID: DictationGate<Void>] = [:]
     private var opened: Set<RecordingID> = []
     private var handedOver: Set<RecordingID> = []
 
@@ -149,11 +221,21 @@ final class FakeCapture: DictationCapturing {
         return Task { try await gate.wait() }
     }
 
-    func stop(owner: RecordingID) -> CapturedAudio? {
+    func retire(owner: RecordingID) -> Task<CapturedAudio?, Never>? {
         stops.append(owner)
         guard opened.contains(owner), !handedOver.contains(owner) else { return nil }
         handedOver.insert(owner)
-        return CapturedAudio(owner: owner, samples: samples, summary: Self.summary(sampleCount: samples.count))
+        let audio = CapturedAudio(owner: owner, samples: samples, summary: Self.summary(sampleCount: samples.count))
+        guard holdsSeals else {
+            return Task { () -> CapturedAudio? in audio }
+        }
+        let gate = DictationGate<Void>()
+        sealGates[owner] = gate
+        return Task { () -> CapturedAudio? in
+            // Teardown fails the gate; the seal still hands its audio over, as sealing always finishes.
+            _ = try? await gate.wait()
+            return audio
+        }
     }
 
     func waitUntilIdle() async {
@@ -164,7 +246,12 @@ final class FakeCapture: DictationCapturing {
         gates.values.reduce(0) { $0 + $1.waitingCount }
     }
 
-    /// Finishes a held open. `.live` makes the recording's audio available to its stop.
+    /// Seals still held.
+    var pendingSeals: Int {
+        sealGates.values.reduce(0) { $0 + $1.waitingCount }
+    }
+
+    /// Finishes a held open. `.live` makes the recording's audio available to its retire.
     func completeOpen(_ owner: RecordingID, _ outcome: CaptureOpenOutcome = .live) {
         if outcome == .live {
             opened.insert(owner)
@@ -174,6 +261,10 @@ final class FakeCapture: DictationCapturing {
 
     func failOpen(_ owner: RecordingID, _ error: any Error) {
         gates[owner]?.fail(error)
+    }
+
+    func releaseSeal(_ owner: RecordingID) {
+        sealGates[owner]?.open(())
     }
 
     /// Posts an event through the sink the recording was started with, as the engine's audio thread would.
@@ -220,9 +311,12 @@ final class FakeTranscriber: DictationTranscribing {
     private(set) var calls = 0
     private(set) var active = 0
     private(set) var mostActiveAtOnce = 0
+    /// The sample counts of every call, in order.
+    private(set) var sampleCounts: [Int] = []
 
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         calls += 1
+        sampleCounts.append(samples.count)
         active += 1
         mostActiveAtOnce = max(mostActiveAtOnce, active)
         defer { active -= 1 }
@@ -477,14 +571,22 @@ final class FakeNotifier: DictationNotifying {
     func notify(_ notice: DictationNotice) {
         notices.append(notice)
     }
+
+    var kinds: [DictationNotice.Kind] {
+        notices.map(\.kind)
+    }
 }
 
 @MainActor
 final class FakeTriggers: DictationTriggerSource {
-    private(set) var cancelledToggles = 0
+    private(set) var settledToggles: [HotkeyBinding] = []
 
-    func cancelToggle() {
-        cancelledToggles += 1
+    var cancelledToggles: Int {
+        settledToggles.count
+    }
+
+    func cancelToggle(_ binding: HotkeyBinding) {
+        settledToggles.append(binding)
     }
 }
 
@@ -504,6 +606,11 @@ final class ManualDictationClock: DictationClock {
 
     var sleeperCount: Int {
         sleepers.count
+    }
+
+    /// When each sleeper wakes.
+    var sleeperDeadlines: [ContinuousClock.Instant] {
+        sleepers.map(\.deadline)
     }
 
     func advance(by duration: Duration) {
@@ -533,6 +640,15 @@ final class ManualDictationClock: DictationClock {
             Task { @MainActor [weak self] in
                 self?.cancelSleeper(id)
             }
+        }
+    }
+
+    /// Teardown: every sleeper throws `CancellationError`.
+    func cancelAllSleepers() {
+        let pending = sleepers
+        sleepers.removeAll()
+        for sleeper in pending {
+            sleeper.continuation.resume(throwing: CancellationError())
         }
     }
 
@@ -567,10 +683,12 @@ final class DictationHarness {
     let reports: PipelineReportStore
     let controller: DictationController
 
+    /// `capture` replaces the fake microphone, for a test that drives the real engine through its adapter.
     init(
         configuration: DictationController.Configuration = DictationController.Configuration(),
         rulesLoaded: Bool = true,
-        injector: (any DictationInjecting)? = nil
+        injector: (any DictationInjecting)? = nil,
+        capture liveCapture: (any DictationCapturing)? = nil
     ) {
         let capture = FakeCapture()
         let transcriber = FakeTranscriber()
@@ -589,7 +707,7 @@ final class DictationHarness {
         let reports = PipelineReportStore()
         let controller = DictationController(
             services: DictationController.Services(
-                capture: capture,
+                capture: liveCapture ?? capture,
                 transcriber: transcriber,
                 cleanup: cleanup,
                 targeting: targeting,
@@ -690,6 +808,83 @@ final class DictationHarness {
 
     var lastOverlay: OverlayState? {
         presenter.last?.overlay
+    }
+
+    /// The notice on the pill now, from the controller's schedule.
+    var shownNotice: DictationOutcomeNotice? {
+        controller.noticeSchedule.shown?.notice
+    }
+
+    /// Teardown: lets go of everything the test left held, then shuts the controller down under a watchdog, so no
+    /// task of this test is still suspended, or runs, once the next test starts.
+    func tearDown() async {
+        HeldGates.releaseAll()
+        if !gate.isOpen {
+            gate.open(.withoutStoredRules)
+        }
+        clock.cancelAllSleepers()
+        _ = await bounded("the harness's controller to shut down in teardown") {
+            await self.controller.shutDown()
+        }
+    }
+}
+
+extension XCTestCase {
+    /// A harness whose controller the test's teardown shuts down, after releasing whatever the test left held.
+    @MainActor
+    func makeHarness(
+        configuration: DictationController.Configuration = DictationController.Configuration(),
+        rulesLoaded: Bool = true,
+        injector: (any DictationInjecting)? = nil,
+        capture: (any DictationCapturing)? = nil
+    ) -> DictationHarness {
+        let harness = DictationHarness(
+            configuration: configuration, rulesLoaded: rulesLoaded, injector: injector, capture: capture)
+        addTeardownBlock { @MainActor in
+            await harness.tearDown()
+        }
+        return harness
+    }
+}
+
+/// Keyboard events as the event tap reports them, for a real `HotkeyManager`.
+enum HotkeyTestEvents {
+    /// Right Option's own device bit, as `CGEventFlags` carries it.
+    static let rightOptionDown = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x0040)
+
+    static func event(
+        _ type: CGEventType, keyCode: CGKeyCode, flags: CGEventFlags = [], repeat isAutorepeat: Bool = false,
+        synthetic: Bool = false
+    ) -> HotkeyObservedEvent {
+        HotkeyObservedEvent(
+            typeRawValue: type.rawValue, keyCode: keyCode, flagsRawValue: flags.rawValue,
+            isAutorepeat: isAutorepeat, isSynthetic: synthetic)
+    }
+
+    /// Caps Lock's flags event after a tap, with its lock on or off.
+    static func capsLock(on: Bool) -> HotkeyObservedEvent {
+        event(.flagsChanged, keyCode: 57, flags: on ? [.maskAlphaShift] : [])
+    }
+
+    static func rightOption(down: Bool) -> HotkeyObservedEvent {
+        event(.flagsChanged, keyCode: 61, flags: down ? rightOptionDown : [])
+    }
+}
+
+extension DictationHarness {
+    /// A real `HotkeyManager`, without an event tap, wired to the controller as the app wires it: its presses and
+    /// releases reach the controller, and the controller settles its toggle. `flags` is what it reads as the
+    /// keyboard's state now.
+    func wireHotkeyManager(keyCode: CGKeyCode, flags: @escaping () -> CGEventFlags = { [] }) -> HotkeyManager {
+        let manager = HotkeyManager(keyCode: keyCode, readModifierFlags: flags, readKeyDown: { _ in false })
+        manager.onPressed = { [controller] binding in
+            controller.hotkeyPressed(binding)
+        }
+        manager.onReleased = { [controller] binding, cause in
+            controller.hotkeyReleased(binding, cause: cause)
+        }
+        controller.triggers = manager
+        return manager
     }
 }
 
