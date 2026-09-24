@@ -3155,9 +3155,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public async Task<(bool Ok, string Message)> LoginAsync()
         {
-            // Retiring the attempt cancels this, and AzureCliInstaller.RunAsync then kills az login's process tree, so a
-            // tenant edit no longer leaves it holding the gate for up to five minutes. A sign-in window it opened may
-            // stay on screen, but nothing is left to receive its result.
+            // Retiring the attempt cancels this, and AzureCliInstaller.RunAsync then ends az's own processes (cmd.exe and
+            // az's python.exe, never a browser az opened: AzureCliProcessTree), so a tenant edit no longer leaves it holding
+            // the gate for up to five minutes. A sign-in page or window it opened stays open, but nothing is left to
+            // receive its result.
             using var loginCts = CancellationTokenSource.CreateLinkedTokenSource(attemptCancellation);
             loginCts.CancelAfter(TimeSpan.FromMinutes(5));
             var selectedSubscription = window.SelectedAzureSubscription;

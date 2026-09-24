@@ -82,7 +82,7 @@ public sealed class AzureCliInstaller
         string stderr;
         try
         {
-            (exit, stdout, stderr) = await RunAsync("winget", args, ct).ConfigureAwait(false);
+            (exit, stdout, stderr) = await RunAsync("winget", args, CancelScope.EntireTree, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -156,6 +156,7 @@ public sealed class AzureCliInstaller
                 token => RunAsync(
                     azureCliPath,
                     loginArguments,
+                    CancelScope.AzureCliOnly,
                     token,
                     disableLoginSubscriptionSelector: true),
                 ct).ConfigureAwait(false);
@@ -198,6 +199,7 @@ public sealed class AzureCliInstaller
                 token => RunAsync(
                     azureCliPath,
                     ["account", "list", "--all", "--output", "json"],
+                    CancelScope.AzureCliOnly,
                     token),
                 ct).ConfigureAwait(false);
             if (exit != 0)
@@ -324,9 +326,21 @@ public sealed class AzureCliInstaller
                value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-');
     }
 
+    // What a cancelled process takes down with it.
+    private enum CancelScope
+    {
+        // winget often hands the install to a separate installer child, which must not keep running after a timeout.
+        EntireTree,
+
+        // Only az's own processes (AzureCliProcessTree): a browser az opened for sign-in is the user's, and may hold
+        // their other tabs.
+        AzureCliOnly,
+    }
+
     private static async Task<(int Exit, string StdOut, string StdErr)> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
+        CancelScope cancelScope,
         CancellationToken ct,
         bool disableLoginSubscriptionSelector = false)
     {
@@ -363,16 +377,28 @@ public sealed class AzureCliInstaller
         }
         catch (OperationCanceledException)
         {
-            // The caller's timeout (or an explicit cancel) fired. winget often spawns a separate
-            // installer child, so terminate the whole tree; otherwise the install keeps running in
-            // the background after we've reported a timeout, and a retry would overlap a live install.
             try
             {
                 if (!process.HasExited)
                 {
-                    process.Kill(entireProcessTree: true);
-                    // Bounded reap so the OS releases the handles before we surface the cancellation.
-                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (cancelScope == CancelScope.EntireTree)
+                    {
+                        // The caller's timeout (or an explicit cancel) fired. winget often spawns a separate installer
+                        // child, so terminate the whole tree; otherwise the install keeps running in the background
+                        // after we've reported a timeout, and a retry would overlap a live install.
+                        process.Kill(entireProcessTree: true);
+
+                        // Bounded reap so the OS releases the handles before we surface the cancellation.
+                        await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        AzureCliProcessTree.End(process);
+
+                        // Only the exit is awaited, not the end of the output: what az started and was left running may
+                        // hold the output pipe it inherited, and a wait with a timeout does not wait for the streams.
+                        process.WaitForExit(TimeSpan.FromSeconds(5));
+                    }
                 }
             }
             catch
