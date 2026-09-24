@@ -100,13 +100,14 @@
             </StackPanel>
         </Grid>
 
-        <!-- Buttons -->
+        <!-- Buttons. "Got it" is also the Cancel button, so Escape dismisses the welcome like every other
+             Scribe dialog, without opening settings. -->
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
                     Margin="28,16,28,20">
             <ui:Button x:Name="SettingsButton" Content="Open settings" MinWidth="120"
                        Margin="0,0,8,0" Click="SettingsButton_Click"/>
             <ui:Button x:Name="GotItButton" Content="Got it" Appearance="Primary"
-                       MinWidth="96" Click="GotItButton_Click" IsDefault="True"/>
+                       MinWidth="96" Click="GotItButton_Click" IsDefault="True" IsCancel="True"/>
         </StackPanel>
     </Grid>
 </ui:FluentWindow>

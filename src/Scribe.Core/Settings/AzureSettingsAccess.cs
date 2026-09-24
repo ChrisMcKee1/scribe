@@ -14,7 +14,8 @@ public static class AzureSettingsAccess
         bool ShowManualConfigurationAction,
         bool CanStartSignIn,
         bool HasUsableAuthentication,
-        bool ShowServicePrincipalFields);
+        bool ShowServicePrincipalFields,
+        bool ShowCliTenant);
 
     public enum ValidationIssue
     {
@@ -25,13 +26,19 @@ public static class AzureSettingsAccess
         ServicePrincipalIncomplete,
     }
 
+    /// <summary>Decides which parts of the Microsoft Foundry settings show for the current sign-in state.</summary>
+    /// <param name="apiKeySelected">
+    /// The API key sign-in method is chosen. It is stored as <see cref="AzureAuthMode.AzureCli"/> plus
+    /// a key, so <paramref name="authMode"/> alone cannot tell it apart.
+    /// </param>
     public static State Resolve(
         bool cliInstalled,
         bool signedIn,
         bool manualConfigurationRequested,
         bool hasApiKey,
         AzureAuthMode authMode = AzureAuthMode.AzureCli,
-        bool servicePrincipalComplete = false)
+        bool servicePrincipalComplete = false,
+        bool apiKeySelected = false)
     {
         var manualConfigurationAvailable = manualConfigurationRequested || hasApiKey;
 
@@ -54,6 +61,9 @@ public static class AzureSettingsAccess
             // panel until the user pressed Verify again on every visit. It also made first-time
             // setup circular: the endpoint boxes stayed hidden until you verified, but verifying
             // was not what supplied them.
+            //
+            // The app registration names its own tenant among these fields, so the Azure CLI tenant
+            // field would be a second control for the same setting.
             return new State(
                 ShowCliSetup: false,
                 ShowDiscovery: false,
@@ -61,9 +71,14 @@ public static class AzureSettingsAccess
                 ShowManualConfigurationAction: false,
                 CanStartSignIn: servicePrincipalComplete,
                 HasUsableAuthentication: servicePrincipalComplete || signedIn || hasApiKey,
-                ShowServicePrincipalFields: true);
+                ShowServicePrincipalFields: true,
+                ShowCliTenant: false);
         }
 
+        // The tenant is what an az login authenticates against: signing in passes it on whenever no
+        // subscription is selected. It therefore shows whatever the sign-in state, because someone who
+        // is not signed in yet, or whose saved tenant is the wrong one, has to be able to set it before
+        // signing in. An API key never asks Entra for a token, so there is nothing for it to pin.
         return new State(
             ShowCliSetup: !cliInstalled,
             ShowDiscovery: signedIn,
@@ -71,22 +86,9 @@ public static class AzureSettingsAccess
             ShowManualConfigurationAction: !signedIn && !manualConfigurationAvailable,
             CanStartSignIn: cliInstalled,
             HasUsableAuthentication: signedIn || hasApiKey,
-            ShowServicePrincipalFields: false);
+            ShowServicePrincipalFields: false,
+            ShowCliTenant: !apiKeySelected);
     }
-
-    /// <summary>
-    /// Whether the optional Azure CLI tenant field shows, and with it the "Optional Azure details"
-    /// expander, which holds nothing else. The tenant only pins which directory an az login
-    /// authenticates against. A service principal names its own tenant, and an API key never asks
-    /// Entra for a token, so in either mode the expander would open onto nothing.
-    /// </summary>
-    /// <param name="authMode">The Entra identity the settings resolve to.</param>
-    /// <param name="apiKeySelected">
-    /// The API key sign-in method is chosen. It is stored as <see cref="AzureAuthMode.AzureCli"/>
-    /// plus a key, so the mode alone cannot tell it apart.
-    /// </param>
-    public static bool ShowCliTenant(AzureAuthMode authMode, bool apiKeySelected) =>
-        authMode == AzureAuthMode.AzureCli && !apiKeySelected;
 
     public static ValidationIssue ValidateCleanup(
         bool enabled,

@@ -197,6 +197,9 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
+        // UI Automation names each row of the list after ToString(), which would otherwise read out this type's name.
+        public override string ToString() => Title;
+
         private void OnPropertyChanged([CallerMemberName] string? name = null) =>
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
