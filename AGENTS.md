@@ -352,7 +352,11 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
-                                    (which library wins a spoken form: frozen built-in ids, then file names)
+                                    (which library wins a spoken form: frozen built-in ids, then file names),
+                                    LibraryTermKey (one key per spoken form), and the library model's shared types:
+                                    the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
+                                    save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
+                                    the built-in overlay, composition and the committed store
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -384,8 +388,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
   tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
-                                    will read in stream M1) and composition-golden.txt (what the libraries
-                                    decide, captured from 0.4.3)
+                                    will read in stream M1), term-keys.json (the library term key's answers, for
+                                    the same port) and composition-golden.txt (what the libraries decide,
+                                    captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -985,6 +990,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
   cleanup rows of `macos/PORTING-PLAN.md` are stale, and, as the mono-repo note says, nothing keeps the C# and Swift
   orders in step.
+- **One key per library term.** `LibraryTermKey` is a spoken form trimmed, with every inner run of white space
+  (`char.IsWhiteSpace`) collapsed to one space, compared `OrdinalIgnoreCase`; it keeps the spelling it was made from and
+  its `ToString()` shows only the length, so a key handed to a log template leaks nothing. The personal dictionary's
+  merge keeps its own trim-only key. `tests/fixtures/libraries/term-keys.json` pins its answers for the macOS port,
+  including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s, final sigma).
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
