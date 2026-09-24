@@ -346,6 +346,49 @@ public class DictionaryUsageAnalyzerTests
         Assert.Equal(["alpha", "mike", "zulu"], report.UnusedEntries.Select(u => u.Entry.Pattern));
     }
 
+    // It said "Checked 1 terms" and "1 of your own entry". One term is a term, and one of your own entries keeps its
+    // plural noun, as the macOS summary now reads too.
+    [Fact]
+    public void The_summary_reads_correctly_for_one_term()
+    {
+        var own = DictionaryUsageAnalyzer.Analyze(
+            Corpus("unrelated content"),
+            [new DictionaryEntry(1, "kubernetes", "Kubernetes")],
+            NoLibraries);
+
+        Assert.Equal(
+            $"Checked 1 term against your last {own.TranscriptsScanned:N0} dictations. "
+                + "1 of your own entries did not appear.",
+            own.Summary);
+
+        var library = DictionaryUsageAnalyzer.Analyze(
+            Corpus("unrelated content"),
+            [],
+            [Library("legal", "Legal", new DictionaryEntry(0, "voir dire", "voir dire"))]);
+
+        Assert.Equal(
+            $"Checked 1 term against your last {library.TranscriptsScanned:N0} dictations. "
+                + "1 term across 1 library did not appear.",
+            library.Summary);
+    }
+
+    [Fact]
+    public void The_summary_reads_correctly_for_several_terms()
+    {
+        var report = DictionaryUsageAnalyzer.Analyze(
+            Corpus("unrelated content"),
+            [new DictionaryEntry(1, "kubernetes", "Kubernetes"), new DictionaryEntry(2, "helm chart", "Helm chart")],
+            [
+                Library("legal", "Legal", new DictionaryEntry(0, "voir dire", "voir dire")),
+                Library("medical", "Medical", new DictionaryEntry(0, "tachy cardia", "tachycardia")),
+            ]);
+
+        Assert.Equal(
+            $"Checked 4 terms against your last {report.TranscriptsScanned:N0} dictations. "
+                + "2 of your own entries and 2 terms across 2 libraries did not appear.",
+            report.Summary);
+    }
+
     /// <summary>
     /// The glossary cap is only worth mentioning when the dictionary is big enough for it to bite;
     /// quoting a limit to someone nowhere near it is noise.

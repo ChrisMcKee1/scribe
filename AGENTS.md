@@ -28,7 +28,8 @@ leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu
 failure raises a recovery notification); **tray quick add to dictionary** (chip-style word picker
 over a recent dictation that saves the fix and repairs that transcript in place); **dictionary
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
-disables them by default rather than deleting); tray quick toggles (microphone, AI cleanup on/off, pause) and a
+disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause), a tray Microphone
+submenu (the Windows default or a specific device, plus Sound settings) and a
 first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
