@@ -118,10 +118,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _updatingAzureSubscriptions;
     private bool _foundryModelOp;
     private bool _azureAutoListed;
-    private int _azureSignInProbeVersion;
+    private readonly AzureSignInAttempts _azureSignInAttempts = new();
     private bool _azureCliInstalled;
     private bool _azureConnectionKnown;
-    private bool _azureConnectionBusy;
     private bool _azureManualConfiguration;
     private AzureSignInStatus _azureSignInStatus = new(false, null);
     private AzureFoundryDeployment? _selectedAzureDeployment;
@@ -2921,15 +2920,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        ++_azureSignInProbeVersion;
+        // Retiring any verification still running also ends its busy state (AzureSignInAttempts), which that
+        // verification no longer can, so editing the endpoint mid-probe leaves the Verify button usable.
+        _azureSignInAttempts.Retire();
         _azureApiKeyVerified = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
-
-        // Bumping the version supersedes any in-flight verify, whose finally block then declines to
-        // clear the busy flag because the version no longer matches. Clearing it here keeps the
-        // Verify button usable: editing the endpoint mid-probe would otherwise disable it for the
-        // rest of the settings session, with no way back in API key mode.
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
 
         if (AzureStatusText is not null && CanVerifyAzureApiKey)
         {
@@ -2962,7 +2958,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // setup (_azureManualConfiguration): that would open the endpoint fields and hide "Use endpoint
         // instead" for anyone who types a tenant before signing in. The box sits with the sign-in method,
         // outside every panel this hides, so it stays put while the user types.
-        ++_azureSignInProbeVersion;
+        _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         _azureAutoListed = false;
@@ -2977,7 +2973,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _updatingAzureSubscriptions = false;
         }
 
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Tenant changed. Verify Azure sign-in before browsing subscriptions and models.";
     }
 
@@ -3034,10 +3030,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var operationVersion = ++_azureSignInProbeVersion;
+        var operationVersion = _azureSignInAttempts.Begin();
         var shouldListModels = false;
         _azureSignInStatus = new AzureSignInStatus(false, null);
-        SetAzureConnectionBusy(true);
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Checking your Azure CLI sign-in…";
 
         try
@@ -3047,7 +3043,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             var result = await AzureCliSignIn.RunAsync(
                 new CliSignInSteps(this),
                 allowInteractiveLogin,
-                () => operationVersion == _azureSignInProbeVersion);
+                () => _azureSignInAttempts.IsCurrent(operationVersion));
 
             switch (result.Outcome)
             {
@@ -3085,7 +3081,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
@@ -3096,7 +3092,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not verify Azure sign-in.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 _azureConnectionKnown = true;
@@ -3106,13 +3102,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
 
-        if (shouldListModels && operationVersion == _azureSignInProbeVersion)
+        if (shouldListModels && _azureSignInAttempts.IsCurrent(operationVersion))
         {
             await ListAzureDeploymentsAsync();
         }
@@ -3193,12 +3189,6 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             _updatingAzureSubscriptions = false;
         }
-    }
-
-    private void SetAzureConnectionBusy(bool busy)
-    {
-        _azureConnectionBusy = busy;
-        ApplyAzureSettingsAccess();
     }
 
     private bool IsAzureApiKeySelected => AzureAuthModeBox?.SelectedIndex == 2;
@@ -3285,7 +3275,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Verifying an app registration is a direct Entra call, so unlike the CLI path it does not
         // have to wait on the Azure CLI probe that _azureConnectionKnown tracks.
-        AzureRefreshButton.IsEnabled = !_azureConnectionBusy && (
+        AzureRefreshButton.IsEnabled = !_azureSignInAttempts.IsBusy && (
             apiKeyMode
                 ? CanVerifyAzureApiKey
                 : access.CanStartSignIn && (servicePrincipal || _azureConnectionKnown));
@@ -3352,16 +3342,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         // The previous mode's verification says nothing about this one's identity, so drop it and
-        // make the user verify again instead of showing a stale signed-in state. Bumping the
-        // versions abandons any probe still in flight from the mode being left; that probe's
-        // cleanup is version-guarded and will not run, so busy is released here instead or the
-        // action button would stay disabled forever.
-        ++_azureSignInProbeVersion;
+        // make the user verify again instead of showing a stale signed-in state. Retiring the attempt
+        // abandons any probe still in flight from the mode being left and ends its busy state, which
+        // that probe no longer can (AzureSignInAttempts); bumping the deployment version abandons its
+        // listing.
+        _azureSignInAttempts.Retire();
         ++_azureDeploymentLoadVersion;
         _azureSignInStatus = new AzureSignInStatus(false, null);
         _azureAutoListed = false;
         AzureCredentialInvalidation.Invalidate();
-        SetAzureConnectionBusy(false);
+        ApplyAzureSettingsAccess();
         if (AzureStatusText is not null)
         {
             AzureStatusText.Text = IsAzureApiKeySelected
@@ -3388,12 +3378,15 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Editing the identity retires any verification, in flight or already applied. Bumping
+        // Editing the identity retires any verification, in flight or already applied. Retiring
         // unconditionally matters: a verification started against the previous details must not be
-        // allowed to land on the new ones just because nothing was verified yet.
-        ++_azureSignInProbeVersion;
-        if (_azureSignInStatus.IsSignedIn && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
+        // allowed to land on the new ones just because nothing was verified yet. Retiring also ends the
+        // busy state, which the retired verification no longer can, so Verify is usable again at once.
+        var verifying = _azureSignInAttempts.IsBusy;
+        _azureSignInAttempts.Retire();
+        if ((_azureSignInStatus.IsSignedIn || verifying) && SelectedAzureAuthMode == AzureAuthMode.ServicePrincipal)
         {
+            // Also replaces "Verifying the service principal…", which nothing would replace any more.
             _azureSignInStatus = new AzureSignInStatus(false, null);
             if (AzureStatusText is not null)
             {
@@ -3597,14 +3590,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var endpoint = AzureEndpointBox.Text.Trim();
         var deployment = AzureDeploymentBox.Text.Trim();
         var apiKey = SelectedAzureApiKey.Trim();
-        var operationVersion = ++_azureSignInProbeVersion;
-        SetAzureConnectionBusy(true);
+        var operationVersion = _azureSignInAttempts.Begin();
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = "Verifying the API key…";
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var result = await ProbeAzureApiKeyAsync(endpoint, deployment, apiKey, cts.Token);
-            if (operationVersion != _azureSignInProbeVersion)
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
             }
@@ -3617,7 +3610,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
@@ -3627,7 +3620,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         catch (Exception ex)
         {
             TryLog(ex, "Could not verify the Azure API key.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureApiKeyVerified = false;
                 _azureSignInStatus = new AzureSignInStatus(false, null);
@@ -3636,9 +3629,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
     }
@@ -3792,8 +3785,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // Guard the completion the same way the CLI probe does. Without this, editing a field or
         // switching modes mid-verification would let the old identity's result land on the new one.
-        var operationVersion = ++_azureSignInProbeVersion;
-        SetAzureConnectionBusy(true);
+        var operationVersion = _azureSignInAttempts.Begin();
+        ApplyAzureSettingsAccess();
         AzureStatusText.Text = automatic
             ? "Checking the saved service principal…"
             : "Verifying the service principal…";
@@ -3810,7 +3803,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             var status = await _azureDiscovery.GetSignInStatusAsync(
                 principal.TenantId, null, cts.Token, principal);
-            if (operationVersion != _azureSignInProbeVersion)
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 return;
             }
@@ -3822,7 +3815,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (OperationCanceledException)
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 AzureStatusText.Text = "Verifying the service principal timed out. Please try again.";
@@ -3833,7 +3826,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // The exception is logged, never shown: an Entra failure can echo request details, and
             // this path handles a secret.
             TryLog(ex, "Could not verify the Azure service principal.");
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.IsCurrent(operationVersion))
             {
                 _azureSignInStatus = new AzureSignInStatus(false, null);
                 AzureStatusText.Text = "The service principal could not be verified. Check the details and try again.";
@@ -3841,9 +3834,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         finally
         {
-            if (operationVersion == _azureSignInProbeVersion)
+            if (_azureSignInAttempts.Finish(operationVersion))
             {
-                SetAzureConnectionBusy(false);
+                ApplyAzureSettingsAccess();
             }
         }
     }
