@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NAudio.CoreAudioApi;
 using Scribe.Core.Audio;
+using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Tests.Concurrency;
 
@@ -257,6 +258,37 @@ public sealed class CaptureDeviceResolutionTests
         Assert.True(service.Start());
         Assert.Equal("Mic In (Elgato Wave Neo)", service.LastDeviceName);
         service.Stop();
+    }
+
+    [Fact]
+    public void An_open_carries_the_fallback_of_its_own_start_and_one_that_opened_nothing_carries_none()
+    {
+        var endpoints = ReportedMachine();
+        endpoints.Add(Yeti, "Blue Yeti", DeviceState.Unplugged);
+        using var service = endpoints.CreateService();
+        var lifecycle = new DictationLifecycle<string>(() => { }, () => { }, new ManualTimeProvider());
+        lifecycle.Start(Timeout.InfiniteTimeSpan);
+
+        var a = lifecycle.TryBeginRecording(() => "a");
+        var fellBack = RecordingCapture.Open(lifecycle, service, a.DictationId, Yeti);
+        Assert.Equal(RecordingOpenOutcome.Live, fellBack.Outcome);
+        Assert.True(fellBack.RequestedDeviceUnavailable);
+        Assert.Equal("Microphone (6- Insta360 Link 2 Pro)", fellBack.DeviceName);
+        var stopA = lifecycle.TryBeginProcessing(a.DictationId);
+        service.Stop(a.DictationId);
+        lifecycle.ReturnToIdle(Timeout.InfiniteTimeSpan);
+        lifecycle.EndProcessing(stopA.Admission!);
+
+        // The next recording's stop reaches the capture service before its open, so nothing opens. The service's last
+        // start, which fell back, belongs to the recording before.
+        var b = lifecycle.TryBeginRecording(() => "b");
+        service.RequestStop(b.DictationId);
+        var nothing = RecordingCapture.Open(lifecycle, service, b.DictationId, Yeti);
+
+        Assert.Equal(RecordingOpenOutcome.NotOpened, nothing.Outcome);
+        Assert.True(service.LastRequestedDeviceUnavailable);
+        Assert.False(nothing.RequestedDeviceUnavailable);
+        Assert.Null(nothing.DeviceName);
     }
 
     [Fact]
