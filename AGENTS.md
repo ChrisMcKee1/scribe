@@ -330,7 +330,11 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
-                                    (which library wins a spoken form: frozen built-in ids, then file names)
+                                    (which library wins a spoken form: frozen built-in ids, then file names),
+                                    LibraryTermKey (one key per spoken form), and the library model's shared types:
+                                    the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
+                                    save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
+                                    the built-in overlay, composition and the committed store
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -357,7 +361,7 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
-  tests/fixtures/libraries/         built-in-precedence.json (shared with the macOS port) and
+  tests/fixtures/libraries/         built-in-precedence.json and term-keys.json (shared with the macOS port) and
                                     composition-golden.txt (what the libraries decide, captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
@@ -803,6 +807,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
   turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
+- **One key per library term.** `LibraryTermKey` is a spoken form trimmed, with every inner run of white space
+  (`char.IsWhiteSpace`) collapsed to one space, compared `OrdinalIgnoreCase`; it keeps the spelling it was made from and
+  its `ToString()` shows only the length, so a key handed to a log template leaks nothing. The personal dictionary's
+  merge keeps its own trim-only key. `tests/fixtures/libraries/term-keys.json` pins its answers for the macOS port,
+  including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s, final sigma).
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
