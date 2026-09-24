@@ -577,10 +577,19 @@ public sealed class ScribeDatabase : IDisposable
     // process death. Relying on the compiled default left durability to whatever the native bundle
     // was built with. wal_autocheckpoint is per connection and pooled connections are reused, so it
     // is set on every open rather than only when it changes.
+    //
+    // secure_delete=ON for the same reason: the bundled e_sqlite3 is built without
+    // SQLITE_SECURE_DELETE, so a fresh connection reads 0, and SQLite then leaves a deleted
+    // transcript's bytes in the page it lived on, or in a freed page, until something happens to
+    // write over them. On, it overwrites deleted content with zeros as it deletes it. It is a per
+    // connection setting, so every connection sets it, and it costs I/O only when rows are deleted:
+    // a freed page is written once more, as zeros, through the WAL and the checkpoint. It cannot reach
+    // content deleted before it was on, earlier copies of a page still in the WAL until a checkpoint
+    // truncates it, or copies of the file made elsewhere.
     private static void Configure(SqliteConnection connection, bool autoCheckpoint = true) =>
         Execute(connection, string.Create(
             CultureInfo.InvariantCulture,
-            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};"));
+            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};"));
 
     // sqlite.org: auto_vacuum can change from NONE only while a database is new (before its first
     // page is written, which journal_mode=WAL already does) or through a full VACUUM. A brand-new
