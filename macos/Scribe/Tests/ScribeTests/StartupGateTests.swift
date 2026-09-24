@@ -23,7 +23,7 @@ final class StartupGateTests: XCTestCase {
     private func makeRefresher(
         _ processor: TextPostProcessor,
         load: @escaping @Sendable () async throws -> PersistenceRuleSet
-    ) -> RuleSetRefresher {
+    ) -> RuleSetRefresher<PersistenceRuleSet> {
         RuleSetRefresher(
             load: load,
             apply: { rules in

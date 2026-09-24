@@ -28,10 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Applies the history retention choice and reclaims space while the app is idle.
     private lazy var storageMaintenance = StorageMaintenance(
         store: persistenceStore, historyWriter: historyWriter, activity: foregroundActivity)
-    /// Reads the rules every dictation applies off the main actor; the newest refresh wins.
-    private lazy var ruleRefresher = RuleSetRefresher(
-        load: { [persistenceStore] in try await persistenceStore.loadRuleSet() },
-        apply: { [weak self] rules in self?.applyRules(rules) },
+    /// Reads the rules every dictation applies and compiles them, off the main actor; the newest refresh wins.
+    private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
+        load: { [persistenceStore, weak self] in
+            let rules = try await persistenceStore.loadRuleSet()
+            let libraryEntries = await self?.enabledLibraryEntries() ?? []
+            return await DictationRuleSnapshot.compile(rules, libraryEntries: libraryEntries)
+        },
+        apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
     /// Opens once the database is migrated and the first rule load has finished; dictation and Quick Add wait for it.
     private let startupGate = StartupGate()
@@ -174,19 +178,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         })
     }
 
-    /// Starts reading the rules every dictation applies. The read runs off the main actor, and only the newest
-    /// refresh is applied (`RuleSetRefresher`).
+    /// Starts reading the rules every dictation applies. The read and the compile run off the main actor, and only the
+    /// newest refresh is installed (`RuleSetRefresher`).
     private func refreshPostProcessorRules() {
         Task { await ruleRefresher.refresh() }
     }
 
-    private func applyRules(_ rules: PersistenceRuleSet) {
-        let libraryEntries = dictionaryLibraryService.enabledLibraryEntries()
-        dictationRules.apply(rules, libraryEntries: libraryEntries)
+    /// Which dictionary libraries are switched on, read on the main actor where Settings changes them.
+    private func enabledLibraryEntries() -> [DictionaryEntry] {
+        dictionaryLibraryService.enabledLibraryEntries()
+    }
+
+    private func installRules(_ snapshot: DictationRuleSnapshot) {
+        dictationRules.install(snapshot)
         ScribeLog.info(
-            .persistence, "Rules loaded", .count("dictionaryEntries", rules.dictionaryEntries.count),
-            .count("libraryEntries", libraryEntries.count), .count("snippets", rules.snippets.count),
-            .count("appProfiles", rules.appProfiles.count))
+            .persistence, "Rules loaded", .count("dictionaryEntries", snapshot.dictionaryEntryCount),
+            .count("libraryEntries", snapshot.libraryEntryCount), .count("snippets", snapshot.snippetCount),
+            .count("appProfiles", snapshot.appProfiles.count), .duration("compile", snapshot.compileDuration))
     }
 
     /// A failed refresh keeps the rules already in use.

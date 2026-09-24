@@ -276,7 +276,7 @@ final class DictationControllerTests: XCTestCase {
     /// A held key never stops on silence, and neither does the toggle key (Caps Lock, the default) unless the user
     /// opted in, as on Windows (`AppSettings.AutoStopOnSilence`, off by default), with the choice read at each press.
     /// The tray's test dictation always stops on silence. A toggle's recording that ended some other way than by the
-    /// key tells the key's listener, so its next tap starts a new recording.
+    /// key tells the key's listener, so its next tap is not taken for the toggle's second tap.
     func testTheStopPolicyFollowsTheBindingThatFiredAndTheOptIn() async throws {
         let optIn = LockedValue<Bool>()
         let harness = makeHarness(
@@ -329,8 +329,9 @@ final class DictationControllerTests: XCTestCase {
     }
 
     /// Caps Lock through a real `HotkeyManager`: the tap that turned the light on started a recording whose
-    /// microphone failed to open. The toggle is settled, so after the microphone recovers the next tap, which turns
-    /// the light off, starts exactly one recording, and the tap after it ends that recording.
+    /// microphone failed to open. The toggle is settled, so the light is on with nothing recording: after the
+    /// microphone recovers, the next tap turns the light off and starts nothing, the tap after it starts exactly one
+    /// recording, and the one after that ends it.
     func testACapsLockTapWhoseMicrophoneFailedToOpenLeavesTheKeyFreeForTheNextTap() async throws {
         let harness = makeHarness()
         let manager = harness.wireHotkeyManager(keyCode: 57)
@@ -343,12 +344,15 @@ final class DictationControllerTests: XCTestCase {
 
         harness.capture.openError = nil
         manager.receive(HotkeyTestEvents.capsLock(on: false))
+        XCTAssertFalse(manager.isEngaged, "the tap turning the light off started a recording")
+        XCTAssertNil(harness.controller.currentRecording)
+        manager.receive(HotkeyTestEvents.capsLock(on: true))
         XCTAssertEqual(harness.capture.starts.count, 1)
         await waitUntil("the next tap asks for the microphone") { harness.capture.starts.count == 2 }
         await harness.waitUntilLive()
         XCTAssertTrue(manager.isEngaged)
 
-        manager.receive(HotkeyTestEvents.capsLock(on: true))
+        manager.receive(HotkeyTestEvents.capsLock(on: false))
         await harness.waitUntilProcessed()
         XCTAssertNil(harness.controller.currentRecording)
         XCTAssertEqual(harness.capture.starts.count, 2, "one tap started more than one recording")
@@ -373,6 +377,8 @@ final class DictationControllerTests: XCTestCase {
 
         harness.capture.holdsOpens = false
         manager.receive(HotkeyTestEvents.capsLock(on: false))
+        XCTAssertFalse(manager.isEngaged, "the tap turning the light off started a recording")
+        manager.receive(HotkeyTestEvents.capsLock(on: true))
         await harness.waitUntilLive()
         XCTAssertNotEqual(harness.controller.currentRecording, first)
     }

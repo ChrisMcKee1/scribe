@@ -11,7 +11,9 @@ enum UsageInsight {
 
     /// Builds the payload sent to the user's configured AI endpoint. Guarantee: only terms with
     /// `covered == true` (dictionary-canonical labels) are ever included; novel mined tokens are
-    /// verbatim words from the user's dictations and never enter the payload.
+    /// verbatim words from the user's dictations and never enter the payload. Nor does a label that
+    /// is a template-like replacement (`TermUsage.isTemplateLike`), which the dictation path never
+    /// sends to a provider either.
     static func buildSummary(_ snapshot: UsageAnalyzer.Snapshot, maxChars: Int = 4_000) -> String {
         guard maxChars > 0 else { return "" }
 
@@ -22,8 +24,10 @@ enum UsageInsight {
         lines.append("Recurring terms:")
         for term in snapshot.terms {
             // Uncovered terms are raw tokens mined from dictation text (surnames, project
-            // codenames); only dictionary-canonical labels may leave the machine.
-            guard term.covered else { continue }
+            // codenames); only dictionary-canonical labels may leave the machine, and of those only
+            // the ones a dictation may send: a signature block or other template-like replacement
+            // stays on the Mac.
+            guard term.covered, !term.isTemplateLike else { continue }
             lines.append("- \(term.text): \(term.dictations) dictations")
         }
 

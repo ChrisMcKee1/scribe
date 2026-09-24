@@ -87,6 +87,31 @@ final class UsageInsightTests: XCTestCase {
         XCTAssertEqual(UsageInsight.parse("abc\u{1F600}def", maxChars: 4), "abc")
         XCTAssertEqual(UsageInsight.parse("abc\u{1F600}def", maxChars: 5), "abc\u{1F600}")
     }
+
+    /// A dictionary-covered label that is a template-like replacement, such as a signature block, stays on the Mac, as
+    /// it does when a dictation is sent for cleanup.
+    func testBuildSummaryLeavesOutATemplateLikeReplacement() {
+        let snapshot = UsageAnalyzer.Snapshot(
+            dictations: 2,
+            words: 12,
+            activeDays: 1,
+            speechSeconds: 10,
+            averageWords: 6,
+            topApps: [],
+            trend: [],
+            terms: [
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true),
+                UsageAnalyzer.TermUsage(
+                    text: "Pat Doe\nSupport lead", dictations: 2, occurrences: 2, covered: true, isTemplateLike: true),
+            ],
+            granularity: .daily)
+
+        let summary = UsageInsight.buildSummary(snapshot)
+
+        XCTAssertTrue(summary.contains("Next.js: 2 dictations"))
+        XCTAssertFalse(summary.contains("Pat Doe"))
+        XCTAssertFalse(summary.contains("Support lead"))
+    }
 }
 
 extension String {

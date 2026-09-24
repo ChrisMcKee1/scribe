@@ -3,7 +3,7 @@ import Foundation
 
 /// Why the bound key's release reached the dictation.
 enum HotkeyReleaseCause: Equatable, Sendable {
-    /// The key came up (Caps Lock: turned off).
+    /// The key came up (Caps Lock: its lock changed while it held a recording).
     case keyReleased
     /// The key was rebound while it held a recording; its own release would never match the new binding.
     case bindingChanged
@@ -32,7 +32,10 @@ enum HotkeyKeyAction: Equatable, Sendable {
 /// Whether the bound key holds a recording, decided from its events alone, so every rule is tested without an event
 /// tap. A held key (every key but Caps Lock) presses on its way down and releases on its way up. Caps Lock toggles: it
 /// counts only a change of its lock state, so a flags event that repeats the state (a second event for one tap, or
-/// one after the tap was re-enabled) is never taken for a tap, and each change alternates press and release.
+/// one after the tap was re-enabled) is never taken for a tap. It presses only when the lock turns on, and releases
+/// at any change of the lock while it holds a recording. So its light is on while its recording runs, and a light
+/// left on by a recording that ended some other way (Scribe never changes the lock) comes back in step after one tap,
+/// which turns it off and starts nothing; the tap after that starts the next recording.
 /// After the tap was disabled, `resynchronize` settles what the lost events would have done without ever making up
 /// a press: a held key found up releases, Caps Lock releases when its lock changed an odd number of times, and a held
 /// key found down with nothing engaged must come up and go down again before it presses.
@@ -56,7 +59,10 @@ struct HotkeyKeyState: Equatable, Sendable {
         case (.toggle, .lockChanged(let isOn)):
             guard isOn != lockIsOn else { return .none }
             lockIsOn = isOn
-            return isEngaged ? .release : .press
+            if isEngaged {
+                return .release
+            }
+            return isOn ? .press : .none
         case (.hold, .modifierChanged(let isDown)):
             if awaitsRelease {
                 awaitsRelease = isDown
@@ -90,8 +96,9 @@ struct HotkeyKeyState: Equatable, Sendable {
     }
 
     /// The owner ended a toggle's recording some other way (silence, the ceiling, a fault, a pause, the tray), so the
-    /// lock's next change is a new press. A held key stays engaged until it comes up, so neither its release nor its
-    /// key repeats are taken for a new press.
+    /// lock's next change is not taken for the toggle's second tap: it starts a recording only if it turns the lock on.
+    /// A held key stays engaged until it comes up, so neither its release nor its key repeats are taken for a new
+    /// press.
     mutating func cancelToggle() {
         guard binding.gesture == .toggle else { return }
         isEngaged = false
@@ -157,7 +164,8 @@ struct HotkeyObservedEvent: Equatable, Sendable {
 /// including while dictation is paused.
 @MainActor
 final class HotkeyManager: DictationTriggerSource {
-    /// A press of the bound key (Caps Lock: turned on). Returns whether a recording started.
+    /// A press of the bound key (Caps Lock: its lock turned on while it held no recording). Returns whether a
+    /// recording started.
     var onPressed: ((HotkeyBinding) -> Bool)?
     /// The bound key's recording should end.
     var onReleased: ((HotkeyBinding, HotkeyReleaseCause) -> Void)?

@@ -69,9 +69,10 @@ enum CleanupResponseGuard {
         }
 
         // Last, because the guards above compare the model's own answer with the text it was sent. The dashes the
-        // writing style forbids come out of the model's prose here. The rules that can hold the user's own dash run
-        // after the guard: the snippets, and every dictionary rule that is not vocabulary, which includes each
-        // replacement with a dash (`TextPostProcessor.isVocabulary`). So a dash in the user's own text survives.
+        // writing style forbids come out of the model's prose here. The replacements that can hold the user's own dash
+        // are made after the guard: the snippets', and those of every dictionary rule that is not vocabulary, which
+        // includes each replacement with a dash (`TextPostProcessor.isVocabulary`). So a dash in the user's own text
+        // survives.
         return .accepted(DashNormalizer.normalize(cleaned))
     }
 

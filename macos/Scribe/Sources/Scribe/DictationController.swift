@@ -168,8 +168,10 @@ extension Duration {
 /// (`Configuration.toggleKeyStopsOnSilence`), and a held key never does. All stop at the duration ceiling, which is a
 /// deadline of this controller's own (Windows' `ArmDurationLimit` and `TryAcceptDurationLimit`), since the capture
 /// engine's own ceiling and silence clock only move while buffers arrive. A toggle whose recording ends any other way
-/// than by its key (a failed open, silence, a fault) is settled, so the key's next change starts a new recording.
-/// Scribe never changes the lock state, so Caps Lock's light can be left on after such an ending.
+/// than by its key (a failed open, silence, a fault) is settled, so the key's next change is not taken for its second
+/// tap. Scribe never changes the lock state, so after such an ending Caps Lock's light is on with nothing recording;
+/// since a recording starts only when the lock turns on, the next tap turns the light off and starts nothing, and the
+/// tap after it starts the next recording.
 ///
 /// **Stopping.** A stop can arrive in the event tap's callback, so it only retires the recording: the recording lets
 /// go of the microphone, takes its place in both turn queues, and its samples are sealed on the capture engine's
@@ -178,11 +180,12 @@ extension Duration {
 /// **Processing.** A stopped recording is admitted to processing in the order recordings stopped, and a new recording
 /// can start while earlier ones are processed. Each dictation runs raw speech recognition (one recognizer at a time)
 /// and waits for startup's first rule load. With AI cleanup off it applies snippets, then the dictionary. With cleanup
-/// on it applies the vocabulary rules to the raw transcript, sends that text with the target's writing style (and a
-/// single-line instruction when the target flattens line breaks), checks the reply against the text it sent and
-/// normalizes its dashes (`CleanupResponseGuard`), then applies the snippets and the template-like rules; a fallback
-/// is exactly the cleanup-off result. It then formats line breaks for the captured target and delivers into that
-/// target only. Deliveries run in dictation order, so a second dictation's text never goes in before the first's.
+/// on it decides every replacement on the raw transcript as cleanup off would, makes the vocabulary rules' in the text
+/// it sends with the target's writing style (and a single-line instruction when the target flattens line breaks),
+/// checks the reply against the text it sent and normalizes its dashes (`CleanupResponseGuard`), then makes the
+/// snippets and the template-like replacements where the reply kept their words; a fallback is exactly the cleanup-off
+/// result. It then formats line breaks for the captured target and delivers into that target only. Deliveries run in
+/// dictation order, so a second dictation's text never goes in before the first's.
 /// Cleanup never sees a snippet template or a template-like replacement, and no rule runs twice. Cancellation and
 /// admission are checked again before cleanup, recovery and delivery, because the recognizer returns a transcript it
 /// has already produced even when the cancellation arrives just after it exited.
@@ -206,9 +209,9 @@ final class DictationController {
         var maximumDuration: Duration? = CaptureStopPolicy.defaultMaximumDuration
         /// Whether a push-to-talk key tapped on and off (Caps Lock) stops its recording on silence, read at each
         /// press (`HotkeySettingsStore.autoStopOnSilence`). Off unless the user opts in: a pause to think would end
-        /// the dictation, and a recording that ends itself leaves Caps Lock's light on, since the listen-only event
-        /// tap cannot change it. The tray's test dictation always stops on silence and a held key never does
-        /// (`DictationTrigger.stopsOnSilence`).
+        /// the dictation, and a recording that ends itself leaves Caps Lock's light on until the next tap, which only
+        /// turns it off, since the listen-only event tap cannot change it. The tray's test dictation always stops on
+        /// silence and a held key never does (`DictationTrigger.stopsOnSilence`).
         var toggleKeyStopsOnSilence: @MainActor @Sendable () -> Bool = { false }
         /// Line-break handling when no app profile overrides it.
         var newlineMode: NewlineInjectionMode = .smartFlatten
@@ -606,9 +609,10 @@ final class DictationController {
         showNextNoticeOrPresent()
     }
 
-    /// A toggle whose recording ended some other way than by its key is still on; its next change has to start a
-    /// new recording rather than count as the second tap of this one (Windows' `CancelToggle`). Called only for the
-    /// recording that was current, and the key's listener ignores a binding it no longer has.
+    /// A toggle whose recording ended some other way than by its key is still on; its next change must not count as
+    /// the second tap of this one (Windows' `CancelToggle`), and Caps Lock starts the next recording only when its
+    /// lock turns on. Called only for the recording that was current, and the key's listener ignores a binding it no
+    /// longer has.
     private func settleToggle(of ended: LiveRecording) {
         guard case .hotkey(let binding) = ended.trigger, binding.gesture == .toggle else { return }
         triggers?.cancelToggle(binding)
@@ -682,11 +686,13 @@ final class DictationController {
         let singleLine = AppProfileMatcher.flattensNewlines(newlineMode, bundleIdentifier: target?.bundleIdentifier)
 
         // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With
-        // cleanup on, the rules are split around the request: the vocabulary rules (one-line replacements of at most
-        // 100 characters with no em or en dash) run on the raw transcript, and that corrected text is what the
-        // provider is sent and what its reply is checked against, so the model starts from the user's spellings; the
-        // snippets and the template-like rules run on the accepted reply. So no snippet template or template-like
-        // replacement ever reaches a provider, a dash the user wrote survives, and no rule runs twice.
+        // cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it, and
+        // split around the request: the vocabulary rules' (one-line spellings of at most 100 characters with no em or
+        // en dash, already in normal form) are made in the text the provider is sent and its reply is checked
+        // against, so the model starts from the user's spellings; the snippets and the template-like replacements are
+        // held back and made on the accepted reply where it kept the words that set them off. So no snippet template
+        // or template-like replacement ever reaches a provider, a dash the user wrote survives, no rule runs twice,
+        // and a reply that is the text sent gives exactly the cleanup-off text.
         let post: TextPostProcessingResult
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {

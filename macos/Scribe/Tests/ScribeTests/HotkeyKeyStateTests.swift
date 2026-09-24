@@ -46,9 +46,10 @@ final class HotkeyKeyStateTests: XCTestCase {
         XCTAssertEqual(state.receive(.modifierChanged(isDown: true)), .press)
     }
 
-    /// Caps Lock counts a change of its lock state as a tap, and taps alternate press and release; a flags event
-    /// that repeats the lock state is not a tap.
-    func testCapsLockTogglesOnEachChangeOfItsLockOnly() {
+    /// Caps Lock counts a change of its lock state as a tap: a recording starts when the lock turns on and ends at the
+    /// next change, and a flags event that repeats the lock state is not a tap. With nothing recording, a tap that
+    /// turns the lock off starts nothing, so the light is on exactly while a recording runs.
+    func testCapsLockPressesWhenItsLockTurnsOnAndReleasesAtTheNextChange() {
         var state = HotkeyKeyState(binding: capsLock, lockIsOn: false)
 
         XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .none, "no change")
@@ -58,11 +59,17 @@ final class HotkeyKeyStateTests: XCTestCase {
         XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .release)
         state.released()
         XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
+
+        // Launched with the light on: the first tap turns it off and starts nothing, and the next one starts.
+        var launched = HotkeyKeyState(binding: capsLock, lockIsOn: true)
+        XCTAssertEqual(launched.receive(.lockChanged(isOn: false)), .none, "a tap turning the light off pressed")
+        XCTAssertEqual(launched.receive(.lockChanged(isOn: true)), .press)
     }
 
-    /// After the owner ended a toggle's recording itself (silence, the ceiling), the light is still on and the next
-    /// tap turns it off: that tap starts the next recording rather than ending one that is already over.
-    func testAfterACancelledToggleTheNextTapIsAPress() {
+    /// After the owner ended a toggle's recording itself (silence, the ceiling, a fault, a pause), the light is still
+    /// on with nothing recording. The next tap turns it off and starts nothing, and the tap after it starts the next
+    /// recording with the light on: the light is back in step after one tap.
+    func testAfterACancelledToggleTheLightComesBackInStepAfterOneTap() {
         var state = HotkeyKeyState(binding: capsLock, lockIsOn: false)
         XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
         state.pressAnswered(started: true)
@@ -70,7 +77,20 @@ final class HotkeyKeyStateTests: XCTestCase {
         state.cancelToggle()
 
         XCTAssertFalse(state.isEngaged)
-        XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .press)
+        XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .none, "the tap turning the light off pressed")
+        XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
+    }
+
+    /// A press the owner turned away with the light coming on leaves the light on with nothing recording; it comes
+    /// back in step the same way.
+    func testARefusedCapsLockPressLeavesNothingEngagedAndTheLightComesBackInStep() {
+        var state = HotkeyKeyState(binding: capsLock, lockIsOn: false)
+        XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
+        state.pressAnswered(started: false)
+
+        XCTAssertFalse(state.isEngaged)
+        XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .none, "the tap turning the light off pressed")
+        XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press)
     }
 
     /// A held key stays engaged when its recording ended some other way, so neither its release nor its repeats
@@ -123,7 +143,8 @@ final class HotkeyKeyStateTests: XCTestCase {
         XCTAssertEqual(toggle.resynchronize(isDown: false, lockIsOn: true), .none)
         XCTAssertTrue(toggle.lockIsOn)
         XCTAssertEqual(toggle.receive(.lockChanged(isOn: true)), .none, "the new baseline counted as a tap")
-        XCTAssertEqual(toggle.receive(.lockChanged(isOn: false)), .press)
+        XCTAssertEqual(toggle.receive(.lockChanged(isOn: false)), .none, "the tap turning the light off pressed")
+        XCTAssertEqual(toggle.receive(.lockChanged(isOn: true)), .press)
     }
 
     /// A Caps Lock recording whose stop tap was lost while the tap was off: the lock changed an odd number of times,
@@ -132,18 +153,22 @@ final class HotkeyKeyStateTests: XCTestCase {
     func testResynchronizingACapsLockRecordingReleasesItOnlyWhenTheLockChangedAnOddNumberOfTimes() {
         for initial in [false, true] {
             var state = HotkeyKeyState(binding: capsLock, lockIsOn: initial)
-            XCTAssertEqual(state.receive(.lockChanged(isOn: !initial)), .press, "light on at launch: \(initial)")
+            if initial {
+                XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .none, "the light turning off pressed")
+            }
+            XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press, "light on at launch: \(initial)")
             state.pressAnswered(started: true)
 
-            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: !initial), .none, "no tap was missed")
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: true), .none, "no tap was missed")
             XCTAssertTrue(state.isEngaged)
-            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: initial), .release, "one tap was missed")
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: false), .release, "one tap was missed")
             XCTAssertFalse(state.isEngaged)
-            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: initial), .none, "released twice")
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: false), .none, "released twice")
 
             // Idle now: a lock change missed while nothing records is not a made-up press.
-            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: !initial), .none, "a press was made up")
-            XCTAssertEqual(state.receive(.lockChanged(isOn: initial)), .press, "the next real tap")
+            XCTAssertEqual(state.resynchronize(isDown: false, lockIsOn: true), .none, "a press was made up")
+            XCTAssertEqual(state.receive(.lockChanged(isOn: false)), .none, "the light turning off pressed")
+            XCTAssertEqual(state.receive(.lockChanged(isOn: true)), .press, "the next real tap")
         }
     }
 
@@ -278,8 +303,9 @@ final class HotkeyManagerEventTests: XCTestCase {
         XCTAssertFalse(manager.isEngaged)
     }
 
-    /// Caps Lock through the manager: each change of its lock is a tap, and after a cancelled toggle the tap that turns
-    /// the light off starts the next recording.
+    /// Caps Lock through the manager: a recording starts when the light comes on and ends at the next change. After a
+    /// cancelled toggle the light is on with nothing recording, so the next tap turns it off and starts nothing, and
+    /// the tap after it starts the next recording.
     func testCapsLockThroughTheManager() {
         let recorder = Recorder()
         let manager = makeManager(keyCode: 57, recorder: recorder)
@@ -288,10 +314,39 @@ final class HotkeyManagerEventTests: XCTestCase {
         XCTAssertEqual(recorder.presses.count, 1)
         manager.cancelToggle(HotkeyBinding(keyCode: 57))
         manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
-        XCTAssertEqual(recorder.presses.count, 2)
+        XCTAssertEqual(recorder.presses.count, 1, "the tap turning the light off started a recording")
         XCTAssertTrue(recorder.releases.isEmpty)
         manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        XCTAssertEqual(recorder.presses.count, 2)
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
         XCTAssertEqual(recorder.causes, [.keyReleased])
+    }
+
+    /// Launched with Caps Lock's light on, and after a press Scribe turned away, the light is on with nothing
+    /// recording: the next tap turns it off and starts nothing, and the one after it starts a recording.
+    func testACapsLockLightOnWithNothingRecordingComesBackInStepAfterOneTap() {
+        let recorder = Recorder()
+        recorder.flags = [.maskAlphaShift]
+        let manager = makeManager(keyCode: 57, recorder: recorder)
+
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
+        XCTAssertTrue(recorder.presses.isEmpty, "the tap turning the light off started a recording")
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        XCTAssertEqual(recorder.presses.count, 1)
+        XCTAssertTrue(manager.isEngaged)
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
+        XCTAssertEqual(recorder.causes, [.keyReleased])
+
+        recorder.startsRecording = false
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        XCTAssertEqual(recorder.presses.count, 2)
+        XCTAssertFalse(manager.isEngaged)
+        recorder.startsRecording = true
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: []))
+        XCTAssertEqual(recorder.presses.count, 2, "the tap turning the light off started a recording")
+        manager.receive(event(.flagsChanged, keyCode: 57, flags: [.maskAlphaShift]))
+        XCTAssertEqual(recorder.presses.count, 3)
+        XCTAssertTrue(manager.isEngaged)
     }
 
     /// A cancel for a binding the manager no longer has (the key was rebound since) settles nothing.

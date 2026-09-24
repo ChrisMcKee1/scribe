@@ -105,12 +105,12 @@ protocol DictationRuleSource: AnyObject, Sendable {
     /// With AI cleanup off, and when cleanup fell back: snippets, then the dictionary and the enabled libraries.
     func postProcess(_ text: String) -> TextPostProcessingResult
 
-    /// With AI cleanup on, before the request: the vocabulary rules only, on the raw transcript. The pass's text is
-    /// what the provider is sent (`TextPostProcessor.correctVocabulary`).
+    /// With AI cleanup on, before the request: every replacement decided on the raw transcript, and the vocabulary
+    /// rules' made. The pass's text is what the provider is sent (`TextPostProcessor.correctVocabulary`).
     func correctVocabulary(_ text: String) -> VocabularyPass
 
-    /// With AI cleanup on, after an accepted reply: the snippets and the template-like rules, with the rules `pass`
-    /// ran with, never a vocabulary rule again (`TextPostProcessor.finishAfterCleanup`).
+    /// With AI cleanup on, after an accepted reply: the snippets and the template-like replacements `pass` held back,
+    /// made where the reply kept their words, and no rule matched again (`TextPostProcessor.finishAfterCleanup`).
     func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult
 }
 
@@ -129,9 +129,9 @@ protocol DictationNotifying: AnyObject {
 /// The push-to-talk key (`HotkeyManager`).
 @MainActor
 protocol DictationTriggerSource: AnyObject {
-    /// A toggle's recording ended by some other way than the key: the key's next change starts a new recording
-    /// instead of being taken as the toggle's second tap. Windows' `CancelToggle`. Ignored unless `binding` is the
-    /// toggle bound now, so a recording started by a key since rebound settles nothing.
+    /// A toggle's recording ended by some other way than the key: the key's next change is not taken as the toggle's
+    /// second tap (Caps Lock starts a recording only when its lock turns on). Windows' `CancelToggle`. Ignored unless
+    /// `binding` is the toggle bound now, so a recording started by a key since rebound settles nothing.
     func cancelToggle(_ binding: HotkeyBinding)
 }
 
@@ -233,6 +233,41 @@ struct LiveDictationTargeting: DictationTargeting {
     }
 }
 
+/// One load of the rules every dictation applies, compiled. Compiling every library's rules takes tens of
+/// milliseconds, so the app compiles off the main actor (`compile`) and installs the result there in one step
+/// (`DictationRules.install`); a dictation meets either the rules before or the rules after, never a mix.
+struct DictationRuleSnapshot: Sendable {
+    let rules: TextPostProcessor.CompiledRules
+    let appProfiles: [AppProfile]
+    /// For the log: how many rules of each kind went in, and how long compiling took.
+    let dictionaryEntryCount: Int
+    let libraryEntryCount: Int
+    let snippetCount: Int
+    let compileDuration: Duration
+
+    /// Compiles `ruleSet` on the calling thread.
+    init(_ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
+        let clock = ContinuousClock()
+        let started = clock.now
+        rules = TextPostProcessor.CompiledRules(
+            dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries)
+        appProfiles = ruleSet.appProfiles
+        dictionaryEntryCount = ruleSet.dictionaryEntries.count
+        libraryEntryCount = libraryEntries.count
+        snippetCount = ruleSet.snippets.count
+        compileDuration = started.duration(to: clock.now)
+    }
+
+    /// Compiles `ruleSet` off the main actor.
+    static func compile(
+        _ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]
+    ) async -> DictationRuleSnapshot {
+        await Task.detached(priority: .userInitiated) {
+            DictationRuleSnapshot(ruleSet, libraryEntries: libraryEntries)
+        }.value
+    }
+}
+
 /// The rules every dictation applies, loaded at launch and after every change in Settings or Quick Add
 /// (`RuleSetRefresher`), and whether startup's first load has finished (`StartupGate`).
 @MainActor
@@ -253,10 +288,15 @@ final class DictationRules: DictationRuleSource {
         await gate.wait()
     }
 
+    /// Installs rules compiled off the main actor, in one step.
+    func install(_ snapshot: DictationRuleSnapshot) {
+        processor.install(snapshot.rules)
+        appProfiles = snapshot.appProfiles
+    }
+
+    /// Compiles `rules` here and installs them. The app compiles off the main actor instead (`install`).
     func apply(_ rules: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
-        processor.reload(
-            dictionaryEntries: rules.dictionaryEntries, snippets: rules.snippets, libraryEntries: libraryEntries)
-        appProfiles = rules.appProfiles
+        install(DictationRuleSnapshot(rules, libraryEntries: libraryEntries))
     }
 
     func postProcess(_ text: String) -> TextPostProcessingResult {

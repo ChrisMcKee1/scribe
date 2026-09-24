@@ -94,6 +94,11 @@ enum UsageAnalyzer {
         let dictations: Int
         let occurrences: Int
         let covered: Bool
+        /// A covered term that is the replacement of a template-like dictionary rule (`TextPostProcessor.isVocabulary`
+        /// is false for one of the rules it comes from): a signature block, a long or multi-line text, one with a dash
+        /// or with spacing the normalization would change. The dictation path never sends such a replacement to a
+        /// cleanup provider, so the AI summary never sends it either (`UsageInsight.buildSummary`).
+        var isTemplateLike = false
     }
 
     struct Snapshot {
@@ -260,6 +265,7 @@ enum UsageAnalyzer {
     private struct KnownTerm {
         let canonical: String
         let forms: [String]
+        let isTemplateLike: Bool
     }
 
     private static func extractTerms(
@@ -299,7 +305,8 @@ enum UsageAnalyzer {
             // A 1-char pattern with a 1-char replacement leaves no usable forms; skipping keeps
             // the max-over-forms lookup below from ever seeing an empty form list.
             guard !forms.isEmpty else { continue }
-            known.append(KnownTerm(canonical: canonical, forms: forms))
+            let isTemplateLike = groupEntries.contains { !TextPostProcessor.isVocabulary($0) }
+            known.append(KnownTerm(canonical: canonical, forms: forms, isTemplateLike: isTemplateLike))
         }
 
         // Forms Token() can represent whole are counted through one tokenization pass and hash
@@ -395,7 +402,8 @@ enum UsageAnalyzer {
                     text: term.canonical,
                     dictations: termDictations[index],
                     occurrences: termOccurrences[index],
-                    covered: true))
+                    covered: true,
+                    isTemplateLike: term.isTemplateLike))
         }
         for value in novelForms.values where value.dictations >= 2 {
             results.append(

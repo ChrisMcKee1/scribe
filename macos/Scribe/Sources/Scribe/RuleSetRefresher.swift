@@ -1,11 +1,11 @@
 import Foundation
 
-/// Reads what every dictation applies (`PersistenceRuleSet`) off the main actor and hands it to `apply` on the main
-/// actor. Refreshes can overlap, for example after two Settings edits in a row; only the newest one's rules are
-/// applied, whichever read finishes last, and a refresh that fails keeps the rules already in use, so a storage error
-/// never leaves dictation running with an empty or older rule set.
+/// Reads what every dictation applies off the main actor, compiled there too (`DictationRuleSnapshot`), and hands it to
+/// `apply` on the main actor. Refreshes can overlap, for example after two Settings edits in a row; only the newest
+/// one's rules are applied, whichever read and compile finishes last, and a refresh that fails keeps the rules already
+/// in use, so a storage error never leaves dictation running with an empty or older rule set.
 @MainActor
-final class RuleSetRefresher {
+final class RuleSetRefresher<Loaded: Sendable> {
     /// What one refresh did.
     enum Outcome: Equatable, Sendable {
         /// Its rules were read and applied.
@@ -16,14 +16,14 @@ final class RuleSetRefresher {
         case superseded
     }
 
-    private let loadRules: @Sendable () async throws -> PersistenceRuleSet
-    private let apply: @MainActor (PersistenceRuleSet) -> Void
+    private let loadRules: @Sendable () async throws -> Loaded
+    private let apply: @MainActor (Loaded) -> Void
     private let onFailure: @MainActor (any Error) -> Void
     private var section = SettingsSectionLoad()
 
     init(
-        load: @escaping @Sendable () async throws -> PersistenceRuleSet,
-        apply: @escaping @MainActor (PersistenceRuleSet) -> Void,
+        load: @escaping @Sendable () async throws -> Loaded,
+        apply: @escaping @MainActor (Loaded) -> Void,
         onFailure: @escaping @MainActor (any Error) -> Void
     ) {
         loadRules = load

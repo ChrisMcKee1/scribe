@@ -306,8 +306,8 @@ private struct HotkeySettingsTab: View {
                 """
                 For a key you tap on and off, such as Caps Lock: the dictation also ends after about four seconds \
                 of silence, or after ten seconds if you never start talking. Off by default, because a pause to \
-                think ends the dictation too. A dictation that ends by itself leaves Caps Lock's light on; the \
-                next tap starts a new dictation either way.
+                think ends the dictation too. A dictation that ends by itself leaves Caps Lock's light on: the next \
+                tap only turns it off, and the tap after it starts a new dictation.
                 """
             )
             .font(.footnote)
@@ -1318,9 +1318,9 @@ private struct DiagnosticsSettingsTab: View {
 /// Local-only usage totals, a trend chart, top apps, and recurring-term mining, backed by
 /// `UsageAnalyzer`. The AI summary section is the one part of this tab that leaves the device: it
 /// is opt-in per generation (never automatic), available only while AI cleanup is on, and sends
-/// only the aggregate `UsageInsight` payload (counts and dictionary-covered term labels), never raw
-/// transcripts (see `UsageSummaryModel`). Mirrors Windows' Usage Insights page, split across the
-/// totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
+/// only the aggregate `UsageInsight` payload (counts and dictionary-covered term labels other than
+/// template-like replacements), never raw transcripts (see `UsageSummaryModel`). Mirrors Windows'
+/// Usage Insights page, split across the totals/top-apps/recurring-terms/AI-summary PORTING-PLAN rows.
 private struct UsageInsightsSettingsTab: View {
     @StateObject private var model: UsageInsightsModel
     @StateObject private var summaryModel = UsageSummaryModel()
@@ -1496,7 +1496,8 @@ private struct UsageInsightsSettingsTab: View {
             Text(
                 """
                 Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup \
-                provider. Novel terms and raw transcripts never leave this device.
+                provider. Novel terms, replacements that are templates in all but name (such as a signature \
+                block), and raw transcripts never leave this device.
                 """
             )
             .font(.caption)

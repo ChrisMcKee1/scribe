@@ -33,7 +33,7 @@ enum HotkeyHint {
             return "Hold \(binding.displayName) and start talking. Release it when you are done, "
                 + "and the text appears wherever your cursor is."
         case .toggle:
-            return "Tap \(binding.displayName) and start talking. Tap it again when you are done, "
+            return "Tap \(binding.displayName) to turn its light on and start talking. Tap it again when you are done, "
                 + "and the text appears wherever your cursor is."
         }
     }
@@ -43,8 +43,8 @@ enum HotkeyHint {
         case .hold:
             return "Hold \(binding.displayName) anywhere on your Mac to start dictating, and release it to stop."
         case .toggle:
-            return "Tap \(binding.displayName) once to start dictating, and tap it again to stop, "
-                + "just like its own on/off light."
+            return "Tap \(binding.displayName) once to start dictating as its light comes on, and tap it again to "
+                + "stop. If the light is already on, the first tap only turns it off."
         }
     }
 }
@@ -100,9 +100,9 @@ struct HotkeySettingsStore {
 
     /// Whether a push-to-talk key tapped on and off (Caps Lock) also ends its dictation after a pause, as the tray's
     /// test dictation does. Off unless the user turns it on, as on Windows (`AppSettings.AutoStopOnSilence`): four
-    /// seconds of thinking would end the dictation, and a dictation that ends itself leaves Caps Lock's light on,
-    /// because Scribe only listens to the key and never changes its lock state. A held key never stops on silence.
-    /// Read at each press, so a change applies to the next dictation.
+    /// seconds of thinking would end the dictation, and a dictation that ends itself leaves Caps Lock's light on until
+    /// the next tap, which only turns it off, because Scribe only listens to the key and never changes its lock state.
+    /// A held key never stops on silence. Read at each press, so a change applies to the next dictation.
     var autoStopOnSilence: Bool {
         get { defaults.bool(forKey: Self.autoStopDefaultsKey) }
         nonmutating set { defaults.set(newValue, forKey: Self.autoStopDefaultsKey) }

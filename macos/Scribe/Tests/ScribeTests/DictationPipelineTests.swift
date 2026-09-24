@@ -176,6 +176,95 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(provider.requests.map(\.transcript), [sent, sent])
     }
 
+    /// A model that returns what it was sent delivers exactly what cleanup off delivers: every replacement is decided
+    /// on the transcript, and nothing is matched against the reply. The dictations are ones a written form in the
+    /// reply was once taken for a trigger in: "my signature" read as the trigger "my sig" as a vocabulary rule would
+    /// write it (cleanup off expands the snippet "signature" the user did say), a deletion inside a word, a trigger
+    /// said once beside its own written form, and the trigger "my sig" itself.
+    func testAModelThatChangesNothingDeliversExactlyTheCleanupOffText() async throws {
+        let harness = makeHarness()
+        harness.load(
+            dictionary: [
+                DictionaryEntry(pattern: "sig", replacement: "signature"),
+                DictionaryEntry(pattern: "k eight s", replacement: "K8s"),
+                DictionaryEntry(pattern: "x", replacement: "", wholeWord: false),
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+            ],
+            snippets: [
+                Snippet(phrase: "my sig", template: "Best,\nPat Doe"),
+                Snippet(phrase: "k eight s", template: "Private\nnotes"),
+                Snippet(phrase: "signature", template: "Private\nfooter"),
+            ])
+        let transcripts = [
+            "I will add my signature tomorrow", "signaturex", "k eight s then K8s", "deploy cube flow then my sig",
+        ]
+        for transcript in transcripts {
+            harness.transcriber.defaultText = transcript
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+        }
+        let cleanupOff = harness.fakeInjector.texts
+        let expected = [
+            "I will add my Private\nfooter tomorrow", "signature", "Private\nnotes then K8s",
+            "deploy Kubeflow then Best,\nPat Doe",
+        ]
+        XCTAssertEqual(cleanupOff, expected)
+
+        harness.cleanup.isEnabled = true
+        for transcript in transcripts {
+            harness.transcriber.defaultText = transcript
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+            XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .unchanged, transcript)
+        }
+
+        XCTAssertEqual(Array(harness.fakeInjector.texts.dropFirst(transcripts.count)), cleanupOff)
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        XCTAssertEqual(provider.requests.count, transcripts.count)
+    }
+
+    /// The equality above is the rules', not the whole pipeline's: the response guard still works on every reply. A
+    /// reply that returns what was sent inside the tags, a code fence, quotes or after a reasoning block is stripped
+    /// back to it and then gets the cleanup-off text; and a dash in the reply is still rewritten, even one the
+    /// transcript held (the recognizer is not expected to write one), so there the text differs from cleanup off by
+    /// exactly that dash, while the snippet's own dash, which is the user's text, survives.
+    func testTheGuardStillStripsWrappersAndRewritesDashesAroundHeldBackReplacements() async throws {
+        let template = "Best,\nPat \u{2013} Doe"
+        let harness = makeHarness()
+        harness.load(
+            dictionary: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")],
+            snippets: [Snippet(phrase: "my sig", template: template)])
+        harness.transcriber.defaultText = "deploy cube flow then my sig"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        let cleanupOff = try XCTUnwrap(harness.fakeInjector.texts.last)
+        XCTAssertEqual(cleanupOff, "deploy Kubeflow then \(template)")
+
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        let wrappers: [(String) -> String] = [
+            { CleanupPrompt.wrapTranscript($0) }, { "```\n\($0)\n```" }, { "\"\($0)\"" },
+            { "<think>Tidy it.</think>\($0)" },
+        ]
+        for wrap in wrappers {
+            provider.reply = { request in wrap(RecordingCleanupProvider.transcript(in: request)) }
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+            XCTAssertEqual(harness.fakeInjector.texts.last, cleanupOff)
+            XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .unchanged)
+        }
+
+        harness.transcriber.defaultText = "deploy cube flow \u{2014} then my sig"
+        provider.reply = { request in RecordingCleanupProvider.transcript(in: request) }
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        let sent = provider.requests.last.map(RecordingCleanupProvider.transcript(in:))
+        XCTAssertEqual(sent, "deploy Kubeflow \u{2014} then my sig")
+        XCTAssertEqual(harness.fakeInjector.texts.last, "deploy Kubeflow, then \(template)")
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
+    }
+
     /// The reply is checked against the text the provider was sent, not the raw transcript: a one-line rule that wrote
     /// a long product name does not make the model's faithful reply look like a ramble.
     func testTheReplyIsCheckedAgainstTheTextThatWasSent() async throws {

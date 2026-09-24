@@ -83,6 +83,58 @@ final class UsageAnalyzerTests: XCTestCase {
                 UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)))
     }
 
+    /// A covered term that is a template-like rule's replacement is marked so, and a spelling is not, so the AI
+    /// summary can leave the first out: the dictation path never sends such a replacement to a provider either.
+    func testATermThatIsATemplateLikeReplacementIsMarkedSo() {
+        let signature = "Pat Doe\nSupport lead"
+        let text = "Deploy with Next.js. Thanks, \(signature)"
+        let entries = [entry(text: text, audioMilliseconds: 1_000, targetApp: nil)]
+        let terms = [
+            DictionaryEntry(pattern: "next js", replacement: "Next.js"),
+            DictionaryEntry(pattern: "my sign off", replacement: signature),
+        ]
+
+        let snapshot = UsageAnalyzer.compute(
+            entries: entries, knownTerms: terms,
+            sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        let expected = [
+            UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true),
+            UsageAnalyzer.TermUsage(
+                text: signature, dictations: 1, occurrences: 1, covered: true, isTemplateLike: true),
+        ]
+        XCTAssertEqual(snapshot.terms.filter(\.covered).sorted { $0.text < $1.text }, expected)
+        let summary = UsageInsight.buildSummary(snapshot)
+        XCTAssertTrue(summary.contains("Next.js: 1 dictations"), summary)
+        XCTAssertFalse(summary.contains("Pat Doe"), summary)
+    }
+
+    /// A replacement is judged as it is stored, before its label is trimmed: a line break at its edge or padding makes
+    /// it template-like, as the dictation path judges it, though the label it is counted under is the one line
+    /// "Pat Doe". The tab still lists the term; only the summary leaves it out.
+    func testATermIsJudgedByItsReplacementBeforeTheLabelIsTrimmed() {
+        for replacement in ["Pat Doe\n", "\nPat Doe", "  Pat Doe", "Pat Doe "] {
+            let entries = [entry(text: "Signed Pat Doe with Next.js", audioMilliseconds: 1_000, targetApp: nil)]
+            let terms = [
+                DictionaryEntry(pattern: "my name", replacement: replacement),
+                DictionaryEntry(pattern: "next js", replacement: "Next.js"),
+            ]
+
+            let snapshot = UsageAnalyzer.compute(
+                entries: entries, knownTerms: terms,
+                sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
+                timeZone: TimeZone(identifier: "UTC")!)
+
+            let label = snapshot.terms.first { $0.text == "Pat Doe" }
+            XCTAssertEqual(label?.covered, true, replacement.debugDescription)
+            XCTAssertEqual(label?.isTemplateLike, true, replacement.debugDescription)
+            let summary = UsageInsight.buildSummary(snapshot)
+            XCTAssertFalse(summary.contains("Pat Doe"), replacement.debugDescription)
+            XCTAssertTrue(summary.contains("Next.js: 1 dictations"), replacement.debugDescription)
+        }
+    }
+
     func testComputeSuggestsOnlyRecurringJargonShapes() {
         let entries = [
             entry(text: "Hello CloudThing from ProjectAlpha", audioMilliseconds: 1_000, targetApp: nil),

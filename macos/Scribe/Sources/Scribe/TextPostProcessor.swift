@@ -29,12 +29,16 @@ struct TextPostProcessingResult {
     let replacements: [TextReplacement]
 }
 
-/// The vocabulary step of one dictation with AI cleanup on (`TextPostProcessor.correctVocabulary`): the text the
-/// provider is sent, what the vocabulary rules changed in it, and the rules as they stood then. The step after cleanup
-/// runs with those same rules, so a rule edited while the request was out still runs exactly once.
+/// The step before the request of one dictation with AI cleanup on (`TextPostProcessor.correctVocabulary`). Every
+/// replacement is decided there, once, on the transcript as it was spoken, exactly as cleanup off decides it. The
+/// vocabulary rules' replacements are made in the text the provider is sent; every other replacement is held back as
+/// an edit of the words that set it off, and is made after an accepted reply where the reply kept those words
+/// (`TextPostProcessor.finishAfterCleanup`). No rule is ever matched against the model's text.
 struct VocabularyPass {
+    /// What the provider is sent, with the spans of the replacements made in it.
     let result: TextPostProcessingResult
-    let rules: TextPostProcessor.CompiledRules
+    /// The replacements held back until the reply, in the order their words appear in `result.text`.
+    fileprivate let heldBack: [TextPostProcessor.HeldBackEdit]
 
     /// What the cleanup provider is sent.
     var text: String {
@@ -50,11 +54,12 @@ struct VocabularyPass {
 ///
 /// This macOS port keeps the essential ordering, whole-word semantics, and the "replacement
 /// contains pattern" double-expansion guard from Windows' `CompiledRule`. It has no glossary for AI
-/// cleanup; with cleanup on, the rules are split around the request instead: the vocabulary rules
-/// (`isVocabulary`) run on the raw transcript, whose corrected text is what the provider is sent
-/// (`correctVocabulary`), and the snippets and the template-like rules run on the accepted reply
-/// (`finishAfterCleanup`). Every rule runs once, and no snippet template or template-like
-/// replacement ever reaches a provider.
+/// cleanup. With cleanup on, every replacement is decided on the spoken transcript, as cleanup off decides it, and
+/// the replacements are split around the request: the vocabulary rules' (`isVocabulary`) are made in the text the
+/// provider is sent (`correctVocabulary`), and the snippets and the template-like replacements after the accepted
+/// reply, each at most once and only where the reply kept the words that set it off (`finishAfterCleanup`). So no
+/// snippet template or template-like replacement reaches a provider, no rule runs twice or on another rule's or the
+/// model's output, and a model that returns what it was sent gets exactly the cleanup-off text.
 final class TextPostProcessor {
     /// Windows' per-term cap on what its cleanup glossary carries (`CleanupPrompt.MaxGlossaryTermChars`), counted
     /// in UTF-16 units as .NET counts a string.
@@ -72,6 +77,12 @@ final class TextPostProcessor {
         rules = CompiledRules(dictionaryEntries: dictionaryEntries, snippets: snippets, libraryEntries: libraryEntries)
     }
 
+    /// Replaces the rules in one step with ones compiled elsewhere, off the main actor in the app
+    /// (`DictationRuleSnapshot`).
+    func install(_ compiled: CompiledRules) {
+        rules = compiled
+    }
+
     func process(_ text: String) -> String {
         processDetailed(text).text
     }
@@ -82,46 +93,45 @@ final class TextPostProcessor {
         rules.processDetailed(text)
     }
 
-    /// With AI cleanup on, the step before the request: the vocabulary rules, once, on the raw
-    /// transcript. The pass's text is what the provider is sent.
+    /// With AI cleanup on, the step before the request: every replacement decided on the transcript, and the
+    /// vocabulary rules' made. The pass's text is what the provider is sent.
     func correctVocabulary(_ text: String) -> VocabularyPass {
         rules.correctVocabulary(text)
     }
 
-    /// With AI cleanup on, the step after an accepted reply, with the rules `pass` ran with.
+    /// With AI cleanup on, the step after an accepted reply: the replacements `pass` held back, made where the reply
+    /// kept their words. Nothing but `pass` decides it, so a rule edited while the request was out changes nothing.
     func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
-        pass.rules.finishAfterCleanup(reply, after: pass.result)
+        Self.finish(reply, after: pass)
     }
 
-    /// Whether `entry` is a vocabulary rule: its replacement is one line of at most
-    /// `vocabularyReplacementLimit` characters, a spelling rather than a template, and holds no em or
-    /// en dash. With AI cleanup on, only vocabulary rules run on text a provider is sent; any other
-    /// rule is a template in all but name, so it runs after cleanup with the snippets, and its
-    /// replacement never leaves the Mac. A replacement with a dash runs there too, after the reply's
-    /// dash normalization (`DashNormalizer`), so a dash the user wrote survives, as on Windows, where
-    /// every rule runs after cleanup.
+    /// Whether `entry` is a vocabulary rule, one whose replacement may be made in text a provider is sent: a spelling
+    /// of one line and 1 to `vocabularyReplacementLimit` characters, with no em or en dash, already in the form the
+    /// pipeline normalizes text to (no tab, no run of spaces, no space before `, . ! ? ;` or `:`, none at either end).
+    /// Every other rule is template-like, and its replacement never leaves the Mac: a template in all but name, a
+    /// deletion, a replacement with a dash (made after the reply's dash normalization, so the user's own dash
+    /// survives, as on Windows, where every rule runs after cleanup), and one whose spacing the normalization of the
+    /// reply would change. The Usage Insights request leaves template-like replacements out by this same test.
     static func isVocabulary(_ entry: DictionaryEntry) -> Bool {
-        entry.replacement.utf16.count <= vocabularyReplacementLimit
-            && !entry.replacement.contains(where: \.isNewline)
-            && !DashNormalizer.containsDash(entry.replacement)
+        let replacement = entry.replacement
+        return !replacement.isEmpty
+            && replacement.utf16.count <= vocabularyReplacementLimit
+            && !replacement.contains(where: \.isNewline)
+            && !DashNormalizer.containsDash(replacement)
+            && normalizeWhitespace(replacement) == replacement
     }
 
     // MARK: - Compiled rules
 
-    /// One load's rules, compiled once and never changed afterwards, so a dictation keeps the set its
-    /// first step used while a Settings edit loads the next one.
-    final class CompiledRules {
-        /// Every enabled dictionary and library rule, for the pass after the snippets with cleanup off.
+    /// One load's rules, compiled once and never changed afterwards, so they can be compiled on any thread and handed
+    /// to the one that uses them.
+    final class CompiledRules: Sendable {
+        /// Every enabled dictionary and library rule, for the pass after the snippets.
         private let dictionaryRules: [DictionaryRule]
         private let snippetRules: [SnippetRule]
-        /// With cleanup on, the rules that run on the text the provider is sent (`isVocabulary`).
+        /// The rules whose replacements may be made in text a provider is sent (`isVocabulary`). With cleanup on they
+        /// also write the words of a held-back replacement in the user's spellings (`writtenForm`).
         private let vocabularyRules: [DictionaryRule]
-        /// With cleanup on, the rules that run on the reply: every snippet, its template already run
-        /// through the whole dictionary as it would be with cleanup off, and every rule that is not
-        /// vocabulary. Each also matches its spoken form as the vocabulary rules write it, since the
-        /// text it meets went through those rules before the model saw it.
-        private let snippetRulesAfterCleanup: [SnippetRule]
-        private let dictionaryRulesAfterCleanup: [DictionaryRule]
 
         init(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry]) {
             let base = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
@@ -130,38 +140,12 @@ final class TextPostProcessor {
                 ? base
                 : DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: libraryEntries)
             let dictionary = effective.map(DictionaryRule.init)
-            let snippetRules =
+            dictionaryRules = dictionary
+            snippetRules =
                 snippets
                 .filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
                 .map(SnippetRule.init)
-            let vocabulary = dictionary.filter { TextPostProcessor.isVocabulary($0.entry) }
-            let templateLike = dictionary.filter { !TextPostProcessor.isVocabulary($0.entry) }
-            dictionaryRules = dictionary
-            self.snippetRules = snippetRules
-            vocabularyRules = vocabulary
-            dictionaryRulesAfterCleanup = templateLike.flatMap { rule in
-                CompiledRules.matchedForms(of: rule.entry.pattern, vocabulary: vocabulary).map {
-                    DictionaryRule(entry: rule.entry, matching: $0)
-                }
-            }
-            snippetRulesAfterCleanup = snippetRules.flatMap { rule in
-                var canonical = rule.snippet
-                canonical.template =
-                    TextPostProcessor.applySinglePass(canonical.template, rules: dictionary, kind: .dictionary).0
-                return CompiledRules.matchedForms(of: rule.snippet.phrase, vocabulary: vocabulary).map {
-                    SnippetRule(snippet: canonical, matching: $0)
-                }
-            }
-        }
-
-        /// A pattern as it is spoken, and also as the vocabulary rules write it when that differs by more
-        /// than case.
-        private static func matchedForms(of pattern: String, vocabulary: [DictionaryRule]) -> [String] {
-            let written = TextPostProcessor.applySinglePass(pattern, rules: vocabulary, kind: .dictionary).0
-            if written.isEmpty || written.caseInsensitiveCompare(pattern) == .orderedSame {
-                return [pattern]
-            }
-            return [pattern, written]
+            vocabularyRules = dictionary.filter(\.isVocabulary)
         }
 
         /// With cleanup off: snippets, then the dictionary and the libraries, each phase in one pass.
@@ -203,47 +187,179 @@ final class TextPostProcessor {
             return TextPostProcessingResult(text: finalText, replacements: replacements)
         }
 
-        /// With cleanup on, before the request: the vocabulary rules, in one pass, on the normalized
-        /// transcript. No snippet runs and no template-like rule does.
+        /// With cleanup on, before the request: every replacement cleanup off would make, planned on the normalized
+        /// transcript, and the text the provider is sent, with the vocabulary rules' replacements made in it and every
+        /// other replacement held back.
         func correctVocabulary(_ text: String) -> VocabularyPass {
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return VocabularyPass(result: TextPostProcessingResult(text: "", replacements: []), rules: self)
+                return VocabularyPass(result: TextPostProcessingResult(text: "", replacements: []), heldBack: [])
             }
-            let (corrected, replacements) = TextPostProcessor.applySinglePass(
-                TextPostProcessor.normalizeWhitespace(text), rules: vocabularyRules, kind: .dictionary)
-            return VocabularyPass(
-                result: TextPostProcessingResult(text: corrected, replacements: replacements), rules: self)
+            let normalized = TextPostProcessor.normalizeWhitespace(text)
+            let edits = plannedEdits(normalized)
+            let pass = TextPostProcessor.vocabularyPass(normalized, edits: edits, vocabulary: vocabularyRules)
+            // The reply is normalized before the held-back replacements are made, so the text sent has to be in that
+            // form already for a reply that is the text sent to give exactly the cleanup-off text. Should a
+            // replacement made in it break that form anyway, none is made: every replacement is held back with its
+            // words as spoken, and the text sent is the normalized transcript itself.
+            if TextPostProcessor.normalizeWhitespace(pass.text) == pass.text {
+                return pass
+            }
+            return TextPostProcessor.vocabularyPass(normalized, edits: edits, vocabulary: nil)
         }
 
-        /// With cleanup on, after an accepted reply: the snippets, then the template-like rules, each
-        /// phase in one pass. No vocabulary rule runs again, and a match that only exists because a
-        /// vocabulary rule wrote it is skipped (`spokenMatches`), so no rule's output feeds another's.
-        /// `corrected` is the vocabulary step's result for the text the provider was sent.
-        func finishAfterCleanup(
-            _ reply: String, after corrected: TextPostProcessingResult
-        ) -> TextPostProcessingResult {
-            guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return TextPostProcessingResult(text: "", replacements: [])
+        /// The cleanup-off result for `normalized`, as edits of it. The snippets' pass and then the dictionary's pass
+        /// over its output run exactly as in `processDetailed`; a dictionary replacement that reaches into a template
+        /// joins that template's edit, since its text only exists once the template is in place.
+        private func plannedEdits(_ normalized: String) -> [PlannedEdit] {
+            let source = normalized as NSString
+            var pieces: [ExpandedPiece] = []
+            var expanded = ""
+            var expandedLength = 0
+            func append(_ text: String, from range: NSRange, template: Selection?) {
+                let length = text.utf16.count
+                let target = NSRange(location: expandedLength, length: length)
+                pieces.append(ExpandedPiece(source: range, target: target, template: template))
+                expanded += text
+                expandedLength += length
             }
-            let rewrites = VocabularyRewrite.all(in: corrected)
-            let normalized = TextPostProcessor.normalizeWhitespace(reply)
-            let (afterSnippets, snippetSpans) = TextPostProcessor.applySinglePass(
-                normalized, rules: snippetRulesAfterCleanup, kind: .snippet,
-                admitting: TextPostProcessor.spokenMatches(in: normalized, rewrites: rewrites, outside: []))
-            // A template is already canonical, so no rule runs inside it again.
-            let templates = snippetSpans.map { NSRange(location: $0.start, length: $0.length) }
-            let (finalText, ruleSpans) = TextPostProcessor.applySinglePass(
-                afterSnippets, rules: dictionaryRulesAfterCleanup, kind: .dictionary,
-                admitting: TextPostProcessor.spokenMatches(in: afterSnippets, rewrites: rewrites, outside: templates))
+            var position = 0
+            for selection in TextPostProcessor.select(normalized, rules: snippetRules) {
+                if selection.start > position {
+                    let range = NSRange(location: position, length: selection.start - position)
+                    append(source.substring(with: range), from: range, template: nil)
+                }
+                let trigger = NSRange(location: selection.start, length: selection.end - selection.start)
+                append(selection.replacement, from: trigger, template: selection)
+                position = selection.end
+            }
+            if position < source.length {
+                let range = NSRange(location: position, length: source.length - position)
+                append(source.substring(with: range), from: range, template: nil)
+            }
 
-            // For the Playground: the templates where they now sit, then what the vocabulary rules wrote,
-            // wherever the reply kept it.
-            let located = TextPostProcessor.relocate(snippetSpans, in: finalText, options: [], avoiding: [])
-            let taken = (located + ruleSpans).map { NSRange(location: $0.start, length: $0.length) }
-            let vocabulary = TextPostProcessor.relocate(
-                corrected.replacements, in: finalText, options: [.caseInsensitive], avoiding: taken)
-            return TextPostProcessingResult(
-                text: finalText, replacements: TextPostProcessor.withoutOverlaps(ruleSpans + located + vocabulary))
+            // A match that changes nothing is left out: the text it would copy is the text already there.
+            let replacements = TextPostProcessor.select(expanded, rules: dictionaryRules).filter(\.changesText)
+            var members: [(range: NSRange, piece: Int?, replacement: Int?)] = []
+            for (index, piece) in pieces.enumerated() where piece.template != nil {
+                members.append((range: piece.target, piece: index, replacement: nil))
+            }
+            for (index, replacement) in replacements.enumerated() {
+                let range = NSRange(location: replacement.start, length: replacement.end - replacement.start)
+                members.append((range: range, piece: nil, replacement: index))
+            }
+            members.sort { lhs, rhs in
+                if lhs.range.location != rhs.range.location {
+                    return lhs.range.location < rhs.range.location
+                }
+                return lhs.range.length < rhs.range.length
+            }
+            var groups: [PlanGroup] = []
+            for member in members {
+                let end = member.range.location + member.range.length
+                if groups.isEmpty || member.range.location >= groups[groups.count - 1].end {
+                    groups.append(PlanGroup(start: member.range.location, end: end, pieces: [], replacements: []))
+                }
+                let last = groups.count - 1
+                groups[last].end = max(groups[last].end, end)
+                if let piece = member.piece {
+                    groups[last].pieces.append(piece)
+                }
+                if let replacement = member.replacement {
+                    groups[last].replacements.append(replacement)
+                }
+            }
+            let text = expanded as NSString
+            return groups.map { group in
+                CompiledRules.edit(for: group, pieces: pieces, replacements: replacements, expanded: text)
+            }
+        }
+
+        /// The edit a group makes: its stretch of the normalized transcript, and the cleanup-off text that stretch
+        /// becomes, with the replacements in it for the Playground.
+        private static func edit(
+            for group: PlanGroup, pieces: [ExpandedPiece], replacements: [Selection], expanded: NSString
+        ) -> PlannedEdit {
+            let made = group.replacements.map { replacements[$0] }
+            var output = ""
+            var outputLength = 0
+            var spans: [TextReplacement] = []
+            var position = group.start
+            for replacement in made {
+                let kept = expanded.substring(with: NSRange(location: position, length: replacement.start - position))
+                output += kept
+                outputLength += kept.utf16.count
+                let length = replacement.replacement.utf16.count
+                if replacement.original != replacement.replacement {
+                    spans.append(
+                        TextReplacement(
+                            start: outputLength, length: length, pattern: replacement.pattern,
+                            replacement: replacement.replacement, kind: .dictionary))
+                }
+                output += replacement.replacement
+                outputLength += length
+                position = replacement.end
+            }
+            output += expanded.substring(with: NSRange(location: position, length: group.end - position))
+
+            // Each template where it ended up, with the replacements made inside and around it.
+            let written = output as NSString
+            for index in group.pieces {
+                guard let template = pieces[index].template else { continue }
+                let target = pieces[index].target
+                let start = outputOffset(of: target.location, in: group, made: made, towardEnd: false)
+                let end = outputOffset(of: target.location + target.length, in: group, made: made, towardEnd: true)
+                let range = NSRange(location: start, length: end - start)
+                spans.append(
+                    TextReplacement(
+                        start: start, length: range.length, pattern: template.pattern,
+                        replacement: written.substring(with: range), kind: .snippet))
+            }
+            spans.sort { $0.start < $1.start }
+
+            let isVocabulary = group.pieces.isEmpty && made.count == 1 && made[0].isVocabulary
+            return PlannedEdit(
+                source: sourceRange(of: group, pieces: pieces), output: output, spans: spans,
+                isVocabulary: isVocabulary)
+        }
+
+        /// Where `offset` of the expanded text lands in a group's output. An offset inside a replacement lands at the
+        /// start of what it wrote, or at its end when `towardEnd`.
+        private static func outputOffset(
+            of offset: Int, in group: PlanGroup, made: [Selection], towardEnd: Bool
+        ) -> Int {
+            var shift = 0
+            for replacement in made {
+                if offset <= replacement.start {
+                    break
+                }
+                let length = replacement.replacement.utf16.count
+                if offset < replacement.end {
+                    let written = replacement.start - group.start + shift
+                    return towardEnd ? written + length : written
+                }
+                shift += length - (replacement.end - replacement.start)
+            }
+            return offset - group.start + shift
+        }
+
+        /// Where a group sits in the normalized transcript: a template stands for its trigger (with any whitespace the
+        /// tight punctuation guard took before it), and the transcript's own text for itself.
+        private static func sourceRange(of group: PlanGroup, pieces: [ExpandedPiece]) -> NSRange {
+            var lower = 0
+            var upper = 0
+            for piece in pieces {
+                let pieceEnd = piece.target.location + piece.target.length
+                if piece.target.location <= group.start, group.start < pieceEnd {
+                    let inside = group.start - piece.target.location
+                    lower = piece.template == nil ? piece.source.location + inside : piece.source.location
+                }
+                if piece.target.location < group.end, group.end <= pieceEnd {
+                    let inside = group.end - piece.target.location
+                    let sourceEnd = piece.source.location + piece.source.length
+                    upper = piece.template == nil ? piece.source.location + inside : sourceEnd
+                }
+            }
+            return NSRange(location: lower, length: upper - lower)
         }
     }
 
@@ -283,17 +399,15 @@ final class TextPostProcessor {
         let original: String
         let replacement: String
         let order: Int
-    }
-
-    /// A located substitution reported out of `applySinglePass`, before final sorting/merging.
-    private struct AppliedReplacement {
-        let pattern: String
-        let replacement: String
+        /// Whether the rule may run on text a provider is sent (`isVocabulary`); false for a snippet.
+        let isVocabulary: Bool
     }
 
     private struct DictionaryRule: Rule {
         let entry: DictionaryEntry
         let order: Int = 0
+        /// Whether the rule's replacement may be made in text a provider is sent (`TextPostProcessor.isVocabulary`).
+        let isVocabulary: Bool
         var pattern: String { entry.pattern }
         private let regex: NSRegularExpression?
         // Only an expansion whose replacement is strictly longer than its pattern AND embeds that
@@ -306,20 +420,15 @@ final class TextPostProcessor {
         private let replacementContainsPattern: Bool
 
         init(entry: DictionaryEntry) {
-            self.init(entry: entry, matching: entry.pattern)
-        }
-
-        /// Replaces as `entry` does wherever `literal` occurs: the entry's pattern, or that pattern as the
-        /// vocabulary rules write it (`CompiledRules.matchedForms`). `pattern` stays the entry's own.
-        init(entry: DictionaryEntry, matching literal: String) {
             self.entry = entry
-            let escaped = NSRegularExpression.escapedPattern(for: literal)
+            isVocabulary = TextPostProcessor.isVocabulary(entry)
+            let escaped = NSRegularExpression.escapedPattern(for: entry.pattern)
             let pattern = entry.wholeWord ? "(?<!\\w)\(escaped)(?!\\w)" : escaped
             self.regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
             self.replacementContainsPattern =
-                !literal.isEmpty
-                && entry.replacement.count > literal.count
-                && entry.replacement.range(of: literal, options: .caseInsensitive) != nil
+                !entry.pattern.isEmpty
+                && entry.replacement.count > entry.pattern.count
+                && entry.replacement.range(of: entry.pattern, options: .caseInsensitive) != nil
         }
 
         func findMatches(in text: String) -> [ReplacementCandidate] {
@@ -342,7 +451,8 @@ final class TextPostProcessor {
                     range: match.range,
                     original: original,
                     replacement: replacement,
-                    order: order)
+                    order: order,
+                    isVocabulary: isVocabulary)
             }
         }
 
@@ -387,14 +497,8 @@ final class TextPostProcessor {
         private let regex: NSRegularExpression?
 
         init(snippet: Snippet) {
-            self.init(snippet: snippet, matching: snippet.phrase)
-        }
-
-        /// Expands `snippet` wherever `literal` occurs: the trigger phrase, or that phrase as the vocabulary
-        /// rules write it (`CompiledRules.matchedForms`). `pattern` stays the phrase itself.
-        init(snippet: Snippet, matching literal: String) {
             self.snippet = snippet
-            let escaped = NSRegularExpression.escapedPattern(for: literal)
+            let escaped = NSRegularExpression.escapedPattern(for: snippet.phrase)
             let pattern = "(?<!\\w)\(escaped)(?!\\w)"
             self.regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
         }
@@ -408,30 +512,43 @@ final class TextPostProcessor {
                     range: match.range,
                     original: String(text[swiftRange]),
                     replacement: snippet.template,
-                    order: order)
+                    order: order,
+                    isVocabulary: false)
             }
         }
     }
 
-    /// Applies every rule's matches against the *original* input in one pass: matches are sorted by
-    /// position (then longest-first, then rule order) and non-overlapping matches are spliced in,
-    /// mirroring Windows' `ApplySinglePass`, including its "tight punctuation" guard: a replacement
-    /// that is entirely comma/period/etc. absorbs the one whitespace character immediately before
-    /// it, so "hello comma world" -> "hello, world" rather than "hello , world". Replacement text is
-    /// never re-scanned within this same call, only by the next phase (see `processDetailed(_:)`).
-    /// Also returns every located span whose replacement text actually changed the input, tagged
-    /// with the rule's pattern, for Playground highlighting. A match `admits` turns down is left as
-    /// it is, as if its rule had not matched there.
-    private static func applySinglePass<R: Rule>(
-        _ text: String,
-        rules: [R],
-        kind: TextReplacementKind,
-        admitting admits: (ReplacementCandidate, String) -> Bool = { _, _ in true }
-    ) -> (String, [TextReplacement]) {
+    /// A candidate a single pass keeps.
+    private struct Selection {
+        /// Where the replacement begins: at the match, or one before it when the tight punctuation guard takes the
+        /// whitespace in front of it.
+        let start: Int
+        let match: NSRange
+        let original: String
+        let replacement: String
+        /// The rule's pattern, for the Playground.
+        let pattern: String
+        let isVocabulary: Bool
+
+        var end: Int {
+            match.location + match.length
+        }
+
+        /// Whether keeping the candidate changes the text at all.
+        var changesText: Bool {
+            start != match.location || original != replacement
+        }
+    }
+
+    /// The candidates one pass keeps: every rule's matches against the *original* input, sorted by position (then
+    /// longest first, then rule order), and those that do not overlap one kept before them. Mirrors Windows'
+    /// `ApplySinglePass`, including its "tight punctuation" guard: a replacement that is entirely comma/period/etc.
+    /// absorbs the one whitespace character immediately before it, so "hello comma world" -> "hello, world" rather
+    /// than "hello , world".
+    private static func select<R: Rule>(_ text: String, rules: [R]) -> [Selection] {
         let candidates =
             rules
             .flatMap { rule in rule.findMatches(in: text).map { ($0, rule.pattern) } }
-            .filter { admits($0.0, $0.1) }
             .sorted { lhs, rhs in
                 if lhs.0.range.location != rhs.0.range.location {
                     return lhs.0.range.location < rhs.0.range.location
@@ -442,126 +559,318 @@ final class TextPostProcessor {
                 return lhs.0.order < rhs.0.order
             }
 
-        guard !candidates.isEmpty else { return (text, []) }
+        let nsText = text as NSString
+        var selections: [Selection] = []
+        var position = 0
+        for (candidate, pattern) in candidates {
+            guard candidate.range.location >= position else { continue }  // overlap, skip
+            var start = candidate.range.location
+            if start > position,
+                !candidate.replacement.isEmpty,
+                candidate.replacement.allSatisfy(Self.isTightPunctuation),
+                Self.isWhitespace(unit: nsText.character(at: start - 1))
+            {
+                start -= 1
+            }
+            selections.append(
+                Selection(
+                    start: start, match: candidate.range, original: candidate.original,
+                    replacement: candidate.replacement, pattern: pattern, isVocabulary: candidate.isVocabulary))
+            position = candidate.range.location + candidate.range.length
+        }
+        return selections
+    }
+
+    /// Applies one pass's kept candidates (`select`), splicing each replacement in. Replacement text is never
+    /// re-scanned within this same call, only by the next phase (see `processDetailed(_:)`). Also returns every
+    /// located span whose replacement text actually changed the input, tagged with the rule's pattern, for
+    /// Playground highlighting.
+    private static func applySinglePass<R: Rule>(
+        _ text: String,
+        rules: [R],
+        kind: TextReplacementKind
+    ) -> (String, [TextReplacement]) {
+        let selections = select(text, rules: rules)
+        guard !selections.isEmpty else { return (text, []) }
 
         let nsText = text as NSString
         var result = ""
-        var position = 0
+        var resultLength = 0
         var replacements: [TextReplacement] = []
-
-        for (candidate, pattern) in candidates {
-            guard candidate.range.location >= position else { continue }  // overlap, skip
-            var prefixLength = candidate.range.location - position
-            if prefixLength > 0,
-                !candidate.replacement.isEmpty,
-                candidate.replacement.allSatisfy(Self.isTightPunctuation),
-                Self.isWhitespace(unit: nsText.character(at: candidate.range.location - 1))
-            {
-                prefixLength -= 1
-            }
-            let prefixRange = NSRange(location: position, length: prefixLength)
-            result += nsText.substring(with: prefixRange)
-            let start = (result as NSString).length
-            result += candidate.replacement
-            if candidate.original != candidate.replacement {
+        var position = 0
+        for selection in selections {
+            let kept = nsText.substring(with: NSRange(location: position, length: selection.start - position))
+            result += kept
+            resultLength += kept.utf16.count
+            let length = selection.replacement.utf16.count
+            if selection.original != selection.replacement {
                 replacements.append(
                     TextReplacement(
-                        start: start,
-                        length: (candidate.replacement as NSString).length,
-                        pattern: pattern,
-                        replacement: candidate.replacement,
+                        start: resultLength,
+                        length: length,
+                        pattern: selection.pattern,
+                        replacement: selection.replacement,
                         kind: kind))
             }
-            position = candidate.range.location + candidate.range.length
+            result += selection.replacement
+            resultLength += length
+            position = selection.end
         }
         result += nsText.substring(from: position)
         return (result, replacements)
     }
 
-    // MARK: - After cleanup
+    // MARK: - With AI cleanup on
 
-    /// What a vocabulary rule wrote in place of a spoken form, where that changed more than case.
-    private struct VocabularyRewrite {
-        let written: String
-        let spoken: String
+    /// A stretch of the text the dictionary pass meets with cleanup off: the transcript's own text, or a template in
+    /// place of its trigger.
+    private struct ExpandedPiece {
+        /// Where the piece comes from in the normalized transcript: its own text, or the trigger with any whitespace
+        /// the tight punctuation guard took before it.
+        let source: NSRange
+        /// Where the piece sits in the expanded text.
+        let target: NSRange
+        /// The snippet's selection, for a template.
+        let template: Selection?
+    }
 
-        /// The distinct rewrites of the vocabulary step. A pure casing fix is left out: it changes no letter, so
-        /// whatever matches its output matched the words as spoken too.
-        static func all(in corrected: TextPostProcessingResult) -> [VocabularyRewrite] {
-            var rewrites: [VocabularyRewrite] = []
-            for span in corrected.replacements {
-                let isRewrite =
-                    !span.replacement.isEmpty
-                    && span.replacement.caseInsensitiveCompare(span.pattern) != .orderedSame
-                let isNew = !rewrites.contains { $0.written == span.replacement && $0.spoken == span.pattern }
-                if isRewrite && isNew {
-                    rewrites.append(VocabularyRewrite(written: span.replacement, spoken: span.pattern))
+    /// What overlaps in the expanded text, as one edit: a template with every dictionary replacement that reaches into
+    /// it, or a dictionary replacement on its own. Indices into the pieces and into the dictionary pass's replacements.
+    private struct PlanGroup {
+        var start: Int
+        var end: Int
+        var pieces: [Int]
+        var replacements: [Int]
+    }
+
+    /// One edit of the normalized transcript that cleanup off makes: `source` becomes `output`.
+    private struct PlannedEdit {
+        let source: NSRange
+        let output: String
+        /// The replacements within `output`, for the Playground.
+        let spans: [TextReplacement]
+        /// One vocabulary rule's replacement in the transcript's own text, which may be made in the text a provider is
+        /// sent. An edit with a template in it, or a template-like rule's replacement, is held back.
+        let isVocabulary: Bool
+    }
+
+    /// A replacement held back from the text sent: the words that set it off and where they sit in the text sent, and
+    /// the cleanup-off text they become, with the spans in it for the Playground.
+    fileprivate struct HeldBackEdit {
+        let location: Int
+        let words: String
+        let output: String
+        let spans: [TextReplacement]
+    }
+
+    /// The text a provider is sent for `normalized`: the edits that are one vocabulary rule's replacement made in it,
+    /// and every other edit held back, its words written with the vocabulary rules where that is safe (`writtenForm`)
+    /// and as spoken otherwise. A replacement that begins with `, . ! ? ;` or `:` is held back after a space or tab,
+    /// which the reply's normalization would take out before it. With `vocabulary` nil nothing is made and every
+    /// edit's words go as spoken, so the text sent is `normalized` itself.
+    private static func vocabularyPass(
+        _ normalized: String, edits: [PlannedEdit], vocabulary: [DictionaryRule]?
+    ) -> VocabularyPass {
+        let source = normalized as NSString
+        var sent = ""
+        var sentLength = 0
+        var endsWithSpace = false
+        var spans: [TextReplacement] = []
+        var heldBack: [HeldBackEdit] = []
+        func append(_ piece: String) {
+            guard let last = piece.utf16.last else { return }
+            sent += piece
+            sentLength += piece.utf16.count
+            endsWithSpace = last == 0x20 || last == 0x09
+        }
+        var position = 0
+        for edit in edits {
+            if edit.source.location > position {
+                append(source.substring(with: NSRange(location: position, length: edit.source.location - position)))
+            }
+            let pulledIn = endsWithSpace && startsWithTightPunctuation(edit.output)
+            if vocabulary != nil, edit.isVocabulary, !pulledIn {
+                spans += shifted(edit.spans, by: sentLength)
+                append(edit.output)
+            } else {
+                let spoken = source.substring(with: edit.source)
+                let written = vocabulary.flatMap { rules in
+                    writtenForm(of: spoken, at: edit.source, in: source, rules: rules, afterSpace: endsWithSpace)
                 }
+                let words = written ?? spoken
+                let held = HeldBackEdit(location: sentLength, words: words, output: edit.output, spans: edit.spans)
+                heldBack.append(held)
+                append(words)
             }
-            return rewrites
+            position = edit.source.location + edit.source.length
+        }
+        if position < source.length {
+            append(source.substring(from: position))
+        }
+        return VocabularyPass(result: TextPostProcessingResult(text: sent, replacements: spans), heldBack: heldBack)
+    }
+
+    /// The words of a held-back replacement as the vocabulary rules write them, so the model reads the user's
+    /// spellings there too: the trigger "my k eight s notes" is sent as "my K8s notes". Only for words that stand
+    /// apart from the text around them, and only when the written form stays in normal form, cannot be pulled up
+    /// against a space before it, and begins and ends with a word character exactly where the words do, so it is
+    /// found in the reply as the words would be. Nil otherwise, and the words go as spoken.
+    private static func writtenForm(
+        of spoken: String, at range: NSRange, in source: NSString, rules: [DictionaryRule], afterSpace: Bool
+    ) -> String? {
+        guard let first = spoken.unicodeScalars.first, let last = spoken.unicodeScalars.last,
+            !isWhitespace(first), !isWhitespace(last), standsApart(range, in: source)
+        else {
+            return nil
+        }
+        let written = applySinglePass(spoken, rules: rules, kind: .dictionary).0
+        guard let writtenFirst = written.unicodeScalars.first, let writtenLast = written.unicodeScalars.last,
+            isWordScalar(writtenFirst) == isWordScalar(first), isWordScalar(writtenLast) == isWordScalar(last),
+            normalizeWhitespace(written) == written, !(afterSpace && startsWithTightPunctuation(written))
+        else {
+            return nil
+        }
+        return written
+    }
+
+    /// After an accepted reply: each held-back replacement is made where the reply kept its words, and nowhere else.
+    /// The words are looked for as the rules match, ignoring case, with a word character on either side exactly where
+    /// the text sent has one, and the replacement is made at the occurrence that answers to its own: the k-th in the
+    /// reply for the k-th in the text sent. When the reply holds a different number of them (the model dropped,
+    /// repeated or rewrote the words), it is not made and the reply's words stay. Only replacements cleanup off would
+    /// make are ever made, each at most once, and a reply that is the text sent gets exactly the cleanup-off text.
+    private static func finish(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
+        guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return TextPostProcessingResult(text: "", replacements: [])
+        }
+        let normalized = normalizeWhitespace(reply)
+        let target = normalized as NSString
+        let sent = pass.text as NSString
+        var made: [(range: NSRange, edit: HeldBackEdit)] = []
+        var searchFrom = 0
+        for edit in pass.heldBack {
+            let own = NSRange(location: edit.location, length: edit.words.utf16.count)
+            let context = WordContext(of: own, in: sent)
+            let inSent = occurrences(of: edit.words, in: sent).filter { WordContext(of: $0, in: sent) == context }
+            let inReply = occurrences(of: edit.words, in: target).filter { WordContext(of: $0, in: target) == context }
+            guard inSent.count == inReply.count, let index = inSent.firstIndex(of: own),
+                inReply[index].location >= searchFrom
+            else {
+                continue
+            }
+            made.append((range: inReply[index], edit: edit))
+            searchFrom = inReply[index].location + inReply[index].length
+        }
+
+        var text = ""
+        var length = 0
+        var spans: [TextReplacement] = []
+        var outputs: [NSRange] = []
+        var position = 0
+        for (range, edit) in made {
+            let kept = target.substring(with: NSRange(location: position, length: range.location - position))
+            text += kept
+            length += kept.utf16.count
+            spans += shifted(edit.spans, by: length)
+            let outputLength = edit.output.utf16.count
+            outputs.append(NSRange(location: length, length: outputLength))
+            text += edit.output
+            length += outputLength
+            position = range.location + range.length
+        }
+        text += target.substring(from: position)
+        // For the Playground: what the vocabulary rules wrote in the text sent, wherever the reply kept it.
+        let vocabulary = relocate(pass.result.replacements, in: text, options: [.caseInsensitive], avoiding: outputs)
+        return TextPostProcessingResult(text: text, replacements: withoutOverlaps(spans + vocabulary))
+    }
+
+    /// Whether a word character touches a stretch of text, before it and after it.
+    private struct WordContext: Equatable {
+        let before: Bool
+        let after: Bool
+
+        init(of range: NSRange, in text: NSString) {
+            before = TextPostProcessor.isWord(TextPostProcessor.scalar(before: range.location, in: text))
+            after = TextPostProcessor.isWord(TextPostProcessor.scalar(at: range.location + range.length, in: text))
         }
     }
 
-    /// Admits a match after cleanup only when it is the user's own words for its rule: every vocabulary rewrite
-    /// inside it, turned back into what was spoken, gives the rule's pattern again. Anything else is one rule's
-    /// output feeding another ("alpha" written as "beta" before cleanup, then "beta" expanded after it), and a match
-    /// that reaches into `excluded` (the templates, already canonical) would run a second rule over a rule's output.
-    /// Both are skipped. A rewrite found in the reply is taken for the vocabulary step's output wherever it is, so a
-    /// dictation that also said the written form itself may lose a match there, never gain one.
-    private static func spokenMatches(
-        in text: String, rewrites: [VocabularyRewrite], outside excluded: [NSRange]
-    ) -> (ReplacementCandidate, String) -> Bool {
-        let nsText = text as NSString
-        var collected: [(range: NSRange, spoken: String)] = []
-        for rewrite in rewrites {
-            for range in occurrences(of: rewrite.written, in: nsText) {
-                collected.append((range: range, spoken: rewrite.spoken))
-            }
+    /// Every place `words` occurs in `text`, ignoring case as the rules do, overlapping ones included.
+    private static func occurrences(of words: String, in text: NSString) -> [NSRange] {
+        let pattern = "(?=(\(NSRegularExpression.escapedPattern(for: words))))"
+        guard !words.isEmpty, let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
         }
-        let found = collected.sorted { lhs, rhs in
-            if lhs.range.location != rhs.range.location {
-                return lhs.range.location < rhs.range.location
-            }
-            return lhs.range.length > rhs.range.length
+        let whole = NSRange(location: 0, length: text.length)
+        return regex.matches(in: text as String, range: whole).map { $0.range(at: 1) }
+    }
+
+    /// Whether `range` of `text` begins and ends at a word boundary.
+    private static func standsApart(_ range: NSRange, in text: NSString) -> Bool {
+        let start = range.location
+        let end = range.location + range.length
+        let joinsBefore = isWord(scalar(before: start, in: text)) && isWord(scalar(at: start, in: text))
+        let joinsAfter = isWord(scalar(before: end, in: text)) && isWord(scalar(at: end, in: text))
+        return !joinsBefore && !joinsAfter
+    }
+
+    /// The Unicode scalar that ends at UTF-16 offset `offset` of `text`; nil at the start.
+    private static func scalar(before offset: Int, in text: NSString) -> Unicode.Scalar? {
+        guard offset > 0, offset <= text.length else { return nil }
+        let isPair =
+            offset > 1 && UTF16.isTrailSurrogate(text.character(at: offset - 1))
+            && UTF16.isLeadSurrogate(text.character(at: offset - 2))
+        let width = isPair ? 2 : 1
+        return text.substring(with: NSRange(location: offset - width, length: width)).unicodeScalars.last
+    }
+
+    /// The Unicode scalar that begins at UTF-16 offset `offset` of `text`; nil at the end.
+    private static func scalar(at offset: Int, in text: NSString) -> Unicode.Scalar? {
+        guard offset >= 0, offset < text.length else { return nil }
+        let isPair =
+            offset + 1 < text.length && UTF16.isLeadSurrogate(text.character(at: offset))
+            && UTF16.isTrailSurrogate(text.character(at: offset + 1))
+        let width = isPair ? 2 : 1
+        return text.substring(with: NSRange(location: offset, length: width)).unicodeScalars.first
+    }
+
+    private static func isWord(_ scalar: Unicode.Scalar?) -> Bool {
+        guard let scalar else { return false }
+        return isWordScalar(scalar)
+    }
+
+    /// Whether `scalar` is a word character as `\w` in the rules' regular expressions reads one (ICU: alphabetic, a
+    /// mark, a decimal digit, connector punctuation, or a zero-width joiner or non-joiner).
+    private static func isWordScalar(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.value == 0x200C || scalar.value == 0x200D {
+            return true
         }
-        return { candidate, pattern in
-            let match = candidate.range
-            let end = match.location + match.length
-            if excluded.contains(where: { NSIntersectionRange($0, match).length > 0 }) {
-                return false
-            }
-            let inside = found.filter { NSIntersectionRange($0.range, match).length > 0 }
-            guard !inside.isEmpty else { return true }
-            var spoken = ""
-            var position = match.location
-            for occurrence in inside {
-                let range = occurrence.range
-                // Reaching past the match: the rewrite was not part of what the rule matched.
-                guard range.location >= match.location, range.location + range.length <= end else { return false }
-                guard range.location >= position else { continue }
-                spoken += nsText.substring(with: NSRange(location: position, length: range.location - position))
-                spoken += occurrence.spoken
-                position = range.location + range.length
-            }
-            spoken += nsText.substring(with: NSRange(location: position, length: end - position))
-            return spoken.caseInsensitiveCompare(pattern) == .orderedSame
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark, .decimalNumber, .connectorPunctuation:
+            return true
+        default:
+            return scalar.properties.isAlphabetic
         }
     }
 
-    /// Every place `string` occurs in `text`, ignoring case, overlapping ones included.
-    private static func occurrences(of string: String, in text: NSString) -> [NSRange] {
-        let length = (string as NSString).length
-        guard length > 0 else { return [] }
-        var found: [NSRange] = []
-        var from = 0
-        while from <= text.length - length {
-            let range = text.range(
-                of: string, options: [.caseInsensitive], range: NSRange(location: from, length: text.length - from))
-            guard range.location != NSNotFound else { break }
-            found.append(range)
-            from = range.location + 1
+    private static func isWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+        CharacterSet.whitespacesAndNewlines.contains(scalar)
+    }
+
+    /// Whether `text` begins with one of `, . ! ? ;` or `:`, which the whitespace normalization pulls up against a
+    /// space or tab before it.
+    private static func startsWithTightPunctuation(_ text: String) -> Bool {
+        guard let first = text.unicodeScalars.first else { return false }
+        return ",.!?;:".unicodeScalars.contains(first)
+    }
+
+    /// `spans` moved `offset` UTF-16 units along.
+    private static func shifted(_ spans: [TextReplacement], by offset: Int) -> [TextReplacement] {
+        spans.map {
+            TextReplacement(
+                start: $0.start + offset, length: $0.length, pattern: $0.pattern, replacement: $0.replacement,
+                kind: $0.kind)
         }
-        return found
     }
 
     /// Finds each span's replacement in `text`, in order, each after the one before it and clear of `avoiding`, so
@@ -626,15 +935,21 @@ final class TextPostProcessor {
         return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
+    private static let horizontalWhitespace = try! NSRegularExpression(pattern: "[ \\t\\f\\x0B]+")
+    private static let spaceBeforePunctuation = try! NSRegularExpression(pattern: "[ \\t]+([,.!?;:])")
+
     /// Collapses horizontal whitespace runs to a single space, preserving line breaks. `\v` inside
     /// an ICU character class (which `NSRegularExpression` uses) expands to the full "vertical
     /// whitespace" set (`\n`, `\r`, form feed, NEL, LS, PS), unlike .NET's `Regex`, where `\v` inside
     /// a bracket means only the literal vertical-tab byte. Using `\v` here silently collapsed every
     /// CRLF/LF in the text to a single space; `\x0B` is the literal-vertical-tab escape that actually
-    /// matches Windows' `NormalizeWhitespace` behavior.
+    /// matches Windows' `NormalizeWhitespace` behavior. The two expressions are compiled once: every
+    /// rule's replacement is checked against this form at each reload (`isVocabulary`).
     private static func normalizeWhitespace(_ text: String) -> String {
-        var result = text.replacingOccurrences(of: "[ \\t\\f\\x0B]+", with: " ", options: .regularExpression)
-        result = result.replacingOccurrences(of: "[ \\t]+([,.!?;:])", with: "$1", options: .regularExpression)
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsed = horizontalWhitespace.stringByReplacingMatches(
+            in: text, range: NSRange(location: 0, length: text.utf16.count), withTemplate: " ")
+        let tightened = spaceBeforePunctuation.stringByReplacingMatches(
+            in: collapsed, range: NSRange(location: 0, length: collapsed.utf16.count), withTemplate: "$1")
+        return tightened.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
