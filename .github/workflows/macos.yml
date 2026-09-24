@@ -217,10 +217,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Since Homebrew 6.0 a formula from a third-party tap loads only once it is trusted, and installing it
+      # by its fully qualified name trusts that one formula, which is also how the README installs it.
       - name: Install Foundry Local
         run: |
-          brew tap microsoft/foundrylocal
-          brew install foundrylocal
+          brew --version
+          brew install microsoft/foundrylocal/foundrylocal
           foundry --version
 
       - name: Find Foundry Local's model cache
