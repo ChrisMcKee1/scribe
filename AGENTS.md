@@ -640,9 +640,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
   keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
   Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
-  dictation neither ends it nor lets the key through. Every other binding (F9, Ctrl+Shift+X, Right
-  Ctrl, Ctrl+Page Down, a chord) matches exactly as before whatever else is held, so no custom binding
-  an existing install has changes on upgrade; widening the rule would change them.
+  dictation neither ends it nor lets the key through. No binding but a bare Page Up or Page Down
+  changes: every other one (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as
+  before whatever else is held, and widening the rule would change them. An install that had already
+  bound Page Up or Page Down on its own gets the pass-through too, because 0.4.3's capture stored that
+  key exactly so: after the upgrade its Ctrl, Shift, Alt, Win or Narrator key plus the Page key reaches
+  the app instead of dictating.
 - **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
   own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So

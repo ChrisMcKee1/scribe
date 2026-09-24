@@ -34,7 +34,8 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// the app whole and starts nothing. The check is made only as the binding becomes satisfied: a
 /// modifier pressed during a dictation neither ends it nor stops the key being swallowed. Every other
 /// binding (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as it always has,
-/// whatever else is held, so no binding an existing install chose behaves differently.
+/// whatever else is held: no binding but a bare Page Up or Page Down behaves differently, and an install
+/// that had already bound either key on its own (0.4.3 stored it exactly so) gets the pass-through too.
 ///
 /// A Ctrl, Alt, Shift or Windows key counts as held only while Windows agrees it is down, when the
 /// machine is given Windows' view (<c>isLogicallyDown</c>, GetAsyncKeyState in the service). A hook is
