@@ -212,6 +212,96 @@ public sealed class AzureCliSignInTests
         Assert.Equal(["installed", "subscription", "clear", "probe"], steps.Calls);
     }
 
+    // Astra's A2: the sequence finishes while the attempt is current, but the continuation that shows its outcome
+    // runs in a later dispatcher operation, and a UI Automation SetValue on the tenant box (invoked at Send
+    // priority) retires the attempt in between. The old tenant's sign-in must not be shown, nor trusted by Save.
+    [Fact]
+    public async Task An_attempt_retired_after_the_sequence_finished_but_before_its_outcome_is_shown_publishes_nothing()
+    {
+        var dispatcher = new DispatcherLikeContext();
+        var steps = new Steps();
+        var probe = steps.ThenGatedProbe();
+        Task<AzureCliSignIn.Result>? running = null;
+
+        dispatcher.Post(() => running = AzureCliSignIn.RunAndPublishAsync(steps, allowInteractiveLogin: false, () => steps.Current));
+        Assert.True(dispatcher.RunOne());
+        Assert.True(probe.Started.IsCompleted);
+
+        probe.Release(SignedIn);
+        Assert.True(dispatcher.RunOne());
+
+        // The sequence has finished, still current, and its outcome is waiting in a separate dispatcher operation.
+        Assert.Equal(["installed", "probe"], steps.Calls);
+        Assert.Equal(1, dispatcher.Pending);
+
+        steps.Current = false;
+        dispatcher.RunAll();
+
+        Assert.NotNull(running);
+        Assert.True(running.IsCompletedSuccessfully);
+        var result = await running;
+        Assert.Equal(AzureCliSignIn.Outcome.Retired, result.Outcome);
+        Assert.Equal(["installed", "probe"], steps.Calls);
+    }
+
+    [Fact]
+    public async Task An_outcome_is_shown_once_when_nothing_retires_the_attempt()
+    {
+        var dispatcher = new DispatcherLikeContext();
+        var steps = new Steps();
+        var probe = steps.ThenGatedProbe();
+        Task<AzureCliSignIn.Result>? running = null;
+
+        dispatcher.Post(() => running = AzureCliSignIn.RunAndPublishAsync(steps, allowInteractiveLogin: false, () => steps.Current));
+        dispatcher.RunOne();
+        probe.Release(SignedIn);
+        dispatcher.RunAll();
+
+        Assert.NotNull(running);
+        Assert.True(running.IsCompletedSuccessfully);
+        var result = await running;
+        Assert.Equal(AzureCliSignIn.Outcome.SignedIn, result.Outcome);
+        Assert.Same(SignedIn, result.Status);
+        Assert.Equal(["installed", "probe", "publish SignedIn"], steps.Calls);
+    }
+
+    [Fact]
+    public async Task A_sequence_retired_during_a_wait_publishes_nothing()
+    {
+        var steps = new Steps();
+        var probe = steps.ThenGatedProbe();
+
+        var running = AzureCliSignIn.RunAndPublishAsync(steps, allowInteractiveLogin: true, () => steps.Current);
+        await probe.Started;
+        steps.Current = false;
+        probe.Release(SignedOut);
+        var result = await running;
+
+        Assert.Equal(AzureCliSignIn.Outcome.Retired, result.Outcome);
+        Assert.Equal(["installed", "probe"], steps.Calls);
+    }
+
+    [Fact]
+    public async Task Every_outcome_but_retired_is_published()
+    {
+        foreach (var (steps, expected) in new[]
+                 {
+                     (new Steps { Installed = false }, AzureCliSignIn.Outcome.CliMissing),
+                     (new Steps { LoginResult = (false, "Azure sign-in was cancelled.") }, AzureCliSignIn.Outcome.LoginFailed),
+                     (new Steps(), AzureCliSignIn.Outcome.NotSignedIn),
+                 })
+        {
+            steps.ThenProbe(SignedOut);
+            steps.ThenProbe(SignedOut);
+
+            var result = await AzureCliSignIn.RunAndPublishAsync(steps, allowInteractiveLogin: true, () => steps.Current);
+
+            Assert.Equal(expected, result.Outcome);
+            Assert.Equal($"publish {expected}", steps.Calls[^1]);
+            Assert.Single(steps.Calls, call => call.StartsWith("publish", StringComparison.Ordinal));
+        }
+    }
+
     /// <summary>Holds one step open until the test releases it, so the attempt can be retired mid-wait.</summary>
     private sealed class Gate<T>
     {
@@ -295,6 +385,60 @@ public sealed class AzureCliSignInTests
         {
             Calls.Add("login");
             return _login?.Wait() ?? Task.FromResult(LoginResult);
+        }
+
+        public void Publish(AzureCliSignIn.Result result) => Calls.Add($"publish {result.Outcome}");
+    }
+
+    /// <summary>
+    /// Runs posted work one callback at a time, each under a context instance of its own, as WPF's dispatcher does:
+    /// every dispatcher operation gets a new DispatcherSynchronizationContext (DispatcherOperation.InvokeImpl), and
+    /// an await resumes inline only on the very instance it captured (SynchronizationContextAwaitTaskContinuation.Run).
+    /// So an await that completes in a later callback is posted, which leaves the gap the test retires the attempt in.
+    /// </summary>
+    private sealed class DispatcherLikeContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public int Pending => _queue.Count;
+
+        public void Post(Action action) => _queue.Enqueue((_ => action(), null));
+
+        public bool RunOne()
+        {
+            if (!_queue.TryDequeue(out var work))
+            {
+                return false;
+            }
+
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(new Operation(this));
+            try
+            {
+                work.Callback(work.State);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+
+            return true;
+        }
+
+        public void RunAll()
+        {
+            while (RunOne())
+            {
+            }
+        }
+
+        private sealed class Operation(DispatcherLikeContext dispatcher) : SynchronizationContext
+        {
+            public override void Post(SendOrPostCallback d, object? state) => dispatcher._queue.Enqueue((d, state));
+
+            public override void Send(SendOrPostCallback d, object? state) => throw new NotSupportedException();
+
+            public override SynchronizationContext CreateCopy() => new Operation(dispatcher);
         }
     }
 }

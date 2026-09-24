@@ -3039,44 +3039,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             // Editing the tenant or switching the method retires this attempt during any of its waits, and
-            // AzureCliSignIn then stops before it changes anything, a browser sign-in included.
-            var result = await AzureCliSignIn.RunAsync(
-                new CliSignInSteps(this),
+            // AzureCliSignIn then stops before it changes anything, a browser sign-in included. It also shows the
+            // outcome itself (CliSignInSteps.Publish), right after a last ownership check with nothing awaited in
+            // between, because an await can resume in a later dispatcher operation.
+            var result = await AzureCliSignIn.RunAndPublishAsync(
+                new CliSignInSteps(this, allowInteractiveLogin),
                 allowInteractiveLogin,
                 () => _azureSignInAttempts.IsCurrent(operationVersion));
 
-            switch (result.Outcome)
+            // This continuation is such a later operation too: an attempt retired since must not start a listing.
+            if (!_azureSignInAttempts.IsCurrent(operationVersion))
             {
-                case AzureCliSignIn.Outcome.Retired:
-                    return;
-
-                case AzureCliSignIn.Outcome.CliMissing:
-                    _azureSignInStatus = new AzureSignInStatus(false, null);
-                    ApplyAzureSettingsAccess();
-                    AzureStatusText.Text =
-                        "Azure CLI was not found. Install it below, or use an endpoint and API key instead.";
-                    return;
-
-                case AzureCliSignIn.Outcome.LoginFailed:
-                    _azureSignInStatus = new AzureSignInStatus(false, null);
-                    ApplyAzureSettingsAccess();
-                    AzureStatusText.Text = result.Message;
-                    return;
-            }
-
-            var status = result.Status ?? new AzureSignInStatus(false, null);
-            _azureSignInStatus = status;
-            ApplyAzureSettingsAccess();
-            if (!status.IsSignedIn)
-            {
-                AzureStatusText.Text = allowInteractiveLogin
-                    ? "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again."
-                    : "Not signed in to Azure. Sign in to reveal subscriptions and models.";
                 return;
             }
 
-            AzureStatusText.Text = $"{DescribeAzureIdentity(status)} Listing compatible deployments…";
-            shouldListModels =
+            shouldListModels = result.Outcome == AzureCliSignIn.Outcome.SignedIn &&
                 listModels && (forceListModels || allowInteractiveLogin || !_azureAutoListed);
         }
         catch (OperationCanceledException)
@@ -3131,7 +3108,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     /// The window's steps for <see cref="AzureCliSignIn"/>. Each reads the page when it runs, so a check or a
     /// browser sign-in uses the tenant and subscription shown at that moment.
     /// </summary>
-    private sealed class CliSignInSteps(SettingsWindow window) : IAzureCliSignInSteps
+    private sealed class CliSignInSteps(SettingsWindow window, bool allowInteractiveLogin) : IAzureCliSignInSteps
     {
         public async Task<bool> IsCliInstalledAsync()
         {
@@ -3175,6 +3152,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ? NullIfBlank(window.AzureTenantBox.Text)
                 : selectedSubscription.TenantId;
             return await window._azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
+        }
+
+        // Only while the attempt owns the page (AzureCliSignIn.RunAndPublishAsync), never for a retired one.
+        public void Publish(AzureCliSignIn.Result result)
+        {
+            var status = result.Status ?? new AzureSignInStatus(false, null);
+            window._azureSignInStatus = status;
+            window.ApplyAzureSettingsAccess();
+            window.AzureStatusText.Text = result.Outcome switch
+            {
+                AzureCliSignIn.Outcome.CliMissing =>
+                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.",
+                AzureCliSignIn.Outcome.LoginFailed => result.Message,
+                AzureCliSignIn.Outcome.NotSignedIn when allowInteractiveLogin =>
+                    "Azure sign-in completed, but Scribe could not verify an Azure token. Check the tenant and try again.",
+                AzureCliSignIn.Outcome.NotSignedIn =>
+                    "Not signed in to Azure. Sign in to reveal subscriptions and models.",
+                _ => $"{DescribeAzureIdentity(status)} Listing compatible deployments…",
+            };
         }
     }
 
@@ -3880,14 +3876,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                       : null);
             var (subscriptionsOk, subscriptions, subscriptionsMessage) =
                 await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
-            if (!subscriptionsOk)
+
+            // Before anything is shown: a tenant edit or a newer listing during the wait retires this one, and its
+            // failure must not replace "Tenant changed" either.
+            if (loadVersion != _azureDeploymentLoadVersion)
             {
-                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 
-            if (loadVersion != _azureDeploymentLoadVersion)
+            if (!subscriptionsOk)
             {
+                AzureStatusText.Text = $"{DescribeAzureIdentity(_azureSignInStatus)} {subscriptionsMessage}";
                 return;
             }
 

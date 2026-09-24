@@ -3,7 +3,8 @@ using Scribe.Core.Cleanup;
 namespace Scribe.Core.Settings;
 
 /// <summary>
-/// The window's side of <see cref="AzureCliSignIn.RunAsync"/>. Each step reads the page as it is when it runs.
+/// The window's side of <see cref="AzureCliSignIn.RunAndPublishAsync"/>. Each step reads the page as it is when it
+/// runs.
 /// </summary>
 public interface IAzureCliSignInSteps
 {
@@ -27,6 +28,12 @@ public interface IAzureCliSignInSteps
 
     /// <summary>Opens the browser sign-in (az login).</summary>
     Task<(bool Ok, string Message)> LoginAsync();
+
+    /// <summary>
+    /// Shows the outcome on the page. <see cref="AzureCliSignIn.RunAndPublishAsync"/> calls it only while the attempt
+    /// still owns the page, and never for <see cref="AzureCliSignIn.Outcome.Retired"/>.
+    /// </summary>
+    void Publish(AzureCliSignIn.Result result);
 }
 
 /// <summary>
@@ -67,6 +74,33 @@ public static class AzureCliSignIn
     }
 
     public readonly record struct Result(Outcome Outcome, AzureSignInStatus? Status = null, string? Message = null);
+
+    /// <summary>
+    /// Runs the sequence (<see cref="RunAsync"/>), then shows its outcome through
+    /// <see cref="IAzureCliSignInSteps.Publish"/> if the attempt still owns the page.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="RunAsync"/> asks <paramref name="isCurrent"/> before it returns, but the await here can resume in a
+    /// later dispatcher operation than the one that finished the sequence. WPF gives every dispatcher operation its own
+    /// synchronization context, so the continuation is posted rather than run inline, and anything the dispatcher runs
+    /// first can retire the attempt, for example a UI Automation SetValue on the tenant box, which is invoked at Send
+    /// priority. So ownership is asked again, with nothing awaited between that answer and the publish.
+    /// </remarks>
+    /// <returns>The published outcome, or <see cref="Outcome.Retired"/> when nothing was published.</returns>
+    public static async Task<Result> RunAndPublishAsync(
+        IAzureCliSignInSteps steps,
+        bool allowInteractiveLogin,
+        Func<bool> isCurrent)
+    {
+        var result = await RunAsync(steps, allowInteractiveLogin, isCurrent);
+        if (result.Outcome == Outcome.Retired || !isCurrent())
+        {
+            return new Result(Outcome.Retired);
+        }
+
+        steps.Publish(result);
+        return result;
+    }
 
     /// <param name="steps">The window's steps.</param>
     /// <param name="allowInteractiveLogin">A browser sign-in may open when the check finds no sign-in.</param>
