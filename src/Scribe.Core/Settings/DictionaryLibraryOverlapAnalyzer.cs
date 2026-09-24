@@ -36,9 +36,9 @@ public readonly record struct DictionaryOverlap(
 
 /// <summary>
 /// The enabled library row that covers a spoken form: the first enabled row for it in precedence order, and the
-/// library that supplies it.
+/// library that supplies it (its id and whether it is built in, which together place it in precedence).
 /// </summary>
-public readonly record struct LibraryCoverage(DictionaryEntry Entry, string LibraryId, string LibraryName);
+public readonly record struct LibraryCoverage(DictionaryEntry Entry, string LibraryId, string LibraryName, bool BuiltIn);
 
 /// <summary>The overlaps found, split by what the user should be asked about.</summary>
 public readonly record struct DictionaryOverlapReport(IReadOnlyList<DictionaryOverlap> Overlaps)
@@ -166,7 +166,7 @@ public static class DictionaryLibraryOverlapAnalyzer
                     continue;
                 }
 
-                covering.TryAdd(entry.Pattern.Trim(), new LibraryCoverage(entry, library.Id, library.Name));
+                covering.TryAdd(entry.Pattern.Trim(), new LibraryCoverage(entry, library.Id, library.Name, library.BuiltIn));
             }
         }
 

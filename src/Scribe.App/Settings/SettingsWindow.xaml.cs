@@ -5880,8 +5880,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // A library is all or nothing, so switching one off to shed its dead weight would take its
         // working terms with it. Copying those into the user's own dictionary first is what makes a
-        // partly used library actionable at all, which is the common case for a shipped pack. Core decides which
-        // terms to copy, in precedence order rather than the review's, against the libraries that are on now.
+        // partly used library actionable at all, which is the common case for a shipped pack. Core copies only a rule
+        // dictation applies today, across every library that is on, and only when what stays on would write it differently.
         var copy = LibrarySwitchOffCopy.Plan(
             _rows.Select(r => new LibrarySwitchOffCopy.Row(r.Pattern, r.Enabled)).ToList(),
             LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()),
