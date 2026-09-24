@@ -8,7 +8,9 @@ import os
 /// The course one clip is expected to take through a pipeline scenario.
 struct PipelineLine: Sendable {
     let clip: ScenarioClip
-    /// What the stand-in model answers when it is sent this clip's raw transcript.
+    /// The clip's transcript with the vocabulary rules applied: what the stand-in model is sent.
+    let sent: String
+    /// What the stand-in model answers when it is sent `sent`.
     let reply: String
     /// The reply as the pipeline carries it on, after the response guard, which also normalizes dashes.
     let cleaned: String
@@ -22,6 +24,10 @@ struct PipelineScript: Sendable {
 
     func line(raw: String) -> PipelineLine? {
         lines.first { $0.clip.text == raw }
+    }
+
+    func line(sent: String) -> PipelineLine? {
+        lines.first { $0.sent == sent }
     }
 
     func line(cleaned: String) -> PipelineLine? {
@@ -61,6 +67,14 @@ enum ScenarioVocabulary {
         Snippet(phrase: signatureTrigger, template: signatureTemplate),
         Snippet(phrase: addressTrigger, template: addressTemplate),
     ]
+
+    /// `text` with this vocabulary's one-line rules applied, as the pipeline corrects a transcript before it sends it
+    /// for cleanup (`TextPostProcessor.correctVocabulary`).
+    static func corrected(_ text: String) -> String {
+        let processor = TextPostProcessor()
+        processor.reload(dictionaryEntries: dictionary, snippets: snippets)
+        return processor.correctVocabulary(text).text
+    }
 }
 
 enum PipelineScenarioError: Error {
@@ -72,6 +86,7 @@ enum PipelineScenarioError: Error {
 final class PipelineJournal: Sendable {
     enum Step: String, Sendable {
         case recognized
+        case vocabularyCorrected
         case cleanupRequested
         case cleanupAnswered
         case postProcessed
@@ -149,8 +164,8 @@ final class FixtureRecognizer: DictationTranscribing {
     }
 }
 
-/// A stand-in for the cleanup model: it answers each raw transcript with the reply its line scripts, and a clip can be
-/// held until the test lets the model answer it.
+/// A stand-in for the cleanup model: it answers each transcript it is sent with the reply its line scripts, and a clip
+/// can be held until the test lets the model answer it.
 final class ScenarioCleanupModel: CleanupProvider {
     let id = "scenario-model"
     let displayName = "Scenario model"
@@ -171,10 +186,10 @@ final class ScenarioCleanupModel: CleanupProvider {
         recorded.withLock { $0 }
     }
 
-    /// Holds the answer to `clip`'s transcript until the returned latch opens.
+    /// Holds the answer to `clip`'s request until the returned latch opens.
     func hold(_ clip: ScenarioClip) -> ScenarioLatch {
         let latch = ScenarioLatch()
-        holds.withLock { $0[clip.text] = latch }
+        holds.withLock { $0[clip.name] = latch }
         return latch
     }
 
@@ -186,17 +201,17 @@ final class ScenarioCleanupModel: CleanupProvider {
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        let raw = CleanupPrompt.stripTranscriptTags(request.transcript)
-        let line = script.line(raw: raw)
+        let sent = CleanupPrompt.stripTranscriptTags(request.transcript)
+        let line = script.line(sent: sent)
         let clip = line?.clip.name ?? "?"
         recorded.withLock { $0.append(request) }
         journal.record(.cleanupRequested, clip)
         arrivals.increment()
-        if let latch = holds.withLock({ $0[raw] }) {
+        if let latch = holds.withLock({ $0[clip] }) {
             try await latch.wait()
         }
         journal.record(.cleanupAnswered, clip)
-        return CleanupResponse(cleanedText: line?.reply ?? raw, latency: 0, providerID: id, modelID: "scenario")
+        return CleanupResponse(cleanedText: line?.reply ?? sent, latency: 0, providerID: id, modelID: "scenario")
     }
 }
 
@@ -219,14 +234,13 @@ final class ScenarioCleanupSource: DictationCleaning {
     }
 }
 
-/// The production rules (`DictationRules`: `StartupGate` and `TextPostProcessor`), with every post-processing step
-/// journaled.
+/// The production rules (`DictationRules`: `StartupGate` and `TextPostProcessor`), with every rule step journaled.
 @MainActor
 final class ScenarioRules: DictationRuleSource {
     let rules: DictationRules
     let script: PipelineScript
     let journal: PipelineJournal
-    /// Advanced after each post-processing step.
+    /// Advanced after each post-processing step: with cleanup off, or on the reply, never for the vocabulary step.
     let processed = ScenarioCounter()
 
     init(rules: DictationRules, script: PipelineScript, journal: PipelineJournal) {
@@ -250,6 +264,19 @@ final class ScenarioRules: DictationRuleSource {
     func postProcess(_ text: String) -> TextPostProcessingResult {
         let result = rules.postProcess(text)
         journal.record(.postProcessed, script.line(cleaned: text)?.clip.name ?? "?")
+        processed.increment()
+        return result
+    }
+
+    func correctVocabulary(_ text: String) -> VocabularyPass {
+        let pass = rules.correctVocabulary(text)
+        journal.record(.vocabularyCorrected, script.line(raw: text)?.clip.name ?? "?")
+        return pass
+    }
+
+    func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
+        let result = rules.finishAfterCleanup(reply, after: pass)
+        journal.record(.postProcessed, script.line(cleaned: reply)?.clip.name ?? "?")
         processed.increment()
         return result
     }

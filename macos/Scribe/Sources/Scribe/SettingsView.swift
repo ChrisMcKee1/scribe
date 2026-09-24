@@ -298,6 +298,25 @@ private struct HotkeySettingsTab: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            Divider()
+
+            Toggle("Also stop after a pause", isOn: autoStopBinding)
+            Text(
+                """
+                For a key you tap on and off, such as Caps Lock: the dictation also ends after about four seconds \
+                of silence, or after ten seconds if you never start talking. Off by default, because a pause to \
+                think ends the dictation too. A dictation that ends by itself leaves Caps Lock's light on; the \
+                next tap starts a new dictation either way.
+                """
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            if !model.autoStopAppliesToBinding {
+                Text("\(model.binding.displayName) is held while you talk, so it never stops on silence.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
         }
         .onAppear {
@@ -306,6 +325,10 @@ private struct HotkeySettingsTab: View {
         .onDisappear {
             stopRecording()
         }
+    }
+
+    private var autoStopBinding: Binding<Bool> {
+        Binding(get: { model.autoStopOnSilence }, set: { model.setAutoStopOnSilence($0) })
     }
 
     /// Captures the next key press (modifier or regular key) within the Settings window only, via
@@ -1086,6 +1109,16 @@ private struct PlaygroundSettingsTab: View {
                             .padding(.vertical, 4)
                     }
 
+                    if let sent = report.sentText {
+                        GroupBox("Sent to AI Cleanup (Vocabulary Applied)") {
+                            Text(sent)
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 4)
+                        }
+                    }
+
                     GroupBox("Processed Text (Replacements Highlighted)") {
                         highlightedText(for: report.postProcessing)
                             .textSelection(.enabled)
@@ -1115,9 +1148,8 @@ private struct PlaygroundSettingsTab: View {
                         .padding(.vertical, 4)
                     }
 
-                    // No row for a voice activity model: capture ends on an energy-threshold
-                    // auto-stop detector, which has no separate inference step to time. See
-                    // PORTING-PLAN.md.
+                    // No row for voice activity detection: macOS runs none as a step of its own (silence auto-stop
+                    // is `SilenceAutoStopTracker`, inside capture), so there is nothing separate to time.
                 } else {
                     Text("No dictation captured yet this session.")
                         .foregroundStyle(.secondary)

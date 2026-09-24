@@ -27,11 +27,12 @@ final class HotkeyBindingModel: ObservableObject {
     }
 }
 
-/// The Input tab: the push-to-talk key and the microphone. Both are stored the moment they change, and the tab
-/// re-reads them after any preference write in this process.
+/// The Input tab: the push-to-talk key, whether a tapped key also stops on silence, and the microphone. Each is stored
+/// the moment it changes, and the tab re-reads them after any preference write in this process.
 @MainActor
 final class InputSettingsModel: ObservableObject {
     @Published private(set) var binding: HotkeyBinding
+    @Published private(set) var autoStopOnSilence: Bool
     @Published private(set) var devices: [AudioInputDevice]
     @Published private(set) var selectedDeviceUID: String?
     @Published private(set) var selectedDeviceName: String?
@@ -54,6 +55,7 @@ final class InputSettingsModel: ObservableObject {
         self.listDevices = listDevices
         self.onHotkeyChanged = onHotkeyChanged
         binding = hotkeyStore.binding
+        autoStopOnSilence = hotkeyStore.autoStopOnSilence
         devices = listDevices()
         selectedDeviceUID = deviceStore.selectedDeviceUID
         selectedDeviceName = deviceStore.selectedDeviceName
@@ -76,6 +78,19 @@ final class InputSettingsModel: ObservableObject {
         hotkeyStore.keyCode = keyCode
         reload()
         onHotkeyChanged(keyCode)
+    }
+
+    /// Whether the switch applies to the bound key: only a key tapped on and off stops on silence.
+    var autoStopAppliesToBinding: Bool {
+        binding.gesture == .toggle
+    }
+
+    /// Stores the silence auto-stop choice. The next press reads it (`DictationController.Configuration`), so a
+    /// dictation already recording keeps the choice it started with.
+    func setAutoStopOnSilence(_ isOn: Bool) {
+        guard isOn != autoStopOnSilence else { return }
+        hotkeyStore.autoStopOnSilence = isOn
+        reload()
     }
 
     /// Stores the microphone with this UID, or "system default" for nil. Choosing the saved microphone while it is
@@ -108,6 +123,10 @@ final class InputSettingsModel: ObservableObject {
         let stored = hotkeyStore.binding
         if stored != binding {
             binding = stored
+        }
+        let stopsOnSilence = hotkeyStore.autoStopOnSilence
+        if stopsOnSilence != autoStopOnSilence {
+            autoStopOnSilence = stopsOnSilence
         }
         let uid = deviceStore.selectedDeviceUID
         if uid != selectedDeviceUID {

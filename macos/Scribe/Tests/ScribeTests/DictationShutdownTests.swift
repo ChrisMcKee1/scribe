@@ -195,4 +195,33 @@ final class DictationShutdownTests: XCTestCase {
         XCTAssertEqual(reports[0], reports[1])
         XCTAssertEqual(harness.fakeInjector.barrierCalls, 1)
     }
+
+    /// Quit hides the pill and settles the tray at once, under a newer revision than anything shown before, while a
+    /// recording is live and an earlier dictation is still being recognized; nothing presents anything after that,
+    /// not even the dictation that finishes while shutdown waits for it.
+    func testShutdownHidesThePillOnceAndPresentsNothingAfterwards() async throws {
+        let harness = makeHarness()
+        let recognizer = DictationGate<String>()
+        harness.transcriber.steps = [.gateIgnoringCancellation(recognizer)]
+        await harness.dictate()
+        await waitUntil("the recognizer runs") { recognizer.waitingCount == 1 }
+        _ = try await harness.pressAdmitted()
+        await harness.waitUntilLive()
+        let recording = try XCTUnwrap(harness.presenter.last)
+        XCTAssertTrue(recording.isRecording)
+
+        let shutdown = Task { @MainActor in await harness.controller.shutDown() }
+        await waitUntil("shutdown began") { harness.controller.isClosing }
+        let closed = try XCTUnwrap(harness.presenter.last)
+        XCTAssertEqual(closed.overlay, .hidden, "the pill stayed on screen at quit")
+        XCTAssertFalse(closed.isRecording)
+        XCTAssertGreaterThan(closed.revision, recording.revision)
+        let presentedAtClose = harness.presenter.presentations.count
+
+        recognizer.open("words the recognizer finished anyway")
+        _ = await bounded("shutdown") { await shutdown.value }
+
+        XCTAssertEqual(harness.presenter.presentations.count, presentedAtClose, "something presented after quit")
+        XCTAssertEqual(harness.presenter.last?.revision, closed.revision)
+    }
 }

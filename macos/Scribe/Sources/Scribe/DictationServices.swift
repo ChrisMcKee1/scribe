@@ -102,8 +102,16 @@ protocol DictationRuleSource: AnyObject, Sendable {
 
     var appProfiles: [AppProfile] { get }
 
-    /// Snippets, then the dictionary and the enabled libraries.
+    /// With AI cleanup off, and when cleanup fell back: snippets, then the dictionary and the enabled libraries.
     func postProcess(_ text: String) -> TextPostProcessingResult
+
+    /// With AI cleanup on, before the request: the vocabulary rules only, on the raw transcript. The pass's text is
+    /// what the provider is sent (`TextPostProcessor.correctVocabulary`).
+    func correctVocabulary(_ text: String) -> VocabularyPass
+
+    /// With AI cleanup on, after an accepted reply: the snippets and the template-like rules, with the rules `pass`
+    /// ran with, never a vocabulary rule again (`TextPostProcessor.finishAfterCleanup`).
+    func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult
 }
 
 /// What the tray and the pill show.
@@ -253,6 +261,14 @@ final class DictationRules: DictationRuleSource {
 
     func postProcess(_ text: String) -> TextPostProcessingResult {
         processor.processDetailed(text)
+    }
+
+    func correctVocabulary(_ text: String) -> VocabularyPass {
+        processor.correctVocabulary(text)
+    }
+
+    func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
+        processor.finishAfterCleanup(reply, after: pass)
     }
 }
 

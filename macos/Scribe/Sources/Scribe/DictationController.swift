@@ -13,6 +13,16 @@ enum DictationTrigger: Equatable, Sendable {
         case .menu: return .toggle
         }
     }
+
+    /// Whether this trigger's recording stops on silence. The tray's test dictation always does, so one left running
+    /// ends by itself. A push-to-talk key tapped on and off does only when the user opted in (`toggleKeyOptedIn`, off
+    /// by default as on Windows' `AppSettings.AutoStopOnSilence`), and a held key never does.
+    func stopsOnSilence(toggleKeyOptedIn: Bool) -> Bool {
+        switch self {
+        case .hotkey(let binding): return binding.gesture == .toggle && toggleKeyOptedIn
+        case .menu: return true
+        }
+    }
 }
 
 /// Why a recording ended. Logged on every stop, as Windows' `DictationStopReason` is: the causes look alike from
@@ -153,35 +163,40 @@ extension Duration {
 /// or menu item that started it, its phase and what was captured when it started (the target application and
 /// element, and the app profiles). Every start, stop, meter reading, fault and deadline names that id, so a late
 /// event, a second stop or a stale deadline can never act on the recording that came after. Admission is decided when
-/// the press arrives and checked again when the microphone is asked for, so a pause that lands in between wins. Only a
-/// toggle (Caps Lock, the tray) stops on silence; a held key never does. Both stop at the duration ceiling, which is a
+/// the press arrives and checked again when the microphone is asked for, so a pause that lands in between wins. The
+/// tray's test dictation stops on silence; a key tapped on and off (Caps Lock) does only when the user opted in
+/// (`Configuration.toggleKeyStopsOnSilence`), and a held key never does. All stop at the duration ceiling, which is a
 /// deadline of this controller's own (Windows' `ArmDurationLimit` and `TryAcceptDurationLimit`), since the capture
 /// engine's own ceiling and silence clock only move while buffers arrive. A toggle whose recording ends any other way
 /// than by its key (a failed open, silence, a fault) is settled, so the key's next change starts a new recording.
+/// Scribe never changes the lock state, so Caps Lock's light can be left on after such an ending.
 ///
 /// **Stopping.** A stop can arrive in the event tap's callback, so it only retires the recording: the recording lets
 /// go of the microphone, takes its place in both turn queues, and its samples are sealed on the capture engine's
 /// control queue, off the main actor, while its processing waits for them.
 ///
 /// **Processing.** A stopped recording is admitted to processing in the order recordings stopped, and a new recording
-/// can start while earlier ones are processed. Each dictation runs raw speech recognition (one recognizer at a time),
-/// waits for startup's first rule load, runs optional AI cleanup on the raw transcript with the target's writing style
-/// (and a single-line instruction when the target flattens line breaks), checks the reply against the raw transcript
-/// and normalizes its dashes (`CleanupResponseGuard`), applies snippets and the dictionary, formats line breaks for
-/// the captured target, and delivers into that target only. Deliveries run in dictation order, so a second
-/// dictation's text never goes in before the first's. Cleanup never sees a snippet template: templates are expanded
-/// after it. Cancellation and admission are checked again before cleanup, recovery and delivery, because the
-/// recognizer returns a transcript it has already produced even when the cancellation arrives just after it exited.
+/// can start while earlier ones are processed. Each dictation runs raw speech recognition (one recognizer at a time)
+/// and waits for startup's first rule load. With AI cleanup off it applies snippets, then the dictionary. With cleanup
+/// on it applies the vocabulary rules to the raw transcript, sends that text with the target's writing style (and a
+/// single-line instruction when the target flattens line breaks), checks the reply against the text it sent and
+/// normalizes its dashes (`CleanupResponseGuard`), then applies the snippets and the template-like rules; a fallback
+/// is exactly the cleanup-off result. It then formats line breaks for the captured target and delivers into that
+/// target only. Deliveries run in dictation order, so a second dictation's text never goes in before the first's.
+/// Cleanup never sees a snippet template or a template-like replacement, and no rule runs twice. Cancellation and
+/// admission are checked again before cleanup, recovery and delivery, because the recognizer returns a transcript it
+/// has already produced even when the cancellation arrives just after it exited.
 ///
 /// **Presentation.** Every change to what the tray and the pill show takes the next revision (`DictationPresentation`).
 /// Outcomes go through one schedule (`DictationNoticeSchedule`): a recording owns the pill, one notice shows at a time,
 /// an outcome that cannot show yet waits rather than being lost or replacing a newer failure, and a notice's timed end
 /// is tagged with the revision that showed it, so a stale end changes nothing.
 ///
-/// **Shutdown** (`shutDown`): nothing new is admitted, the live recording is discarded, every dictation in processing
-/// is cancelled, a delivery in progress is awaited to completion (`TextInjector.waitUntilIdle`, which puts a borrowed
-/// pasteboard back), every cancelled dictation is awaited (its recognizer's process group stopped and reaped by
-/// `ProcessRunner`), and the history writer is drained within its bound, off the main actor.
+/// **Shutdown** (`shutDown`): nothing new is admitted, the live recording is discarded, the pill and the tray go idle
+/// under one last revision, every dictation in processing is cancelled, a delivery in progress is awaited to
+/// completion (`TextInjector.waitUntilIdle`, which puts a borrowed pasteboard back), every cancelled dictation is
+/// awaited (its recognizer's process group stopped and reaped by `ProcessRunner`), and the history writer is drained
+/// within its bound, off the main actor.
 ///
 /// Logs are shapes only: ids, counts, durations, enum names and failure shapes, never text, profile names or targets.
 @MainActor
@@ -189,8 +204,12 @@ final class DictationController {
     struct Configuration: Sendable {
         /// Windows' `MaxDictationMinutes`; nil or zero means no ceiling.
         var maximumDuration: Duration? = CaptureStopPolicy.defaultMaximumDuration
-        /// Whether a toggle's recording stops on silence (a held key never does).
-        var autoStopOnSilence = true
+        /// Whether a push-to-talk key tapped on and off (Caps Lock) stops its recording on silence, read at each
+        /// press (`HotkeySettingsStore.autoStopOnSilence`). Off unless the user opts in: a pause to think would end
+        /// the dictation, and a recording that ends itself leaves Caps Lock's light on, since the listen-only event
+        /// tap cannot change it. The tray's test dictation always stops on silence and a held key never does
+        /// (`DictationTrigger.stopsOnSilence`).
+        var toggleKeyStopsOnSilence: @MainActor @Sendable () -> Bool = { false }
         /// Line-break handling when no app profile overrides it.
         var newlineMode: NewlineInjectionMode = .smartFlatten
         /// How long a notice stays on the pill.
@@ -439,7 +458,7 @@ final class DictationController {
         let id = RecordingID.next()
         let policy = CaptureStopPolicy(
             gesture: trigger.gesture,
-            autoStopOnSilence: configuration.autoStopOnSilence,
+            autoStopOnSilence: trigger.stopsOnSilence(toggleKeyOptedIn: configuration.toggleKeyStopsOnSilence()),
             maximumDuration: configuration.maximumDuration)
         // The recording owns the pill from its admission; the notice on it has been seen.
         notices.yieldToRecording()
@@ -662,27 +681,46 @@ final class DictationController {
             profile: profile, globalDefault: configuration.newlineMode, bundleIdentifier: target?.bundleIdentifier)
         let singleLine = AppProfileMatcher.flattensNewlines(newlineMode, bundleIdentifier: target?.bundleIdentifier)
 
-        // Optional AI cleanup of the raw transcript, before any snippet or dictionary rule has run, so a snippet
-        // template never reaches a provider and the user's rules have the final say over the model's wording.
-        var text = raw
+        // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With
+        // cleanup on, the rules are split around the request: the vocabulary rules (one-line replacements of at most
+        // 100 characters with no em or en dash) run on the raw transcript, and that corrected text is what the
+        // provider is sent and what its reply is checked against, so the model starts from the user's spellings; the
+        // snippets and the template-like rules run on the accepted reply. So no snippet template or template-like
+        // replacement ever reaches a provider, a dash the user wrote survives, and no rule runs twice.
+        let post: TextPostProcessingResult
+        var postDuration = Duration.zero
         if services.cleanup.isEnabled {
-            let stage = await cleanUp(raw, dictation: dictation, profile: profile, singleLine: singleLine)
-            guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
-            report.cleanupOutcome = stage.outcome
-            report.cleanupDuration = stage.requestDuration?.seconds
-            if let cleaned = stage.text {
-                text = cleaned
-                report.cleanedText = cleaned
+            let vocabularyStarted = clock.now
+            let pass = rules.correctVocabulary(raw)
+            postDuration += vocabularyStarted.duration(to: clock.now)
+            if Self.isBlank(pass.text) {
+                post = rules.postProcess(raw)
+            } else {
+                report.sentText = pass.text
+                let stage = await cleanUp(pass.text, dictation: dictation, profile: profile, singleLine: singleLine)
+                guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
+                report.cleanupOutcome = stage.outcome
+                report.cleanupDuration = stage.requestDuration?.seconds
+                if stage.outcome == .fellBack {
+                    postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
+                }
+                let finishStarted = clock.now
+                if let cleaned = stage.text {
+                    report.cleanedText = cleaned
+                    post = rules.finishAfterCleanup(cleaned, after: pass)
+                } else {
+                    // Exactly what cleanup off gives: the vocabulary step is dropped and every rule runs once, in
+                    // Windows' order, on the raw transcript.
+                    post = rules.postProcess(raw)
+                }
+                postDuration += finishStarted.duration(to: clock.now)
             }
-            if stage.outcome == .fellBack {
-                postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
-            }
+        } else {
+            let postStarted = clock.now
+            post = rules.postProcess(raw)
+            postDuration += postStarted.duration(to: clock.now)
         }
-
-        // Snippets, then the dictionary and the libraries.
-        let postStarted = clock.now
-        let post = rules.postProcess(text)
-        report.postProcessingDuration = postStarted.duration(to: clock.now).seconds
+        report.postProcessingDuration = postDuration.seconds
         report.postProcessing = post
         guard !Self.isBlank(post.text) else { return nothingToInsert(dictation, report: report) }
 
@@ -735,8 +773,9 @@ final class DictationController {
         announce(injection, of: dictation, transcript: insertion, recoveryGeneration: recoveryGeneration)
     }
 
+    /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
     private func cleanUp(
-        _ raw: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
+        _ sent: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
@@ -755,7 +794,7 @@ final class DictationController {
 
         let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
         let request = CleanupRequest(
-            transcript: CleanupPrompt.wrapTranscript(raw),
+            transcript: CleanupPrompt.wrapTranscript(sent),
             writingStylePrompt: CleanupPrompt.systemPrompt(
                 writingStyle: style, useLocalPrompt: provider.usesLocalCleanupPrompt),
             singleLineMode: singleLine)
@@ -774,10 +813,10 @@ final class DictationController {
         }
         let elapsed = started.duration(to: clock.now)
 
-        // Against the raw transcript, the text the model was given; the guard also normalizes the reply's dashes.
-        switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: raw) {
+        // Against the text the model was sent; the guard also normalizes the reply's dashes.
+        switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: sent) {
         case .accepted(let cleaned):
-            let outcome: DictationCleanupOutcome = cleaned == raw ? .unchanged : .cleaned
+            let outcome: DictationCleanupOutcome = cleaned == sent ? .unchanged : .cleaned
             ScribeLog.info(
                 .cleanup, "AI cleanup finished", .integer("dictation", id.rawValue), .name("outcome", outcome),
                 .duration("cleanup", elapsed))
@@ -990,7 +1029,8 @@ final class DictationController {
         return dictations.isEmpty ? .hidden : .processing
     }
 
-    /// Hands the current state to the presenter under the next revision, and returns that revision.
+    /// Hands the current state to the presenter under the next revision, and returns that revision. Once shutdown has
+    /// begun it presents nothing: `presentClosed` has shown the last state.
     @discardableResult
     private func present() -> UInt64 {
         guard !isClosing else { return revision }
@@ -999,6 +1039,13 @@ final class DictationController {
             DictationPresentation(
                 revision: revision, overlay: overlayState, isRecording: recording != nil, isPaused: isPaused))
         return revision
+    }
+
+    /// Shutdown's one presentation: hidden, not recording, under the next revision.
+    private func presentClosed() {
+        revision &+= 1
+        services.presenter.present(
+            DictationPresentation(revision: revision, overlay: .hidden, isRecording: false, isPaused: isPaused))
     }
 
     // MARK: - Shutdown
@@ -1038,6 +1085,9 @@ final class DictationController {
                 .dictation, "Recording stopped", .integer("dictation", discarded.id.rawValue),
                 .name("reason", DictationStopReason.shutdown), .flag("discarded", true))
         }
+        // One last presentation, under the next revision: the pill and the tray go idle at once, and `present` turns
+        // away every later update, so nothing a stopping dictation does can show again.
+        presentClosed()
         let running = Array(dictations.values)
         ScribeLog.info(
             .dictation, "Shutting down: nothing new starts and dictations in progress are stopped",

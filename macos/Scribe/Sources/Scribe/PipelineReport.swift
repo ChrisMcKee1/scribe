@@ -12,9 +12,9 @@ enum PipelineFailureStage: String {
 }
 
 /// A snapshot of one dictation run through the full pipeline: what was captured, how long each stage took, and what
-/// the text looked like at each step, in the pipeline's order (raw recognition, AI cleanup, snippets and dictionary,
-/// line breaks for the target). Reported to the Playground settings tab so testers can see raw recognition,
-/// replacement highlights, and per-step timings without digging through the log.
+/// the text looked like at each step, in the pipeline's order (raw recognition, with AI cleanup on the text it was
+/// sent and its reply, the rules, line breaks for the target). Reported to the Playground settings tab so testers can
+/// see raw recognition, replacement highlights, and per-step timings without digging through the log.
 ///
 /// The macOS analog of Windows' `DictationPipelineReport`, filled in by `DictationController` as the dictation moves
 /// through its stages and published once it ends. It holds text, so it stays in memory for the Playground and never
@@ -34,7 +34,9 @@ struct PipelineReport {
 
     var rawText: String?
     var cleanupOutcome = DictationCleanupOutcome.off
-    /// The model's accepted reply, before snippets and the dictionary.
+    /// What AI cleanup was sent: the raw transcript with the vocabulary rules applied. Nil when no request was made.
+    var sentText: String?
+    /// The model's accepted reply, before snippets and the template-like rules.
     var cleanedText: String?
     var postProcessing: TextPostProcessingResult?
     var finalText: String?
@@ -76,5 +78,11 @@ final class PipelineReportStore: ObservableObject {
 
     func publish(_ report: PipelineReport) {
         latest = report
+    }
+
+    /// Clear history: the report holds a dictation's text, so it goes too. A dictation still being processed may
+    /// publish afterwards; its text was not part of what was cleared.
+    func clear() {
+        latest = nil
     }
 }

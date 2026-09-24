@@ -67,6 +67,22 @@ final class HotkeySettingsStoreTests: XCTestCase {
         suite.defaults.set("Right Option", forKey: "ScribePushToTalkKeyCode")
         XCTAssertEqual(store.keyCode, HotkeySettingsStore.defaultKeyCode)
     }
+
+    /// Off when nothing is stored, as Windows' `AutoStopOnSilence` is, and a value that is not a switch reads as off.
+    func testSilenceAutoStopIsOffUntilTheUserTurnsItOn() throws {
+        XCTAssertFalse(store.autoStopOnSilence)
+
+        store.autoStopOnSilence = true
+        XCTAssertTrue(store.autoStopOnSilence)
+        let other = try SettingsTestDefaults()
+        defer { other.remove() }
+        XCTAssertFalse(HotkeySettingsStore(defaults: other.defaults).autoStopOnSilence)
+
+        store.autoStopOnSilence = false
+        XCTAssertFalse(store.autoStopOnSilence)
+        suite.defaults.set("sometimes", forKey: "ScribeAutoStopOnSilence")
+        XCTAssertFalse(store.autoStopOnSilence)
+    }
 }
 
 final class HotkeyBindingTests: XCTestCase {

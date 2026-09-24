@@ -7,11 +7,12 @@ import XCTest
 /// stand-in model, run through the production rules (the Windows suite's dictionary and snippets), delivered to a
 /// captured target and written through the production history writer into a real database.
 ///
-/// What is checked is Windows' order: raw recognition, cleanup of the raw transcript, the response guard with dash
-/// normalization, snippets and then the dictionary, line breaks for the target last, delivery, and history after
-/// delivery. So a snippet template never reaches the model, the dictionary has the last word over the model's wording,
-/// a terminal gets one line however the model wrote it, deliveries keep dictation order whichever cleanup finished
-/// first, every presentation takes a newer revision than the one before, and no dictated text reaches a log.
+/// What is checked is the order with AI cleanup on: raw recognition, the vocabulary rules on the raw transcript, that
+/// corrected text sent for cleanup, the response guard with dash normalization, the snippets and any template-like
+/// rule on the reply, line breaks for the target last, delivery, and history after delivery. So the model is sent the
+/// dictionary's spellings and never a snippet template, a terminal gets one line however the model wrote it,
+/// deliveries keep dictation order whichever cleanup finished first, every presentation takes a newer revision than
+/// the one before, and no dictated text reaches a log.
 @MainActor
 final class PipelineScenarioTests: XCTestCase {
     /// A device a dictation plays on.
@@ -83,7 +84,8 @@ final class PipelineScenarioTests: XCTestCase {
         let chosen = ["list", "snippet-signature", "long-passage", "dict-kubernetes"]
         let lines = editor.filter { chosen.contains($0.clip.name) }.map { line in
             PipelineLine(
-                clip: line.clip, reply: line.reply, cleaned: line.cleaned, delivered: Self.flattened(line.delivered))
+                clip: line.clip, sent: line.sent, reply: line.reply, cleaned: line.cleaned,
+                delivered: Self.flattened(line.delivered))
         }
         let script = PipelineScript(lines: lines)
         let harness = try makePipelineHarness(script: script, target: PipelineHarness.terminal)
@@ -160,37 +162,28 @@ final class PipelineScenarioTests: XCTestCase {
 
     // MARK: - The script
 
-    /// What the stand-in model answers for every fixture, and what must reach an editor. The model writes the
-    /// dictionary's terms in capitals, which the dictionary then puts back, adds line breaks, formats numbers,
-    /// capitalizes the snippet triggers and writes one em dash, which the response guard turns into a comma.
+    /// What the stand-in model answers for every fixture, and what must reach an editor. The model is sent each
+    /// transcript with the vocabulary rules applied and, unless a line says otherwise, answers with what it was sent,
+    /// so the dictionary's spellings come back in its reply. It adds line breaks, formats numbers, capitalizes the
+    /// snippet triggers and writes one em dash, which the response guard turns into a comma.
     private func editorLines(_ library: ScenarioLibrary) throws -> [PipelineLine] {
         func line(_ name: String, reply: String? = nil, cleaned: String? = nil, delivered: String? = nil) throws
             -> PipelineLine
         {
             let clip = try library.clip(name)
-            let answered = reply ?? clip.text
+            let sent = ScenarioVocabulary.corrected(clip.text)
+            let answered = reply ?? sent
             let carried = cleaned ?? answered
-            return PipelineLine(clip: clip, reply: answered, cleaned: carried, delivered: delivered ?? carried)
+            return PipelineLine(
+                clip: clip, sent: sent, reply: answered, cleaned: carried, delivered: delivered ?? carried)
         }
         let passage = try library.clip("long-passage").text
         let longer = try library.clip("longer").text
         return [
-            try line(
-                "dict-azure-devops",
-                reply: "We track every bug in AZURE DEVOPS and review the board on Monday morning.",
-                delivered: "We track every bug in Azure DevOps and review the board on Monday morning."),
-            try line(
-                "dict-github-copilot",
-                reply: "Ask GITHUB COPILOT to explain why the build is failing.",
-                delivered: "Ask GitHub Copilot to explain why the build is failing."),
-            try line(
-                "dict-kubernetes",
-                reply: "The KUBERNETES cluster restarted overnight after the upgrade.",
-                delivered: "The Kubernetes cluster restarted overnight after the upgrade."),
-            try line(
-                "dict-scribe",
-                reply: "SCRIBE types whatever I say into the window that has focus.",
-                delivered: "Scribe types whatever I say into the window that has focus."),
+            try line("dict-azure-devops"),
+            try line("dict-github-copilot"),
+            try line("dict-kubernetes"),
+            try line("dict-scribe"),
             try line(
                 "snippet-signature", reply: "Insert my signature", delivered: ScenarioVocabulary.signatureCanonical),
             try line("snippet-address", reply: "Insert my address", delivered: ScenarioVocabulary.addressTemplate),
@@ -201,9 +194,7 @@ final class PipelineScenarioTests: XCTestCase {
                 reply: "The meeting moved to 3:30 on Tuesday, and 42 people signed up for the workshop."),
             try line(
                 "long-passage", reply: passage.replacingOccurrences(of: " Today we will", with: "\n\nToday we will")),
-            try line(
-                "greeting", reply: "Hello, this is a test of the SCRIBE dictation system.",
-                delivered: "Hello, this is a test of the Scribe dictation system."),
+            try line("greeting"),
             try line("pangram"),
             try line("sentence"),
             try line(
@@ -211,6 +202,13 @@ final class PipelineScenarioTests: XCTestCase {
                 cleaned: longer),
         ]
     }
+
+    /// What the three dictionary clips are sent, written out, so the vocabulary step is pinned by more than itself.
+    private static let sentWithTheDictionary = [
+        "dict-azure-devops": "We track every bug in Azure DevOps and review the board on Monday morning.",
+        "dict-github-copilot": "Ask GitHub Copilot to explain why the build is failing.",
+        "dict-kubernetes": "The Kubernetes cluster restarted overnight after the upgrade.",
+    ]
 
     /// Every line break turned into a space, the way a terminal target's text is flattened.
     private static func flattened(_ text: String) -> String {
@@ -240,18 +238,21 @@ final class PipelineScenarioTests: XCTestCase {
         }
     }
 
-    /// The model was sent each raw transcript exactly as recognized, once, in tags, and never a snippet's template or a
-    /// dictionary replacement; its prompt asks for a single line exactly when the target flattens line breaks.
+    /// The model was sent each transcript once, in tags, with the vocabulary rules applied, so the dictionary's
+    /// spellings reached it, and never a snippet's template; its prompt asks for a single line exactly when the target
+    /// flattens line breaks.
     private func assertCleanupRequests(_ script: PipelineScript, _ harness: PipelineHarness, singleLine: Bool) {
         let requests = harness.model.requests
-        XCTAssertEqual(requests.map(\.transcript), script.lines.map { CleanupPrompt.wrapTranscript($0.clip.text) })
+        XCTAssertEqual(requests.map(\.transcript), script.lines.map { CleanupPrompt.wrapTranscript($0.sent) })
+        for line in script.lines {
+            if let expected = Self.sentWithTheDictionary[line.clip.name] {
+                XCTAssertEqual(line.sent, expected, "\(line.clip.name) was not sent with the dictionary's spelling")
+            }
+        }
         for request in requests {
             for text in [ScenarioVocabulary.signatureTemplate, ScenarioVocabulary.addressTemplate, "Kind regards"] {
                 XCTAssertFalse(request.transcript.contains(text), "a snippet template reached the model")
                 XCTAssertFalse(request.writingStylePrompt.contains(text), "a snippet template reached the prompt")
-            }
-            for canonical in ["Azure DevOps", "GitHub Copilot"] {
-                XCTAssertFalse(request.transcript.contains(canonical), "the dictionary ran before cleanup")
             }
             XCTAssertEqual(request.singleLineMode, singleLine)
             XCTAssertEqual(request.writingStylePrompt.hasSuffix(CleanupPrompt.singleLineWritingStyle), singleLine)
@@ -259,11 +260,12 @@ final class PipelineScenarioTests: XCTestCase {
         }
     }
 
-    /// For every clip: recognized, then sent to the model, answered, post-processed, delivered and handed to history,
-    /// in that order; and recognition, delivery and history each in dictation order.
+    /// For every clip: recognized, its vocabulary corrected, sent to the model, answered, post-processed, delivered
+    /// and handed to history, in that order; and recognition, delivery and history each in dictation order.
     private func assertWindowsOrder(_ script: PipelineScript, _ journal: PipelineJournal) {
         let steps: [PipelineJournal.Step] = [
-            .recognized, .cleanupRequested, .cleanupAnswered, .postProcessed, .delivered, .historyQueued,
+            .recognized, .vocabularyCorrected, .cleanupRequested, .cleanupAnswered, .postProcessed, .delivered,
+            .historyQueued,
         ]
         for line in script.lines {
             let positions = steps.map { journal.position(of: $0, for: line.clip.name) }
@@ -298,10 +300,11 @@ final class PipelineScenarioTests: XCTestCase {
         XCTAssertEqual(harness.presenter.presentations.last?.isRecording, false)
     }
 
-    /// No run of four dictated words, no reply, no template and no target reached a log line or either unified log
-    /// argument.
+    /// No run of four dictated words, no text sent for cleanup, no reply, no template and no target reached a log line
+    /// or either unified log argument.
     private func assertNothingDictatedWasLogged(_ script: PipelineScript, _ log: ScenarioLogRecorder) {
-        let texts = script.lines.flatMap { [$0.clip.text, $0.reply, $0.cleaned, $0.delivered] } + Self.neverLogged
+        let texts =
+            script.lines.flatMap { [$0.clip.text, $0.sent, $0.reply, $0.cleaned, $0.delivered] } + Self.neverLogged
         XCTAssertGreaterThan(log.renderings.count, 0, "nothing was logged, so nothing was checked")
         XCTAssertEqual(ScenarioPrivacy.leaks(of: texts, in: log), [], "dictated content reached the log")
     }

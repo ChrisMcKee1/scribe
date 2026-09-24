@@ -5,8 +5,9 @@ import Foundation
 enum HotkeyGesture: Equatable, Sendable {
     /// Held down while talking and released to stop.
     case hold
-    /// Tapped once to start and again to stop. Caps Lock works this way because the event tap reads its lock
-    /// state (`HotkeyManager.isKeyCurrentlyPressed`), which a tap flips, rather than whether it is held.
+    /// Tapped once to start and again to stop. Caps Lock works this way because the event tap sees its lock state
+    /// (`CGEventFlags.maskAlphaShift` on each flags-changed event, which `HotkeyKeyState` receives as `.lockChanged`),
+    /// which a tap flips, rather than whether it is held.
     case toggle
 }
 
@@ -58,6 +59,7 @@ struct HotkeySettingsStore {
     static let defaultKeyCode: CGKeyCode = capsLockKeyCode
 
     private static let defaultsKey = "ScribePushToTalkKeyCode"
+    private static let autoStopDefaultsKey = "ScribeAutoStopOnSilence"
 
     static var live: HotkeySettingsStore {
         HotkeySettingsStore(defaults: .standard)
@@ -94,5 +96,15 @@ struct HotkeySettingsStore {
 
     var binding: HotkeyBinding {
         HotkeyBinding(keyCode: keyCode)
+    }
+
+    /// Whether a push-to-talk key tapped on and off (Caps Lock) also ends its dictation after a pause, as the tray's
+    /// test dictation does. Off unless the user turns it on, as on Windows (`AppSettings.AutoStopOnSilence`): four
+    /// seconds of thinking would end the dictation, and a dictation that ends itself leaves Caps Lock's light on,
+    /// because Scribe only listens to the key and never changes its lock state. A held key never stops on silence.
+    /// Read at each press, so a change applies to the next dictation.
+    var autoStopOnSilence: Bool {
+        get { defaults.bool(forKey: Self.autoStopDefaultsKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.autoStopDefaultsKey) }
     }
 }

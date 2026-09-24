@@ -123,6 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 activity: foregroundActivity,
                 recovery: lastTranscriptStore,
                 reports: pipelineReportStore),
+            configuration: DictationController.Configuration(
+                toggleKeyStopsOnSilence: { HotkeySettingsStore.live.autoStopOnSilence }),
             isPaused: UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey))
         controller.triggers = hotkeyManager
         return controller
@@ -243,8 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func observeSettingsAndActivation() {
-        // Input Monitoring granted in System Settings takes effect without a relaunch: the tap is tried again when
-        // Scribe becomes active and whenever the tray menu opens.
+        // Input Monitoring granted in System Settings may take effect without a relaunch: the tap is tried again when
+        // Scribe becomes active and whenever the tray menu opens. Whether macOS lets it start before a relaunch has not
+        // been checked on a real Mac yet.
         observations.append(
             SettingsNotificationObservation(NSApplication.didBecomeActiveNotification) { [weak self] in
                 self?.retryHotkeyIfPermitted()
@@ -423,14 +426,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// A successful Clear history empties everything that could bring the deleted text back: the Recent Dictations
-    /// ring (beyond Windows, whose tray list survives a Clear) and its submenu if it is open, the transcripts earlier
-    /// notices would copy, and a pill notice that offers one.
+    /// A successful Clear history empties everything that shows the deleted text or could bring it back
+    /// (`HistoryClearedEffects`).
     private func historyWasCleared() {
-        lastTranscriptStore.removeAll()
-        (notifier as? DictationNotificationCenter)?.forgetRecoveryTexts()
-        dictationController.recoveryWasCleared()
-        recentDictationsMenu.invalidate()
+        let effects = HistoryClearedEffects(
+            recovery: lastTranscriptStore,
+            reports: pipelineReportStore,
+            forgetNotificationTexts: { [weak self] in
+                (self?.notifier as? DictationNotificationCenter)?.forgetRecoveryTexts()
+            },
+            withdrawPillRecovery: { [weak self] in self?.dictationController.recoveryWasCleared() },
+            invalidateRecentDictationsMenu: { [weak self] in self?.recentDictationsMenu.invalidate() },
+            closeQuickAdd: { [weak self] in self?.closeQuickAddWindow() })
+        effects.apply()
+    }
+
+    private func closeQuickAddWindow() {
+        quickAddWindowController?.close()
+        quickAddWindowController = nil
     }
 
     /// Opens the quick "Add to Dictionary" popup, mirroring Windows' `ShowQuickAdd()`. Seeds `LastTranscriptStore`

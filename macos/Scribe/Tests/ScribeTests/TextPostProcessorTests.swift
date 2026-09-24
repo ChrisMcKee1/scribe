@@ -208,4 +208,163 @@ final class TextPostProcessorTests: XCTestCase {
 
         XCTAssertEqual(processor.process("github and azure"), "github and Azure")
     }
+
+    /// With cleanup off every rule still runs as it always has: snippets first, then the dictionary in one pass over
+    /// the result, the templates included, with the tight punctuation and double-expansion guards.
+    func testWithCleanupOffTheRulesRunAsTheyAlwaysHave() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "york", replacement: "New York"),
+                DictionaryEntry(pattern: "comma", replacement: ","),
+                DictionaryEntry(pattern: "my sign off", replacement: "Pat Doe\nSupport lead"),
+                DictionaryEntry(pattern: "sig", replacement: "signature"),
+            ],
+            snippets: [Snippet(phrase: "signature", template: "Kind regards from york")])
+
+        XCTAssertEqual(
+            processor.process("fly to york comma new york and sig then signature my sign off"),
+            "fly to New York, new york and signature then Kind regards from New York Pat Doe\nSupport lead")
+    }
+
+    // MARK: - With AI cleanup on
+
+    func testOnlyAOneLineReplacementOfAtMostAHundredCharactersIsVocabulary() {
+        let hundred = String(repeating: "a", count: 100)
+        XCTAssertTrue(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "x", replacement: hundred)))
+        XCTAssertFalse(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "x", replacement: hundred + "a")))
+        XCTAssertTrue(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "x", replacement: "")))
+        for lineBreak in ["\n", "\r", "\r\n", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let entry = DictionaryEntry(pattern: "x", replacement: "a\(lineBreak)b")
+            XCTAssertFalse(TextPostProcessor.isVocabulary(entry), "a replacement with a line break is vocabulary")
+        }
+        // Counted as .NET counts a string: each of these emoji is two UTF-16 units.
+        let emoji = String(repeating: "\u{1F642}", count: 51)
+        XCTAssertFalse(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "x", replacement: emoji)))
+        // A dash the user wrote runs after cleanup, out of the reply's dash normalization.
+        for dash in ["\u{2013}", "\u{2014}"] {
+            let entry = DictionaryEntry(pattern: "x", replacement: "Scribe \(dash) Mac")
+            XCTAssertFalse(TextPostProcessor.isVocabulary(entry), "a replacement with a dash is vocabulary")
+        }
+        XCTAssertTrue(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "x", replacement: "sherpa-onnx")))
+    }
+
+    func testBeforeCleanupOnlyTheVocabularyRulesRun() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+                DictionaryEntry(pattern: "my sign off", replacement: "Pat Doe\nSupport lead"),
+            ],
+            snippets: [Snippet(phrase: "insert my address", template: "12 Harbor Road\nSpringfield")])
+
+        let pass = processor.correctVocabulary("insert my address  and my sign off with cube flow ,")
+
+        XCTAssertEqual(pass.text, "insert my address and my sign off with Kubeflow,")
+        XCTAssertEqual(pass.result.replacements.map(\.pattern), ["cube flow"])
+    }
+
+    /// The snippets and the template-like rules run on the reply, each once; the templates arrive canonical, as they
+    /// would with cleanup off, and no vocabulary rule runs on the reply, so an expansion is never doubled.
+    func testAfterCleanupTheSnippetsAndTemplateLikeRulesRunAndNoVocabularyRuleRunsAgain() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "york", replacement: "New York"),
+                DictionaryEntry(pattern: "my sign off", replacement: "Pat Doe\nSupport lead"),
+                DictionaryEntry(pattern: "scribe", replacement: "Scribe"),
+            ],
+            snippets: [Snippet(phrase: "insert my address", template: "sent from scribe in york")])
+        let pass = processor.correctVocabulary("insert my address from york then my sign off")
+        XCTAssertEqual(pass.text, "insert my address from New York then my sign off")
+
+        let result = processor.finishAfterCleanup("Insert my address from New York, then my sign off.", after: pass)
+
+        XCTAssertEqual(result.text, "sent from Scribe in New York from New York, then Pat Doe\nSupport lead.")
+    }
+
+    /// What a vocabulary rule wrote before cleanup is never the spoken form of a rule after it: "alpha" became "beta"
+    /// and "sig" became "signature" on the way to the model, so neither is expanded again on the way back, which is
+    /// what cleanup off gives too.
+    func testAVocabularyRulesOutputNeverFeedsASecondRuleAfterCleanup() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "sig", replacement: "signature"),
+                DictionaryEntry(pattern: "signature", replacement: "Pat Doe\nSupport lead"),
+                DictionaryEntry(pattern: "alpha", replacement: "beta"),
+                DictionaryEntry(pattern: "beta", replacement: "gamma"),
+            ],
+            snippets: [Snippet(phrase: "signature", template: "Kind regards")])
+        let pass = processor.correctVocabulary("alpha then sig")
+        XCTAssertEqual(pass.text, "beta then signature")
+
+        let result = processor.finishAfterCleanup("Beta then signature.", after: pass)
+
+        XCTAssertEqual(result.text, "Beta then signature.")
+        XCTAssertEqual(processor.process("alpha then sig"), "beta then signature")
+    }
+
+    /// A trigger the user did say still expands after cleanup when a vocabulary rule rewrote words inside it: the
+    /// model was sent "my K8s notes", and that is the trigger "my k eight s notes" as spoken.
+    func testATriggerTheUserSaidStillExpandsWhenAVocabularyRuleRewroteItsWords() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "k eight s", replacement: "K8s"),
+                DictionaryEntry(pattern: "github", replacement: "GitHub"),
+            ],
+            snippets: [
+                Snippet(phrase: "my k eight s notes", template: "Cluster notes:\n- nodes"),
+                Snippet(phrase: "my github link", template: "the link to my profile"),
+            ])
+        let pass = processor.correctVocabulary("open my k eight s notes and my github link")
+        XCTAssertEqual(pass.text, "open my K8s notes and my GitHub link")
+
+        let result = processor.finishAfterCleanup("Open my K8s notes and my GitHub link.", after: pass)
+
+        XCTAssertEqual(result.text, "Open Cluster notes:\n- nodes and the link to my profile.")
+    }
+
+    /// A rule edited while the request was out does not change which step it runs in: the step after cleanup uses the
+    /// rules the step before it ran with. Here the rule was template-like when the request went out and one line
+    /// afterwards; it runs once, after cleanup, rather than in neither step.
+    func testTheStepAfterCleanupUsesTheRulesTheStepBeforeItRanWith() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "my address", replacement: "12 Harbor Road\nSpringfield")],
+            snippets: [])
+        let pass = processor.correctVocabulary("send it to my address")
+        XCTAssertEqual(pass.text, "send it to my address")
+
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "my address", replacement: "12 Harbor Road")], snippets: [])
+        let result = processor.finishAfterCleanup("Send it to my address.", after: pass)
+
+        XCTAssertEqual(result.text, "Send it to 12 Harbor Road\nSpringfield.")
+    }
+
+    /// The Playground underlines every replacement where it now sits: what the vocabulary rules wrote, wherever the
+    /// reply kept it, the snippet's template and the template-like rule's text.
+    func testAfterCleanupEveryReplacementIsReportedWhereItNowSits() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+                DictionaryEntry(pattern: "my sign off", replacement: "Pat Doe\nSupport lead"),
+            ],
+            snippets: [Snippet(phrase: "insert my address", template: "12 Harbor Road")])
+        let pass = processor.correctVocabulary("deploy with cube flow insert my address and my sign off")
+
+        let result = processor.finishAfterCleanup(
+            "Deploy with Kubeflow, insert my address and my sign off.", after: pass)
+
+        XCTAssertEqual(result.text, "Deploy with Kubeflow, 12 Harbor Road and Pat Doe\nSupport lead.")
+        let text = result.text as NSString
+        let underlined = result.replacements.map {
+            text.substring(with: NSRange(location: $0.start, length: $0.length))
+        }
+        XCTAssertEqual(underlined, ["Kubeflow", "12 Harbor Road", "Pat Doe\nSupport lead"])
+        XCTAssertEqual(result.replacements.map(\.kind), [.dictionary, .snippet, .dictionary])
+    }
 }

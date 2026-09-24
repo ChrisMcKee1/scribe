@@ -6,18 +6,18 @@ import Foundation
 ///
 /// Startup opens the gate exactly once (`open(afterMigrating:then:loadingRules:)`): after the database migration
 /// queued at launch has run and the first attempt to load the rules has finished, whether or not either succeeded.
-/// Dictation's post-processing waits for it (`whenOpen(_:)`), and so does Quick Add, which shows and changes rules.
-/// Other storage calls need no gate of their own: the migration is the first operation on the storage queue
-/// (`PersistenceStore.beginPreparing()`), and the queue runs operations in the order they arrive, so every later
-/// read and write meets the migrated schema, or the migration's failure.
+/// A dictation waits for it before it applies any rule (`wait()`, through `DictationRules.waitUntilLoaded`), and so
+/// does Quick Add, which shows and changes rules. Other storage calls need no gate of their own: the migration is the
+/// first operation on the storage queue (`PersistenceStore.beginPreparing()`), and the queue runs operations in the
+/// order they arrive, so every later read and write meets the migrated schema, or the migration's failure.
 ///
 /// If the migration or the first rule read fails, the gate still opens, as `.withoutStoredRules`. Dictation keeps
 /// working with no dictionary rules, snippets or app profiles rather than waiting forever, and the app says so once,
 /// with a log line and a notification. A later refresh that succeeds, after a change in Settings or Quick Add,
 /// applies the rules as usual.
 ///
-/// Main-actor state without locks. The app owns it today; the dictation lifecycle owner (stream mf) is expected to
-/// take it over, with `whenOpen(_:)` as the one step its pipeline needs.
+/// Main-actor state without locks: `AppDelegate` opens it at launch, and `DictationRules` hands its `wait()` to the
+/// dictation lifecycle, which waits in a cancellable task of its own so a quit never waits for a load that hangs.
 @MainActor
 final class StartupGate {
     enum State: Equatable, Sendable {
@@ -62,13 +62,6 @@ final class StartupGate {
         return await withCheckedContinuation { (continuation: CheckedContinuation<State, Never>) in
             waiters.append(continuation)
         }
-    }
-
-    /// Dictation's post-processing step: runs `process` once the gate is open, so a transcript that finished before
-    /// startup loaded the user's rules waits for them instead of meeting the empty rule set.
-    func whenOpen<Value>(_ process: () -> Value) async -> Value {
-        _ = await wait()
-        return process()
     }
 
     /// Startup's storage steps, in order, then opens the gate and returns how it opened. `migrate` waits for the

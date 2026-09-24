@@ -114,9 +114,32 @@ final class InputSettingsModelTests: XCTestCase {
 
         hotkeyStore.keyCode = 105
         deviceStore.select(headset)
+        hotkeyStore.autoStopOnSilence = true
 
         XCTAssertEqual(model.binding.keyCode, 105)
         XCTAssertEqual(model.selectedDeviceUID, headset.uid)
+        XCTAssertTrue(model.autoStopOnSilence)
+    }
+
+    /// The switch starts off, is stored the moment it changes (the next press reads the store), and applies only to a
+    /// key tapped on and off.
+    @MainActor
+    func testTheSilenceAutoStopSwitchIsOffByDefaultAndStoredAtOnce() {
+        let model = makeModel()
+        XCTAssertFalse(model.autoStopOnSilence)
+        XCTAssertTrue(model.autoStopAppliesToBinding, "Caps Lock is tapped on and off")
+
+        model.setAutoStopOnSilence(true)
+        XCTAssertTrue(hotkeyStore.autoStopOnSilence)
+        XCTAssertTrue(model.autoStopOnSilence)
+
+        model.apply(keyCode: 61)
+        XCTAssertFalse(model.autoStopAppliesToBinding, "a held key never stops on silence")
+        XCTAssertTrue(hotkeyStore.autoStopOnSilence, "rebinding changed the choice")
+
+        model.setAutoStopOnSilence(false)
+        XCTAssertFalse(hotkeyStore.autoStopOnSilence)
+        XCTAssertFalse(model.autoStopOnSilence)
     }
 
     @MainActor

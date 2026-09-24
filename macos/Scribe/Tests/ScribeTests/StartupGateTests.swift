@@ -65,7 +65,8 @@ final class StartupGateTests: XCTestCase {
 
         // A dictation finishes while the first rule read is still out.
         let dictation = Task {
-            await gate.whenOpen { processor.processDetailed("deploy it with cube flow").text }
+            _ = await gate.wait()
+            return processor.processDetailed("deploy it with cube flow").text
         }
         await waitForWaiters(gate, count: 1)
         XCTAssertEqual(gate.waitingCount, 1)
@@ -91,7 +92,8 @@ final class StartupGateTests: XCTestCase {
             afterMigrating: {},
             then: {},
             loadingRules: { await refresher.refreshUntilSettled() == .applied })
-        let processed = await gate.whenOpen { processor.processDetailed("deploy it with cube flow").text }
+        _ = await gate.wait()
+        let processed = processor.processDetailed("deploy it with cube flow").text
 
         XCTAssertEqual(state, .withoutStoredRules)
         XCTAssertEqual(processed, "deploy it with cube flow")

@@ -847,14 +847,14 @@ final class DictationHarness {
         self.controller = controller
     }
 
-    /// Applies rules as the app's refresher would.
+    /// Applies rules as the app's refresher would; `libraries` are the entries of the switched-on libraries.
     func load(
         dictionary: [DictionaryEntry] = [], snippets: [Snippet] = [], profiles: [AppProfile] = [],
-        openingGate: Bool = true
+        libraries: [DictionaryEntry] = [], openingGate: Bool = true
     ) {
         rules.apply(
             PersistenceRuleSet(dictionaryEntries: dictionary, snippets: snippets, appProfiles: profiles),
-            libraryEntries: [])
+            libraryEntries: libraries)
         if openingGate {
             gate.open(.ready)
         }

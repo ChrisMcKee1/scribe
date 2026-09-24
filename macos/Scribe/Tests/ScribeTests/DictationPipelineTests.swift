@@ -2,8 +2,9 @@ import XCTest
 
 @testable import Scribe
 
-/// The dictation pipeline in Windows' order: raw recognition, optional cleanup of the raw transcript with the target's
-/// writing style, the reply's guard and dash normalization, snippets and the dictionary, line breaks for the captured
+/// The dictation pipeline: raw recognition; with AI cleanup on, the vocabulary rules on the raw transcript, that text
+/// sent with the target's writing style, the reply's guard and dash normalization, then the snippets and the
+/// template-like rules; with cleanup off, snippets and the dictionary in Windows' order; line breaks for the captured
 /// target, delivery into that target only, in dictation order.
 @MainActor
 final class DictationPipelineTests: XCTestCase {
@@ -18,14 +19,15 @@ final class DictationPipelineTests: XCTestCase {
 
     // MARK: - Order
 
-    /// Cleanup is sent the raw transcript, trigger phrase and all, never the snippet's template; snippets and the
-    /// dictionary run on the model's reply, so the user's rules have the final say.
-    func testCleanupSeesTheRawTranscriptAndTheRulesRunOnItsReply() async throws {
+    /// Cleanup is sent the raw transcript with the dictionary's one-line spellings applied and the snippet's trigger
+    /// phrase as spoken, never its template; the snippet runs on the model's reply. So the model starts from the
+    /// user's spellings, and a template never leaves the Mac.
+    func testCleanupIsSentTheCorrectedTranscriptAndTheSnippetsRunOnItsReply() async throws {
         let harness = makeHarness(rulesLoaded: false)
         loadRules(into: harness)
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
-        provider.reply = { _ in "Please insert my address, and deploy it with cube flow." }
+        provider.reply = { _ in "Please insert my address, and deploy it with Kubeflow." }
         harness.transcriber.defaultText = "please insert my address and deploy it with cube flow"
 
         await harness.dictate()
@@ -33,14 +35,168 @@ final class DictationPipelineTests: XCTestCase {
 
         let request = try XCTUnwrap(provider.requests.first)
         XCTAssertEqual(provider.requests.count, 1)
-        XCTAssertTrue(request.transcript.contains("please insert my address and deploy it with cube flow"))
+        XCTAssertEqual(
+            request.transcript, CleanupPrompt.wrapTranscript("please insert my address and deploy it with Kubeflow"))
         XCTAssertFalse(request.transcript.contains("Harbor"), "a snippet template reached the provider")
-        XCTAssertFalse(request.transcript.contains("Kubeflow"), "the dictionary ran before cleanup")
+        XCTAssertFalse(request.writingStylePrompt.contains("Harbor"), "a snippet template reached the prompt")
         XCTAssertEqual(
             harness.fakeInjector.texts,
             ["Please \(Self.snippetTemplate), and deploy it with Kubeflow."])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
-        XCTAssertEqual(harness.reports.latest?.cleanedText, "Please insert my address, and deploy it with cube flow.")
+        XCTAssertEqual(harness.reports.latest?.sentText, "please insert my address and deploy it with Kubeflow")
+        XCTAssertEqual(harness.reports.latest?.cleanedText, "Please insert my address, and deploy it with Kubeflow.")
+    }
+
+    /// The shipped AI model library writes "cloud opus four point eight" as "Claude Opus 4.8". A model that writes
+    /// number words as digits would turn the spoken form into "Cloud opus 4.8" before any rule saw it; the library
+    /// runs on the text the model is sent instead, so the fix survives however the model writes numbers.
+    func testALibraryFixSurvivesAModelThatWritesNumbersAsDigits() async throws {
+        let library = try XCTUnwrap(BuiltInDictionaryLibraries.all.first { $0.id == "ai-model-names" })
+        let entry = try XCTUnwrap(library.entries.first { $0.pattern == "cloud opus four point eight" })
+        XCTAssertEqual(entry.replacement, "Claude Opus 4.8")
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(libraries: library.entries)
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { request in Self.writingNumbersAsDigits(RecordingCleanupProvider.transcript(in: request)) }
+        harness.transcriber.defaultText = "switch the agent to cloud opus four point eight today"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(
+            provider.requests.map(\.transcript),
+            [CleanupPrompt.wrapTranscript("switch the agent to Claude Opus 4.8 today")])
+        XCTAssertEqual(harness.fakeInjector.texts, ["Switch the agent to Claude Opus 4.8 today."])
+        // The stand-in model does what the test says it does: given the spoken form, it loses the library's match.
+        XCTAssertEqual(
+            Self.writingNumbersAsDigits("switch the agent to cloud opus four point eight today"),
+            "Switch the agent to cloud opus 4.8 today.")
+    }
+
+    /// A dictionary entry whose replacement is a template in all but name (more than one line, or longer than
+    /// Windows' 100-character glossary cap) runs after cleanup, as a snippet does, so its text never reaches a
+    /// provider; the one-line entry beside it runs before. Each lands exactly once.
+    func testATemplateLikeReplacementNeverReachesTheProviderAndLandsOnce() async throws {
+        let signature = "Pat Doe\nSupport lead"
+        let footer = Array(repeating: "Confidential and privileged", count: 5).joined(separator: ", ")
+        XCTAssertGreaterThan(footer.count, TextPostProcessor.vocabularyReplacementLimit)
+        let harness = makeHarness()
+        harness.load(
+            dictionary: [
+                DictionaryEntry(pattern: "my sign off", replacement: signature),
+                DictionaryEntry(pattern: "legal footer", replacement: footer),
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+            ])
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { request in RecordingCleanupProvider.transcript(in: request) + "." }
+        harness.transcriber.defaultText = "deploy it with cube flow then my sign off and the legal footer"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertEqual(
+            request.transcript,
+            CleanupPrompt.wrapTranscript("deploy it with Kubeflow then my sign off and the legal footer"))
+        for text in ["Pat Doe", "Support lead", "Confidential"] {
+            XCTAssertFalse(request.transcript.contains(text), "a template-like replacement reached the provider")
+            XCTAssertFalse(request.writingStylePrompt.contains(text), "a template-like replacement reached the prompt")
+        }
+        XCTAssertEqual(harness.fakeInjector.texts, ["deploy it with Kubeflow then \(signature) and the \(footer)."])
+    }
+
+    /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
+    /// form each land once with cleanup on: they run on the text the provider is sent and never again on the reply,
+    /// and one rule's output never feeds another rule after cleanup either.
+    func testCasingAndExpansionRulesLandExactlyOnceAndNeverCascade() async throws {
+        let harness = makeHarness()
+        harness.load(
+            dictionary: [
+                DictionaryEntry(pattern: "azure", replacement: "Azure"),
+                DictionaryEntry(pattern: "york", replacement: "New York"),
+                DictionaryEntry(pattern: "gh", replacement: "GitHub"),
+                DictionaryEntry(pattern: "github", replacement: "GitHub Enterprise"),
+                DictionaryEntry(pattern: "sig", replacement: "signature"),
+                DictionaryEntry(pattern: "signature", replacement: "Pat Doe\nSupport lead"),
+            ])
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { request in RecordingCleanupProvider.transcript(in: request) + "." }
+        harness.transcriber.defaultText = "move azure to york then open gh and add my sig"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(
+            provider.requests.map(\.transcript),
+            [CleanupPrompt.wrapTranscript("move Azure to New York then open GitHub and add my signature")])
+        XCTAssertEqual(harness.fakeInjector.texts, ["move Azure to New York then open GitHub and add my signature."])
+
+        // The same rules with cleanup off: one pass, the same words.
+        harness.cleanup.isEnabled = false
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(harness.fakeInjector.texts.last, "move Azure to New York then open GitHub and add my signature")
+    }
+
+    /// A reply that cannot be used falls back to exactly what cleanup off gives: the vocabulary step is dropped, and
+    /// the snippets and the dictionary run once, in Windows' order, on the raw transcript. Running the rules again on
+    /// the corrected text instead would expand "signature", which only a vocabulary rule wrote.
+    func testAFallbackGivesExactlyTheCleanupOffResult() async throws {
+        let harness = makeHarness()
+        harness.load(
+            dictionary: [
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+                DictionaryEntry(pattern: "sig", replacement: "signature"),
+            ],
+            snippets: [
+                Snippet(phrase: "insert my address", template: Self.snippetTemplate),
+                Snippet(phrase: "signature", template: "Kind regards"),
+            ])
+        harness.transcriber.defaultText = "insert my address and deploy it with cube flow then my sig"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        let cleanupOff = try XCTUnwrap(harness.fakeInjector.texts.first)
+        XCTAssertEqual(cleanupOff, "\(Self.snippetTemplate) and deploy it with Kubeflow then my signature")
+
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { _ in "Absolutely, I can help with that. What would you like me to do next?" }
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        provider.reply = { _ in throw DictationTestFailure(code: 7) }
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(harness.fakeInjector.texts, [cleanupOff, cleanupOff, cleanupOff])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+        let sent = CleanupPrompt.wrapTranscript("insert my address and deploy it with Kubeflow then my signature")
+        XCTAssertEqual(provider.requests.map(\.transcript), [sent, sent])
+    }
+
+    /// The reply is checked against the text the provider was sent, not the raw transcript: a one-line rule that wrote
+    /// a long product name does not make the model's faithful reply look like a ramble.
+    func testTheReplyIsCheckedAgainstTheTextThatWasSent() async throws {
+        let name = "Contoso Enterprise Knowledge Platform for Regulated Industries, Second Edition, with Extended Help"
+        XCTAssertTrue(TextPostProcessor.isVocabulary(DictionaryEntry(pattern: "c e k p", replacement: name)))
+        let harness = makeHarness()
+        harness.load(dictionary: [DictionaryEntry(pattern: "c e k p", replacement: name)])
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { request in RecordingCleanupProvider.transcript(in: request) + "." }
+        harness.transcriber.defaultText = "c e k p"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(provider.requests.map(\.transcript), [CleanupPrompt.wrapTranscript(name)])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .cleaned)
+        XCTAssertEqual(harness.fakeInjector.texts, ["\(name)."])
+        if case .accepted = CleanupResponseGuard.sanitize(candidate: "\(name).", original: "c e k p") {
+            XCTFail("against the raw transcript the same reply should have been rejected")
+        }
     }
 
     /// Line breaks are formatted last, for the target captured at activation: a terminal gets one line, with the
@@ -81,14 +237,17 @@ final class DictationPipelineTests: XCTestCase {
     }
 
     /// The model's dashes are normalized away, and the user's own text keeps its dash: dash normalization applies to
-    /// the model's reply only, before the snippets run.
-    func testDashesAreNormalizedInTheReplyButKeptInTheUsersOwnSnippet() async throws {
+    /// the model's reply only, before the snippets run, and a dictionary replacement with a dash runs after it too,
+    /// so it is never sent for cleanup either.
+    func testDashesAreNormalizedInTheReplyButKeptInTheUsersOwnSnippetAndRule() async throws {
         let harness = makeHarness(rulesLoaded: false)
-        harness.load(snippets: [Snippet(phrase: "sign off", template: "Pat \u{2013} Support")])
+        harness.load(
+            dictionary: [DictionaryEntry(pattern: "team name", replacement: "Scribe \u{2013} Mac")],
+            snippets: [Snippet(phrase: "sign off", template: "Pat \u{2013} Support")])
         harness.cleanup.isEnabled = true
         let provider = try XCTUnwrap(harness.cleanup.gated)
-        provider.reply = { _ in "Thanks \u{2014} see you soon. sign off" }
-        harness.transcriber.defaultText = "thanks see you soon sign off"
+        provider.reply = { _ in "Thanks \u{2014} see you soon. sign off, team name" }
+        harness.transcriber.defaultText = "thanks see you soon sign off team name"
 
         await harness.dictate()
         await harness.waitUntilProcessed()
@@ -96,6 +255,10 @@ final class DictationPipelineTests: XCTestCase {
         let delivered = try XCTUnwrap(harness.fakeInjector.texts.first)
         XCTAssertFalse(delivered.contains("\u{2014}"), "the model's em dash was delivered")
         XCTAssertTrue(delivered.contains("Pat \u{2013} Support"), "the snippet's own dash was normalized")
+        XCTAssertTrue(delivered.contains("Scribe \u{2013} Mac"), "the rule's own dash was normalized")
+        XCTAssertEqual(
+            provider.requests.map(\.transcript),
+            [CleanupPrompt.wrapTranscript("thanks see you soon sign off team name")])
     }
 
     /// The reply is checked against the raw transcript it was given; a reply that answers the dictation instead of
@@ -389,5 +552,19 @@ final class DictationPipelineTests: XCTestCase {
 
         XCTAssertFalse(recorder.renderings.isEmpty)
         PrivacyCanary.assertAbsent(from: recorder.everyText)
+    }
+
+    /// A stand-in for a cleanup model's number formatting: every number word becomes a digit, "4 point 8" becomes
+    /// "4.8", and the sentence is capitalized and closed with a period.
+    private static func writingNumbersAsDigits(_ text: String) -> String {
+        let digits = [
+            "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8",
+            "nine": "9",
+        ]
+        let words = text.split(separator: " ").map { digits[String($0)] ?? String($0) }
+        let spaced = words.joined(separator: " ")
+        let decimals = spaced.replacingOccurrences(
+            of: "([0-9]) point ([0-9])", with: "$1.$2", options: .regularExpression)
+        return decimals.prefix(1).uppercased() + decimals.dropFirst() + "."
     }
 }

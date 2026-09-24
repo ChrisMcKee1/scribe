@@ -273,10 +273,14 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(harness.fakeInjector.deliveries.count, 2)
     }
 
-    /// The toggle key (Caps Lock, the default) stops on silence and a held key never does; a toggle's recording that
-    /// ended some other way than by the key tells the key's listener, so its next tap starts a new recording.
-    func testTheStopPolicyFollowsTheBindingThatFired() async throws {
-        let harness = makeHarness()
+    /// A held key never stops on silence, and neither does the toggle key (Caps Lock, the default) unless the user
+    /// opted in, as on Windows (`AppSettings.AutoStopOnSilence`, off by default), with the choice read at each press.
+    /// The tray's test dictation always stops on silence. A toggle's recording that ended some other way than by the
+    /// key tells the key's listener, so its next tap starts a new recording.
+    func testTheStopPolicyFollowsTheBindingThatFiredAndTheOptIn() async throws {
+        let optIn = LockedValue<Bool>()
+        let harness = makeHarness(
+            configuration: DictationController.Configuration(toggleKeyStopsOnSilence: { optIn.value ?? false }))
 
         let held = try await harness.pressAdmitted(DictationHarness.holdKey)
         XCTAssertEqual(harness.capture.starts.last?.policy.stopsOnSilence, false)
@@ -286,6 +290,17 @@ final class DictationControllerTests: XCTestCase {
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.capture.stopCount(for: held), 1)
 
+        // Caps Lock as installed: no silence stop, and its second tap ends the recording with nothing to settle.
+        _ = try await harness.pressAdmitted(DictationHarness.toggleKey)
+        XCTAssertEqual(harness.capture.starts.last?.policy.stopsOnSilence, false, "a toggle stops on silence unasked")
+        XCTAssertEqual(harness.capture.starts.last?.policy.maximumDuration, CaptureStopPolicy.defaultMaximumDuration)
+        await harness.waitUntilLive()
+        harness.release(DictationHarness.toggleKey)
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(harness.triggers.cancelledToggles, 0)
+
+        // Opted in: the next press stops on silence, and a silence stop settles the key's toggle.
+        optIn.set(true)
         let toggled = try await harness.pressAdmitted(DictationHarness.toggleKey)
         XCTAssertEqual(harness.capture.starts.last?.policy.stopsOnSilence, true)
         await harness.waitUntilLive()
@@ -295,14 +310,15 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(harness.triggers.settledToggles, [DictationHarness.toggleKey])
         await harness.waitUntilProcessed()
 
-        // Ended by the key itself: nothing to cancel.
-        _ = try await harness.pressAdmitted(DictationHarness.toggleKey)
+        // A held key ignores the choice.
+        _ = try await harness.pressAdmitted(DictationHarness.holdKey)
+        XCTAssertEqual(harness.capture.starts.last?.policy.stopsOnSilence, false)
         await harness.waitUntilLive()
-        harness.release(DictationHarness.toggleKey)
+        harness.release(DictationHarness.holdKey)
         await harness.waitUntilProcessed()
-        XCTAssertEqual(harness.triggers.cancelledToggles, 1)
 
-        // The tray's test dictation is a toggle too.
+        // The tray's test dictation stops on silence whatever the choice, and settles no key.
+        optIn.set(false)
         harness.controller.toggleMenuDictation()
         await waitUntil("the menu recording opens") { harness.controller.isRecordingLive }
         XCTAssertEqual(harness.capture.starts.last?.policy.stopsOnSilence, true)
@@ -642,9 +658,9 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(harness.presenter.noticesShown(), [.textKept])
     }
 
-    /// Astra's sequence: dictation A waits for cleanup; recording B then fails to open its microphone and the pill
-    /// says "Microphone access needed"; A's cleanup fails after that. A's older outcome never replaces B's newer,
-    /// actionable failure on the pill; a notification says A's instead.
+    /// Dictation A waits for cleanup; recording B then fails to open its microphone and the pill says "Microphone
+    /// access needed"; A's cleanup fails after that. A's older outcome never replaces B's newer, actionable failure on
+    /// the pill; a notification says A's instead.
     func testAnOlderCleanupFailureNeverReplacesANewerMicrophoneFailure() async throws {
         let harness = makeHarness()
         harness.cleanup.isEnabled = true

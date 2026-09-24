@@ -9,7 +9,9 @@ import os
 /// key or client secret. Now each call reads the preferences, works out the `CleanupConnection` and reuses the provider
 /// when it matches. The connection covers the provider kind, endpoint, model or deployment, auth mode, tenant, client
 /// id and the secret store's revision, never a secret, and the prompt is per request and not part of it. The Microsoft
-/// Foundry credential is kept per identity beside the provider, so a new deployment keeps the old token.
+/// Foundry credential is kept per identity beside the provider, so a provider the cache rebuilds for the same identity
+/// reuses its token. The app drops both on any change of the provider settings (`CleanupInvalidation`), so there a new
+/// deployment starts with a new token.
 ///
 /// The lifecycle owner holds one cache for the app's lifetime (`shared`) and calls `invalidate()` when cleanup is
 /// switched off, which drops tokens and secrets from memory, or when it learns the identity changed outside Scribe
