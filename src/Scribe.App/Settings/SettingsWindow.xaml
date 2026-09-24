@@ -744,7 +744,8 @@
                                                        Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text. AI cleanup still receives your vocabulary when this is off."/>
                                         </StackPanel>
                                         <ui:ToggleSwitch x:Name="PostCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"/>
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
+                                                         Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled"/>
                                     </Grid>
                                 </ui:Card>
 

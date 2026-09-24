@@ -1553,12 +1553,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     // What the dictionary gives AI cleanup, counted by Core the way dictation builds it (GlossaryHint):
-    // this page's rows as typed, the libraries switched on, and the provider and prompt style on screen.
-    // Local find-and-replace is never capped. This is a status line rather than an input limit,
-    // because blocking the 81st entry would break a feature that still works.
+    // this page's rows as typed, the libraries switched on, and the provider, prompt style and switches on
+    // screen, so every control it reads refreshes it. Local find-and-replace is never capped. This is a
+    // status line rather than an input limit, because blocking the 81st entry would break a feature that
+    // still works.
     private void UpdateDictionaryGlossaryHint()
     {
-        if (DictionaryGlossaryHint is null)
+        // Also reached from the AI page's handlers, which can run while InitializeComponent is still
+        // creating the controls this reads.
+        if (DictionaryGlossaryHint is null || AiProviderCombo is null || AiPromptStyleCombo is null ||
+            AiCleanupCheck is null || PostCheck is null)
         {
             return;
         }
@@ -1571,19 +1575,21 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var libraryEntries = _loadedLibraries
+        var enabledLibraries = _loadedLibraries
             .Where(library => _libraryRows.Any(r => r.Enabled &&
                 string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
-            .SelectMany(library => library.EnabledEntries)
             .ToList();
 
         DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
             _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
-            libraryEntries,
-            AiCleanupOn: AiCleanupCheck?.IsChecked == true,
+            enabledLibraries,
+            AiCleanupOn: AiCleanupCheck.IsChecked == true,
+            PostProcessingOn: PostCheck.IsChecked == true,
             SelectedProvider,
             SelectedPromptStyle));
     }
+
+    private void PostCheck_Toggled(object sender, RoutedEventArgs e) => UpdateDictionaryGlossaryHint();
 
     // --- Libraries -----------------------------------------------------------------------
 
@@ -2493,6 +2499,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void AiCleanupCheck_Toggled(object sender, RoutedEventArgs e)
     {
+        // Before the loading guard: the dictionary line reads this switch whatever set it.
+        UpdateDictionaryGlossaryHint();
         if (_loadingUi)
         {
             return;
@@ -2512,6 +2520,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void AiProviderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        UpdateDictionaryGlossaryHint();
         if (_loadingUi)
         {
             return;
@@ -4384,7 +4393,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Prompt-style selector has no live side effects; the choice is applied on Save with the other
     // cleanup settings. The handler exists only because the XAML binds SelectionChanged.
-    private void AiPromptStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) { }
+    private void AiPromptStyleCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateDictionaryGlossaryHint();
 
     private async void ResetFrontierPromptButton_Click(object sender, RoutedEventArgs e)
     {

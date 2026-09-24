@@ -215,6 +215,24 @@ public static class CleanupPrompt
         string.IsNullOrWhiteSpace(prompt) ? DefaultLocalPrompt : prompt.Trim();
 
     /// <summary>
+    /// The glossary's term budget for this prompt style and provider: <see cref="MaxGlossaryTermsLocal"/>
+    /// when the style resolves to Local, otherwise <see cref="MaxGlossaryTermsCloud"/>. Dictation and the
+    /// dictionary page both ask here, so the page cannot quote a budget dictation does not use.
+    /// </summary>
+    public static int GlossaryTermBudget(CleanupPromptStyle style, CleanupProvider provider) =>
+        ResolvePromptStyle(style, provider) == CleanupPromptStyle.Local ? MaxGlossaryTermsLocal : MaxGlossaryTermsCloud;
+
+    /// <summary>
+    /// The vocabulary AI cleanup is given, in priority order: the enabled dictionary
+    /// (<paramref name="personal"/>, in the order dictation reads it) and then the enabled libraries'
+    /// entries, one entry per spoken form, the dictionary winning. Dictation builds its glossary from this,
+    /// and the dictionary page counts from it.
+    /// </summary>
+    public static IReadOnlyList<DictionaryEntry> ComposeVocabulary(
+        IReadOnlyList<DictionaryEntry> personal, IReadOnlyList<DictionaryEntry> libraries) =>
+        libraries.Count == 0 ? personal : PostProcessing.DictionaryLibraryComposer.Merge(personal, libraries);
+
+    /// <summary>
     /// Renders the user's enabled dictionary entries into a compact glossary block that is appended to
     /// the cleanup system prompt as its own paragraph, <b>after</b> the writing style. This keeps the
     /// vocabulary feature independent of the tone instructions (e.g. "write like a pirate" and the

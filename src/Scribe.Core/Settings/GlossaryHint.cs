@@ -2,28 +2,34 @@ using System.Globalization;
 using System.Text;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
+using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Settings;
 
 /// <summary>
-/// The status line under the dictionary grid: how many entries are on and, while AI cleanup is on,
-/// how many terms every cleanup request carries as vocabulary, and who receives them.
+/// The status line under the dictionary grid: how many entries are on, whether they are applied on this
+/// PC and, while AI cleanup is on, how many terms every cleanup request carries as vocabulary and who
+/// receives them.
 /// <para>
-/// It used to count only this page's rows and tell a cloud user that "all of them" were sent, when
-/// the enabled libraries went too and the list stops at a budget. The count now comes from the
-/// glossary's own selection (<see cref="CleanupPrompt.CountGlossary"/>) over the merge dictation
-/// uses (<see cref="DictionaryLibraryComposer.Merge"/>), from entries built the way Save builds them
-/// (<see cref="DictionaryEntryBuilder.Build"/>), so the number shown is the number sent.
+/// The number is the one dictation sends. The page's rows are built the way Save builds them
+/// (<see cref="DictionaryEntryBuilder.Build"/>) and put in the order dictation reads the saved dictionary
+/// (<see cref="DictionaryRepository.GetEnabled"/>, by pattern under SQLite's BINARY collation), the enabled
+/// libraries in the order it loads them (<see cref="DictionaryLibraryService.GetLibraries"/>), and then the
+/// pipeline's own composition, budget and selection count them (<see cref="CleanupPrompt.ComposeVocabulary"/>,
+/// <see cref="CleanupPrompt.GlossaryTermBudget"/>, <see cref="CleanupPrompt.CountGlossary"/>). Counting in the
+/// grid's own order said "the first 312 of 3,100" after an out-of-order import when 3,000 were sent, because
+/// the size budget stops at a different line in a different order.
 /// </para>
 /// </summary>
 public static class GlossaryHint
 {
-    /// <summary>What the page shows: its rows as typed, the enabled libraries' entries, and the AI settings on screen.</summary>
+    /// <summary>What the page shows: its rows as typed, the libraries switched on, and the settings on screen.</summary>
     public sealed record Input(
         IReadOnlyList<DictionaryEntryBuilder.Row> Rows,
-        IReadOnlyList<DictionaryEntry> EnabledLibraryEntries,
+        IReadOnlyList<DictionaryLibrary> EnabledLibraries,
         bool AiCleanupOn,
+        bool PostProcessingOn,
         CleanupProvider Provider,
         CleanupPromptStyle PromptStyle);
 
@@ -31,56 +37,105 @@ public static class GlossaryHint
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        var rows = input.Rows;
-        var enabledRows = rows.Count(r => r.Enabled && !string.IsNullOrWhiteSpace(r.Replacement));
-        var text = new StringBuilder($"{Count(enabledRows)} of {Count(rows.Count)} entries enabled");
+        // Entries are the rows with a spoken form, the rows Save keeps; a rule that deletes its phrase is as
+        // enabled as one that replaces it.
+        var entries = DictionaryEntryBuilder.Build(input.Rows).Entries;
+        var enabled = entries.Where(e => e.Enabled).ToList();
+        var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} entries enabled");
+
+        // Dictation reads only enabled entries, so a disabled row never keeps a library term with the same
+        // spoken form out of the vocabulary.
+        var personal = enabled.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance).ToList();
+        var libraries = DictionaryLibraryComposer.ComposeLibraries(InLoadOrder(input.EnabledLibraries));
+        var effective = CleanupPrompt.ComposeVocabulary(personal, libraries);
+        var personalTerms = DictionaryLibraryComposer.Merge(personal, []).Count;
+
         if (!input.AiCleanupOn)
         {
-            return text.Append('.').ToString();
+            text.Append('.');
+            return AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: true).ToString();
         }
 
-        // Only enabled entries take part: dictation reads the enabled dictionary, so a disabled row
-        // never keeps a library term with the same spoken form out of the glossary.
-        var personal = DictionaryEntryBuilder.Build(rows).Entries.Where(e => e.Enabled).ToList();
-        var personalTerms = DictionaryLibraryComposer.Merge(personal, []).Count;
-        var effective = DictionaryLibraryComposer.Merge(personal, input.EnabledLibraryEntries);
-        if (effective.Count > personalTerms)
+        if (libraries.Count > 0 && effective.Count > personalTerms)
         {
             text.Append($" plus {Count(effective.Count - personalTerms)} from enabled libraries");
         }
 
         text.Append('.');
-        if (effective.Count > 0)
-        {
-            text.Append(" All of them are replaced locally.");
-        }
+        AppendLocalUse(text, effective.Count, input.PostProcessingOn, onlyWhenOff: false);
 
         var local = CleanupPrompt.ResolvePromptStyle(input.PromptStyle, input.Provider) == CleanupPromptStyle.Local;
         var glossary = CleanupPrompt.CountGlossary(
-            effective, local ? CleanupPrompt.MaxGlossaryTermsLocal : CleanupPrompt.MaxGlossaryTermsCloud);
+            effective, CleanupPrompt.GlossaryTermBudget(input.PromptStyle, input.Provider));
+        var templates = effective.Count(e => e.Enabled && !string.IsNullOrWhiteSpace(e.Replacement) &&
+                                             !CleanupPrompt.IsVocabularyReplacement(e.Replacement));
+
         if (glossary.Eligible == 0)
         {
-            return text.Append(" AI cleanup receives no vocabulary.").ToString();
+            text.Append(" AI cleanup receives no vocabulary.");
         }
-
-        var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The on-device model" : "Your AI provider";
-        if (glossary.Included == glossary.Eligible)
+        else
         {
-            var terms = glossary.Eligible == 1 ? "that term" : $"all {Count(glossary.Eligible)} terms";
-            return text.Append(
-                $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
-                "dictation mentions them.").ToString();
+            var receiver = input.Provider == CleanupProvider.FoundryLocal ? "The on-device model" : "Your AI provider";
+            if (glossary.Included == glossary.Eligible)
+            {
+                var terms = glossary.Eligible == 1 ? "that term" : $"all {Count(glossary.Eligible)} terms";
+                text.Append(
+                    $" {receiver} receives {terms} as vocabulary with every cleanup request, whether or not the " +
+                    "dictation mentions them.");
+            }
+            else
+            {
+                text.Append(
+                    $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} terms " +
+                    "as vocabulary with every cleanup request, whether or not the dictation mentions them. Your own " +
+                    "entries come first.");
+                text.Append(local
+                    ? $" The Local prompt style stops the list at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms so " +
+                      "it fits a small model's context."
+                    : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms or " +
+                      $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.");
+            }
         }
 
-        text.Append(
-            $" {receiver} receives the first {Count(glossary.Included)} of {Count(glossary.Eligible)} terms as " +
-            "vocabulary with every cleanup request, whether or not the dictation mentions them. Your own entries " +
-            "come first, and local replacement still covers the rest.");
-        return text.Append(local
-            ? $" The Local prompt style stops the list at {Count(CleanupPrompt.MaxGlossaryTermsLocal)} terms so it " +
-              "fits a small model's context."
-            : $" The list stops at {Count(CleanupPrompt.MaxGlossaryTermsCloud)} terms or " +
-              $"{Count(CleanupPrompt.MaxGlossaryChars)} characters.").ToString();
+        if (templates > 0)
+        {
+            text.Append(
+                $" {Count(templates)} {(templates == 1 ? "entry is" : "entries are")} left out because the written " +
+                $"form spans more than one line or runs past {Count(CleanupPrompt.MaxGlossaryTermChars)} characters.");
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// The order dictation composes enabled libraries in (<see cref="DictionaryLibraryService.GetLibraries"/>):
+    /// the built-in catalog in its own order, then imported libraries by file name, which is the id plus
+    /// ".csv", the way the service sorts the folder. The page appends a library it imports during the session,
+    /// so its own list is not always in this order.
+    /// </summary>
+    internal static IEnumerable<DictionaryLibrary> InLoadOrder(IEnumerable<DictionaryLibrary> libraries)
+    {
+        var catalog = BuiltInDictionaryLibraries.All
+            .Select((library, index) => (library.Id, index))
+            .ToDictionary(pair => pair.Id, pair => pair.index, StringComparer.OrdinalIgnoreCase);
+        return libraries
+            .OrderBy(library => library.BuiltIn && catalog.TryGetValue(library.Id, out var index) ? index : int.MaxValue)
+            .ThenBy(library => library.Id + ".csv", StringComparer.OrdinalIgnoreCase);
+    }
+
+    // Whether the entries are applied to dictation here: the post-processing switch decides, whatever AI
+    // cleanup does with them.
+    private static StringBuilder AppendLocalUse(StringBuilder text, int entries, bool postProcessingOn, bool onlyWhenOff)
+    {
+        if (entries == 0 || (postProcessingOn && onlyWhenOff))
+        {
+            return text;
+        }
+
+        return text.Append(postProcessingOn
+            ? " All of them are applied on this PC."
+            : " Post-processing is off, so none of them are applied on this PC.");
     }
 
     private static string Count(int value) => value.ToString("N0", CultureInfo.InvariantCulture);

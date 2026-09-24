@@ -521,17 +521,9 @@ internal sealed class DictationController : IDisposable
     {
         try
         {
-            var baseEntries = _dictionary.GetEnabled();
-            var libraryEntries = _libraries.GetEnabledLibraryEntries();
-            var effective = libraryEntries.Count == 0
-                ? (IReadOnlyList<DictionaryEntry>)baseEntries
-                : DictionaryLibraryComposer.Merge(baseEntries, libraryEntries);
-
-            var style = CleanupPrompt.ResolvePromptStyle(
-                settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
-            var maxTerms = style == CleanupPromptStyle.Local
-                ? CleanupPrompt.MaxGlossaryTermsLocal
-                : CleanupPrompt.MaxGlossaryTermsCloud;
+            // Composed and budgeted by the same Core code the dictionary page counts with (GlossaryHint).
+            var effective = CleanupPrompt.ComposeVocabulary(_dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries());
+            var maxTerms = CleanupPrompt.GlossaryTermBudget(settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
 
             var glossary = CleanupPrompt.BuildGlossary(effective, maxTerms);
             return string.IsNullOrEmpty(glossary) ? null : glossary;

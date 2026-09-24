@@ -200,8 +200,12 @@ anything was dictated.
   `CleanupProbeVocabularyTests` pins this from the wire for custom endpoints, Foundry Local, Azure
   Responses and the Chat Completions fallback, and through the factory for Copilot.
 - **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
-  suggestion consent, and `GlossaryHint` builds the dictionary page's count from the real glossary
-  selection (`CleanupPrompt.CountGlossary`). Both quote their limits from the constants that enforce them.
+  suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
+  glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
+  collation, `SqliteBinaryCollation`), the libraries in the order the service loads them, then the shared
+  `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
+  `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
+  and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
   `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if
   a retired claim ("text only", "relevant" terms) comes back in the README, the docs or the window.
 - **The suggestion consent is bound to its recipient.** The window captures `ITextCleanupService.Recipient`
