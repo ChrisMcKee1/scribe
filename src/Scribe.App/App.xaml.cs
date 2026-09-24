@@ -746,14 +746,8 @@ public partial class App : Application
     /// </summary>
     private void ShowSingleInstanceNotice()
     {
-        var dialog = new Wpf.Ui.Controls.MessageBox
-        {
-            Title = "Scribe",
-            Content = "Scribe is already running. Look for the microphone icon in the system tray.",
-            PrimaryButtonText = "OK",
-            IsSecondaryButtonEnabled = false,
-            IsCloseButtonEnabled = false,
-        };
+        var dialog = ThemedNotice.Create(
+            "Scribe", "Scribe is already running. Look for the microphone icon in the system tray.");
 
         var frame = new System.Windows.Threading.DispatcherFrame();
         _ = dialog.ShowDialogAsync().ContinueWith(
