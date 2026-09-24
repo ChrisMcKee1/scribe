@@ -123,6 +123,59 @@ public sealed class DefaultHotkeyTests
         Assert.Null(loaded.DictationOnlyHotkey);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\r\n\t ")]
+    public void A_blank_stored_document_is_unreadable_not_a_first_run(string blank)
+    {
+        // Something wrote this row, so the install has run before: an empty or white-space document gets what any
+        // unreadable one gets (the recovery copy, the failed-load report and the legacy hotkeys), never the new
+        // defaults, and the row itself is left as it was.
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", blank);
+
+        var loaded = repo.Load();
+
+        Assert.True(repo.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
+        Assert.Null(loaded.DictationOnlyHotkey);
+        Assert.Equal(blank, repo.Get("app_settings"));
+        Assert.Equal(blank, repo.Get("app_settings_recovery"));
+        Assert.True(SettingsRepository.StartsWithoutSavedSettings(new SettingsRepository(db), db));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_stored_document_refuses_partial_updates_until_a_save_replaces_it(string blank)
+    {
+        using var db = ScribeDatabase.CreateInMemory();
+        var repo = new SettingsRepository(db);
+        repo.Set("app_settings", blank);
+
+        // The welcome's flag and a tray change are partial updates: neither may stand defaults in for the document.
+        Assert.Throws<InvalidOperationException>(() => repo.Update(stored => stored.HasCompletedFirstRun = true));
+        Assert.Throws<InvalidOperationException>(
+            () => repo.Update(stored => stored.EnableAiCleanup = true, ExternalSwitchSync.NextRevision(), out _));
+        Assert.True(repo.LastLoadFailed);
+        Assert.Equal(blank, repo.Get("app_settings"));
+        Assert.Equal(blank, repo.Get("app_settings_recovery"));
+
+        // Saving what the session showed, as the Settings window does, is the explicit choice that ends it.
+        repo.SaveBundle(repo.Load(), dictionaryEntries: null, snippets: null);
+
+        Assert.False(repo.LastLoadFailed);
+        var reread = new SettingsRepository(db);
+        var saved = reread.Load();
+        Assert.False(reread.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, saved.Hotkey);
+        Assert.Null(saved.DictationOnlyHotkey);
+        Assert.True(reread.Update(stored => stored.HasCompletedFirstRun = true).HasCompletedFirstRun);
+        Assert.Equal(blank, repo.Get("app_settings_recovery")); // written once, kept
+    }
+
     [Fact]
     public void A_document_a_repair_recorded_as_lost_runs_on_right_ctrl_and_one_hotkey()
     {

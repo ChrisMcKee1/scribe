@@ -108,8 +108,8 @@ public sealed class SettingsRepository : ISettingsRepository
 
     public AppSettings Load()
     {
-        var json = Get(SettingsKey);
-        if (string.IsNullOrWhiteSpace(json))
+        var (stored, json) = ReadDocument();
+        if (!stored)
         {
             // No document is a first run, unless a repair lost the one the user had. Those defaults are no more
             // their choice than an unreadable document's, so they are reported the same way until one is saved, and
@@ -118,12 +118,13 @@ public sealed class SettingsRepository : ISettingsRepository
             return LastLoadFailed ? AppSettings.CreateForExistingInstall() : AppSettings.CreateDefault();
         }
 
-        if (TryDeserialize(json) is { } settings)
+        if (!string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is { } settings)
         {
             LastLoadFailed = false;
             return settings;
         }
 
+        // Unreadable, blank or white space included: a stored row, however empty, means this is no first run.
         LastLoadFailed = true;
         PreserveRecoveryCopy(json);
         return AppSettings.CreateForExistingInstall();
@@ -436,15 +437,15 @@ public sealed class SettingsRepository : ISettingsRepository
     }
 
     // Load's rules inside Update's transaction: defaults when nothing is stored. A document that
-    // cannot be read is never written over, because defaults plus one field would discard everything
-    // else the user saved: it gets Load's recovery copy (written once, never overwritten), committed
+    // cannot be read, a blank one included, is never written over, because defaults plus one field would discard
+    // everything else the user saved: it gets Load's recovery copy (written once, never overwritten), committed
     // on its own, and the change is refused. The copy is written on this connection because a second
     // one would wait behind this very transaction. A document a repair lost is refused the same way:
     // defaults plus one field would stand in for it as if the user had chosen them.
     private AppSettings ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
     {
-        var json = ReadValue(connection, transaction, SettingsKey);
-        if (string.IsNullOrWhiteSpace(json))
+        var (stored, json) = ReadDocument(connection, transaction);
+        if (!stored)
         {
             if (_database.SettingsLostInRepair || ReadValue(connection, transaction, LostMarkerKey) is not null)
             {
@@ -457,7 +458,7 @@ public sealed class SettingsRepository : ISettingsRepository
             return AppSettings.CreateDefault();
         }
 
-        if (TryDeserialize(json) is { } settings)
+        if (!string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is { } settings)
         {
             LastLoadFailed = false;
             return settings;
@@ -485,6 +486,30 @@ public sealed class SettingsRepository : ISettingsRepository
         command.CommandText = "SELECT value FROM settings WHERE key = $key;";
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private (bool Stored, string Json) ReadDocument()
+    {
+        using var connection = _database.Open();
+        return ReadDocument(connection, transaction: null);
+    }
+
+    // Whether the document row exists, and its text. Only a missing row is a first run: an empty or white-space value
+    // was written by something, so it is judged, and copied for recovery, like any other unreadable document. The cast
+    // reads a value stored as another type (only a hand edit could store one) as the text it holds.
+    private static (bool Stored, string Json) ReadDocument(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT CAST(value AS TEXT) FROM settings WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", SettingsKey);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return (false, string.Empty);
+        }
+
+        return (true, reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
     }
 
     // A readable document is being stored, so a loss a repair recorded is over.

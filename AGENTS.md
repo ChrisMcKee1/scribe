@@ -730,7 +730,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A session whose saved settings could not be used is not a first run.** `SettingsRepository.Load` returns
   `AppSettings.CreateForExistingInstall()`, `CreateDefault` with the legacy hotkeys, for an unreadable document and
   for one a repair lost, so the key that person presses keeps working and Page Up and Page Down keep reaching their
-  other apps. `DefaultHotkeyTests` pins each case.
+  other apps. Only a missing `app_settings` row is a first run: an empty or white-space value is an unreadable
+  document like any other (recovery copy, `LastLoadFailed`, partial updates refused), in `Load` and `Update` alike.
+  `DefaultHotkeyTests` pins each case.
 - **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
   page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
   the result at once.
