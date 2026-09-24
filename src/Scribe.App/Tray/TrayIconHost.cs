@@ -190,7 +190,26 @@ internal sealed class TrayIconHost : IDisposable
             ContextMenu = menu,
             MenuActivation = PopupActivationMode.RightClick,
         };
+
+        // H.NotifyIcon 2.4.1 opens the menu and only then activates the popup that holds it
+        // (TaskbarIcon.ShowContextMenu), so the menu never had keyboard focus: the arrow keys, Enter and Escape did
+        // nothing until the pointer rested on an item, whether a right-click, Shift+F10 or the menu key opened it.
+        // This event is raised once the popup is active.
+        _icon.TrayContextMenuOpen += (_, _) => FocusMenu();
         _icon.ForceCreate(false);
+    }
+
+    private void FocusMenu()
+    {
+        try
+        {
+            _menu.Focus();
+        }
+        catch
+        {
+            // A menu that cannot take focus still works with the pointer; keyboard access is not worth breaking
+            // right-click access over.
+        }
     }
 
 

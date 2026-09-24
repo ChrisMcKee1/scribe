@@ -64,14 +64,16 @@
 
         <ScrollViewer Grid.Row="2" Margin="24,0,24,0" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+                <!-- The two lists only hold the check boxes, which are the Tab stops. An ItemsControl is
+                     focusable by default, so each list was also an empty stop of its own. -->
                 <TextBlock x:Name="EntriesHeader" Style="{StaticResource SectionLabel}"
                            Text="YOUR ENTRIES"/>
-                <ItemsControl x:Name="EntriesList"
+                <ItemsControl x:Name="EntriesList" Focusable="False"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="LibrariesHeader" Style="{StaticResource SectionLabel}"
                            Text="LIBRARIES WITH TERMS THAT DID NOT COME UP"/>
-                <ItemsControl x:Name="LibrariesList"
+                <ItemsControl x:Name="LibrariesList" Focusable="False"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="FootnoteText"
