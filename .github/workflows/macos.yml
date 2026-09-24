@@ -21,7 +21,13 @@ on:
       - 'tests/fixtures/speech/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
-
+    inputs:
+      real_asr:
+        description: >-
+          Also run the optional real speech recognition job: it installs Foundry Local and its speech model and
+          transcribes the committed fixtures. Optional and never required; a hosted runner may not fit the model.
+        type: boolean
+        default: false
 permissions:
   contents: read
 
@@ -186,3 +192,89 @@ jobs:
             swift format lint --recursive macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
             echo "$(grep -c 'warning:' lint.log || true) lint warning(s)"
           fi
+
+  # Optional and never required: it runs only when the workflow is dispatched by hand with real_asr,
+  # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech
+  # model in the Actions cache between runs, and transcribes the committed fixtures through the
+  # production TranscriptionEngine (ScribeScenarioTests.RealRecognizerScenarioTests), reporting cold
+  # and warm latency, word overlap, peak memory and disk. A 7 GB hosted runner may not fit the model;
+  # finding that out is part of what the job is for.
+  real-asr:
+    name: real speech recognition (optional)
+    if: github.event_name == 'workflow_dispatch' && inputs.real_asr
+    runs-on: macos-15
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      SCRIBE_ASR_MODEL: parakeet-tdt-0.6b-v2
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Foundry Local
+        run: |
+          brew tap microsoft/foundrylocal
+          brew install foundrylocal
+          foundry --version
+
+      - name: Find Foundry Local's model cache
+        id: models
+        run: |
+          foundry cache location 2>&1 | tee cache-location.txt || true
+          path=$(grep -oE '/[^[:space:]]+' cache-location.txt | tail -n 1 || true)
+          echo "path=${path:-$HOME/.foundry/cache/models}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the speech model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.models.outputs.path }}
+          key: foundry-local-${{ env.SCRIBE_ASR_MODEL }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+      - name: Download the speech model
+        run: foundry model download "$SCRIBE_ASR_MODEL"
+
+      - name: Build the tests
+        run: swift build --package-path macos/Scribe --build-tests
+
+      - name: Transcribe the fixtures
+        env:
+          SCRIBE_REAL_ASR: '1'
+          SCRIBE_SCENARIO_REPORT_DIR: ${{ runner.temp }}/asr-report
+        run: |
+          # Foundry Local may do the work in a service of its own rather than in a child of the test,
+          # so every Foundry Local process is sampled, once a second, until the tests end.
+          peakFile="$RUNNER_TEMP/peak-rss-kb"
+          echo 0 > "$peakFile"
+          (
+            peak=0
+            while true; do
+              rss=$(ps -axo rss=,command= | awk 'tolower($0) ~ /foundry/ && !/awk/ { sum += $1 } END { print sum + 0 }')
+              if [ "$rss" -gt "$peak" ]; then
+                peak=$rss
+                echo "$peak" > "$peakFile"
+              fi
+              sleep 1
+            done
+          ) &
+          sampler=$!
+          status=0
+          swift test --package-path macos/Scribe --skip-build \
+            --filter 'ScribeScenarioTests.RealRecognizerScenarioTests' || status=$?
+          kill "$sampler" 2>/dev/null || true
+          echo "Peak resident memory of Foundry Local's processes: $(( $(cat "$peakFile") / 1024 )) MB"
+          exit "$status"
+
+      - name: Report
+        if: always()
+        run: |
+          peak=$(cat "$RUNNER_TEMP/peak-rss-kb" 2>/dev/null || echo 0)
+          cache=$(du -sh "${{ steps.models.outputs.path }}" 2>/dev/null | cut -f1 || echo unknown)
+          {
+            echo "### Real speech recognition (optional)"
+            echo "Model: $SCRIBE_ASR_MODEL, cached at ${{ steps.models.outputs.path }} ($cache)"
+            echo "Peak resident memory of Foundry Local's processes: $(( peak / 1024 )) MB"
+            echo '```text'
+            df -h / || true
+            cat "$RUNNER_TEMP"/asr-report/*.txt 2>/dev/null || echo "No report was written."
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
