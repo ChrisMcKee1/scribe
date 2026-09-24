@@ -757,12 +757,17 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   the result at once. Its notice compares the defaults with the page and with the saved settings, so a second press
   or a double click before Save still says Save applies them, and one that only undoes unsaved edits says so.
 - **Keys are named by virtual-key code, never by WPF's `Key.ToString()`.** That enum gives Page Down the alias
-  `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), and .NET does not promise which name
-  comes back. `KeyNames` holds the layout-independent names, the punctuation keys are named by the current layout
-  (`MapVirtualKeyW` with MAPVK_VK_TO_CHAR, in `HotkeyCapture`), and `HotkeyText.Describe` names each key on its own:
-  the table, then the layout, then that key's own part of the stored `DisplayName`, then its code. So a chord of a
-  known key and one only the stored name can name reads "Page Down+Oem1", never "Next+Oem1", and the modifiers always
-  come from the binding. The hook matches virtual-key codes and never reads the name.
+  `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), gives some codes two names that belong to
+  different keys (`KanaMode` and `HangulMode` are both 0x15, `KanjiMode` and `HanjaMode` 0x19, and 0xF0 to 0xFD each
+  have a Japanese IME (DBE) name and an old terminal key's), and .NET does not promise which name comes back.
+  `KeyNames` holds the layout-independent names. A key the table leaves out (punctuation, IME keys) is named by the
+  current layout in `HotkeyCapture`: the character it types (`MapVirtualKeyW`, MAPVK_VK_TO_CHAR), else the name
+  `GetKeyNameTextW` gives its scan code (MAPVK_VK_TO_VSC_EX, with the extended bit) unless the table gives that name
+  to another key (the US layout names the scan code of VK_ABNT_C2 "F15"), else `Key 0xNN`. `HotkeyText.Describe`
+  names each key on its own: the table, then the layout, then that key's own part of the stored `DisplayName` unless
+  that part is one of the shared WPF names, then its code. So a chord of a known key and one only the stored name can
+  name reads "Page Down+Oem1", never "Next+Oem1", and the modifiers always come from the binding. The hook matches
+  virtual-key codes and never reads the name.
 - **The trade-off is stated in Settings.** While Scribe runs unpaused, Page Up and Page Down pressed on their own
   never reach other apps: documents, web pages and terminals stop paging, and a presentation remote stops changing
   slides, because clickers such as the Logitech R400 are keyboards whose Next and Back buttons send Page Down and Page

@@ -83,19 +83,102 @@ public sealed class KeyNamesTests
     }
 
     [Theory]
-    [InlineData(0xBAu)] // VK_OEM_1: ";" on US ANSI, "Ü" on German
-    [InlineData(0xBBu)] // VK_OEM_PLUS
-    [InlineData(0xC0u)] // VK_OEM_3: "`" on US ANSI
-    [InlineData(0xDEu)] // VK_OEM_7
-    [InlineData(0xE2u)] // VK_OEM_102, the extra key on ISO keyboards
-    [InlineData(0x15u)] // VK_KANA, also VK_HANGUL
-    [InlineData(0x19u)] // VK_KANJI, also VK_HANJA
-    public void A_key_whose_meaning_depends_on_the_layout_is_named_by_the_layout(uint virtualKey)
+    // What real layouts type on these keys: US ANSI, then German.
+    [InlineData(0xBAu, ";", "Ü")] // VK_OEM_1
+    [InlineData(0xBBu, "=", "Plus")] // VK_OEM_PLUS; on German it types "+", which the shell spells out (FromMappedCharacter)
+    [InlineData(0xC0u, "`", "Ö")] // VK_OEM_3
+    [InlineData(0xDEu, "'", "Ä")] // VK_OEM_7
+    [InlineData(0xE2u, "\\", "<")] // VK_OEM_102, the extra key on ISO keyboards
+    public void A_punctuation_key_is_named_by_the_character_the_layout_gives_it(uint virtualKey, string us, string german)
     {
         Assert.Null(KeyNames.Of(virtualKey));
-        Assert.Equal("Ö", HotkeyText.KeyName(virtualKey, _ => "Ö"));
+        Assert.Equal(us, HotkeyText.KeyName(virtualKey, _ => us));
+        Assert.Equal(german, HotkeyText.KeyName(virtualKey, _ => german));
         Assert.Null(HotkeyText.KeyName(virtualKey, _ => "  "));
         Assert.Null(HotkeyText.KeyName(virtualKey));
+    }
+
+    [Theory]
+    [InlineData(0x15u)] // VK_KANA and VK_HANGUL
+    [InlineData(0x19u)] // VK_KANJI and VK_HANJA
+    [InlineData(0x1Cu)] // VK_CONVERT
+    [InlineData(0xF0u)] // VK_DBE_ALPHANUMERIC and VK_OEM_ATTN
+    [InlineData(0xF5u)] // VK_DBE_ROMAN and VK_OEM_BACKTAB
+    public void An_ime_key_is_named_by_the_layout_s_key_name_or_else_by_its_code(uint virtualKey)
+    {
+        // An IME key types no character, so the shell asks the layout for the key's name (GetKeyNameTextW); a layout
+        // that has none leaves the code, never a WPF name that may belong to another language's key.
+        Assert.Null(KeyNames.Of(virtualKey));
+        Assert.Equal("Hangul", HotkeyText.KeyNameOrCode(virtualKey, _ => "Hangul"));
+        Assert.Equal($"Key 0x{virtualKey:X2}", HotkeyText.KeyNameOrCode(virtualKey, _ => null));
+        Assert.Equal($"Key 0x{virtualKey:X2}", HotkeyText.KeyNameOrCode(virtualKey));
+    }
+
+    [Theory]
+    [InlineData("Hangul", "Hangul")]
+    [InlineData("  Kana  ", "Kana")]
+    [InlineData("Num +", "Num Plus")]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData(null, null)]
+    [InlineData("A\u0001", null)]
+    public void The_layout_s_key_name_becomes_a_key_name(string? layoutName, string? name)
+    {
+        Assert.Equal(name, KeyNames.FromLayoutKeyName(layoutName, 0x15));
+    }
+
+    [Theory]
+    [InlineData("F15", 0xC2u)] // what the US layout names the scan code of VK_ABNT_C2
+    [InlineData("f15", 0xC2u)]
+    [InlineData("Right Alt", 0x15u)] // a layout that puts Hangul where Right Alt is could name its scan code so
+    [InlineData("Page Down", 0x19u)]
+    public void A_layout_name_that_the_table_gives_another_key_is_not_used(string layoutName, uint virtualKey)
+    {
+        // Shown for this key, the name would read as a different key, one the binding does not match.
+        Assert.Null(KeyNames.Of(virtualKey));
+        Assert.Null(KeyNames.FromLayoutKeyName(layoutName, virtualKey));
+    }
+
+    [Theory]
+    [InlineData(0x15u, "KanaMode")]
+    [InlineData(0x15u, "HangulMode")]
+    [InlineData(0x19u, "KanjiMode")]
+    [InlineData(0x19u, "HanjaMode")]
+    [InlineData(0xF0u, "DbeAlphanumeric")]
+    [InlineData(0xF0u, "OemAttn")]
+    [InlineData(0xF5u, "OemBackTab")]
+    [InlineData(0xFAu, "Play")]
+    public void A_stored_wpf_name_two_keys_share_is_never_shown_as_the_key(uint virtualKey, string stored)
+    {
+        // "KanaMode" stored for 0x15 may have been a Korean keyboard's Hangul key: only the layout or the code names it.
+        var binding = new HotkeyBinding(virtualKey, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, stored);
+        var chord = new HotkeyBinding(
+            0x22, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Next+" + stored, SecondaryVirtualKey: virtualKey);
+
+        Assert.True(KeyNames.IsAmbiguousWpfName(virtualKey, stored));
+        Assert.Equal($"Key 0x{virtualKey:X2}", HotkeyText.Describe(binding));
+        Assert.Equal("Hangul", HotkeyText.Describe(binding, _ => "Hangul"));
+        Assert.Equal($"Page Down+Key 0x{virtualKey:X2}", HotkeyText.Describe(chord));
+    }
+
+    [Fact]
+    public void A_stored_name_that_names_one_key_only_still_stands_for_it()
+    {
+        // A layout's own name for an IME key, as a capture now stores it, is not ambiguous and is kept.
+        var hangul = new HotkeyBinding(0x15, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Hangul");
+
+        Assert.False(KeyNames.IsAmbiguousWpfName(0x15, "Hangul"));
+        Assert.Equal("Hangul", HotkeyText.Describe(hangul));
+    }
+
+    [Fact]
+    public void Every_ambiguous_wpf_name_pair_is_two_names_for_one_code()
+    {
+        Assert.All(KeyNames.AmbiguousWpfNamesByCode, pair =>
+        {
+            Assert.Null(KeyNames.Of(pair.Key));
+            Assert.Equal(2, pair.Value.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        });
     }
 
     [Theory]

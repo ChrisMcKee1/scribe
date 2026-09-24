@@ -17,19 +17,83 @@ namespace Scribe.Core.Hotkeys;
 /// <para>
 /// The table covers the keys whose meaning does not depend on the keyboard layout. The punctuation keys
 /// (<c>VK_OEM_*</c>) and the IME keys type something different on each layout, so they are named from the layout
-/// when the shell can ask it (<see cref="FromMappedCharacter"/>) and otherwise fall back to what was stored when the
-/// key was bound.
+/// when the shell can ask it: by the character the key types (<see cref="FromMappedCharacter"/>), else by the key name
+/// the layout gives it (<see cref="FromLayoutKeyName"/>). Otherwise they fall back to what was stored when the key was
+/// bound, unless that is one of WPF's names shared by two different keys (<see cref="IsAmbiguousWpfName"/>), and last
+/// to the code itself.
 /// </para>
 /// </remarks>
 public static class KeyNames
 {
     private static readonly Dictionary<uint, string> Names = Build();
 
+    // The table the other way round, for telling whether a name a layout reports already belongs to another key. The
+    // table's names are unique (a test pins it), and TryAdd keeps a later duplicate from failing the type initializer.
+    private static readonly Dictionary<string, uint> CodesByName = BuildCodesByName();
+
+    // WPF's Key enum gives each of these codes two names that belong to different keys, and .NET does not promise which
+    // one ToString returns: 0x15 is Kana on a Japanese keyboard and Hangul on a Korean one, 0x19 Kanji or Hanja, and
+    // 0xF0 to 0xFD are both the Japanese IME (DBE) keys and old terminal keys (VK_OEM_ATTN to VK_OEM_BACKTAB, VK_ATTN
+    // to VK_PA1). A stored one says nothing reliable.
+    private static readonly Dictionary<uint, string[]> AmbiguousWpfNames = new()
+    {
+        [0x15] = ["KanaMode", "HangulMode"],
+        [0x19] = ["HanjaMode", "KanjiMode"],
+        [0xF0] = ["DbeAlphanumeric", "OemAttn"],
+        [0xF1] = ["DbeKatakana", "OemFinish"],
+        [0xF2] = ["DbeHiragana", "OemCopy"],
+        [0xF3] = ["DbeSbcsChar", "OemAuto"],
+        [0xF4] = ["DbeDbcsChar", "OemEnlw"],
+        [0xF5] = ["DbeRoman", "OemBackTab"],
+        [0xF6] = ["Attn", "DbeNoRoman"],
+        [0xF7] = ["CrSel", "DbeEnterWordRegisterMode"],
+        [0xF8] = ["ExSel", "DbeEnterImeConfigureMode"],
+        [0xF9] = ["EraseEof", "DbeFlushString"],
+        [0xFA] = ["Play", "DbeCodeInput"],
+        [0xFB] = ["Zoom", "DbeNoCodeInput"],
+        [0xFC] = ["NoName", "DbeDetermineString"],
+        [0xFD] = ["Pa1", "DbeEnterDialogConversionMode"],
+    };
+
     /// <summary>The canonical name of a key whose meaning is the same on every layout, or null for any other key.</summary>
     public static string? Of(uint virtualKey) => Names.GetValueOrDefault(virtualKey);
 
     /// <summary>The virtual-key codes the table names, for tests.</summary>
     internal static IReadOnlyCollection<uint> Known => Names.Keys;
+
+    /// <summary>The codes whose WPF names are shared by two different keys, with those names, for tests.</summary>
+    internal static IReadOnlyDictionary<uint, string[]> AmbiguousWpfNamesByCode => AmbiguousWpfNames;
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is one of the two WPF names for <paramref name="virtualKey"/> that belong to
+    /// different keys, so a binding stored under it cannot say which key it was.
+    /// </summary>
+    public static bool IsAmbiguousWpfName(uint virtualKey, string name) =>
+        AmbiguousWpfNames.TryGetValue(virtualKey, out var names) &&
+        names.Contains(name.Trim(), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A key name from what <c>GetKeyNameTextW</c> returned for the scan code of <paramref name="virtualKey"/> on the
+    /// current layout, for a key the table leaves out that types no character (an IME key, say). Null for nothing, white
+    /// space or a control character, and null for a name the table gives another key: a layout can report one for a code
+    /// it has no name of its own for (on the US layout the scan code of VK_ABNT_C2 is named "F15"), and shown for this
+    /// key it would name the wrong one. A plus sign is spelled out, because "+" is what joins the keys of a chord.
+    /// </summary>
+    public static string? FromLayoutKeyName(string? name, uint virtualKey)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Any(char.IsControl))
+        {
+            return null;
+        }
+
+        var trimmed = name.Trim();
+        if (CodesByName.TryGetValue(trimmed, out var named) && named != virtualKey)
+        {
+            return null;
+        }
+
+        return trimmed.Replace("+", "Plus", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// A key name from what <c>MapVirtualKeyW(virtualKey, MAPVK_VK_TO_CHAR)</c> returned for the current layout: the
@@ -143,5 +207,16 @@ public static class KeyNames
         }
 
         return names;
+    }
+
+    private static Dictionary<string, uint> BuildCodesByName()
+    {
+        var codes = new Dictionary<string, uint>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (code, name) in Names)
+        {
+            codes.TryAdd(name, code);
+        }
+
+        return codes;
     }
 }

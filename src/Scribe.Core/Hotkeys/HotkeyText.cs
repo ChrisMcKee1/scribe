@@ -20,10 +20,18 @@ public static class HotkeyText
         KeyNames.Of(virtualKey) ?? NullIfBlank(layoutName?.Invoke(virtualKey));
 
     /// <summary>
+    /// <see cref="KeyName"/>, or the key's code ("Key 0x15") when nothing can name it: what a capture shows and stores
+    /// for such a key, instead of a WPF name that may belong to another key.
+    /// </summary>
+    public static string KeyNameOrCode(uint virtualKey, Func<uint, string?>? layoutName = null) =>
+        KeyName(virtualKey, layoutName) ?? Code(virtualKey);
+
+    /// <summary>
     /// Describes a binding the way Settings shows it: "Page Down", "Ctrl+Shift+Space", "Right Ctrl+Right Shift". Each
     /// key is named on its own: by the table, then by <paramref name="layoutName"/>, then by its own part of the name
-    /// stored when it was bound, then by its code. So a chord of a known key and one only the stored name can name keeps
-    /// the known key's true name ("Page Down+Oem1", never "Next+Oem1"), and the modifiers always come from the binding.
+    /// stored when it was bound (unless that part is a WPF name two different keys share), then by its code. So a chord
+    /// of a known key and one only the stored name can name keeps the known key's true name ("Page Down+Oem1", never
+    /// "Next+Oem1"), and the modifiers always come from the binding.
     /// </summary>
     public static string Describe(HotkeyBinding binding, Func<uint, string?>? layoutName = null)
     {
@@ -31,10 +39,10 @@ public static class HotkeyText
 
         var (storedPrimary, storedSecondary) = StoredKeyNames(binding);
         var parts = ModifierNames(binding.Modifiers);
-        parts.Add(KeyName(binding.VirtualKey, layoutName) ?? storedPrimary ?? Code(binding.VirtualKey));
+        parts.Add(KeyName(binding.VirtualKey, layoutName) ?? Usable(binding.VirtualKey, storedPrimary) ?? Code(binding.VirtualKey));
         if (binding.SecondaryVirtualKey is { } second)
         {
-            parts.Add(KeyName(second, layoutName) ?? storedSecondary ?? Code(second));
+            parts.Add(KeyName(second, layoutName) ?? Usable(second, storedSecondary) ?? Code(second));
         }
 
         return string.Join("+", parts);
@@ -98,6 +106,11 @@ public static class HotkeyText
                  $"the {Arrow(pageKeys[0])} and {Arrow(pageKeys[1])} arrows.",
         };
     }
+
+    // A stored part names its key unless it is a WPF name two different keys share (KeyNames.IsAmbiguousWpfName): shown
+    // as the key's name, "KanaMode" on a Korean keyboard's Hangul key would be wrong.
+    private static string? Usable(uint virtualKey, string? storedPart) =>
+        storedPart is not null && !KeyNames.IsAmbiguousWpfName(virtualKey, storedPart) ? storedPart : null;
 
     // Each key's part of the stored name, for a key nothing else can name. Every build stored the keys in the order they
     // were pressed, joined by "+", after any modifiers ("Ctrl+X"), and none put a "+" inside a key's name. The modifiers

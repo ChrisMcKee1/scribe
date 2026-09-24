@@ -17,6 +17,7 @@ namespace Scribe.App.Infrastructure;
 internal static class HotkeyCapture
 {
     private const uint MapVkToChar = 2; // MAPVK_VK_TO_CHAR
+    private const uint MapVkToVscEx = 4; // MAPVK_VK_TO_VSC_EX
 
     /// <summary>Builds an exact physical one- or two-key binding in the order keys were pressed.</summary>
     public static HotkeyBinding FromKeys(IReadOnlyList<Key> keys, HotkeyMode mode)
@@ -70,9 +71,13 @@ internal static class HotkeyCapture
     /// <summary>What the welcome says about the push-to-talk gesture, with keys named as Settings names them.</summary>
     public static (string Title, string Body) Gesture(AppSettings? settings) => HotkeyText.Gesture(settings, LayoutKeyName);
 
-    /// <summary>The name of one key, as the capture box shows it while the user presses it.</summary>
+    /// <summary>
+    /// The name of one key, as the capture box shows it while the user presses it and as a new binding stores it: the
+    /// canonical name, else the current layout's, else the key's code. Never <c>Key.ToString()</c>, which can give a
+    /// Korean keyboard's Hangul key the name "KanaMode" (both are 0x15).
+    /// </summary>
     public static string KeyName(Key key) =>
-        HotkeyText.KeyName((uint)KeyInterop.VirtualKeyFromKey(key), LayoutKeyName) ?? key.ToString();
+        HotkeyText.KeyNameOrCode((uint)KeyInterop.VirtualKeyFromKey(key), LayoutKeyName);
 
     public static bool IsReservedWindowsChord(HotkeyBinding binding)
     {
@@ -134,11 +139,36 @@ internal static class HotkeyCapture
         Key.LeftShift or Key.RightShift or
         Key.LWin or Key.RWin;
 
-    // The punctuation keys type something different on each keyboard layout, so the table leaves them out and the
-    // current layout names them by the character they type.
+    // The punctuation keys and the IME keys mean something different on each keyboard layout, so the table leaves them
+    // out and the current layout names them: by the character the key types, else, for a key that types none (an IME
+    // key, say), by the name the layout gives its scan code.
     private static string? LayoutKeyName(uint virtualKey) =>
-        KeyNames.FromMappedCharacter(MapVirtualKeyW(virtualKey, MapVkToChar));
+        KeyNames.FromMappedCharacter(MapVirtualKeyW(virtualKey, MapVkToChar)) ?? LayoutKeyNameText(virtualKey);
+
+    // GetKeyNameTextW takes a keyboard message's lParam: the scan code in bits 16 to 23 and the extended-key flag in bit
+    // 24, which MAPVK_VK_TO_VSC_EX reports as an 0xE0 or 0xE1 prefix in the high byte.
+    private static string? LayoutKeyNameText(uint virtualKey)
+    {
+        var scanCode = MapVirtualKeyW(virtualKey, MapVkToVscEx);
+        if ((scanCode & 0xFF) == 0)
+        {
+            return null;
+        }
+
+        var lParam = (int)((scanCode & 0xFF) << 16);
+        if ((scanCode & 0xFF00) is 0xE000 or 0xE100)
+        {
+            lParam |= 1 << 24;
+        }
+
+        var buffer = new char[64];
+        var length = GetKeyNameTextW(lParam, buffer, buffer.Length);
+        return length > 0 ? KeyNames.FromLayoutKeyName(new string(buffer, 0, length), virtualKey) : null;
+    }
 
     [DllImport("user32.dll")]
     private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetKeyNameTextW(int lParam, [Out] char[] lpString, int cchSize);
 }
