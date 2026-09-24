@@ -68,10 +68,14 @@ privacy/offline promise.
   Caps Lock (the default key) and the test dictation are toggles that stop on silence the way Windows does,
   a held key never does; and every recording stops at ten minutes, even if the microphone stops delivering
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
-  that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept");
-  no modal alerts while you dictate
-- Quitting waits for a paste in progress to put your clipboard back and for a running recognizer to be
-  stopped before Scribe exits
+  that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
+  A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
+  for the pill, and a cleanup fallback or failed transcription that cannot be shown at once is posted as
+  a notification instead. No modal alerts while you dictate
+- Releasing the key never waits for the recording to be finished off: that happens in the background,
+  and dictations are still processed in the order you spoke them
+- Quitting waits for a paste in progress to put your clipboard back, and for a running recognizer or a
+  Settings or Usage Insights check that started `az` or `foundry` to be stopped, before Scribe exits
 - Settings window with Overlay, Input, Dictionary, Libraries, Snippets, App Profiles, AI Cleanup,
   Playground, Diagnostics, Usage Insights, History, and About sections; a change made from the tray
   shows in an open window, Open at Login shows what macOS reports, and no tab waits on the database
@@ -88,7 +92,8 @@ privacy/offline promise.
   top apps, recurring terms with one-click dictionary add, opt-in AI summary)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
   from persisted history), in a Recent Dictations submenu that fills itself as it opens, plus a
-  notification with Copy Transcript for a dictation that did not go in
+  notification with Copy Transcript for a dictation that did not go in. After Clear history neither
+  an entry already on show nor an earlier notification copies the deleted text
 - Startup problems (a database that could not be read, missing Input Monitoring or Accessibility) are
   reported once, in a notification that opens the right System Settings pane; granting Input Monitoring
   takes effect without a relaunch
