@@ -792,7 +792,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   without `SQLITE_SECURE_DELETE` and reads 0, which left a deleted transcript's bytes in its page or a
   freed page. It is per connection, costs one more write of each freed page (as zeros) on delete, and
   does not reach content deleted before it, stale frames in the WAL before a `TRUNCATE` checkpoint, or
-  copies outside the file. `SecureDeleteTests` pins both the setting and the bytes on disk.
+  copies outside the file. `SecureDeleteTests` pins both the setting and the bytes on disk. Deleting
+  costs about 6.5 ms and one more write per MB freed (measured on the dev box), which is why every bulk
+  delete goes in slices: maintenance's retention slices and Clear history's recordings are at most
+  `BlobBatchBytes` (8 MB) per transaction, so the WAL needs about one slice of room at a time. One
+  recording larger than a slice is still one transaction of its own size (up to the 250 MB cap, about
+  1.6 s), since a row cannot be split.
 - **A deletion owes a `TRUNCATE` checkpoint.** Deleting or clearing history, deleting a recording, and
   clearing or retiring cleanup failure samples each count a deletion (`StorageMaintenance.NoteDeletion`),
   and the next pass that reaches reclamation truncates the WAL even with nothing worth reclaiming, so

@@ -27,6 +27,12 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
     /// </summary>
     internal long MaxAudioBlobBytes { get; init; } = StorageRetentionPolicy.MaxStoredAudioBytes;
 
+    /// <summary>
+    /// Most stored bytes of recordings <see cref="Clear"/> deletes in one transaction: the slice storage
+    /// maintenance uses. Settable for tests.
+    /// </summary>
+    internal long ClearSliceBytes { get; init; } = StorageMaintenanceOptions.Default.BlobBatchBytes;
+
     public HistoryEntry Add(HistoryEntry entry)
         => Add(entry, audio: null);
 
@@ -277,18 +283,52 @@ public sealed class HistoryRepository : IHistoryRepository, IHistoryMaintenance
 
     public void Clear()
     {
-        int changes;
+        int entries;
+        List<StoredAudioBlob> recordings;
         using (_database.EnterWriteScope())
         {
             using var connection = _database.Open();
+            using var transaction = connection.BeginTransaction();
             using var command = connection.CreateCommand();
-            command.CommandText = "DELETE FROM history; DELETE FROM audio_blobs;";
-            changes = command.ExecuteNonQuery();
+            command.Transaction = transaction;
+            command.CommandText = "DELETE FROM history;";
+            entries = command.ExecuteNonQuery();
+            recordings = ListStoredAudio(connection);
+            transaction.Commit();
         }
 
-        if (changes > 0)
+        /*
+         * Recordings go in slices, each its own transaction, the way storage maintenance deletes them.
+         *
+         * With secure delete on, every page a deleted recording frees is written again, as zeros, and the
+         * WAL holds a whole transaction until it commits. One statement for all of them (up to 250 MB)
+         * needed that much free disk at once, and Clear could fail on a nearly full one; a slice needs
+         * only its own size, and the automatic checkpoint after it lets the next slice reuse the log. A
+         * single recording larger than a slice is still one transaction of its own size. Each slice checks
+         * again that nothing references its recordings, so one picked up since the list was read stays.
+         */
+        var recordingsDeleted = 0;
+        try
         {
-            _database.NotifyStorageChanged(StorageChange.HistoryCleared);
+            foreach (var slice in StorageMaintenance.Slices(recordings, ClearSliceBytes, StorageMaintenanceOptions.Default.BlobBatchSize))
+            {
+                using (_database.EnterWriteScope())
+                {
+                    using var connection = _database.Open();
+                    using var transaction = connection.BeginTransaction();
+                    recordingsDeleted += DeleteUnreferencedAudio(connection, slice, DateTimeOffset.MaxValue).BlobsDeleted;
+                    transaction.Commit();
+                }
+            }
+        }
+        finally
+        {
+            // Even when a slice fails (a full disk): the history rows are gone already, so maintenance must
+            // still empty the WAL of them, and it deletes the recordings left behind as unreferenced audio.
+            if (entries > 0 || recordingsDeleted > 0)
+            {
+                _database.NotifyStorageChanged(StorageChange.HistoryCleared);
+            }
         }
     }
 

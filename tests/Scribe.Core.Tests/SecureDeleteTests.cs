@@ -90,6 +90,49 @@ public sealed class SecureDeleteTests
         }
     }
 
+    [Fact]
+    public void Clearing_history_deletes_recordings_in_slices_so_the_log_stays_near_one_slice()
+    {
+        // With secure delete every freed page is written again, as zeros, and a WAL holds a whole
+        // transaction, so one statement for every recording needed their whole size in WAL at once.
+        const int Recordings = 24;
+        const int SamplesEach = 256 * 1024;
+        using var folder = new TempDatabaseFolder();
+        using (var database = folder.Open())
+        {
+            var history = new HistoryRepository(database) { ClearSliceBytes = 512 * 1024 };
+            for (var i = 0; i < Recordings; i++)
+            {
+                history.Add(Entry($"entry {i} with a recording"), new CapturedAudio(Samples(SamplesEach, i)));
+            }
+
+            var stored = history.GetStoredAudioUsage();
+            Assert.Equal(Recordings, stored.Blobs);
+            DatabaseProbe.Checkpoint(database);
+
+            history.Clear();
+
+            Assert.Empty(history.GetRecent(100));
+            Assert.Equal(default, history.GetStoredAudioUsage());
+
+            // One slice plus the automatic checkpoint's threshold (1,000 pages) of headroom, and far below
+            // what a single statement for all of them wrote into the WAL.
+            var wal = folder.FileLength("-wal");
+            Assert.True(wal < stored.Bytes / 2, $"The WAL grew to {wal:N0} bytes for {stored.Bytes:N0} bytes of recordings.");
+        }
+    }
+
+    private static float[] Samples(int count, int seed)
+    {
+        var samples = new float[count];
+        for (var i = 0; i < count; i++)
+        {
+            samples[i] = (((i * 31) + seed) % 200 - 100) / 128f;
+        }
+
+        return samples;
+    }
+
     private static HistoryEntry Entry(string text) =>
         new(0, DateTimeOffset.UtcNow, text, 1_000, 50, CleanupMilliseconds: null, TargetApp: null);
 
