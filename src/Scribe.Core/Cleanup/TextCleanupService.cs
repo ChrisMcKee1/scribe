@@ -410,8 +410,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal Action<UsageDetails>? UsageObserver { get; set; }
 
     // Test-only: lets a test put a fake transport under every OpenAI client this service builds (the
-    // custom endpoint and Foundry Local's loopback client), so the privacy, lifetime and storage paths
-    // run against the real OpenAI client and agent without any network.
+    // custom endpoint, Foundry Local's loopback client, and both Azure surfaces), so the privacy,
+    // lifetime and storage paths run against the real OpenAI client and agent without any network.
     internal Action<OpenAIClientOptions>? OpenAIClientOptionsOverride { get; set; }
 
     // Test-only: stands in for the provider-specific half of initialization (the Copilot CLI handshake,
@@ -579,12 +579,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
              * guardrail prompt all change the options, and each used to drop the agents and
              * re-initialize the provider from scratch. For GitHub Copilot that is another twenty
              * second CLI handshake with every dictation in it inserted raw; for Azure and custom
-             * endpoints a fresh readiness probe carrying the whole glossary. Nothing it talks to
+             * endpoints a fresh connection and readiness probe. Nothing it talks to
              * changed, so the factory the running initialization left behind builds the new default
              * agent with no I/O, the same way CleanAsync builds a per-app writing style agent, and
              * cleanup stays Ready throughout. Per-style agents are dropped because they carry the old
-             * prompt too. A prompt too long for a small local model now surfaces on the next cleanup
-             * as an ordinary failure with the raw-text fallback, instead of at a probe.
+             * prompt too. A prompt too long for a small local model surfaces on the next cleanup
+             * as an ordinary failure with the raw-text fallback. A re-initialization would not catch
+             * that either when the glossary is what makes it too long: the probe never carries it.
              *
              * Only while serving. During an initialization the options it will publish are the
              * ones it started with, so a prompt change then still restarts it, as before, and a
@@ -2596,7 +2597,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return;
             }
 
-            if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } probeFailure)
+            if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } probeFailure)
             {
                 if (await TryDemoteFoundryGpuAsync(options, probeFailure, ct).ConfigureAwait(false) is { } demotion)
                 {
@@ -2779,7 +2780,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var useKey = !string.IsNullOrWhiteSpace(options.AzureApiKey);
 
             var openAiClient = useKey
-                ? AzureOpenAIResponsesClientFactory.CreateClientWithApiKey(accountHost, options.AzureApiKey!)
+                ? AzureOpenAIResponsesClientFactory.CreateClientWithApiKey(
+                    accountHost, options.AzureApiKey!, configure: OpenAIClientOptionsOverride)
                 : AzureOpenAIResponsesClientFactory.CreateClientWithTokenCredential(
                     accountHost,
                     AzureCredentialFactory.Create(new AzureCredentialRequest(
@@ -2787,15 +2789,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                         options.AzureTenantId,
                         options.AzureSubscriptionId,
                         options.AzureClientId,
-                        options.AzureClientSecret)));
+                        options.AzureClientSecret)),
+                    configure: OpenAIClientOptionsOverride);
 
             var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
             // Carries the same wrapper as the Responses path; on this surface it keeps "store" unset,
             // never true (WithStoredOutputDisabled explains why the field is not sent here).
             _pendingFactory = i => CreateAzureChatCompletionsAgent(deployment, i);
-            var agent = _pendingFactory(BuildSystemPrompt(options));
 
-            if (await ProbeAgentAsync(agent, options, ct).ConfigureAwait(false) is { } stillFailing)
+            if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } stillFailing)
             {
                 // Deployment names are the user's resource names; the log gets the failure's shape.
                 _log.LogDebug(
@@ -2807,7 +2809,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             _log.LogInformation("The Azure deployment does not serve the Responses API; using Chat Completions.");
-            return agent;
+            return _pendingFactory(BuildSystemPrompt(options));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2979,9 +2981,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     }
 
-    private async Task<AgentProbeFailure?> ProbeAgentAsync(AIAgent agent, CleanupOptions options, CancellationToken ct)
+    /*
+     * The readiness probe carries none of the user's vocabulary.
+     *
+     * It used to run through the agent the initialization was about to publish, whose instructions end
+     * with the glossary: every enabled dictionary and library term, up to 5,000 of them for a cloud
+     * endpoint. So every time cleanup connected (at startup, on a provider or model change, on the
+     * retry after a failure) the whole vocabulary went to the provider before a word was dictated.
+     * The probe answers "will this deployment serve cleanup", and the glossary is data a cleanup call
+     * needs only when there is a dictation to apply it to. So the probe builds its own agent from the
+     * factory the initialization just connected, with the same guardrails and writing style, so it
+     * still reasons the way a real cleanup call will (below), and without the glossary. It is built
+     * here rather than handed in, so no caller can pass the serving agent back in.
+     */
+    private async Task<AgentProbeFailure?> ProbeAgentAsync(CleanupOptions options, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var factory = _pendingFactory
+            ?? throw new InvalidOperationException("The readiness probe has no agent factory to build its agent from.");
+        var agent = factory(BuildProbeSystemPrompt(options));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));
 
@@ -3212,7 +3230,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return null;
         }
 
-        if (await ProbeAgentAsync(agent, demotedOptions, ct).ConfigureAwait(false) is { } cpuFailure)
+        if (await ProbeAgentAsync(demotedOptions, ct).ConfigureAwait(false) is { } cpuFailure)
         {
             // Report the CPU failure, not the original GPU one. Falling back through here and then
             // telling the user to "pick a CPU variant" would be advising the exact action that just
@@ -3683,7 +3701,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 endpointUri,
                 options.AzureApiKey!,
                 networkTimeout,
-                DisableRetries)
+                DisableRetries,
+                OpenAIClientOptionsOverride)
             : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
                 endpointUri,
                 AzureCredentialFactory.Create(new AzureCredentialRequest(
@@ -3693,7 +3712,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     options.AzureClientId,
                     options.AzureClientSecret)),
                 networkTimeout,
-                DisableRetries);
+                DisableRetries,
+                OpenAIClientOptionsOverride);
         _pendingFactory = i => CreateAzureResponsesAgent(responses, options.AzureDeployment!, i);
 #pragma warning restore OPENAI001
         var agent = _pendingFactory(instructions);
@@ -4085,6 +4105,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         return prompt;
     }
+
+    /// <summary>
+    /// The readiness probe's instructions: the guardrails and writing style a cleanup call runs under,
+    /// without the glossary (see <see cref="ProbeAgentAsync"/>).
+    /// </summary>
+    internal static string BuildProbeSystemPrompt(CleanupOptions options) =>
+        BuildSystemPrompt(options with { Glossary = null });
 
     internal static string BuildAuxiliarySystemPrompt(CleanupOptions options, string systemPrompt)
     {

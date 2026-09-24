@@ -182,8 +182,12 @@ public sealed class CleanupPromptRebuildTests
         fake.HandshakeGate.SetResult();
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        // The readiness probe builds an agent of its own without the glossary, so "every agent carries
+        // the new prompt" reads here as "no agent was ever built with the old one".
         Assert.Equal(2, fake.Handshakes);
-        Assert.All(fake.Built, built => Assert.Contains("Fabrikam", built, StringComparison.Ordinal));
+        Assert.DoesNotContain(fake.Built, built => built.Contains("Contoso", StringComparison.Ordinal));
+        Assert.Contains(fake.Built, built => built.Contains("Fabrikam", StringComparison.Ordinal));
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", fake.Client.Instructions[^1], StringComparison.Ordinal);
     }
 
@@ -212,8 +216,11 @@ public sealed class CleanupPromptRebuildTests
         fake.HandshakeGate.SetResult();
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        // The probe's own agent has no glossary, so the serving agent is the one that must carry it.
         Assert.All(fake.Built.Skip(builtForA), built => Assert.StartsWith("model-b|", built, StringComparison.Ordinal));
-        Assert.Contains("Fabrikam", fake.Built[^1], StringComparison.Ordinal);
+        Assert.Contains(fake.Built.Skip(builtForA), built => built.Contains("Fabrikam", StringComparison.Ordinal));
+        Assert.DoesNotContain(fake.Built.Skip(builtForA), built => built.Contains("Contoso", StringComparison.Ordinal));
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", fake.Client.Instructions[^1], StringComparison.Ordinal);
     }
 
@@ -299,8 +306,10 @@ public sealed class CleanupPromptRebuildTests
     [Fact]
     public async Task A_factory_that_fails_to_rebuild_falls_back_to_reinitializing()
     {
+        // Builds 1 and 2 are the first initialization's serving agent and its probe's own agent, so
+        // build 3 is the in-place rebuild.
         await using var harness = new CleanupHarness();
-        var fake = new FakeProvider { ThrowOnBuild = 2 };
+        var fake = new FakeProvider { ThrowOnBuild = 3 };
         var svc = harness.Service;
         svc.ProviderFactoryForTesting = fake.Connect;
         svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
@@ -348,7 +357,10 @@ public sealed class CleanupPromptRebuildTests
         svc.Configure(CleanupHarness.FoundryOn() with { Glossary = "Terms: Fabrikam." });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        // One new probe, which carries no glossary; the next cleanup carries the new one.
         Assert.Equal(probesBefore + 1, bodies.Count);
+        Assert.DoesNotContain("Fabrikam", bodies.Last(), StringComparison.Ordinal);
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", bodies.Last(), StringComparison.Ordinal);
     }
 
