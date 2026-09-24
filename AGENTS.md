@@ -72,11 +72,15 @@ Key macOS architecture facts before you edit it:
   progress has put the pasteboard back, recognizers and `az` or `foundry` children have been stopped
   and reaped, and history has drained within its bound.
 - **Pipeline.** With AI cleanup off: snippets, then the dictionary and libraries, as on Windows. With
-  cleanup on, the vocabulary rules (one-line replacements of at most 100 characters with no em or en
-  dash) correct the raw transcript, that text is what the provider is sent and what its reply is checked against, and the
-  snippets and the longer or multi-line replacements run on the reply; each rule runs once. No
-  glossary is sent (porting Windows' is an open decision). Never let a snippet body or a template-like
-  replacement reach a provider.
+  cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it
+  (`TextPostProcessor.correctVocabulary`): the vocabulary rules' replacements (one line of at most 100
+  characters, no em or en dash, already in normal form) are made in the text the provider is sent and its
+  reply is checked against, and the snippets' and every template-like replacement are held back and made on
+  the reply where it kept the words that set them off (`finishAfterCleanup`). No rule is ever matched against
+  the model's text, so a model that returns what it was sent gets exactly the cleanup-off text from the rules
+  (`TextPostProcessorPropertyTests`; the response guard still rewrites dashes in the reply). No glossary is sent
+  (porting Windows' is an open decision). Never let a snippet body or a template-like replacement reach a
+  provider. The rules are compiled off the main actor (`DictationRuleSnapshot`) and installed in one step.
 - **Speech recognition.** Foundry Local `parakeet-tdt-0.6b-v2` (English only), its port found with
   `foundry status -o json`. The app bundles no runtime or model: users install Foundry Local, and
   Ollama if they want it for cleanup.
@@ -84,7 +88,8 @@ Key macOS architecture facts before you edit it:
   recording through `CaptureStopPolicy`: the tray's test dictation always, Caps Lock (the default key,
   a toggle) only when the user opts in (off by default, as on Windows), a held key never. Every
   recording also stops at ten minutes. Scribe only listens to Caps Lock and never changes its lock
-  state.
+  state: a Caps Lock recording starts only when the lock turns on and ends at its next change, so a light
+  left on with nothing recording comes back in step after one tap.
 - **Child processes.** Every `az` and `foundry` run goes through `ProcessRunner` (`posix_spawn` into a
   process group of its own, a deadline, cancellation that terminates, escalates and reaps the group).
   Do not start a child process any other way.

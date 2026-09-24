@@ -59,15 +59,20 @@ privacy/offline promise.
   clipboard history tools skip it, and puts your text back only if nothing replaced it in the meantime.
   With anything else on the clipboard it types the text instead. If focus moves to another app before or
   while the text is going in, Scribe stops and keeps the dictation for recovery
-- The dictation pipeline: raw speech recognition; with AI cleanup on, your dictionary and library
-  spellings applied to that transcript, and the result sent for cleanup (with the app profile's writing
-  style, and a one-line request for a terminal), the reply checked against what was sent and its dashes
-  rewritten, then your snippets and any dictionary entry whose replacement is more than one line,
-  longer than 100 characters or holds an em or en dash; with cleanup off, snippets and then your dictionary, as on Windows; then
-  line breaks for the target app. A cleanup request contains the dictation with your vocabulary
-  corrections applied, never a snippet body or one of those longer replacements, and no rule runs
-  twice. If cleanup fails, the text is exactly what it would be with cleanup off. You can start the
-  next dictation while the last one is still being processed; the text goes in in the order you spoke
+- The dictation pipeline: raw speech recognition; with AI cleanup on, every replacement decided on that
+  transcript exactly as cleanup off would make it, your dictionary and library spellings made in the text sent
+  for cleanup (with the app profile's writing style, and a one-line request for a terminal), the reply checked
+  against what was sent and its dashes rewritten, and then your snippets and every other dictionary replacement
+  made where the reply kept the words that set them off (where the model rewrote, dropped or repeated those
+  words, its words stay). Those others are the template-like replacements: one that is more than one line,
+  longer than 100 characters, holds an em or en dash, deletes the words, or has spacing the text's
+  normalization would change (a tab, a run of spaces, a space at either end or before punctuation). With
+  cleanup off, snippets and then your dictionary, as on Windows; then line breaks for the target app. A cleanup
+  request contains the dictation with your vocabulary corrections applied, never a snippet body or a
+  template-like replacement; no rule runs twice, none is matched against the model's text, and a model that
+  returns what it was sent gives exactly the cleanup-off text (except that an em or en dash the transcript itself
+  held is rewritten with the reply's). If cleanup fails, the text is exactly what it would be with cleanup off. You
+  can start the next dictation while the last one is still being processed; the text goes in in the order you spoke
   it
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
   The recognizer runs off the main thread with a deadline and can be cancelled, and the recording it
@@ -78,10 +83,11 @@ privacy/offline promise.
   on "Also stop after a pause" in Settings > Input (off by default, as on Windows, because a pause to
   think would end the dictation); the tray's test dictation always stops after a pause; a held key never
   does; and every recording stops at ten minutes, even if the microphone stops delivering. Scribe only
-  listens to Caps Lock and never changes its lock state, so after a dictation that ended some other way
-  than your tap (a pause with the setting on, the ten minute limit, a microphone fault, Pause Dictation,
-  a change of key or a press Scribe turned away) the Caps Lock light can be out of step with dictation;
-  the next tap still starts a new one
+  listens to Caps Lock and never changes its lock state, so a recording starts only when your tap turns the
+  light on, and ends at your next tap. After a dictation that ended some other way than your tap (a pause with
+  the setting on, the ten minute limit, a microphone fault, Pause Dictation, a change of key or a press Scribe
+  turned away), or if the light was on when Scribe started, the light is on with nothing recording: your next
+  tap turns it off and starts nothing, and the tap after it starts a new dictation
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
   that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
   A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
@@ -105,7 +111,9 @@ privacy/offline promise.
   cleanup request for a test word and passes only if the model answers with text, and em and en
   dashes are rewritten out of the model's answer
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
-  top apps, recurring terms with one-click dictionary add, opt-in AI summary)
+  top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
+  totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,
+  and never a template-like replacement)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
   from persisted history), in a Recent Dictations submenu that fills itself as it opens, plus a
   notification with Copy Transcript for a dictation that did not go in. After Clear history neither
@@ -118,11 +126,16 @@ privacy/offline promise.
 - Dictation history written in the background after the text is delivered, in dictation order. It is
   best-effort until committed: a crash in that moment loses the entry. A new install keeps 90 days of
   text, a history from an earlier build keeps everything until a limit is chosen, and a missing or
-  unreadable setting never deletes anything. Retention is swept at launch and daily, deleted text is
-  overwritten in the database rather than left in its freed space, and freed space is reclaimed only while
-  no dictation is running. Settings > History chooses the limit (7, 30, 90 days,
-  1 year or Forever) and clears all history after a confirmation, which also empties Recent Dictations and
-  the Playground's last dictation and closes an open Quick Add window
+  unreadable setting never deletes anything. Retention is swept at launch and daily, and freed space is
+  reclaimed only while no dictation is running. Deleted text is written over with zeros rather than left in
+  the database's free space, and after a history deletion (Clear History, the retention sweep, reclaiming
+  space) Scribe checkpoints the database's write-ahead log and truncates it, so the text is gone from both
+  files once that checkpoint succeeds; a dictation or another reader of the database can hold it off, and it
+  is retried. Other deletions, such as a dictionary entry, leave the log to SQLite, and text deleted by an
+  earlier build, before this was set, can remain in free pages until they are reused or reclaimed.
+  Settings > History chooses the limit (7, 30, 90 days, 1 year or Forever) and clears all history after a
+  confirmation, which also empties Recent Dictations and the Playground's last dictation and closes an open
+  Quick Add window
 - Scribe removes only what it made: the private recording it hands the recognizer, as soon as the recognizer
   returns, and any a crash left behind, at the next launch. It never deletes Foundry Local's or Ollama's model
   caches, which you installed and which other apps share
@@ -144,8 +157,9 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   play the fixtures through the real capture engine on scripted devices at 16, 44.1 and 48 kHz, mono and stereo,
   with the voice on either channel; run silence auto-stop on room tone, steady noise, a quiet microphone and speech
   followed by silence; drive the whole dictation pipeline with a stand-in recognizer that answers with each
-  fixture's text; and read and sweep 50,000 rows of history. They need no microphone, recognizer, permission or
-  network. They find the fixtures from their own source path; `SCRIBE_FIXTURES_DIR` points them at another copy,
+  fixture's text; time a compile of the rules with every built-in library switched on; and read and sweep 50,000
+  rows of history. They need no microphone, recognizer, permission or network. They find the fixtures from their
+  own source path; `SCRIBE_FIXTURES_DIR` points them at another copy,
   and they are skipped when there are none. Their timings and levels are printed, and written to the folder
   `SCRIBE_SCENARIO_REPORT_DIR` names when it is set.
 - With Foundry Local and its model installed,
