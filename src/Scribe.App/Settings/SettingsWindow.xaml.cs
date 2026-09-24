@@ -81,9 +81,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     // Cached snapshot of the loaded libraries (built-in + custom) so the preview panel resolves a
-    // selected row without re-reading files on every click. Kept in sync on import/remove. Held in
-    // the precedence order GetLibraries returns; the rows above are the A to Z view of it, placed
-    // with the ordering captured when they loaded, and nothing that picks a winner reads their order.
+    // selected row without re-reading files on every click. Kept in sync on import/remove. It starts
+    // in the precedence order GetLibraries returns and an import is appended, but nothing reads its
+    // order: the rows above show it A to Z, placed with the ordering captured when they loaded, and
+    // everything that picks a winner from it applies LibraryPrecedence itself.
     private readonly List<DictionaryLibrary> _loadedLibraries = new();
     private LibraryOrdering? _libraryOrdering;
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();

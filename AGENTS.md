@@ -788,17 +788,21 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   name. Never derive a winner from the list's order.
 - **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
   ids so that a rename or a new category moves nothing. It decides which built-in supplies a spoken form two of them
-  share and which terms fill a default install's 80 on-device glossary slots, so never reorder it. Append a new
-  built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`, which the macOS port reads;
-  `LibraryPrecedenceTests` fails until every shipped id appears exactly once and the two lists agree.
+  share and which terms fill a default install's 80 on-device glossary slots, so never reorder it or remove an id.
+  Append a new built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`, which the macOS
+  port reads. A built-in that stops shipping keeps its id in the order and is added to `RetiredBuiltInIds` (and the
+  fixture's "retired"), the only way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests`
+  fails until every shipped id appears exactly once, every other listed id is retired, and the lists agree.
 - **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
   file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
   comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
-  `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges) and `AnalyzeEnabledLibraries` (the Save
-  prompt) apply it to whatever order they are given. The window hands the glossary hint (`GlossaryHint`) and the
-  cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids in precedence order,
-  never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and random orders.
+  `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
+  prompt) and `LibrarySwitchOffCopy` (which still-used terms the dictionary cleanup copies into the dictionary before
+  it switches their libraries off) apply it to whatever order they are given. The window hands the glossary hint
+  (`GlossaryHint`) and the cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids
+  in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and
+  random orders.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
