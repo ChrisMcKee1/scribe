@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Tests;
@@ -159,11 +160,35 @@ public sealed class CleanupDisclosureTests
         Assert.Contains(
             $"spans more than one line or is longer than {N(CleanupPrompt.MaxGlossaryTermChars)} characters",
             policy, StringComparison.Ordinal);
-        Assert.Contains("overwrites the deleted content inside its file with zeros", policy, StringComparison.Ordinal);
+        Assert.Contains("the database overwrites the deleted content with zeros", policy, StringComparison.Ordinal);
         Assert.Contains(
-            "Storage maintenance empties it in its first pass after the deletion: normally within a minute of your " +
-            "deleting history or clearing the cleanup failure samples",
+            "until Scribe copies that log into `scribe.db` and empties it, either file can still hold an earlier copy",
             policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "Storage maintenance does both at the end of its next pass: normally within a minute of your deleting " +
+            "history or clearing the cleanup failure samples, and at the end of the pass that removes something " +
+            "because its retention period ended.",
+            policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "it does not empty the log until it tries again: two minutes later at first, twice as long after each " +
+            "further interruption, and never more than an hour later.",
+            policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "maintenance tries again shortly after, up to three times, and then hourly.", policy, StringComparison.Ordinal);
+        Assert.Contains("Scribe also empties the log when it closes normally.", policy, StringComparison.Ordinal);
+        Assert.Contains(
+            "Secure delete applies to everything Scribe deletes from its database, dictionary entries, snippets and " +
+            "profiles included, but Scribe does not empty the log specially after those deletions",
+            policy, StringComparison.Ordinal);
+
+        // The numbers those sentences quote are the ones maintenance runs with. "Within a minute": a deletion
+        // brings the pass forward by TriggerDelay, and it waits at most MinimumSpacing after the last pass.
+        var maintenance = StorageMaintenanceOptions.Default;
+        Assert.True(maintenance.TriggerDelay + maintenance.MinimumSpacing < TimeSpan.FromMinutes(1));
+        Assert.Equal(TimeSpan.FromMinutes(2), maintenance.ConversionQuietPeriod);
+        Assert.Equal(TimeSpan.FromHours(1), maintenance.Interval);
+        Assert.Equal(3, StorageMaintenance.MaxQuickReclaimRetries);
+
         Assert.Contains("Scribe versions up to 0.4.3 did not overwrite deleted content", policy, StringComparison.Ordinal);
         Assert.Contains("does not reach copies made elsewhere", policy, StringComparison.Ordinal);
         Assert.Contains(

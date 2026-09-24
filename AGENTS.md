@@ -811,17 +811,22 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A deletion owes a `TRUNCATE` checkpoint.** Deleting or clearing history, deleting a recording, and
   clearing or retiring cleanup failure samples each count a deletion (`StorageMaintenance.NoteDeletion`),
   and the next pass that reaches reclamation truncates the WAL even with nothing worth reclaiming, so
-  PRIVACY.md's "emptied within about a minute" holds. It is heavy work: a pass that yields skips it and
-  the pass after the backoff pays it. `StorageMaintenanceWalTests` reads the WAL after real passes.
+  PRIVACY.md's "at the end of its next pass: normally within a minute" holds. It is heavy work: a pass
+  that yields skips it and the pass after the backoff pays it, and a busy checkpoint stays owed.
+  PRIVACY.md quotes the trigger delay, the backoff, `MaxQuickReclaimRetries` and the hourly interval,
+  and `CleanupDisclosureTests` pins them, so change the text with the numbers. Dictionary, snippet and
+  profile deletions owe nothing, and PRIVACY.md says so. `StorageMaintenanceWalTests` reads the WAL
+  after real passes.
 - **`StorageMaintenance` owns all retention**: history text follows the retention setting (90 days by
   default), recordings at most 7 days and 250 MB, oldest first, cleanup failure samples 7 days, and
   damaged-copy files 14 days after they are first seen, except that the newest damaged copy is never
   deleted. The cap is re-checked inside each deletion slice's transaction.
-- **When and how it runs:** 30 s after startup, hourly, and 10 s after audio is stored or history is
-  deleted. Deletions go in slices of at most 8 MB per transaction, and free pages come back through
-  `incremental_vacuum` in 4 MB steps and a closing `TRUNCATE` checkpoint. Other writers, settings
-  aside (below), take `ScribeDatabase.EnterWriteScope` (bounded at 2 minutes), never across an await,
-  and a writer waiting on the gate interrupts a preemptible `VACUUM` or incremental step.
+- **When and how it runs:** 30 s after startup, hourly, and 10 s after audio is stored, history is
+  deleted or the cleanup failure samples are cleared. Deletions go in slices of at most 8 MB per
+  transaction, and free pages come back through `incremental_vacuum` in 4 MB steps and a closing
+  `TRUNCATE` checkpoint. Other writers, settings aside (below), take `ScribeDatabase.EnterWriteScope`
+  (bounded at 2 minutes), never across an await, and a writer waiting on the gate interrupts a
+  preemptible `VACUUM` or incremental step.
 - **Settings writes never take the maintenance write gate.** They ask maintenance to yield instead, and
   every read-modify-write goes through `ISettingsRepository.Update`. Yields are sticky, enforced by a
   SQLite progress handler, and each consecutive yield doubles the wait before heavy work returns, from

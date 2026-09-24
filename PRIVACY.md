@@ -275,19 +275,28 @@ receive the additional Windows Data Protection API protection described above.
 
 When Scribe deletes a history entry, a recording, or a cleanup failure sample,
 whether you delete it or its retention period ends, the database overwrites the
-deleted content inside its file with zeros (SQLite's secure delete). The
-database's write-ahead log (`scribe.db-wal`) can still hold an earlier copy of
-deleted content until Scribe empties it. Storage maintenance empties it in its
-first pass after the deletion: normally within a minute of your deleting
-history or clearing the cleanup failure samples, and at the end of any pass that
-removed something because its retention period ended. If you start dictating
-while that pass runs, it waits a few minutes and tries again, and Scribe empties
-the log again when it exits. This has limits. Scribe versions up to 0.4.3 did
-not overwrite deleted content, so what they deleted can remain in unused space
-inside the database file until the database writes over that space or removes
-it from the file. And deletion inside the database does not reach copies made
-elsewhere, such as the damaged copies described below, backups, or data the
-storage device itself keeps.
+deleted content with zeros (SQLite's secure delete). The overwrite is written
+to the database's write-ahead log (`scribe.db-wal`) first, so until Scribe
+copies that log into `scribe.db` and empties it, either file can still hold an
+earlier copy of the deleted content. Storage maintenance does both at the end
+of its next pass: normally within a minute of your deleting history or clearing
+the cleanup failure samples, and at the end of the pass that removes something
+because its retention period ended. When other work in Scribe, such as a
+dictation or a settings save, interrupts maintenance, it does not empty the log
+until it tries again: two minutes later at first, twice as long after each
+further interruption, and never more than an hour later. If the database is in
+use at that moment, maintenance tries again shortly after, up to three times,
+and then hourly. Scribe also empties the log when it closes normally. Secure
+delete applies to everything Scribe deletes from its database, dictionary
+entries, snippets and profiles included, but Scribe does not empty the log
+specially after those deletions, so an earlier copy can stay there until the
+log is next emptied.
+
+This has limits. Scribe versions up to 0.4.3 did not overwrite deleted content,
+so what they deleted can remain in unused space inside the database file until
+the database writes over that space or removes it from the file. And deletion
+inside the database does not reach copies made elsewhere, such as the damaged
+copies described below, backups, or data the storage device itself keeps.
 
 If Scribe finds its database damaged when it starts, it rebuilds the database
 from whatever can still be read and keeps the damaged file beside it, named

@@ -55,7 +55,7 @@ public sealed class StorageMaintenance : IDisposable
     private const int SqliteInterrupt = 9;
     private const int MaxRetentionDays = 36_500;
     private const long MinimumStepPages = 64;
-    private const int MaxQuickReclaimRetries = 3;
+    internal const int MaxQuickReclaimRetries = 3;
 
     private readonly ScribeDatabase _database;
     private readonly IHistoryMaintenance _history;

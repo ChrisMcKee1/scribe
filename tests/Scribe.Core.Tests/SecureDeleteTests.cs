@@ -122,6 +122,45 @@ public sealed class SecureDeleteTests
         }
     }
 
+    [Fact]
+    public void Deleted_dictionary_entries_snippets_and_profiles_leave_no_copy_in_the_database_file()
+    {
+        // PRIVACY.md says secure delete covers these too. They are deleted by Settings' Save, through
+        // connections the database hands out like any other, so this pins the bytes rather than the pragma.
+        const string Word = "zq dictionary canary 3f60 Fabrikam";
+        const string Template = "zq snippet canary 9a1d with a body worth keeping private";
+        const string Style = "zq profile canary 6e2b writing style for one app";
+        string[] canaries = [Word, Template, Style];
+        using var folder = new TempDatabaseFolder();
+        using (var database = folder.Open())
+        {
+            var settings = new SettingsRepository(database);
+            var dictionary = new DictionaryRepository(database);
+            var document = AppSettings.CreateDefault();
+            document.Profiles.Add(new AppProfile { Name = "Canary", ProcessNames = ["canary.exe"], WritingStyle = Style });
+            settings.SaveBundle(
+                document,
+                [DictionaryEntry.New("fabrikam canary", Word), DictionaryEntry.New("stays", "Stays")],
+                [Snippet.New("insert canary", Template)]);
+            DatabaseProbe.Checkpoint(database);
+            Assert.All(canaries, canary => Assert.True(
+                FileContains(folder.DatabasePath, canary), "A canary never reached the file, so its absence would prove nothing."));
+
+            document.Profiles.Clear();
+            settings.SaveBundle(document, dictionary.GetAll().Where(entry => entry.Replacement != Word).ToList(), []);
+            DatabaseProbe.Checkpoint(database);
+
+            Assert.All(canaries, canary =>
+            {
+                Assert.False(FileContains(folder.DatabasePath, canary), "A deleted item is still readable in scribe.db.");
+                Assert.False(FileContains(folder.DatabasePath + "-wal", canary), "A deleted item is still readable in the WAL.");
+            });
+            Assert.Equal("Stays", Assert.Single(dictionary.GetAll()).Replacement);
+            Assert.Empty(new SnippetRepository(database).GetAll());
+            Assert.Empty(settings.Load().Profiles);
+        }
+    }
+
     private static float[] Samples(int count, int seed)
     {
         var samples = new float[count];
