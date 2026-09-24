@@ -17,15 +17,17 @@
             <Setter Property="Margin" Value="2,14,0,6"/>
         </Style>
 
+        <!-- A check box whose content is a panel has no name of its own, so it is labelled by the row's title. -->
         <DataTemplate x:Key="CleanupRowTemplate">
             <Border Margin="0,0,0,4" Padding="10,8" CornerRadius="6"
                     Background="{DynamicResource ControlFillColorDefaultBrush}"
                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                     BorderThickness="1">
                 <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}"
-                          VerticalContentAlignment="Top">
+                          VerticalContentAlignment="Top"
+                          AutomationProperties.LabeledBy="{Binding ElementName=RowTitle}">
                     <StackPanel Margin="4,0,0,0">
-                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontSize="13"/>
+                        <TextBlock x:Name="RowTitle" Text="{Binding Title}" TextWrapping="Wrap" FontSize="13"/>
                         <TextBlock Text="{Binding Detail}" TextWrapping="Wrap"
                                    FontSize="11" Margin="0,2,0,0"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
@@ -69,11 +71,13 @@
                 <TextBlock x:Name="EntriesHeader" Style="{StaticResource SectionLabel}"
                            Text="YOUR ENTRIES"/>
                 <ItemsControl x:Name="EntriesList" Focusable="False"
+                              AutomationProperties.LabeledBy="{Binding ElementName=EntriesHeader}"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="LibrariesHeader" Style="{StaticResource SectionLabel}"
                            Text="LIBRARIES WITH TERMS THAT DID NOT COME UP"/>
                 <ItemsControl x:Name="LibrariesList" Focusable="False"
+                              AutomationProperties.LabeledBy="{Binding ElementName=LibrariesHeader}"
                               ItemTemplate="{StaticResource CleanupRowTemplate}"/>
 
                 <TextBlock x:Name="FootnoteText"

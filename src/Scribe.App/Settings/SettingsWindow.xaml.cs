@@ -201,6 +201,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         InitializeComponent();
 
+        // Keyboard focus in an editable combo box lands on its text box, which WPF-UI leaves unnamed.
+        EditableComboBoxName.ShareWithTextBox(AiModelBox);
+        EditableComboBoxName.ShareWithTextBox(AzureModelBox);
+        EditableComboBoxName.ShareWithTextBox(CopilotModelCombo);
+
         UsagePeriodBox.ItemsSource = UsagePeriodChoice.All;
         UsagePeriodBox.DisplayMemberPath = nameof(UsagePeriodChoice.Label);
         UsagePeriodBox.SelectedIndex = 1;
@@ -6681,12 +6686,17 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string ToolTip =>
             $"{Period}: {Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")}, " +
             $"{Words:N0} word{(Words == 1 ? string.Empty : "s")}";
+
+        // UI Automation names a trend bar and a trend row after ToString(); a record's lists every field.
+        public override string ToString() => ToolTip;
     }
 
     private sealed record UsageTermRow(string Text, int Dictations)
     {
         public string DictationLabel =>
             $"({Dictations:N0} dictation{(Dictations == 1 ? string.Empty : "s")})";
+
+        public override string ToString() => Text;
     }
 
     /// <summary>
@@ -6769,8 +6779,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             Coverage == DictionaryRowCoverage.None ? Visibility.Collapsed : Visibility.Visible;
 
         // The check box and badge cells have no text of their own, so UI Automation names them after
-        // ToString(), which would otherwise read out this type's name.
-        public override string ToString() => Pattern;
+        // ToString(), which would otherwise read out this type's name. A row just added has no spoken
+        // form yet, and is named the way its check boxes name it.
+        public override string ToString() => string.IsNullOrWhiteSpace(Pattern) ? "New entry" : Pattern;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -6826,8 +6837,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public string ThumbDownGlyph => Rating == AiRating.NotUseful ? "" : "";
 
+        // The thumbs draw only a glyph, so these name them for UI Automation: each says what its ToolTip says,
+        // and adds whether it is the rating given, which the filled glyph shows.
+        public string ThumbUpName =>
+            Rating == AiRating.Useful ? "This rewrite was useful, selected" : "This rewrite was useful";
+
+        public string ThumbDownName =>
+            Rating == AiRating.NotUseful ? "This rewrite was not useful, selected" : "This rewrite was not useful";
+
         /// <summary>The report path opens only on a thumbs-down, which is where it is wanted.</summary>
         public bool CanReport => ProducedByAi && Rating == AiRating.NotUseful;
+
+        // UI Automation names the row after ToString(), and so the Result cell too, which holds buttons rather
+        // than text. A record's ToString lists every field.
+        public override string ToString() => $"{When}, {Text}";
 
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
@@ -6944,5 +6967,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string When { get; set; } = string.Empty;
         public string Model { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
+
+        // UI Automation names a row after ToString(), which would otherwise read out this type's name.
+        public override string ToString() => $"{When}, {Model}, {Reason}";
     }
 }

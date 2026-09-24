@@ -9,6 +9,29 @@
                 <ui:ThemesDictionary Theme="Dark" />
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- WPF-UI 4.3.0's title bar buttons (TitleBar.xaml) carry automation ids but no names, so a screen
+                 reader found unnamed buttons at the top of every window and dialog. They are named by their kind,
+                 which WPF-UI turns from Maximize to Restore while the window is maximized. -->
+            <Style TargetType="ui:TitleBarButton" BasedOn="{StaticResource {x:Type ui:TitleBarButton}}">
+                <Style.Triggers>
+                    <Trigger Property="ButtonType" Value="Help">
+                        <Setter Property="AutomationProperties.Name" Value="Help" />
+                    </Trigger>
+                    <Trigger Property="ButtonType" Value="Minimize">
+                        <Setter Property="AutomationProperties.Name" Value="Minimize" />
+                    </Trigger>
+                    <Trigger Property="ButtonType" Value="Maximize">
+                        <Setter Property="AutomationProperties.Name" Value="Maximize" />
+                    </Trigger>
+                    <Trigger Property="ButtonType" Value="Restore">
+                        <Setter Property="AutomationProperties.Name" Value="Restore" />
+                    </Trigger>
+                    <Trigger Property="ButtonType" Value="Close">
+                        <Setter Property="AutomationProperties.Name" Value="Close" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

@@ -114,7 +114,8 @@
                         <!-- Not a Tab stop: an ItemsControl is focusable by default, and the chips inside it
                              deliberately are not (the boxes below are the keyboard path), so it was an empty
                              stop between the dictation picker and the first box. -->
-                        <ItemsControl x:Name="Chips" Focusable="False">
+                        <ItemsControl x:Name="Chips" Focusable="False"
+                                      AutomationProperties.Name="Words in the dictation">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <WrapPanel Orientation="Horizontal"/>
