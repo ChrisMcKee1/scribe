@@ -5801,8 +5801,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .ToList();
 
         var libraryTargets = choice.Libraries
-            .Select(usage => (Usage: usage, Row: _libraryRows.FirstOrDefault(
-                r => string.Equals(r.Id, usage.Id, StringComparison.OrdinalIgnoreCase))))
+            .Select(usage => (Usage: usage, Row: _libraryRows.FirstOrDefault(r => r.BuiltIn == usage.BuiltIn
+                && string.Equals(r.Id, usage.Id, StringComparison.OrdinalIgnoreCase))))
             .Where(t => t.Row is { Enabled: true })
             .ToList();
 
@@ -5838,52 +5838,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // A library is all or nothing, so switching one off to shed its dead weight would take its
         // working terms with it. Copying those into the user's own dictionary first is what makes a
-        // partly used library actionable at all, which is the common case for a shipped pack.
-        var existing = new HashSet<string>(
-            _rows.Where(r => !string.IsNullOrWhiteSpace(r.Pattern)).Select(r => r.Pattern.Trim()),
-            StringComparer.OrdinalIgnoreCase);
+        // partly used library actionable at all, which is the common case for a shipped pack. Core decides which
+        // terms to copy, in precedence order rather than the review's, against the libraries that are on now.
+        var copy = LibrarySwitchOffCopy.Plan(
+            _rows.Select(r => new LibrarySwitchOffCopy.Row(r.Pattern, r.Enabled)).ToList(),
+            LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()),
+            libraryTargets.Select(t => t.Usage).ToList());
 
-        var preserved = 0;
-        var collided = 0;
-        foreach (var (usage, row) in libraryTargets)
+        foreach (var (_, row) in libraryTargets)
         {
             row!.Enabled = false;
-
-            foreach (var term in usage.KeepTerms)
-            {
-                var pattern = term.Pattern.Trim();
-                if (pattern.Length == 0)
-                {
-                    continue;
-                }
-
-                // A duplicate spoken form blocks the whole save, so a colliding term can never be
-                // copied in. Usually the existing row already does the same job, but if it is
-                // switched off it does not, and the user has to be told rather than quietly losing
-                // a rule that works today.
-                if (!existing.Add(pattern))
-                {
-                    if (!_rows.Any(r => r.Enabled
-                        && !string.IsNullOrWhiteSpace(r.Pattern)
-                        && string.Equals(r.Pattern.Trim(), pattern, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        collided++;
-                    }
-
-                    continue;
-                }
-
-                _rows.Add(new DictionaryRow
-                {
-                    Id = 0,
-                    Pattern = pattern,
-                    Replacement = term.Replacement,
-                    WholeWord = term.WholeWord,
-                    Enabled = true,
-                });
-                preserved++;
-            }
         }
+
+        foreach (var entry in copy.Copies)
+        {
+            _rows.Add(new DictionaryRow
+            {
+                Id = 0,
+                Pattern = entry.Pattern,
+                Replacement = entry.Replacement,
+                WholeWord = entry.WholeWord,
+                Enabled = true,
+            });
+        }
+
+        var preserved = copy.Copies.Count;
+        var collided = copy.Collided;
 
         // The rows' notifications update the ticks. The list is never sorted by anything a switch changes (it has no
         // sortable columns), so a library switched off here stays where it is and needs no refresh of the view.
