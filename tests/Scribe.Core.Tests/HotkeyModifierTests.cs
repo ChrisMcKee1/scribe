@@ -5,12 +5,12 @@ using Scribe.Core.Models;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// A binding made only of ordinary keys starts only when the modifiers held are exactly the ones it names. With the new
-/// defaults a bare Page Down or Page Up dictates, while Ctrl with them (switching tabs in browsers, editors and Excel),
-/// Shift with them (selecting a page), Alt, Win, Ctrl+Alt (Narrator's table commands) and a Narrator key (Caps Lock,
-/// Insert or NonConvert: changing views) reach the app whole and start nothing. A modifier pressed during a dictation
-/// neither ends it nor lets the bound key through, a modifier whose release the hook never saw blocks nothing once
-/// Windows reports it up, and a binding that includes a modifier key keeps matching as it always has.
+/// Page Up or Page Down bound on its own, as the new defaults are, starts only when no modifier is held: a bare press
+/// dictates, while Ctrl with them (switching tabs in browsers, editors and Excel), Shift with them (selecting a page),
+/// Alt, Win, Ctrl+Alt (Narrator's table commands) and a Narrator key (Caps Lock, Insert or NonConvert: changing views)
+/// reach the app whole and start nothing. A modifier pressed during a dictation neither ends it nor lets the bound key
+/// through, and a modifier whose release the hook never saw blocks nothing once Windows reports it up. Every other
+/// binding, custom ones an existing install already has included, matches exactly as it did before, whatever else is held.
 /// </summary>
 public sealed class HotkeyModifierTests
 {
@@ -30,29 +30,94 @@ public sealed class HotkeyModifierTests
     private const uint RightCtrl = 0xA3;
     private const uint LeftAlt = 0xA4;
     private const uint RightAlt = 0xA5;
+    private const uint KeyH = 0x48;
     private const uint KeyX = 0x58;
     private const uint F9 = 0x78;
 
-    public static TheoryData<string, uint[]> Modifiers => new()
+    // Every combination a bare Page Up or Page Down must let through, by name.
+    private static readonly Dictionary<string, uint[]> Combinations = new()
     {
-        { "Left Ctrl", [LeftCtrl] },
-        { "Right Ctrl", [RightCtrl] },
-        { "Left Shift", [LeftShift] },
-        { "Right Shift", [RightShift] },
-        { "Left Alt", [LeftAlt] },
-        { "Right Alt", [RightAlt] },
-        { "Left Win", [LeftWin] },
-        { "Right Win", [RightWin] },
-        { "Ctrl+Alt", [LeftCtrl, LeftAlt] },
-        { "Ctrl+Shift", [LeftCtrl, LeftShift] },
-        { "AltGr (the Left Ctrl Windows adds, then Right Alt)", [LeftCtrl, RightAlt] },
-        { "Narrator key Caps Lock", [CapsLock] },
-        { "Narrator key Insert", [Insert] },
-        { "Narrator key NonConvert (Japanese 106 keyboard)", [NonConvert] },
-        { "injected generic Ctrl", [Ctrl] },
-        { "injected generic Shift", [Shift] },
-        { "injected generic Alt", [Alt] },
+        ["Left Ctrl"] = [LeftCtrl],
+        ["Right Ctrl"] = [RightCtrl],
+        ["Left Shift"] = [LeftShift],
+        ["Right Shift"] = [RightShift],
+        ["Left Alt"] = [LeftAlt],
+        ["Right Alt"] = [RightAlt],
+        ["Left Win"] = [LeftWin],
+        ["Right Win"] = [RightWin],
+        ["Ctrl+Alt"] = [LeftCtrl, LeftAlt],
+        ["Ctrl+Shift"] = [LeftCtrl, LeftShift],
+        ["AltGr (the Left Ctrl Windows adds, then Right Alt)"] = [LeftCtrl, RightAlt],
+        ["Narrator key Caps Lock"] = [CapsLock],
+        ["Narrator key Insert"] = [Insert],
+        ["Narrator key NonConvert (Japanese 106 keyboard)"] = [NonConvert],
+        ["injected generic Ctrl"] = [Ctrl],
+        ["injected generic Shift"] = [Shift],
+        ["injected generic Alt"] = [Alt],
     };
+
+    // Bindings an existing install may already have, none a bare Page Up or Page Down, with the keys that complete each
+    // in the order they are pressed.
+    private static readonly Dictionary<string, (HotkeyBinding Binding, uint[] Keys)> OtherBindings = new()
+    {
+        ["F9"] = (new HotkeyBinding(F9, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F9"), [F9]),
+        ["Ctrl+Shift+X"] = (
+            new HotkeyBinding(KeyX, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true),
+            [LeftCtrl, LeftShift, KeyX]),
+        ["Right Ctrl"] = (HotkeyBinding.Legacy, [RightCtrl]),
+        ["Right Alt"] = (new HotkeyBinding(RightAlt, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Right Alt"), [RightAlt]),
+        ["Caps Lock"] = (new HotkeyBinding(CapsLock, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Caps Lock"), [CapsLock]),
+        ["Insert"] = (new HotkeyBinding(Insert, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Insert"), [Insert]),
+        ["Ctrl+Page Down"] = (
+            new HotkeyBinding(PageDown, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true),
+            [LeftCtrl, PageDown]),
+        ["Page Down+Page Up"] = (
+            new HotkeyBinding(
+                PageDown, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Page Down+Page Up",
+                SecondaryVirtualKey: PageUp, SuppressChordMembers: true),
+            [PageDown, PageUp]),
+        ["Page Up+X"] = (
+            new HotkeyBinding(
+                PageUp, KeyModifiers.None, HotkeyMode.Toggle, Suppress: true, "Page Up+X",
+                SecondaryVirtualKey: KeyX, SuppressChordMembers: true),
+            [PageUp, KeyX]),
+        ["Left Win+H"] = (
+            new HotkeyBinding(
+                LeftWin, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Left Win+H",
+                SecondaryVirtualKey: KeyH, SuppressChordMembers: true),
+            [LeftWin, KeyH]),
+    };
+
+    public static TheoryData<string, uint[]> Modifiers
+    {
+        get
+        {
+            var data = new TheoryData<string, uint[]>();
+            foreach (var (name, keys) in Combinations)
+            {
+                data.Add(name, keys);
+            }
+
+            return data;
+        }
+    }
+
+    public static TheoryData<string, string> OtherBindingsWithEachCombination
+    {
+        get
+        {
+            var data = new TheoryData<string, string>();
+            foreach (var binding in OtherBindings.Keys)
+            {
+                foreach (var combination in Combinations.Keys)
+                {
+                    data.Add(binding, combination);
+                }
+            }
+
+            return data;
+        }
+    }
 
     // Modifiers the hook saw go down whose release it never saw: Win+L locks before the keys come up, and Ctrl+Alt+Del
     // shows the secure desktop, where a hook on the user's desktop is not called.
@@ -188,7 +253,8 @@ public sealed class HotkeyModifierTests
     [Fact]
     public void Right_ctrl_keeps_firing_with_another_modifier_held()
     {
-        // A binding that includes a modifier key keeps its old match, so a Right Ctrl binding does not regress.
+        // Only a bare Page Up or Page Down is judged, so a Right Ctrl binding, the one every earlier release shipped,
+        // does not regress.
         var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         var bare = Press(state, RightCtrl);
@@ -230,65 +296,64 @@ public sealed class HotkeyModifierTests
     }
 
     [Fact]
-    public void Ctrl_shift_x_fires_with_exactly_ctrl_and_shift_from_either_side()
+    public void Shift_f9_activates_as_it_did_before()
+    {
+        // F9 bound on its own fired whatever else was held, and an existing install that relies on that keeps it.
+        var binding = new HotkeyBinding(F9, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F9");
+
+        foreach (var modifiers in new uint[][] { [], [RightShift], [LeftShift], [LeftCtrl], [LeftAlt], [CapsLock] })
+        {
+            var press = Chord(binding, modifiers, F9);
+            Assert.Equal(HotkeyTransition.Activated, press.Transition);
+            Assert.True(press.ShouldSuppress);
+        }
+    }
+
+    [Fact]
+    public void Ctrl_shift_x_with_alt_held_activates_as_it_did_before()
     {
         var binding = new HotkeyBinding(KeyX, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true);
 
         Assert.Equal(HotkeyTransition.Activated, Chord(binding, [LeftCtrl, LeftShift], KeyX).Transition);
         Assert.Equal(HotkeyTransition.Activated, Chord(binding, [RightCtrl, RightShift], KeyX).Transition);
-        Assert.Equal(HotkeyTransition.Activated, Chord(binding, [LeftShift, LeftCtrl], KeyX).Transition);
 
-        // Another modifier makes it another shortcut (Ctrl+Alt+Shift+X), which reaches the app.
         var extraAlt = Chord(binding, [LeftCtrl, LeftShift, LeftAlt], KeyX);
-        Assert.Equal(HotkeyTransition.None, extraAlt.Transition);
-        Assert.False(extraAlt.ShouldSuppress);
+        Assert.Equal(HotkeyTransition.Activated, extraAlt.Transition);
+        Assert.True(extraAlt.ShouldSuppress);
 
-        // A named modifier missing is not the binding either, as before.
+        // Completed by its last modifier, with Alt held, as before too.
+        Assert.Equal(HotkeyTransition.Activated, Chord(binding, [LeftAlt, LeftShift, KeyX], LeftCtrl).Transition);
+
+        // A named modifier missing is still not the binding.
         var ctrlOnly = Chord(binding, [LeftCtrl], KeyX);
         Assert.Equal(HotkeyTransition.None, ctrlOnly.Transition);
         Assert.False(ctrlOnly.ShouldSuppress);
     }
 
-    [Fact]
-    public void Ctrl_shift_x_completed_by_its_last_modifier_is_judged_the_same_way()
-    {
-        // Pressing the key first and a named modifier last completes the binding on the modifier's press.
-        var binding = new HotkeyBinding(KeyX, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true);
-
-        Assert.Equal(HotkeyTransition.Activated, Chord(binding, [LeftShift, KeyX], LeftCtrl).Transition);
-        Assert.Equal(HotkeyTransition.None, Chord(binding, [LeftAlt, LeftShift, KeyX], LeftCtrl).Transition);
-    }
-
-    [Fact]
-    public void A_function_key_fires_bare_and_passes_with_a_modifier()
-    {
-        var binding = new HotkeyBinding(F9, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F9");
-
-        var bare = Chord(binding, [], F9);
-        var ctrlF9 = Chord(binding, [LeftCtrl], F9);
-        var shiftF9 = Chord(binding, [RightShift], F9);
-
-        Assert.Equal(HotkeyTransition.Activated, bare.Transition);
-        Assert.True(bare.ShouldSuppress);
-        Assert.Equal(HotkeyTransition.None, ctrlF9.Transition);
-        Assert.False(ctrlF9.ShouldSuppress);
-        Assert.Equal(HotkeyTransition.None, shiftF9.Transition);
-        Assert.False(shiftF9.ShouldSuppress);
-    }
-
     [Theory]
-    [InlineData(Insert, CapsLock)]
-    [InlineData(CapsLock, Insert)]
-    [InlineData(CapsLock, NonConvert)]
-    [InlineData(NonConvert, Insert)]
-    public void A_bound_narrator_key_is_not_counted_against_itself(uint bound, uint otherNarratorKey)
+    [MemberData(nameof(OtherBindingsWithEachCombination))]
+    public void Any_binding_but_a_bare_page_key_fires_as_before_whatever_else_is_held(string bindingName, string combination)
     {
-        // A Narrator key bound as push-to-talk: its own press fires it, while another Narrator key held still makes the
-        // press a Narrator command.
-        var binding = new HotkeyBinding(bound, KeyModifiers.None, HotkeyMode.Hold, Suppress: true);
+        // The keys of the combination that belong to the binding are pressed as part of it instead.
+        var (binding, keys) = OtherBindings[bindingName];
+        var windows = new WindowsKeyboard();
+        var state = new ChordStateMachine(binding, windows.IsDown);
+        foreach (var key in Combinations[combination].Where(key => !ChordStateMachine.IsBindingKey(binding, key)))
+        {
+            windows.Press(key);
+            state.Process(key, isDown: true);
+        }
 
-        Assert.Equal(HotkeyTransition.Activated, Chord(binding, [], bound).Transition);
-        Assert.Equal(HotkeyTransition.None, Chord(binding, [otherNarratorKey], bound).Transition);
+        var completing = default(ChordUpdate);
+        foreach (var key in keys)
+        {
+            windows.Press(key);
+            completing = state.Process(key, isDown: true);
+        }
+
+        Assert.Equal(HotkeyTransition.Activated, completing.Transition);
+        Assert.True(completing.ShouldSuppress);
+        Assert.Empty(windows.Asked); // Windows is asked about nothing for any of these bindings
     }
 
     [Theory]
@@ -350,7 +415,7 @@ public sealed class HotkeyModifierTests
     }
 
     [Fact]
-    public void Windows_is_asked_only_about_a_modifier_the_hook_sees_on_the_press_that_completes_the_binding()
+    public void Windows_is_asked_only_about_a_modifier_the_hook_sees_on_the_press_that_completes_a_bare_page_key()
     {
         var windows = new WindowsKeyboard();
         var state = new ChordStateMachine(HotkeyBinding.DefaultDictation, windows.IsDown);
@@ -369,18 +434,18 @@ public sealed class HotkeyModifierTests
         state.Process(PageDown, isDown: false);
         Assert.Equal(new[] { Ctrl }, windows.Asked);
 
-        // A named modifier is not asked about either: Ctrl+Shift+X with exactly Ctrl and Shift held asks nothing.
-        var named = new WindowsKeyboard();
+        // Any other binding is never judged, so nothing is asked: Ctrl+Shift+X with Alt held as well.
+        var other = new WindowsKeyboard();
         var ctrlShiftX = new ChordStateMachine(
-            new HotkeyBinding(KeyX, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true), named.IsDown);
-        foreach (var key in new[] { RightCtrl, LeftShift })
+            new HotkeyBinding(KeyX, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true), other.IsDown);
+        foreach (var key in new[] { RightCtrl, LeftShift, LeftAlt })
         {
-            named.Press(key);
+            other.Press(key);
             ctrlShiftX.Process(key, isDown: true);
         }
 
         Assert.Equal(HotkeyTransition.Activated, ctrlShiftX.Process(KeyX, isDown: true).Transition);
-        Assert.Empty(named.Asked);
+        Assert.Empty(other.Asked);
 
         // Paused, nothing is refused, so nothing is asked either.
         var paused = new WindowsKeyboard();

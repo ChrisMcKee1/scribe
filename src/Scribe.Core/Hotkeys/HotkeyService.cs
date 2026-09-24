@@ -64,8 +64,8 @@ public sealed class HotkeyService : IHotkeyService
     {
         _logger = logger;
 
-        // GetAsyncKeyState on the hook path, rarely: only on a press that completes a binding of ordinary keys while the
-        // hook's view shows another modifier held, and only about that modifier (see ChordStateMachine).
+        // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding
+        // while the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
         _router = new HotkeyCommandRouter(binding, NativeMethods.IsKeyLogicallyDown);
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,

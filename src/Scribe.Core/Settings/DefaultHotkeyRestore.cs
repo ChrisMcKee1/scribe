@@ -51,11 +51,12 @@ public static class DefaultHotkeyRestore
     }
 
     /// <summary>
-    /// The hint above the button: what it restores, and what binding those keys costs. The hook swallows a bound key
-    /// pressed on its own, so other apps never see it, while the same key pressed with a modifier the binding does not
-    /// name, or with Narrator's key, reaches the app as before (see <c>ChordStateMachine</c>). A presentation remote is
-    /// a keyboard whose buttons send Page Down and Page Up, so it stops changing slides. The hook matches the virtual-key
-    /// code alone, so the numeric keypad's Page Down and Page Up (its 3 and 9 with Num Lock off) are the same keys to it.
+    /// The hint above the button: what it restores, and what binding those keys costs. The hook swallows Page Up and
+    /// Page Down pressed on their own, so other apps never see them, while either pressed with a modifier or a Narrator
+    /// key reaches the app as before (see <c>ChordStateMachine</c>, which judges only a bare Page Up or Page Down
+    /// binding). A presentation remote is a keyboard whose buttons send Page Down and Page Up, so it stops changing
+    /// slides. The hook matches the virtual-key code alone, so the numeric keypad's Page Down and Page Up (its 3 and 9
+    /// with Num Lock off) are the same keys to it.
     /// </summary>
     public static string Hint
     {

@@ -634,14 +634,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
-- **A binding of ordinary keys fires only with exactly its own modifiers.** `ChordStateMachine` refuses
-  the press that would complete Page Down, F9 or Ctrl+Shift+X while any other Ctrl, Alt, Shift or Win
-  key is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that
-  whole keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
+- **Only a bare Page Up or Page Down lets modified presses through.** For a binding whose only key is
+  Page Up or Page Down, with no modifier (the shipped defaults, or either key bound in Settings),
+  `ChordStateMachine` refuses the press that would complete it while any Ctrl, Alt, Shift or Win key
+  is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
+  keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
   Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
-  dictation neither ends it nor lets the key through. A binding that includes a modifier key (Right
-  Ctrl, Right Alt, Left Win+H) keeps the old lenient match, because Windows reports a Left Ctrl with
-  every AltGr press and an exact rule would never let a Right Alt binding fire.
+  dictation neither ends it nor lets the key through. Every other binding (F9, Ctrl+Shift+X, Right
+  Ctrl, Ctrl+Page Down, a chord) matches exactly as before whatever else is held, so no custom binding
+  an existing install has changes on upgrade; widening the rule would change them.
 - **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
   own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
