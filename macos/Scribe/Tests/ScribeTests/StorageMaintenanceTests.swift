@@ -513,6 +513,98 @@ final class StorageMaintenanceTests: XCTestCase {
         XCTAssertTrue(maintenance.stop(timeout: 5))
     }
 
+    /// Starts a Clear history that will fail and returns once maintenance stands aside for it: one history write is
+    /// held at the recorder's gate, the Clear is queued behind it, and opening the gate lets the write through and
+    /// makes the Clear's own step throw. No pass is scheduled on a timer.
+    private func startAClearThatWillFail(
+        _ store: PersistenceStore, hooks: StorageMaintenance.Hooks
+    ) -> (
+        maintenance: StorageMaintenance, recorder: StorageTestGatedRecorder, writer: HistoryWriter,
+        clearing: Task<Int, Error>
+    ) {
+        let recorder = StorageTestGatedRecorder(forwardingTo: store)
+        recorder.closeGate()
+        recorder.failWrite(number: 2)
+        let clearQueued = StorageTestSignal()
+        let writer = HistoryWriter(recorder: recorder, hooks: .init(onClearQueued: { clearQueued.signal() }))
+        let maintenance = makeMaintenance(store, writer: writer, hooks: hooks) {
+            $0.initialDelay = 3_600
+            $0.clearTimeout = 60
+        }
+        maintenance.start()
+        writer.enqueue(
+            DictationHistoryRecord(
+                startedAt: fixedNow, durationSeconds: 1, sampleCount: 16_000, transcriptText: "held"))
+        XCTAssertTrue(recorder.waitUntilStarted(1))
+        let clearing = Task { try await maintenance.clearHistory() }
+        XCTAssertTrue(clearQueued.wait())
+        return (maintenance, recorder, writer, clearing)
+    }
+
+    /// Lets the held write through, so the Clear's step runs and fails, and waits until the Clear has reported it.
+    private func failTheClear(_ recorder: StorageTestGatedRecorder, _ clearing: Task<Int, Error>) async {
+        recorder.openGate()
+        do {
+            _ = try await clearing.value
+            XCTFail("expected the Clear to fail")
+        } catch {
+            XCTAssertTrue(
+                error is StorageTestGatedRecorder.InjectedFailure, "the Clear failed with \(type(of: error))")
+        }
+    }
+
+    /// A9: a rule's deletion that commits while Clear history runs asks for its checkpoint, and that pass stands aside
+    /// for the Clear. When the Clear fails and lets go, the pass is asked for again and completes on its own: the test
+    /// runs no pass, makes no other write and keeps the connection open.
+    func testARemovalsCheckpointThatStoodAsideForAFailedClearStillRuns() async throws {
+        let store = try makeStore()
+        let text = "entry-\(UUID().uuidString)"
+        let id = try store.insertDictionaryEntry(DictionaryEntry(pattern: "alpha", replacement: text))
+        XCTAssertTrue(try store.checkpointWal())
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let running = startAClearThatWillFail(store, hooks: hooks)
+
+        try await store.removeDictionaryEntry(id: id)
+        XCTAssertEqual(passes.next()?.checkpoint, .notRun, "the removal's pass did not stand aside for the Clear")
+        XCTAssertTrue(try databaseFileContains(text), "the search missed text that is stored")
+
+        await failTheClear(running.recorder, running.clearing)
+
+        XCTAssertEqual(passes.next()?.checkpoint, .completed, "nothing checkpointed after the Clear failed")
+        XCTAssertEqual(walBytes, 0)
+        XCTAssertFalse(try databaseFileContains(text), "the old text is still in the database file")
+        XCTAssertTrue(running.writer.waitForAcceptedWrites(timeout: 10))
+        running.writer.complete(timeout: 5)
+        XCTAssertTrue(running.maintenance.stop(timeout: 5))
+    }
+
+    /// The same for a whole pass: one asked for while a Clear runs stands aside, its retention sweep removing nothing,
+    /// and when the Clear fails it runs again, so an entry past the limit is still removed.
+    func testAPassThatStoodAsideForAFailedClearRunsAgain() async throws {
+        let store = try makeStore()
+        try store.setHistoryRetention(.days(30))
+        try record(store, daysAgo: 45, "old")
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let running = startAClearThatWillFail(store, hooks: hooks)
+
+        running.maintenance.requestPass()
+        let stoodAside = passes.next()
+        XCTAssertEqual(stoodAside?.retention, .applied(days: 30, removed: 0))
+        XCTAssertEqual(stoodAside?.checkpoint, .notRun)
+
+        await failTheClear(running.recorder, running.clearing)
+
+        XCTAssertEqual(passes.next()?.retention, .applied(days: 30, removed: 1), "the pass did not run again")
+        XCTAssertTrue(running.writer.waitForAcceptedWrites(timeout: 10))
+        XCTAssertEqual(try store.fetchDictationHistory().compactMap(\.transcriptText), ["held"])
+        running.writer.complete(timeout: 5)
+        XCTAssertTrue(running.maintenance.stop(timeout: 5))
+    }
+
     // MARK: - Clear history
 
     func testClearHistoryRunsAfterEarlierWritesAndThenReclaims() async throws {

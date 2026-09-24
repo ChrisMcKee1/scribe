@@ -238,7 +238,9 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 /// One pass at a time, on a private serial queue, never on the caller's thread: 30 seconds after
 /// `start()`, then daily on the wall clock (so a Mac that slept through the deadline runs it on wake),
 /// when the retention choice changes, and after Clear history; and a pass that only checkpoints after
-/// a dictionary entry, snippet or app profile is deleted, or an entry rewritten.
+/// a dictionary entry, snippet or app profile is deleted, or an entry rewritten. A pass that stands
+/// aside while Clear history runs is asked for again when the Clear lets go, whether it succeeded or
+/// failed, so nothing it owed waits for the next day.
 ///
 /// Retention deletes in short batches, and every batch checks the stored choice in its own
 /// transaction, so a choice changed, removed or made unreadable mid-sweep stops it. Only a choice on
@@ -327,6 +329,10 @@ final class StorageMaintenance: @unchecked Sendable {
     private var yieldRequested = false
     private var passPending = false
     private var checkpointPassPending = false
+    /// A whole pass, or a pass that only checkpoints, stood aside while Clear history held the queue's attention;
+    /// the Clear asks for it again when it lets go, whether it succeeded or failed (`finishClear`).
+    private var passAfterClear = false
+    private var checkpointPassAfterClear = false
     private var followUpDue: DispatchTime?
     private var reclaimEverythingRequested = false
     private var timer: DispatchSourceTimer?
@@ -509,6 +515,8 @@ final class StorageMaintenance: @unchecked Sendable {
         if !shouldYield {
             report.reclaim = reclaim()
             report.checkpoint = checkpointIfOwed()
+        } else {
+            standAsideForClear(checkpointOnly: false)
         }
         report.stopped = isStoppedNow
         log(report)
@@ -536,7 +544,7 @@ final class StorageMaintenance: @unchecked Sendable {
 
     /// A pass that only checkpoints, if one is owed. Like any checkpoint it waits while a dictation holds a lease
     /// and backs off while a reader keeps it busy; the retry is an ordinary pass. It stands aside for Clear history,
-    /// which checkpoints when it is done, and for shutdown.
+    /// which asks for it again when it lets go, and for shutdown, which needs no retry.
     private func performCheckpointPass() {
         stateLock.lock()
         checkpointPassPending = false
@@ -545,14 +553,43 @@ final class StorageMaintenance: @unchecked Sendable {
         var report = StorageMaintenanceReport()
         if !shouldYield {
             report.checkpoint = checkpointIfOwed()
+        } else {
+            standAsideForClear(checkpointOnly: true)
         }
         report.stopped = isStoppedNow
         log(report)
         hooks.onPassFinished?(report)
     }
 
+    /// Remembers that a pass stood aside for a Clear in progress, so the Clear asks for it again when it lets go
+    /// (`finishClear`): a debt the pass would have paid, such as a checkpoint a rule's deletion owes, never waits for
+    /// the next day because a Clear happened to run, even one that failed. A pass that stood aside for shutdown gets no
+    /// retry.
+    private func standAsideForClear(checkpointOnly: Bool) {
+        stateLock.lock()
+        if yieldRequested, !stopped {
+            if checkpointOnly {
+                checkpointPassAfterClear = true
+            } else {
+                passAfterClear = true
+            }
+        }
+        stateLock.unlock()
+    }
+
+    /// Ends a Clear's hold on the queue and hands back what stood aside for it.
+    private func releaseClearYield() -> (pass: Bool, checkpointPass: Bool) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        yieldRequested = false
+        let deferred = (pass: passAfterClear, checkpointPass: checkpointPassAfterClear)
+        passAfterClear = false
+        checkpointPassAfterClear = false
+        return deferred
+    }
+
     private func finishClear(_ result: Result<Int, Error>) {
-        setYieldRequested(false)
+        let deferred = releaseClearYield()
         switch result {
         case .success(let removed):
             reclaimEverythingOwed = true
@@ -570,6 +607,13 @@ final class StorageMaintenance: @unchecked Sendable {
             let errorType = String(describing: type(of: error))
             logger.warning(
                 "Clear history failed (\(errorType, privacy: .public), SQLite \(code)); nothing was cleared.")
+        }
+        // What stood aside for the Clear runs now, whatever became of it: after a failed Clear nothing else would ask
+        // for it until the next day. A whole pass checkpoints too. Both requests do nothing once shutdown has begun.
+        if deferred.pass {
+            requestPass()
+        } else if deferred.checkpointPass {
+            requestCheckpointPass()
         }
     }
 
