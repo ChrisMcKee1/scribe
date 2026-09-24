@@ -110,13 +110,16 @@ struct SettingsView: View {
                 audioDeviceStore: audioDeviceStore,
                 onHotkeyChanged: onHotkeyChanged)
         case .dictionary:
-            DictionarySettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
+            DictionarySettingsTab(
+                persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .libraries:
-            DictionaryLibrariesSettingsTab(dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
+            DictionaryLibrariesSettingsTab(
+                dictionaryLibraryService: dictionaryLibraryService, onChanged: onProfilesOrRulesChanged)
         case .snippets:
             SnippetsSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .appProfiles:
-            AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
+            AppProfilesSettingsTab(
+                persistenceStore: persistenceStore, onChanged: onProfilesOrRulesChanged, drafts: drafts)
         case .aiCleanup:
             CleanupSettingsTab(drafts: drafts)
         case .playground:
@@ -157,7 +160,9 @@ private struct OverlaySettingsTab: View {
                         Text(anchor.displayName)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
-                            .background(selection.anchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(
+                                selection.anchor == anchor ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                            )
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -239,9 +244,11 @@ private struct HotkeySettingsTab: View {
             // since (unlike Microphone/Accessibility) macOS never shows a system prompt for it;
             // the user has to add Scribe manually. Surfaced here because "the key does nothing"
             // is otherwise indistinguishable from a wrong binding.
-            Text("If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            Text(
+                "If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
 
             HStack(spacing: 12) {
                 Text(isRecording ? "Press any key..." : model.binding.displayName)
@@ -279,7 +286,10 @@ private struct HotkeySettingsTab: View {
                         Text(entry.name)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 6)
-                            .background(model.binding.keyCode == entry.keyCode ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1))
+                            .background(
+                                model.binding.keyCode == entry.keyCode
+                                    ? Color.accentColor.opacity(0.25) : Color.gray.opacity(0.1)
+                            )
                             .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -332,13 +342,18 @@ private struct HotkeySettingsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Microphone")
                 .font(.headline)
-            Text("Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as soon as macOS lists it here, no extra setup needed.")
-                .foregroundStyle(.secondary)
+            Text(
+                "Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as soon as macOS lists it here, no extra setup needed."
+            )
+            .foregroundStyle(.secondary)
 
-            Picker("Microphone", selection: Binding(
-                get: { model.selectedDeviceUID },
-                set: { model.selectDevice(uid: $0) }
-            )) {
+            Picker(
+                "Microphone",
+                selection: Binding(
+                    get: { model.selectedDeviceUID },
+                    set: { model.selectDevice(uid: $0) }
+                )
+            ) {
                 Text("System default (recommended)").tag(String?.none)
                 ForEach(model.devices) { device in
                     Text(device.isDefault ? "\(device.name) (default)" : device.name)
@@ -367,7 +382,8 @@ private struct DictionarySettingsTab: View {
     init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
         _drafts = ObservedObject(wrappedValue: drafts)
         _model = StateObject(
-            wrappedValue: DictionarySettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+            wrappedValue: DictionarySettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged)
+        )
     }
 
     var body: some View {
@@ -434,10 +450,12 @@ private struct DictionarySettingsTab: View {
         .onAppear {
             Task { await model.reload() }
         }
-        .sheet(isPresented: Binding(
-            get: { model.cleanupReport != nil },
-            set: { if !$0 { model.cleanupReport = nil } }
-        )) {
+        .sheet(
+            isPresented: Binding(
+                get: { model.cleanupReport != nil },
+                set: { if !$0 { model.cleanupReport = nil } }
+            )
+        ) {
             if let report = model.cleanupReport {
                 DictionaryCleanupView(
                     report: report,
@@ -527,11 +545,13 @@ private struct DictionaryCleanupView: View {
                             .labelsHidden()
                         VStack(alignment: .leading) {
                             Text("\"\(usage.entry.pattern)\" becomes \"\(usage.entry.replacement)\"")
-                            Text(usage.entry.enabled
-                                ? "Currently on. Neither wording came up in your recent dictations."
-                                : "Already off. Neither wording came up in your recent dictations.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                usage.entry.enabled
+                                    ? "Currently on. Neither wording came up in your recent dictations."
+                                    : "Already off. Neither wording came up in your recent dictations."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }
@@ -539,10 +559,12 @@ private struct DictionaryCleanupView: View {
             }
             .frame(minHeight: 160)
 
-            Text("Turning a term off is reversible: it stays in your dictionary with its tick "
-                + "cleared and stops being applied. Nothing is written until you confirm below.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Turning a term off is reversible: it stays in your dictionary with its tick "
+                    + "cleared and stops being applied. Nothing is written until you confirm below."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             HStack {
                 Spacer()
@@ -599,11 +621,13 @@ private struct DictionaryLibrariesSettingsTab: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Dictionary Libraries")
                 .font(.headline)
-            Text("Switch on ready-made glossaries to canonicalize domain vocabulary (Azure, GitHub, "
-                + "programming languages, and more) without typing every term yourself. Library entries "
-                + "never override your own dictionary.")
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(
+                "Switch on ready-made glossaries to canonicalize domain vocabulary (Azure, GitHub, "
+                    + "programming languages, and more) without typing every term yourself. Library entries "
+                    + "never override your own dictionary."
+            )
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             HStack {
                 Button("Import Library CSV\u{2026}") { showingImporter = true }
@@ -784,16 +808,19 @@ private struct AppProfilesSettingsTab: View {
     init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void, drafts: SettingsDrafts) {
         _drafts = ObservedObject(wrappedValue: drafts)
         _model = StateObject(
-            wrappedValue: AppProfileSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged))
+            wrappedValue: AppProfileSettingsModel(access: .live(persistenceStore), drafts: drafts, onChanged: onChanged)
+        )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Per-App Profiles")
                 .font(.headline)
-            Text("Override writing style or line-break handling for specific apps, matched by bundle identifier (e.g. com.apple.Terminal).")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            Text(
+                "Override writing style or line-break handling for specific apps, matched by bundle identifier (e.g. com.apple.Terminal)."
+            )
+            .foregroundStyle(.secondary)
+            .font(.caption)
 
             VStack(alignment: .leading, spacing: 6) {
                 TextField("Profile name (e.g. \"Terminal\")", text: $drafts.profileName)
@@ -867,11 +894,13 @@ private struct CleanupSettingsTab: View {
             Section {
                 Toggle("Enable AI Cleanup", isOn: $model.values.isEnabled)
                     .disabled(model.isDisabled(.enableSwitch))
-                Text("Cleans up punctuation and phrasing after each dictation using a locally or "
-                    + "remotely hosted model. Strictly opt-in and off by default: only the "
-                    + "transcribed text is ever sent to a cleanup provider, never audio.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Cleans up punctuation and phrasing after each dictation using a locally or "
+                        + "remotely hosted model. Strictly opt-in and off by default: only the "
+                        + "transcribed text is ever sent to a cleanup provider, never audio."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Provider") {
@@ -923,19 +952,23 @@ private struct CleanupSettingsTab: View {
         case .foundryLocal:
             Section("Foundry Local") {
                 TextField("Model alias", text: $model.values.foundryLocalModelAlias)
-                Text("Runs fully on-device via Foundry Local. Requires "
-                    + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
-                    + "first use.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Runs fully on-device via Foundry Local. Requires "
+                        + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on "
+                        + "first use."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .ollama:
             Section("Local model (Ollama managed)") {
                 TextField("Model", text: $model.values.ollamaModel)
-                Text("Runs fully on-device via a local Ollama installation "
-                    + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Runs fully on-device via a local Ollama installation "
+                        + "(http://127.0.0.1:11434). Appropriate if you already run Ollama for other tools."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .openAICompatible:
             Section("OpenAI-compatible endpoint") {
@@ -951,10 +984,12 @@ private struct CleanupSettingsTab: View {
                         Button("Clear Key", role: .destructive) { model.clearOpenAIApiKey() }
                     }
                 }
-                Text("For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
-                    + "key, if any, is stored in Keychain, never in plain text.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "For LM Studio, OpenRouter, or any other OpenAI-compatible server. The API "
+                        + "key, if any, is stored in Keychain, never in plain text."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         case .microsoftFoundry:
             Section("Microsoft Foundry (cloud)") {
@@ -980,15 +1015,19 @@ private struct CleanupSettingsTab: View {
                             Button("Clear Secret", role: .destructive) { model.clearAzureClientSecret() }
                         }
                     }
-                    Text("The client secret is stored in Keychain, never in an environment "
-                        + "variable, a plist, or a script.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "The client secret is stored in Keychain, never in an environment "
+                            + "variable, a plist, or a script."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 } else {
-                    Text("Uses the signed-in 'az login' session on this Mac. Install the Azure "
-                        + "CLI and run 'az login' once.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "Uses the signed-in 'az login' session on this Mac. Install the Azure "
+                            + "CLI and run 'az login' once."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
@@ -1013,13 +1052,18 @@ private struct PlaygroundSettingsTab: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Playground")
                     .font(.headline)
-                Text("Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw transcript, dictionary/snippet replacements, and per-step timings for the most recent run.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw transcript, dictionary/snippet replacements, and per-step timings for the most recent run."
+                )
+                .foregroundStyle(.secondary)
 
                 if let report = pipelineReportStore.latest {
                     if let failureStage = report.failureStage {
-                        Label("Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")", systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
+                        Label(
+                            "Failed at \(failureStage.rawValue): \(report.failureReason ?? "unknown error")",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .foregroundStyle(.red)
                     }
 
                     GroupBox("Raw Recognition") {
@@ -1042,7 +1086,9 @@ private struct PlaygroundSettingsTab: View {
                             timingRow("Capture", report.captureDuration)
                             timingRow("Speech Recognition (Decode)", report.decodeDuration)
                             if let cleanupDuration = report.cleanupDuration {
-                                timingRow(report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)", cleanupDuration)
+                                timingRow(
+                                    report.cleanupApplied ? "AI Cleanup" : "AI Cleanup (failed, raw text used)",
+                                    cleanupDuration)
                             }
                             timingRow("Dictionary / Snippets", report.postProcessingDuration)
                             timingRow("Text Insertion", report.injectionDuration)
@@ -1098,7 +1144,8 @@ private struct PlaygroundSettingsTab: View {
         for replacement in result.replacements.sorted(by: { $0.start < $1.start }) {
             guard replacement.start >= cursor, replacement.start + replacement.length <= nsText.length else { continue }
             if replacement.start > cursor {
-                segments.append(Text(nsText.substring(with: NSRange(location: cursor, length: replacement.start - cursor))))
+                segments.append(
+                    Text(nsText.substring(with: NSRange(location: cursor, length: replacement.start - cursor))))
             }
             let highlighted = nsText.substring(with: NSRange(location: replacement.start, length: replacement.length))
             let color: Color = replacement.kind == .dictionary ? .blue : .green
@@ -1160,7 +1207,9 @@ private struct DiagnosticsSettingsTab: View {
                         metricRow(label: "Dictations", value: "\(snapshot.count)")
                         metricRow(
                             label: "Total audio",
-                            value: String(format: "%.1f s (longest %.1f s)", snapshot.totalAudioSeconds, snapshot.longestAudioSeconds))
+                            value: String(
+                                format: "%.1f s (longest %.1f s)", snapshot.totalAudioSeconds,
+                                snapshot.longestAudioSeconds))
 
                         Divider()
 
@@ -1170,7 +1219,8 @@ private struct DiagnosticsSettingsTab: View {
                             metricRow(label: "Average", value: String(format: "%.0f", decodeMs.average))
                             metricRow(label: "P50", value: String(format: "%.0f", decodeMs.p50))
                             metricRow(label: "P95", value: String(format: "%.0f", decodeMs.p95))
-                            metricRow(label: "Min / Max", value: String(format: "%.0f / %.0f", decodeMs.min, decodeMs.max))
+                            metricRow(
+                                label: "Min / Max", value: String(format: "%.0f / %.0f", decodeMs.min, decodeMs.max))
 
                             Divider()
 
@@ -1180,8 +1230,10 @@ private struct DiagnosticsSettingsTab: View {
                             metricRow(label: "P50", value: String(format: "%.3fx", snapshot.rtfP50))
                             metricRow(label: "P95", value: String(format: "%.3fx", snapshot.rtfP95))
                         } else {
-                            Text("No timed dictations yet. Decode latency is recorded starting with the next dictation.")
-                                .foregroundStyle(.secondary)
+                            Text(
+                                "No timed dictations yet. Decode latency is recorded starting with the next dictation."
+                            )
+                            .foregroundStyle(.secondary)
                         }
 
                         if let cleanupMs = snapshot.cleanupMs {
@@ -1189,7 +1241,8 @@ private struct DiagnosticsSettingsTab: View {
                             Text("AI cleanup latency (ms)")
                                 .font(.subheadline.bold())
                             metricRow(label: "Average", value: String(format: "%.0f", cleanupMs.average))
-                            metricRow(label: "Min / Max", value: String(format: "%.0f / %.0f", cleanupMs.min, cleanupMs.max))
+                            metricRow(
+                                label: "Min / Max", value: String(format: "%.0f / %.0f", cleanupMs.min, cleanupMs.max))
                         }
                     }
                 }
@@ -1325,7 +1378,9 @@ private struct UsageInsightsSettingsTab: View {
             } else {
                 Chart(snapshot.trend, id: \.start) { point in
                     BarMark(
-                        x: .value("Period", String(format: "%04d-%02d-%02d", point.start.year, point.start.month, point.start.day)),
+                        x: .value(
+                            "Period",
+                            String(format: "%04d-%02d-%02d", point.start.year, point.start.month, point.start.day)),
                         y: .value("Dictations", point.dictations))
                 }
                 .frame(height: 160)
@@ -1394,9 +1449,11 @@ private struct UsageInsightsSettingsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("AI summary")
                 .font(.subheadline.bold())
-            Text("Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup provider. Novel terms and raw transcripts never leave this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(
+                "Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup provider. Novel terms and raw transcripts never leave this device."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             HStack {
                 Button(summaryModel.isGenerating ? "Generating..." : "Generate AI Summary") {
@@ -1455,10 +1512,13 @@ private struct HistorySettingsTab: View {
             Text("Dictation History")
                 .font(.headline)
 
-            Picker("Keep dictation history for", selection: Binding(
-                get: { model.selection },
-                set: { choice in _ = model.choose(choice) }
-            )) {
+            Picker(
+                "Keep dictation history for",
+                selection: Binding(
+                    get: { model.selection },
+                    set: { choice in _ = model.choose(choice) }
+                )
+            ) {
                 ForEach(model.options, id: \.self) { option in
                     Text(option.label).tag(option)
                 }
@@ -1518,7 +1578,9 @@ private struct HistorySettingsTab: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone.")
+            Text(
+                "This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone."
+            )
         }
     }
 }

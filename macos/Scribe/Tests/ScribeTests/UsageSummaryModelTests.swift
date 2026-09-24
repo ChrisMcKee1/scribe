@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// What the Usage Insights summary model reads and sends, held in the test. `cleanupEnabled` is read through the

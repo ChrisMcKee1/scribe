@@ -50,11 +50,13 @@ final class TextPostProcessor {
     ///   Mirrors Windows' `DictionaryLibraryComposer.Merge` usage in `TextPostProcessor.Reload`.
     func reload(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry] = []) {
         let base = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
-        let effective = libraryEntries.isEmpty
+        let effective =
+            libraryEntries.isEmpty
             ? base
             : DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: libraryEntries)
         dictionaryRules = effective.map(DictionaryRule.init)
-        snippetRules = snippets
+        snippetRules =
+            snippets
             .filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
             .map(SnippetRule.init)
     }
@@ -88,12 +90,13 @@ final class TextPostProcessor {
             guard !canonicalTemplate.isEmpty else { continue }
             if let range = finalText.range(of: canonicalTemplate, range: searchStart..<finalText.endIndex) {
                 let nsRange = NSRange(range, in: finalText)
-                replacements.append(TextReplacement(
-                    start: nsRange.location,
-                    length: nsRange.length,
-                    pattern: snippetReplacement.pattern,
-                    replacement: canonicalTemplate,
-                    kind: .snippet))
+                replacements.append(
+                    TextReplacement(
+                        start: nsRange.location,
+                        length: nsRange.length,
+                        pattern: snippetReplacement.pattern,
+                        replacement: canonicalTemplate,
+                        kind: .snippet))
                 searchStart = range.upperBound
             }
         }
@@ -108,7 +111,8 @@ final class TextPostProcessor {
     /// `processDetailed(_:)`'s real behavior. Only the one rule is applied, since the text has
     /// already been through every other rule. Mirrors Windows' `TextPostProcessor.ApplyRule`.
     static func applyRule(_ text: String?, entry: DictionaryEntry?) -> String {
-        guard let text, !text.isEmpty, let entry, !entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let text, !text.isEmpty, let entry, !entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
             return text ?? ""
         }
 
@@ -164,7 +168,8 @@ final class TextPostProcessor {
             let escaped = NSRegularExpression.escapedPattern(for: entry.pattern)
             let pattern = entry.wholeWord ? "(?<!\\w)\(escaped)(?!\\w)" : escaped
             self.regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-            self.replacementContainsPattern = !entry.pattern.isEmpty
+            self.replacementContainsPattern =
+                !entry.pattern.isEmpty
                 && entry.replacement.count > entry.pattern.count
                 && entry.replacement.range(of: entry.pattern, options: .caseInsensitive) != nil
         }
@@ -173,12 +178,16 @@ final class TextPostProcessor {
             guard let regex else { return [] }
             let fullRange = NSRange(text.startIndex..., in: text)
             let nsText = text as NSString
-            let canonicalStarts = replacementContainsPattern ? Self.collectReplacementStarts(entry.replacement, in: nsText) : []
+            let canonicalStarts =
+                replacementContainsPattern ? Self.collectReplacementStarts(entry.replacement, in: nsText) : []
             return regex.matches(in: text, range: fullRange).compactMap { match in
                 guard let swiftRange = Range(match.range, in: text) else { return nil }
                 let original = String(text[swiftRange])
-                let replacement = !canonicalStarts.isEmpty
-                    && Self.isInsideAnyReplacement(canonicalStarts, matchRange: match.range, replacementLength: (entry.replacement as NSString).length)
+                let replacement =
+                    !canonicalStarts.isEmpty
+                        && Self.isInsideAnyReplacement(
+                            canonicalStarts, matchRange: match.range,
+                            replacementLength: (entry.replacement as NSString).length)
                     ? original
                     : entry.replacement
                 return ReplacementCandidate(
@@ -202,17 +211,18 @@ final class TextPostProcessor {
                 let found = nsText.range(of: replacement, options: [.caseInsensitive], range: searchRange)
                 guard found.location != NSNotFound else { break }
                 starts.append(found.location)
-                from = found.location + 1 // allow overlapping occurrences
+                from = found.location + 1  // allow overlapping occurrences
             }
             return starts
         }
 
         // Mirrors Windows' `IsInsideAnyReplacement`.
-        private static func isInsideAnyReplacement(_ starts: [Int], matchRange: NSRange, replacementLength: Int) -> Bool {
+        private static func isInsideAnyReplacement(_ starts: [Int], matchRange: NSRange, replacementLength: Int) -> Bool
+        {
             let matchEnd = matchRange.location + matchRange.length
             for idx in starts {
                 if idx > matchRange.location {
-                    break // ascending: no later occurrence can contain this match
+                    break  // ascending: no later occurrence can contain this match
                 }
                 if matchEnd <= idx + replacementLength {
                     return true
@@ -224,7 +234,7 @@ final class TextPostProcessor {
 
     private struct SnippetRule: Rule {
         let snippet: Snippet
-        let order: Int = -1 // snippets always take priority within their own phase; irrelevant across phases
+        let order: Int = -1  // snippets always take priority within their own phase; irrelevant across phases
         var pattern: String { snippet.phrase }
         private let regex: NSRegularExpression?
 
@@ -262,14 +272,15 @@ final class TextPostProcessor {
         rules: [R],
         kind: TextReplacementKind
     ) -> (String, [TextReplacement]) {
-        let candidates = rules
+        let candidates =
+            rules
             .flatMap { rule in rule.findMatches(in: text).map { ($0, rule.pattern) } }
             .sorted { lhs, rhs in
                 if lhs.0.range.location != rhs.0.range.location {
                     return lhs.0.range.location < rhs.0.range.location
                 }
                 if lhs.0.range.length != rhs.0.range.length {
-                    return lhs.0.range.length > rhs.0.range.length // longest match first
+                    return lhs.0.range.length > rhs.0.range.length  // longest match first
                 }
                 return lhs.0.order < rhs.0.order
             }
@@ -282,7 +293,7 @@ final class TextPostProcessor {
         var replacements: [TextReplacement] = []
 
         for (candidate, pattern) in candidates {
-            guard candidate.range.location >= position else { continue } // overlap, skip
+            guard candidate.range.location >= position else { continue }  // overlap, skip
             var prefixLength = candidate.range.location - position
             if prefixLength > 0,
                 !candidate.replacement.isEmpty,
@@ -296,12 +307,13 @@ final class TextPostProcessor {
             let start = (result as NSString).length
             result += candidate.replacement
             if candidate.original != candidate.replacement {
-                replacements.append(TextReplacement(
-                    start: start,
-                    length: (candidate.replacement as NSString).length,
-                    pattern: pattern,
-                    replacement: candidate.replacement,
-                    kind: kind))
+                replacements.append(
+                    TextReplacement(
+                        start: start,
+                        length: (candidate.replacement as NSString).length,
+                        pattern: pattern,
+                        replacement: candidate.replacement,
+                        kind: kind))
             }
             position = candidate.range.location + candidate.range.length
         }
@@ -335,4 +347,3 @@ final class TextPostProcessor {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-

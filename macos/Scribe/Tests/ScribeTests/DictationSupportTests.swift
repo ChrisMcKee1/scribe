@@ -135,7 +135,8 @@ final class DictationNoticeScheduleTests: XCTestCase {
         let second = outcome(.microphoneStoppedEarly, source: 2, stage: .capture)
         XCTAssertEqual(arrive(first, in: &schedule, owned: true), .waiting)
         XCTAssertEqual(arrive(second, in: &schedule, owned: true), .waiting)
-        XCTAssertEqual(arrive(outcome(.transcriptionFailed, source: 3, stage: .recognition), in: &schedule, owned: true), .notify)
+        XCTAssertEqual(
+            arrive(outcome(.transcriptionFailed, source: 3, stage: .recognition), in: &schedule, owned: true), .notify)
 
         XCTAssertNil(schedule.takeNext(pillIsOwned: true))
         XCTAssertEqual(schedule.takeNext(pillIsOwned: false), first)
@@ -167,12 +168,15 @@ final class DictationNoticeScheduleTests: XCTestCase {
         var schedule = DictationNoticeSchedule()
         let kept = outcome(.textKept, source: 5, generation: 3)
         XCTAssertEqual(arrive(kept, in: &schedule, owned: true, generation: 3), .waiting)
-        XCTAssertEqual(arrive(outcome(.textKept, source: 5, generation: 3), in: &schedule, owned: true, generation: 3),
+        XCTAssertEqual(
+            arrive(outcome(.textKept, source: 5, generation: 3), in: &schedule, owned: true, generation: 3),
             .rejected(.duplicate))
         XCTAssertEqual(arrive(kept, in: &schedule, owned: true, generation: 3), .rejected(.duplicate))
-        XCTAssertEqual(arrive(outcome(.textKept, source: 6, generation: 2), in: &schedule, generation: 3),
+        XCTAssertEqual(
+            arrive(outcome(.textKept, source: 6, generation: 2), in: &schedule, generation: 3),
             .rejected(.cleared))
-        XCTAssertEqual(arrive(outcome(.recognizerMissing, source: 9), in: &schedule, closing: true),
+        XCTAssertEqual(
+            arrive(outcome(.recognizerMissing, source: 9), in: &schedule, closing: true),
             .rejected(.closing))
         schedule.close()
         XCTAssertNil(schedule.shown)
@@ -386,7 +390,8 @@ final class StartupNoticeTests: XCTestCase {
             texts.text(for: "notice \(NotificationRecoveryTexts.capacity + 1)", currentGeneration: 0),
             "text \(NotificationRecoveryTexts.capacity + 1)")
         texts.removeAll()
-        XCTAssertNil(texts.text(for: "notice 2", currentGeneration: 0), "Clear history left a notice's transcript behind")
+        XCTAssertNil(
+            texts.text(for: "notice 2", currentGeneration: 0), "Clear history left a notice's transcript behind")
     }
 
     /// A notice's Copy Transcript copies nothing once Clear history has started another recovery generation, even
@@ -506,7 +511,8 @@ final class DictationTestSupportTests: XCTestCase {
             }
         }
         XCTAssertEqual(refused, true)
-        let kept = await bounded("a wait on a gate the test opened", within: 5) { () -> Int? in try? await opened.wait() }
+        let kept = await bounded("a wait on a gate the test opened", within: 5) { () -> Int? in try? await opened.wait()
+        }
         XCTAssertEqual(kept ?? nil, 3)
     }
 

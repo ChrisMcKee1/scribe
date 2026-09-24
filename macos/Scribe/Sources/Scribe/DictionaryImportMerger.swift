@@ -118,7 +118,8 @@ enum DictionaryImportMerger {
             let key = entry.pattern.lowercased()
             if let index = indexByPattern[key], let row = byIndex[index] {
                 if (row.replacement?.trimmingCharacters(in: .whitespaces) ?? "") == entry.replacement,
-                   row.wholeWord == entry.wholeWord, row.enabled == entry.enabled {
+                    row.wholeWord == entry.wholeWord, row.enabled == entry.enabled
+                {
                     unchanged += 1
                     continue
                 }

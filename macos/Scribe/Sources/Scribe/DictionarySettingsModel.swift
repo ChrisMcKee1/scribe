@@ -150,7 +150,8 @@ final class DictionarySettingsModel: ObservableObject {
         }
         isImporting = false
 
-        let skipped = parsed.errors.isEmpty
+        let skipped =
+            parsed.errors.isEmpty
             ? ""
             : " \(parsed.errors.count) row(s) skipped: \(parsed.errors.joined(separator: "; "))"
         statusMessage =
@@ -215,7 +216,8 @@ final class DictionarySettingsModel: ObservableObject {
         guard succeeded else {
             return
         }
-        statusMessage = learned.isEmpty
+        statusMessage =
+            learned.isEmpty
             ? "No new recurring terms found in your dictation history yet."
             : "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
     }
@@ -234,7 +236,8 @@ final class DictionarySettingsModel: ObservableObject {
         do {
             let report = try await access.reviewUsage()
             guard report.hasFindings else {
-                statusMessage = report.hasEnoughEvidence
+                statusMessage =
+                    report.hasEnoughEvidence
                     ? "Every term in your dictionary turned up in your recent dictations. Nothing to clean up."
                     : report.summary
                 return

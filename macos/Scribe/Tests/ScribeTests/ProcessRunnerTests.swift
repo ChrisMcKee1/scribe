@@ -130,9 +130,10 @@ final class ProcessRunnerTests: XCTestCase {
     /// `cat` echoes as it reads, so writing all of the input before reading any output deadlocks once
     /// both pipes are full.
     func testStandardInputIsWrittenWhileTheOutputIsRead() async throws {
-        let input = Data((0..<(3 * 1024 * 1024)).map { (index: Int) -> UInt8 in
-            UInt8(truncatingIfNeeded: index &* 31 &+ index >> 11)
-        })
+        let input = Data(
+            (0..<(3 * 1024 * 1024)).map { (index: Int) -> UInt8 in
+                UInt8(truncatingIfNeeded: index &* 31 &+ index >> 11)
+            })
 
         let outcome = try await ProcessRunner.run(
             URL(fileURLWithPath: "/bin/cat"),

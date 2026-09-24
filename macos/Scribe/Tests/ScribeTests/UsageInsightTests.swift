@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class UsageInsightTests: XCTestCase {
@@ -10,7 +11,9 @@ final class UsageInsightTests: XCTestCase {
             speechSeconds: 30,
             averageWords: 14,
             topApps: [UsageAnalyzer.AppUsage(name: "Editor", dictations: 2, words: 30)],
-            trend: [UsageAnalyzer.TrendPoint(start: LocalDate(year: 2026, month: 6, day: 15), dictations: 3, words: 42)],
+            trend: [
+                UsageAnalyzer.TrendPoint(start: LocalDate(year: 2026, month: 6, day: 15), dictations: 3, words: 42)
+            ],
             terms: [UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)],
             granularity: .daily)
 
@@ -86,8 +89,8 @@ final class UsageInsightTests: XCTestCase {
     }
 }
 
-private extension String {
-    func trimmingTrailingWhitespaceForTest() -> String {
+extension String {
+    fileprivate func trimmingTrailingWhitespaceForTest() -> String {
         var result = Substring(self)
         while let last = result.last, last.isWhitespace {
             result.removeLast()

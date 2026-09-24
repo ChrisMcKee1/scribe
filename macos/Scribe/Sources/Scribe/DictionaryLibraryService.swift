@@ -83,7 +83,8 @@ final class DictionaryLibraryService {
             self.librariesDirectory = overrideDirectory
         } else {
             let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.librariesDirectory = applicationSupportURL
+            self.librariesDirectory =
+                applicationSupportURL
                 .appendingPathComponent("Scribe", isDirectory: true)
                 .appendingPathComponent("Libraries", isDirectory: true)
         }
@@ -124,7 +125,8 @@ final class DictionaryLibraryService {
         try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
         let id = uniqueId(baseSlug: slugify(name))
         let library = DictionaryLibrary(
-            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries)
+            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries
+        )
 
         // Re-export through the library writer so the stored file is normalized and always
         // carries a header, regardless of what the source file looked like.
@@ -163,7 +165,9 @@ final class DictionaryLibraryService {
         }
 
         var libraries: [DictionaryLibrary] = []
-        for fileURL in fileURLs.sorted(by: { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending })
+        for fileURL in fileURLs.sorted(by: {
+            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
+        })
         where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
             guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
@@ -171,13 +175,14 @@ final class DictionaryLibraryService {
             let file = DictionaryLibraryCsv.parse(text)
             guard !file.entries.isEmpty else { continue }
 
-            libraries.append(DictionaryLibrary(
-                id: id,
-                name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
-                category: file.category ?? "Custom",
-                description: file.description,
-                builtIn: false,
-                entries: file.entries))
+            libraries.append(
+                DictionaryLibrary(
+                    id: id,
+                    name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
+                    category: file.category ?? "Custom",
+                    description: file.description,
+                    builtIn: false,
+                    entries: file.entries))
         }
         return libraries
     }
@@ -189,7 +194,8 @@ final class DictionaryLibraryService {
         var candidate = baseSlug
         var n = 2
         while builtinIds.contains(candidate.lowercased())
-            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path) {
+            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path)
+        {
             candidate = "\(baseSlug)-\(n)"
             n += 1
         }

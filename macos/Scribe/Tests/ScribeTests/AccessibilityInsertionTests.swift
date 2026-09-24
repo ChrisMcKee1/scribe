@@ -1,5 +1,6 @@
 import ApplicationServices
 import XCTest
+
 @testable import Scribe
 
 /// Stands in for the Accessibility attribute requests of one element, so a test chooses which request

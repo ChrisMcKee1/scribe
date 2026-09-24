@@ -358,7 +358,8 @@ final class LoginItemSwitch: ObservableObject {
         refusal = (outcome == .declined && latest == settled) ? (refused ?? .noEffect) : nil
         // Enum names, a flag and an error code only, never a message from macOS.
         let refusalShape = refused.map { "\($0)" } ?? "none"
-        let shape = "requested=\(requested) before=\(shown) after=\(settled) latest=\(latest) "
+        let shape =
+            "requested=\(requested) before=\(shown) after=\(settled) latest=\(latest) "
             + "refusal=\(refusalShape) outcome=\(outcome)"
         logger.info("Login item change: \(shape, privacy: .public)")
         return outcome

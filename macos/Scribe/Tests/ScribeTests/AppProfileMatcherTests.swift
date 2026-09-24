@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class AppProfileMatcherTests: XCTestCase {
@@ -89,12 +90,14 @@ final class AppProfileMatcherTests: XCTestCase {
     }
 
     func testApplyNewlineModeSmartFlattenFlattensKnownTerminal() {
-        let result = AppProfileMatcher.applyNewlineMode(.smartFlatten, to: "one\ntwo", bundleIdentifier: "com.apple.Terminal")
+        let result = AppProfileMatcher.applyNewlineMode(
+            .smartFlatten, to: "one\ntwo", bundleIdentifier: "com.apple.Terminal")
         XCTAssertEqual(result, "one two")
     }
 
     func testApplyNewlineModeSmartFlattenKeepsNewlinesForNonTerminal() {
-        let result = AppProfileMatcher.applyNewlineMode(.smartFlatten, to: "one\ntwo", bundleIdentifier: "com.apple.mail")
+        let result = AppProfileMatcher.applyNewlineMode(
+            .smartFlatten, to: "one\ntwo", bundleIdentifier: "com.apple.mail")
         XCTAssertEqual(result, "one\ntwo")
     }
 }

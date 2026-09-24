@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class UsageAnalyzerTests: XCTestCase {
@@ -36,10 +37,12 @@ final class UsageAnalyzerTests: XCTestCase {
         XCTAssertEqual(snapshot.activeDays, 3)
         XCTAssertEqual(snapshot.speechSeconds, 6, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageWords, 2, accuracy: 0.001)
-        XCTAssertEqual(snapshot.topApps, [
-            UsageAnalyzer.AppUsage(name: "Terminal", dictations: 2, words: 3),
-            UsageAnalyzer.AppUsage(name: "Visual Studio Code", dictations: 1, words: 3),
-        ])
+        XCTAssertEqual(
+            snapshot.topApps,
+            [
+                UsageAnalyzer.AppUsage(name: "Terminal", dictations: 2, words: 3),
+                UsageAnalyzer.AppUsage(name: "Visual Studio Code", dictations: 1, words: 3),
+            ])
         XCTAssertEqual(snapshot.trend.count, 31)
         XCTAssertEqual(snapshot.trend.reduce(0) { $0 + $1.dictations }, 3)
     }
@@ -72,8 +75,12 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 2, occurrences: 2, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)))
     }
 
     func testComputeSuggestsOnlyRecurringJargonShapes() {
@@ -88,7 +95,9 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertEqual(snapshot.terms, [UsageAnalyzer.TermUsage(text: "CloudThing", dictations: 2, occurrences: 2, covered: false)])
+        XCTAssertEqual(
+            snapshot.terms, [UsageAnalyzer.TermUsage(text: "CloudThing", dictations: 2, occurrences: 2, covered: false)]
+        )
     }
 
     func testComputeUsesWeekBucketsForLongPeriodsAndFillsGaps() {
@@ -145,8 +154,12 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: ".NET", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(UsageAnalyzer.TermUsage(text: ".NET", dictations: 2, occurrences: 2, covered: true))
+        )
     }
 
     func testComputeDoesNotMatchFormsInsideLargerWords() {
@@ -179,8 +192,12 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 1, occurrences: 1, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
     }
 
     func testComputePreservesNonOverlappingCountsForSingleTokenForms() {

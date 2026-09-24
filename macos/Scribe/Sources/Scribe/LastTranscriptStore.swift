@@ -57,9 +57,9 @@ final class LastTranscriptStore: @unchecked Sendable {
     @discardableResult
     func update(original: String?, updated: String?) -> Bool {
         guard let original, let updated,
-              !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !updated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              original != updated
+            !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            !updated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            original != updated
         else {
             return false
         }
@@ -152,7 +152,8 @@ final class LastTranscriptStore: @unchecked Sendable {
             return ""
         }
 
-        let collapsed = text
+        let collapsed =
+            text
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")

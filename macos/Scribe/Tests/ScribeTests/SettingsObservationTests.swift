@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Scribe
 
 final class SettingsNotificationObservationTests: XCTestCase {

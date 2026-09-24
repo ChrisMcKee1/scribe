@@ -341,7 +341,8 @@ extension XCTestCase {
     func makeScript(named name: String, body: String) throws -> URL {
         let file = try makeTemporaryDirectory(label: "tools").appendingPathComponent(name)
         try Data(("#!/bin/sh\n" + body + "\n").utf8).write(to: file)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path(percentEncoded: false))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: file.path(percentEncoded: false))
         return file
     }
 }
@@ -392,7 +393,9 @@ extension ProcessRunner.CapturedOutput {
 }
 
 extension ProcessRunner.Outcome {
-    static func exited(_ status: Int32, standardOutput: String = "", standardError: String = "") -> ProcessRunner.Outcome {
+    static func exited(_ status: Int32, standardOutput: String = "", standardError: String = "")
+        -> ProcessRunner.Outcome
+    {
         ProcessRunner.Outcome(
             terminationReason: .finished, exitStatus: status, terminationSignal: nil,
             standardOutput: .text(standardOutput), standardError: .text(standardError), duration: .milliseconds(3))

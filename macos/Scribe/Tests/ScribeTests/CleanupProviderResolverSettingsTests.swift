@@ -6,7 +6,9 @@ import XCTest
 /// connection and a provider. Every case runs against a store of its own and an environment it passes in, so nothing
 /// here depends on the developer's preferences or on how the test process was launched.
 final class CleanupProviderResolverSettingsTests: XCTestCase {
-    private func connection(_ store: CleanupSettingsStore, environment: [String: String] = [:]) throws -> CleanupConnection {
+    private func connection(_ store: CleanupSettingsStore, environment: [String: String] = [:]) throws
+        -> CleanupConnection
+    {
         try CleanupProviderResolver.connection(store: store, environment: environment)
     }
 

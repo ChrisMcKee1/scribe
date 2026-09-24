@@ -212,7 +212,9 @@ enum CommandLineTranscriptionTool {
             fputs("  \(device.uid): \(device.name)\(marker)\n", stdout)
         }
         if let selectedUID = AudioDeviceStore.selectedDeviceUID {
-            fputs("Currently selected: \(selectedUID) (\(AudioDeviceStore.selectedDeviceName ?? "unknown name"))\n", stdout)
+            fputs(
+                "Currently selected: \(selectedUID) (\(AudioDeviceStore.selectedDeviceName ?? "unknown name"))\n",
+                stdout)
         } else {
             fputs("Currently selected: system default\n", stdout)
         }
@@ -308,23 +310,27 @@ enum CommandLineTranscriptionTool {
             var profiles = try store.fetchAppProfiles()
             if profiles.isEmpty {
                 fputs("No app profile rows found; seeding verification fixtures.\n", stderr)
-                _ = try store.insertAppProfile(AppProfile(
-                    name: "Terminal",
-                    bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
-                    processNames: ["Terminal", "iTerm2"],
-                    writingStylePrompt: "Be extremely terse. No filler words.",
-                    newlineHandling: .alwaysFlatten))
-                _ = try store.insertAppProfile(AppProfile(
-                    name: "Email",
-                    bundleIdentifiers: ["com.apple.mail", "com.microsoft.Outlook"],
-                    processNames: ["Mail", "Microsoft Outlook"],
-                    writingStylePrompt: "Use a formal, professional tone with complete sentences.",
-                    newlineHandling: .keepNewlines))
+                _ = try store.insertAppProfile(
+                    AppProfile(
+                        name: "Terminal",
+                        bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
+                        processNames: ["Terminal", "iTerm2"],
+                        writingStylePrompt: "Be extremely terse. No filler words.",
+                        newlineHandling: .alwaysFlatten))
+                _ = try store.insertAppProfile(
+                    AppProfile(
+                        name: "Email",
+                        bundleIdentifiers: ["com.apple.mail", "com.microsoft.Outlook"],
+                        processNames: ["Mail", "Microsoft Outlook"],
+                        writingStylePrompt: "Use a formal, professional tone with complete sentences.",
+                        newlineHandling: .keepNewlines))
                 profiles = try store.fetchAppProfiles()
             }
 
-            let matched = AppProfileMatcher.match(profiles: profiles, bundleIdentifier: bundleIdentifier, processName: nil)
-            let mode = AppProfileMatcher.resolveNewlineMode(profile: matched, globalDefault: .smartFlatten, bundleIdentifier: bundleIdentifier)
+            let matched = AppProfileMatcher.match(
+                profiles: profiles, bundleIdentifier: bundleIdentifier, processName: nil)
+            let mode = AppProfileMatcher.resolveNewlineMode(
+                profile: matched, globalDefault: .smartFlatten, bundleIdentifier: bundleIdentifier)
             let result = AppProfileMatcher.applyNewlineMode(mode, to: rawText, bundleIdentifier: bundleIdentifier)
 
             fputs("Matched profile: \(matched?.name ?? "none")\n", stderr)
@@ -360,7 +366,10 @@ enum CommandLineTranscriptionTool {
             }
 
             fputs("Dictations: \(snapshot.count)\n", stdout)
-            fputs(String(format: "Total audio: %.1f s (longest %.1f s)\n", snapshot.totalAudioSeconds, snapshot.longestAudioSeconds), stdout)
+            fputs(
+                String(
+                    format: "Total audio: %.1f s (longest %.1f s)\n", snapshot.totalAudioSeconds,
+                    snapshot.longestAudioSeconds), stdout)
             if let decodeMs = snapshot.decodeMs {
                 fputs(
                     String(
@@ -368,7 +377,9 @@ enum CommandLineTranscriptionTool {
                         decodeMs.average, decodeMs.p50, decodeMs.p95, decodeMs.min, decodeMs.max, snapshot.decodeCount),
                     stdout)
                 fputs(
-                    String(format: "RTF: fastest %.3f, p50 %.3f, p95 %.3f\n", snapshot.fastestRtf, snapshot.rtfP50, snapshot.rtfP95),
+                    String(
+                        format: "RTF: fastest %.3f, p50 %.3f, p95 %.3f\n", snapshot.fastestRtf, snapshot.rtfP50,
+                        snapshot.rtfP95),
                     stdout)
             } else {
                 fputs("Decode ms: no timed dictations yet.\n", stdout)

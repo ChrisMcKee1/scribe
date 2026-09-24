@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Exercises `AudioDeviceStore`'s saved selection against a suite of its own (`SettingsTestDefaults`), never

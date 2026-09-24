@@ -172,7 +172,8 @@ struct DictationNoticeSchedule: Equatable, Sendable {
     private func isDuplicate(_ notice: DictationOutcomeNotice) -> Bool {
         let known = waiting + (shown.map { [$0.notice] } ?? [])
         return known.contains { other in
-            other.id == notice.id || (notice.source != nil && other.source == notice.source && other.kind == notice.kind)
+            other.id == notice.id
+                || (notice.source != nil && other.source == notice.source && other.kind == notice.kind)
         }
     }
 }

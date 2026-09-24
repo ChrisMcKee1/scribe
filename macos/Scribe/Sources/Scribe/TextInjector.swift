@@ -322,7 +322,8 @@ final class TextInjector {
         }
 
         if !trusted {
-            let message = "Accessibility permission is not granted. Scribe can capture audio, but text injection "
+            let message =
+                "Accessibility permission is not granted. Scribe can capture audio, but text injection "
                 + "is unavailable until System Settings > Privacy & Security > Accessibility allows it."
             logger.warning("\(message, privacy: .public)")
             logSink(message)

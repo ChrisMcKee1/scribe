@@ -47,7 +47,7 @@ enum AppProfileMatcher {
         "com.github.wez.wezterm",
         "net.kovidgoyal.kitty",
         "co.zeit.hyper",
-        "com.mitchellh.ghostty"
+        "com.mitchellh.ghostty",
     ]
 
     /// Returns the first profile matching `bundleIdentifier`/`processName` (case-insensitive),
@@ -58,7 +58,9 @@ enum AppProfileMatcher {
 
         if let bundleIdentifier, !bundleIdentifier.isEmpty {
             for profile in profiles {
-                if profile.bundleIdentifiers.contains(where: { $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame }) {
+                if profile.bundleIdentifiers.contains(where: {
+                    $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+                }) {
                     return profile
                 }
             }

@@ -110,7 +110,8 @@ final class CleanupSettingsModelCancelTests: XCTestCase {
     func testCancelWithNothingRunningChangesNothing() async {
         let backing = CleanupSettingsBackingFake()
         backing.stored.isEnabled = true
-        backing.connectionCheck = CleanupConnectionCheck(reachable: true, message: "Foundry Local cleaned a test phrase.")
+        backing.connectionCheck = CleanupConnectionCheck(
+            reachable: true, message: "Foundry Local cleaned a test phrase.")
         let model = CleanupSettingsModel(access: backing.access, drafts: backing.drafts, center: backing.center)
 
         model.cancelConnectionTest()

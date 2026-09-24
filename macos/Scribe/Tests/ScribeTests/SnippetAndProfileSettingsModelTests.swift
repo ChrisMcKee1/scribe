@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class SnippetAndProfileSettingsModelTests: XCTestCase {
@@ -177,7 +178,9 @@ final class SnippetAndProfileSettingsModelTests: XCTestCase {
             access: AppProfileSettingsAccess(
                 loadProfiles: {
                     await gate.pass()
-                    return [AppProfile(id: 1, name: "Stored", bundleIdentifiers: ["com.apple.Terminal"], processNames: [])]
+                    return [
+                        AppProfile(id: 1, name: "Stored", bundleIdentifiers: ["com.apple.Terminal"], processNames: [])
+                    ]
                 },
                 addProfile: { _ in throw StorageTestFailure(message: "the profile was not saved") },
                 deleteProfile: { _ in }),

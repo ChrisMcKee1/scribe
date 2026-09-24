@@ -76,7 +76,8 @@ final class AppProfileSettingsModel: ObservableObject {
 
         let profile = AppProfile(
             name: name,
-            bundleIdentifiers: identifiersText
+            bundleIdentifiers:
+                identifiersText
                 .split(separator: ",")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty },
@@ -87,7 +88,8 @@ final class AppProfileSettingsModel: ObservableObject {
             try await self.access.addProfile(profile)
         }
         if added, drafts.profileName == name, drafts.profileBundleIdentifiers == identifiersText,
-           drafts.profileWritingStyle == writingStyle, drafts.profileNewlineMode == newlineMode {
+            drafts.profileWritingStyle == writingStyle, drafts.profileNewlineMode == newlineMode
+        {
             drafts.profileName = ""
             drafts.profileBundleIdentifiers = ""
             drafts.profileWritingStyle = ""

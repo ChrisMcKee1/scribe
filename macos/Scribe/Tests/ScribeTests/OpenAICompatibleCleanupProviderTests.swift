@@ -40,7 +40,6 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
             model: "test-model", apiKey: apiKey, completionsURL: completionsURL, session: makeStubSession(handler))
     }
 
-
     /// No `store` (Chat Completions keep nothing unless asked with `true`) and no `temperature` (a bring-your-own
     /// endpoint may serve a reasoning model, which rejects one).
     func testTheRequestIsAChatCompletionWithoutStoreOrTemperature() async throws {
@@ -93,7 +92,8 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
     }
 
     func testARefusalCarriesItsStatusAndCodeButNotTheBody() async throws {
-        let body = #"{"error":{"message":"Incorrect API key provided: sk-test.","type":"invalid_request_error","code":"invalid_api_key"}}"#
+        let body =
+            #"{"error":{"message":"Incorrect API key provided: sk-test.","type":"invalid_request_error","code":"invalid_api_key"}}"#
         let provider = makeProvider(apiKey: "sk-test") { request in StubReply.json(request, status: 401, body) }
 
         let error = try await cleanupFailure(of: provider)
@@ -103,7 +103,9 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
             .rejected(
                 status: 401, provider: .openAICompatible,
                 reply: CleanupServiceReply(code: "invalid_api_key", message: "Incorrect API key provided: sk-test.")))
-        XCTAssertEqual(FailureShape(error).description, "CleanupProviderError.rejected values=401 http=401 service=invalid_api_key")
+        XCTAssertEqual(
+            FailureShape(error).description, "CleanupProviderError.rejected values=401 http=401 service=invalid_api_key"
+        )
         let description = try XCTUnwrap(error.errorDescription)
         XCTAssertTrue(description.contains("401"), description)
         XCTAssertFalse(description.contains("Incorrect API key"), description)
@@ -154,7 +156,8 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertTrue(error.isConnectionRefusal)
         PrivacyCanary.assertAbsent(from: String(describing: error))
         PrivacyCanary.assertAbsent(from: FailureShape(error).description)
-        XCTAssertTrue(FailureShape(error).description.contains("url=cannotConnectToHost"), FailureShape(error).description)
+        XCTAssertTrue(
+            FailureShape(error).description.contains("url=cannotConnectToHost"), FailureShape(error).description)
     }
 
     func testASuccessThatIsNotACompletionIsInvalid() async throws {
@@ -167,7 +170,8 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 
     func testAnEmptyOrMissingAnswerIsInvalid() async throws {
         let blank = makeProvider { request in StubReply.completion(request, "  \n ") }
-        let missing = makeProvider { request in StubReply.json(request, #"{"choices":[{"message":{"content":null}}]}"#) }
+        let missing = makeProvider { request in StubReply.json(request, #"{"choices":[{"message":{"content":null}}]}"#)
+        }
         let none = makeProvider { request in StubReply.json(request, #"{"choices":[]}"#) }
 
         for provider in [blank, missing, none] {

@@ -145,10 +145,12 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(result.backend, .foundryLocal)
         XCTAssertTrue(result.diagnostics.usedColdBudget)
         XCTAssertFalse(result.diagnostics.outputHeldAfterExit)
-        XCTAssertEqual(try String(contentsOf: evidence.appendingPathComponent("file-mode"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines), "600")
-        XCTAssertEqual(try String(contentsOf: evidence.appendingPathComponent("directory-mode"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines), "700")
+        XCTAssertEqual(
+            try String(contentsOf: evidence.appendingPathComponent("file-mode"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), "600")
+        XCTAssertEqual(
+            try String(contentsOf: evidence.appendingPathComponent("directory-mode"), encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines), "700")
         XCTAssertEqual(
             try String(contentsOf: evidence.appendingPathComponent("alias"), encoding: .utf8),
             TranscriptionEngine.defaultFoundryModelAlias)

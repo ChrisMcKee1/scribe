@@ -46,8 +46,8 @@ enum PersistenceError: LocalizedError, Equatable {
     }
 }
 
-private extension PersistenceOperation {
-    var verb: String {
+extension PersistenceOperation {
+    fileprivate var verb: String {
         switch self {
         case .open: return "open"
         case .migrate: return "update"
@@ -497,7 +497,7 @@ final class PersistenceStore: Sendable {
             var records: [DictationHistoryRecord] = []
             while try statement.step() {
                 guard let startedAtText = statement.text(at: 0),
-                      let startedAt = session.date(from: startedAtText)
+                    let startedAt = session.date(from: startedAtText)
                 else {
                     continue
                 }
@@ -589,7 +589,7 @@ final class PersistenceStore: Sendable {
             try session.transaction(.maintenance) { () -> RetentionBatchOutcome in
                 let current = try Self.readRetention(session)
                 guard current == .chosen(HistoryRetention(days: days)),
-                      let cutoff = current.cutoff(before: now)
+                    let cutoff = current.cutoff(before: now)
                 else {
                     return .authorizationChanged(current)
                 }
@@ -960,7 +960,8 @@ final class PersistenceStore: Sendable {
     }
 
     private static func readDictionaryEntries(enabledOnly: Bool, _ session: SQLiteSession) throws -> [DictionaryEntry] {
-        let sql = enabledOnly
+        let sql =
+            enabledOnly
             ? "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;"
             : "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries ORDER BY id;"
         return try session.withStatement(sql, .read) { statement in
@@ -1083,7 +1084,8 @@ final class PersistenceStore: Sendable {
     }
 
     private static func readSnippets(enabledOnly: Bool, _ session: SQLiteSession) throws -> [Snippet] {
-        let sql = enabledOnly
+        let sql =
+            enabledOnly
             ? "SELECT id, phrase, template, enabled FROM snippets WHERE enabled = 1 ORDER BY id;"
             : "SELECT id, phrase, template, enabled FROM snippets ORDER BY id;"
         return try session.withStatement(sql, .read) { statement in
@@ -1226,7 +1228,8 @@ final class PersistenceStore: Sendable {
             let dictionaryEntries = try Self.readDictionaryEntries(enabledOnly: true, session)
             let snippets = try Self.readSnippets(enabledOnly: true, session)
             let appProfiles = try Self.readAppProfiles(session)
-            return PersistenceRuleSet(dictionaryEntries: dictionaryEntries, snippets: snippets, appProfiles: appProfiles)
+            return PersistenceRuleSet(
+                dictionaryEntries: dictionaryEntries, snippets: snippets, appProfiles: appProfiles)
         }
     }
 
@@ -1420,7 +1423,8 @@ private final class ConnectionOwner: @unchecked Sendable {
         }
 
         do {
-            let journalMode = try Self.configure(opened, busyTimeoutMilliseconds: busyTimeoutMilliseconds, timestamps: timestamps)
+            let journalMode = try Self.configure(
+                opened, busyTimeoutMilliseconds: busyTimeoutMilliseconds, timestamps: timestamps)
             if journalMode.lowercased() == "wal" {
                 logger.info("Opened the database in WAL mode.")
             } else {
@@ -1628,7 +1632,7 @@ private struct SQLiteStatement {
 
     func text(at column: Int32) -> String? {
         guard sqlite3_column_type(handle, column) != SQLITE_NULL,
-              let pointer = sqlite3_column_text(handle, column)
+            let pointer = sqlite3_column_text(handle, column)
         else {
             return nil
         }

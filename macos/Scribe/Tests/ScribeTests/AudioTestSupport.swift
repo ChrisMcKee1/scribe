@@ -43,7 +43,13 @@ enum AudioTestSignal {
     /// Pink noise (Paul Kellet's filter over seeded Gaussian white noise) at an RMS level in dBFS.
     static func pink(seconds: Double, rmsDbfs: Double, seed: UInt64, sampleRate: Int = sampleRate) -> [Float] {
         var random = AudioTestRandom(seed: seed)
-        var b0 = 0.0, b1 = 0.0, b2 = 0.0, b3 = 0.0, b4 = 0.0, b5 = 0.0, b6 = 0.0
+        var b0 = 0.0
+        var b1 = 0.0
+        var b2 = 0.0
+        var b3 = 0.0
+        var b4 = 0.0
+        var b5 = 0.0
+        var b6 = 0.0
         var samples = [Float](repeating: 0, count: Int(seconds * Double(sampleRate)))
         for index in samples.indices {
             let white = random.gaussian()

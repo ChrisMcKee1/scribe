@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class PersistenceStoreCRUDTests: XCTestCase {
@@ -30,7 +31,8 @@ final class PersistenceStoreCRUDTests: XCTestCase {
 
     func testFetchAllDictionaryEntriesIncludesDisabled() throws {
         _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "enabled-one", replacement: "x", enabled: true))
-        let disabledID = try store.insertDictionaryEntry(DictionaryEntry(pattern: "disabled-one", replacement: "y", enabled: false))
+        let disabledID = try store.insertDictionaryEntry(
+            DictionaryEntry(pattern: "disabled-one", replacement: "y", enabled: false))
 
         XCTAssertEqual(try store.fetchEnabledDictionaryEntries().count, 1)
         XCTAssertEqual(try store.fetchAllDictionaryEntries().count, 2)
@@ -72,12 +74,13 @@ final class PersistenceStoreCRUDTests: XCTestCase {
     // MARK: - App profiles
 
     func testInsertAndFetchAppProfileRoundTripsAllFields() throws {
-        let id = try store.insertAppProfile(AppProfile(
-            name: "Terminal",
-            bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
-            processNames: ["Terminal"],
-            writingStylePrompt: "Be terse.",
-            newlineHandling: .alwaysFlatten))
+        let id = try store.insertAppProfile(
+            AppProfile(
+                name: "Terminal",
+                bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
+                processNames: ["Terminal"],
+                writingStylePrompt: "Be terse.",
+                newlineHandling: .alwaysFlatten))
         XCTAssertGreaterThan(id, 0)
 
         let profiles = try store.fetchAppProfiles()
@@ -92,12 +95,13 @@ final class PersistenceStoreCRUDTests: XCTestCase {
     }
 
     func testAppProfileWithNilOverridesRoundTrips() throws {
-        _ = try store.insertAppProfile(AppProfile(
-            name: "Minimal",
-            bundleIdentifiers: ["com.example.app"],
-            processNames: [],
-            writingStylePrompt: nil,
-            newlineHandling: nil))
+        _ = try store.insertAppProfile(
+            AppProfile(
+                name: "Minimal",
+                bundleIdentifiers: ["com.example.app"],
+                processNames: [],
+                writingStylePrompt: nil,
+                newlineHandling: nil))
 
         let profile = try XCTUnwrap(try store.fetchAppProfiles().first)
         XCTAssertNil(profile.writingStylePrompt)
@@ -105,7 +109,8 @@ final class PersistenceStoreCRUDTests: XCTestCase {
     }
 
     func testDeleteAppProfile() throws {
-        let id = try store.insertAppProfile(AppProfile(name: "Temp", bundleIdentifiers: ["com.example.temp"], processNames: []))
+        let id = try store.insertAppProfile(
+            AppProfile(name: "Temp", bundleIdentifiers: ["com.example.temp"], processNames: []))
         try store.deleteAppProfile(id: id)
         XCTAssertTrue(try store.fetchAppProfiles().isEmpty)
     }

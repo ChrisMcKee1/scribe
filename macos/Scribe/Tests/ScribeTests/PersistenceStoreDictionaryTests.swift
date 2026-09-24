@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// The dictionary, snippet and profile operations the Settings tabs use through the store's asynchronous forms.

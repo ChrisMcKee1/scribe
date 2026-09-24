@@ -47,9 +47,9 @@ enum DictionaryLibraryCsv {
                     continue
                 }
                 if trimmed.isEmpty {
-                    continue // tolerate blank lines before the header
+                    continue  // tolerate blank lines before the header
                 }
-                break // reached the header/data; metadata only lives at the top
+                break  // reached the header/data; metadata only lives at the top
             }
         }
 

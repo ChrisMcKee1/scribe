@@ -97,7 +97,8 @@ enum DictionaryUsageAnalyzer {
         // unrelated dictations.
         let corpus = usable.joined(separator: "\n")
 
-        let unused = candidates
+        let unused =
+            candidates
             .map { score(corpus: corpus, entry: $0) }
             .filter { $0.unused }
             .sorted { $0.entry.pattern.localizedCaseInsensitiveCompare($1.entry.pattern) == .orderedAscending }
@@ -134,7 +135,8 @@ enum DictionaryUsageAnalyzer {
         // somewhere boundaries would reject: "comma" -> "," produces "hello, world", where the
         // comma follows a word character. Searching that with boundaries would report a rule that
         // fires constantly as dead.
-        let replacementHits = entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let replacementHits =
+            entry.replacement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? 0
             : count(corpus: corpus, term: entry.replacement, wholeWord: false)
 
@@ -167,7 +169,8 @@ enum DictionaryUsageAnalyzer {
                 + "Nothing to clean up."
         }
 
-        let headline = "Checked \(examined) terms against your last \(transcripts) dictations. "
+        let headline =
+            "Checked \(examined) terms against your last \(transcripts) dictations. "
             + "\(unusedCount) of your own \(unusedCount == 1 ? "entry" : "entries") did not appear."
 
         // The glossary cap only bites once the dictionary is bigger than it, so the number is only

@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import OSLog
 import XCTest
+
 @testable import Scribe
 
 /// Stands in for Accessibility, the workspace and event posting, so each test decides what has focus and

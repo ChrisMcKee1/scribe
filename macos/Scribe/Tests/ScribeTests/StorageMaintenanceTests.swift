@@ -1,5 +1,6 @@
 import SQLite3
 import XCTest
+
 @testable import Scribe
 
 final class StorageMaintenanceTests: XCTestCase {
@@ -438,7 +439,8 @@ final class StorageMaintenanceTests: XCTestCase {
         let writer = HistoryWriter(recorder: recorder)
         let maintenance = makeMaintenance(store, writer: writer) { $0.clearTimeout = 0.05 }
         writer.enqueue(
-            DictationHistoryRecord(startedAt: fixedNow, durationSeconds: 1, sampleCount: 16_000, transcriptText: "held"))
+            DictationHistoryRecord(startedAt: fixedNow, durationSeconds: 1, sampleCount: 16_000, transcriptText: "held")
+        )
         XCTAssertTrue(recorder.waitUntilStarted(1))
 
         do {

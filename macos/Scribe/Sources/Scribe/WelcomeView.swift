@@ -35,9 +35,14 @@ struct WelcomeView: View {
                 .font(.body)
 
             VStack(alignment: .leading, spacing: 8) {
-                Label("Fully offline. Audio is transcribed on this Mac and discarded; nothing is uploaded.", systemImage: "lock.shield")
-                Label("Scribe lives in the menu bar (top right). Click the microphone icon any time.", systemImage: "menubar.rectangle")
-                Label("AI cleanup, if you enable it, sends only transcribed text, never audio.", systemImage: "sparkles")
+                Label(
+                    "Fully offline. Audio is transcribed on this Mac and discarded; nothing is uploaded.",
+                    systemImage: "lock.shield")
+                Label(
+                    "Scribe lives in the menu bar (top right). Click the microphone icon any time.",
+                    systemImage: "menubar.rectangle")
+                Label(
+                    "AI cleanup, if you enable it, sends only transcribed text, never audio.", systemImage: "sparkles")
             }
             .font(.callout)
             .foregroundStyle(.secondary)

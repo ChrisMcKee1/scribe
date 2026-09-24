@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class SemanticVersionTests: XCTestCase {
@@ -83,12 +84,12 @@ final class UpdateCheckerTests: XCTestCase {
         let session = makeStubSession { request in
             requests.record(request)
             let json = """
-            {
-                "tag_name": "v9.9.9",
-                "html_url": "https://github.com/x3nc0n/scribe/releases/tag/v9.9.9",
-                "name": "Scribe 9.9.9"
-            }
-            """.data(using: .utf8)!
+                {
+                    "tag_name": "v9.9.9",
+                    "html_url": "https://github.com/x3nc0n/scribe/releases/tag/v9.9.9",
+                    "name": "Scribe 9.9.9"
+                }
+                """.data(using: .utf8)!
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (response, json)

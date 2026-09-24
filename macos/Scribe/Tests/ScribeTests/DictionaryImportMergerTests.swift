@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryImportMergerTests: XCTestCase {
@@ -50,8 +51,8 @@ final class DictionaryImportMergerTests: XCTestCase {
         let op = plan.operations[0]
         XCTAssertEqual(op.kind, .update)
         XCTAssertEqual(op.index, 2)
-        XCTAssertEqual(op.entry.id, 42) // existing id preserved
-        XCTAssertEqual(op.entry.pattern, "azure") // original spoken form preserved
+        XCTAssertEqual(op.entry.id, 42)  // existing id preserved
+        XCTAssertEqual(op.entry.pattern, "azure")  // original spoken form preserved
         XCTAssertEqual(op.entry.replacement, "Azure")
         XCTAssertFalse(op.entry.wholeWord)
         XCTAssertFalse(op.entry.enabled)
@@ -81,22 +82,22 @@ final class DictionaryImportMergerTests: XCTestCase {
 
     func testMergeMixedBatchReportsAllCounts() {
         let existingRows = [
-            existing(0, 1, "azure", "Azure"), // will be unchanged
-            existing(1, 2, "cube", "cube"),   // will be updated
+            existing(0, 1, "azure", "Azure"),  // will be unchanged
+            existing(1, 2, "cube", "cube"),  // will be updated
         ]
 
         let plan = DictionaryImportMerger.merge(
             existing: existingRows,
             imported: [
-                DictionaryEntry(pattern: "azure", replacement: "Azure"),      // unchanged
+                DictionaryEntry(pattern: "azure", replacement: "Azure"),  // unchanged
                 DictionaryEntry(pattern: "cube", replacement: "Kubernetes"),  // update
-                DictionaryEntry(pattern: "net", replacement: "NET"),          // add
+                DictionaryEntry(pattern: "net", replacement: "NET"),  // add
             ])
 
         XCTAssertEqual(plan.added, 1)
         XCTAssertEqual(plan.updated, 1)
         XCTAssertEqual(plan.unchanged, 1)
-        XCTAssertEqual(plan.operations.count, 2) // one update, one add (unchanged emits nothing)
+        XCTAssertEqual(plan.operations.count, 2)  // one update, one add (unchanged emits nothing)
     }
 
     func testMergeLaterDuplicateImportUpdatesTheJustAddedRow() {
@@ -114,7 +115,7 @@ final class DictionaryImportMergerTests: XCTestCase {
         XCTAssertEqual(plan.operations.count, 2)
         XCTAssertEqual(plan.operations[0].kind, .add)
         XCTAssertEqual(plan.operations[1].kind, .update)
-        XCTAssertEqual(plan.operations[1].index, 0) // the row the add appended
+        XCTAssertEqual(plan.operations[1].index, 0)  // the row the add appended
         XCTAssertEqual(plan.operations[1].entry.replacement, "Second")
     }
 

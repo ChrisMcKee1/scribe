@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Applied rule sets, recorded on the main actor.

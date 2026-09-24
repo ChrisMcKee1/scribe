@@ -45,7 +45,8 @@ final class AzureCliCommandTests: XCTestCase {
     }
 
     func testTheResourceIsTheScopeWithoutItsDefaultSuffix() {
-        XCTAssertEqual(AzureCliCredentialProvider.resource(fromScope: "https://ai.azure.com/.default"), "https://ai.azure.com")
+        XCTAssertEqual(
+            AzureCliCredentialProvider.resource(fromScope: "https://ai.azure.com/.default"), "https://ai.azure.com")
         XCTAssertEqual(AzureCliCredentialProvider.resource(fromScope: "https://ai.azure.com"), "https://ai.azure.com")
     }
 }
@@ -158,7 +159,8 @@ final class AzureCliCredentialProviderTests: XCTestCase {
             """
         try Data(script.utf8).write(to: az)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: az.path(percentEncoded: false))
-        let provider = AzureCliCredentialProvider(searchPath: [directory.path(percentEncoded: false)], lane: AsyncLane())
+        let provider = AzureCliCredentialProvider(
+            searchPath: [directory.path(percentEncoded: false)], lane: AsyncLane())
 
         do {
             _ = try await provider.accessToken(scope: scope)
@@ -213,7 +215,8 @@ final class AzureCliCredentialProviderTests: XCTestCase {
                 XCTAssertFalse(text.contains("1234567"), text)
             }
             XCTAssertTrue(
-                CleanupFailureText.forSettings(error, providerName: nil).hasSuffix("Microsoft Entra reported AADSTS1234567."))
+                CleanupFailureText.forSettings(error, providerName: nil).hasSuffix(
+                    "Microsoft Entra reported AADSTS1234567."))
         }
     }
 
@@ -241,7 +244,9 @@ final class AzureCliCredentialProviderTests: XCTestCase {
     func testTheTokenIsReusedUntilAMinuteBeforeItExpires() async throws {
         let clock = TestClock()
         let expiry = Int(clock.date.timeIntervalSince1970) + 3600
-        let fake = FakeAzureCli(outcomes: [.azToken("first", expiresOn: expiry), .azToken("second", expiresOn: expiry + 3600)])
+        let fake = FakeAzureCli(outcomes: [
+            .azToken("first", expiresOn: expiry), .azToken("second", expiresOn: expiry + 3600),
+        ])
         let path = try azDirectory()
         let provider = AzureCliCredentialProvider(
             searchPath: [path], lane: AsyncLane(), launch: fake.launch, now: clock.now)
@@ -313,10 +318,12 @@ final class AsyncLaneTests: XCTestCase {
     func testACallerCancelledWhileWaitingLeavesTheLaneAtOnce() async throws {
         let lane = AsyncLane()
         let gate = SettingsTestGate()
-        let holder = Task { try await lane.run { () async -> Int in
-            await gate.pass()
-            return 1
-        } }
+        let holder = Task {
+            try await lane.run { () async -> Int in
+                await gate.pass()
+                return 1
+            }
+        }
         await waitBounded("the first caller to hold the lane") { await gate.waitForArrival() }
         let waiter = Task { try await lane.run { 2 } }
         await waitBounded("the second caller to queue") { await lane.waitUntilWaiting(atLeast: 1) }
@@ -341,18 +348,23 @@ final class AsyncLaneTests: XCTestCase {
         let lane = AsyncLane()
         let gate = SettingsTestGate()
         let order = RequestOrder()
-        let holder = Task { try await lane.run { () async -> Int in
-            await gate.pass()
-            order.append(0)
-            return 0
-        } }
+        let holder = Task {
+            try await lane.run { () async -> Int in
+                await gate.pass()
+                order.append(0)
+                return 0
+            }
+        }
         await waitBounded("the first caller to hold the lane") { await gate.waitForArrival() }
         var waiters: [Task<Int, any Error>] = []
         for index in 1...3 {
-            waiters.append(Task { try await lane.run { () -> Int in
-                order.append(index)
-                return index
-            } })
+            waiters.append(
+                Task {
+                    try await lane.run { () -> Int in
+                        order.append(index)
+                        return index
+                    }
+                })
             await waitBounded("caller \(index) to queue") { await lane.waitUntilWaiting(atLeast: index) }
         }
 

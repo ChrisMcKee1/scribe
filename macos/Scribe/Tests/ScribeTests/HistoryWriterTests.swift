@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// A `HistoryRecording` that can hold writes at their start, fail chosen ones, and forward the rest
@@ -190,7 +191,8 @@ final class HistoryWriterTests: XCTestCase {
         writer.enqueue(record("queued one"))
         writer.enqueue(record("queued two"))
 
-        XCTAssertEqual(writer.complete(timeout: 0.05), HistoryDrainResult(drained: false, stillWriting: 1, abandoned: 2))
+        XCTAssertEqual(
+            writer.complete(timeout: 0.05), HistoryDrainResult(drained: false, stillWriting: 1, abandoned: 2))
 
         // The stuck write finishes on its own; what was queued behind it is never committed.
         recorder.openGate()
@@ -271,7 +273,8 @@ final class HistoryWriterTests: XCTestCase {
         let clearing = Task { try await writer.clearHistory(timeout: 30) }
         XCTAssertTrue(clearQueued.wait())
 
-        XCTAssertEqual(writer.complete(timeout: 0.05), HistoryDrainResult(drained: false, stillWriting: 1, abandoned: 1))
+        XCTAssertEqual(
+            writer.complete(timeout: 0.05), HistoryDrainResult(drained: false, stillWriting: 1, abandoned: 1))
         recorder.openGate()
 
         do {

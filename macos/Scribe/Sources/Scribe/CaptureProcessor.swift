@@ -316,7 +316,8 @@ final class CaptureProcessor: Sendable {
             var events: [CaptureEvent.Kind] = []
             state.readingFrames += processed
             if state.readingFrames >= input.framesPerReading {
-                let rms = state.readingSamples > 0
+                let rms =
+                    state.readingSamples > 0
                     ? Float((state.readingSquares / Double(state.readingSamples)).squareRoot()) : 0
                 events.append(.level(AudioLevelMeasurement(peakAmplitude: state.readingPeak, rmsAmplitude: rms)))
                 state.readingPeak = 0

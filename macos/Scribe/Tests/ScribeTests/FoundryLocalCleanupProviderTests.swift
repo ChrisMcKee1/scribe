@@ -48,7 +48,9 @@ final class FoundryLocalStatusTests: XCTestCase {
         try Data(script.utf8).write(to: foundry)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: foundry.path(percentEncoded: false))
-        let status = FoundryLocalStatusSource.live(environment: ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)])
+        let status = FoundryLocalStatusSource.live(environment: [
+            "SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)
+        ])
 
         let url = try await status.lookup()
 
@@ -70,7 +72,9 @@ final class FoundryLocalStatusTests: XCTestCase {
 
     func testALiveLookupThatFailsIsNotReady() async throws {
         let foundry = try makeScript(named: "foundry", body: "echo 'Service is not running' >&2\nexit 1")
-        let status = FoundryLocalStatusSource.live(environment: ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)])
+        let status = FoundryLocalStatusSource.live(environment: [
+            "SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)
+        ])
 
         do {
             _ = try await status.lookup()

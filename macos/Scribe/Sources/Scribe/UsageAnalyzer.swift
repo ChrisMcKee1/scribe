@@ -57,8 +57,8 @@ struct LocalDate: Hashable, Comparable {
         components.month = month
         components.day = day
         let date = Self.utcCalendar.date(from: components) ?? Date(timeIntervalSince1970: 0)
-        let weekday = Self.utcCalendar.component(.weekday, from: date) // 1 = Sunday ... 7 = Saturday
-        let offset = (weekday + 5) % 7 // Monday-based offset, matching C#'s DayOfWeek arithmetic
+        let weekday = Self.utcCalendar.component(.weekday, from: date)  // 1 = Sunday ... 7 = Saturday
+        let offset = (weekday + 5) % 7  // Monday-based offset, matching C#'s DayOfWeek arithmetic
         return addingDays(-offset)
     }
 
@@ -220,7 +220,8 @@ enum UsageAnalyzer {
     ) -> ([TrendPoint], TrendGranularity) {
         let end = LocalDate(date: nowUtc, timeZone: timeZone)
         let requestedStart = LocalDate(date: sinceUtc, timeZone: timeZone)
-        let firstEntry = entries.isEmpty
+        let firstEntry =
+            entries.isEmpty
             ? end
             : entries.map { LocalDate(date: $0.timestampUtc, timeZone: timeZone) }.min()!
         var start = requestedStart.year <= 1 ? firstEntry : requestedStart
@@ -303,7 +304,7 @@ enum UsageAnalyzer {
 
         // Forms Token() can represent whole are counted through one tokenization pass and hash
         // lookups; only multi-token phrases retain compiled regex matching.
-        var singleTokenForms: [String: String] = [:] // lowercased form -> canonical-cased form
+        var singleTokenForms: [String: String] = [:]  // lowercased form -> canonical-cased form
         var phraseMatchers: [(text: String, regex: NSRegularExpression)] = []
         var seenFormKeys = Set<String>()
         for term in known {
@@ -313,7 +314,8 @@ enum UsageAnalyzer {
                 if isSingleTokenForm(form) {
                     singleTokenForms[key] = form
                 } else if let regex = try? NSRegularExpression(
-                    pattern: phrasePattern(for: form), options: [.caseInsensitive]) {
+                    pattern: phrasePattern(for: form), options: [.caseInsensitive])
+                {
                     phraseMatchers.append((text: form, regex: regex))
                 }
             }
@@ -333,7 +335,7 @@ enum UsageAnalyzer {
         for entry in entries {
             let nsText = entry.text as NSString
             let fullRange = NSRange(location: 0, length: nsText.length)
-            var formCounts: [String: Int] = [:] // keyed by canonical form text
+            var formCounts: [String: Int] = [:]  // keyed by canonical form text
             var lastMatchEnds: [String: Int] = [:]
             var seenNovelForms = Set<String>()
 
@@ -354,7 +356,8 @@ enum UsageAnalyzer {
                 }
                 let lowered = trimmed.lowercased()
                 guard trimmed.count >= 2, !coveredForms.contains(lowered),
-                      DictionarySuggestionMiner.isJargonShaped(trimmed) else {
+                    DictionarySuggestionMiner.isJargonShaped(trimmed)
+                else {
                     continue
                 }
 
@@ -387,18 +390,21 @@ enum UsageAnalyzer {
 
         var results: [TermUsage] = []
         for (index, term) in known.enumerated() where termDictations[index] > 0 {
-            results.append(TermUsage(
-                text: term.canonical,
-                dictations: termDictations[index],
-                occurrences: termOccurrences[index],
-                covered: true))
+            results.append(
+                TermUsage(
+                    text: term.canonical,
+                    dictations: termDictations[index],
+                    occurrences: termOccurrences[index],
+                    covered: true))
         }
         for value in novelForms.values where value.dictations >= 2 {
-            results.append(TermUsage(
-                text: value.surface, dictations: value.dictations, occurrences: value.occurrences, covered: false))
+            results.append(
+                TermUsage(
+                    text: value.surface, dictations: value.dictations, occurrences: value.occurrences, covered: false))
         }
 
-        return results
+        return
+            results
             .sorted { lhs, rhs in
                 if lhs.dictations != rhs.dictations { return lhs.dictations > rhs.dictations }
                 if lhs.occurrences != rhs.occurrences { return lhs.occurrences > rhs.occurrences }

@@ -69,8 +69,8 @@ enum HistoryRetentionSetting: Equatable, Sendable {
 
     init(storedValue: String?) {
         guard let storedValue,
-              let days = Int(storedValue.trimmingCharacters(in: .whitespaces)),
-              days >= 0
+            let days = Int(storedValue.trimmingCharacters(in: .whitespaces)),
+            days >= 0
         else {
             self = .unreadable
             return
@@ -501,7 +501,8 @@ final class StorageMaintenance: @unchecked Sendable {
             let reclaimOutcome = reclaim()
             let checkpointOutcome = checkpointIfOwed()
             logger.info(
-                "Cleared \(removed) history entries; reclaim \(Self.describe(reclaimOutcome), privacy: .public); checkpoint \(Self.describe(checkpointOutcome), privacy: .public).")
+                "Cleared \(removed) history entries; reclaim \(Self.describe(reclaimOutcome), privacy: .public); checkpoint \(Self.describe(checkpointOutcome), privacy: .public)."
+            )
         case .failure(let error):
             let code = Self.code(of: error)
             let errorType = String(describing: type(of: error))
@@ -598,7 +599,8 @@ final class StorageMaintenance: @unchecked Sendable {
         let outcome: StorageMaintenanceReport.Reclaim
         do {
             if stats.autoVacuum == 2 {
-                outcome = try reclaimIncrementally(freePages: stats.freePages, deadline: deadline, shouldStop: shouldStop)
+                outcome = try reclaimIncrementally(
+                    freePages: stats.freePages, deadline: deadline, shouldStop: shouldStop)
             } else {
                 outcome = try convertAndVacuum(freePages: stats.freePages, deadline: deadline, shouldStop: shouldStop)
             }
@@ -827,10 +829,12 @@ final class StorageMaintenance: @unchecked Sendable {
 
         if eventful {
             logger.info(
-                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).")
+                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public)."
+            )
         } else {
             logger.debug(
-                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).")
+                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public)."
+            )
         }
     }
 

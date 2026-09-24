@@ -16,10 +16,11 @@ struct RecordingID: Hashable, Comparable, Sendable, CustomStringConvertible {
 
     /// A new identifier, higher than every one `next()` returned before in this process. Never zero.
     static func next() -> RecordingID {
-        RecordingID(rawValue: issued.withLock { last -> UInt64 in
-            last += 1
-            return last
-        })
+        RecordingID(
+            rawValue: issued.withLock { last -> UInt64 in
+                last += 1
+                return last
+            })
     }
 
     static func < (lhs: RecordingID, rhs: RecordingID) -> Bool {

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// In-memory stand-in for `CleanupSettingsStore`, Keychain and the provider. A save posts

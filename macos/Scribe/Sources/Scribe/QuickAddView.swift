@@ -50,9 +50,11 @@ struct QuickAddView: View {
                 .font(.headline)
 
             if recentTranscripts.isEmpty {
-                Text("No recent dictations to pick a word from yet. Dictate something first, or type the spoken form directly below.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "No recent dictations to pick a word from yet. Dictate something first, or type the spoken form directly below."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
             } else {
                 Picker("Recent dictation", selection: $selectedTranscriptIndex) {
                     ForEach(recentTranscripts.indices, id: \.self) { index in
@@ -73,7 +75,8 @@ struct QuickAddView: View {
                     ForEach(Array(tokens.enumerated()), id: \.offset) { index, token in
                         Button(token.text) {
                             selection = QuickDictionaryAdd.toggle(selection, index: index)
-                            heard = QuickDictionaryAdd.select(transcript, tokens: tokens, first: selection.first, last: selection.last)
+                            heard = QuickDictionaryAdd.select(
+                                transcript, tokens: tokens, first: selection.first, last: selection.last)
                         }
                         .buttonStyle(.plain)
                         .padding(.horizontal, 8)
@@ -145,10 +148,11 @@ struct QuickAddView: View {
                     wholeWord: entry.wholeWord,
                     enabled: entry.enabled)
                 let corrected = sourceTranscript.map { QuickDictionaryAdd.apply($0, entry: saved) }
-                onSave(SavedResult(
-                    entry: saved,
-                    sourceTranscript: sourceTranscript,
-                    correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
+                onSave(
+                    SavedResult(
+                        entry: saved,
+                        sourceTranscript: sourceTranscript,
+                        correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
             } catch {
                 errorMessage = "Couldn't save that rule: \(error.localizedDescription)"
             }

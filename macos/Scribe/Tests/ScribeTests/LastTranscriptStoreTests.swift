@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Direct port of Windows' `LastTranscriptStoreTests`, covering the ring buffer semantics, the

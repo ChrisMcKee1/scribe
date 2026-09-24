@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Scribe
 
 /// Exercises `PasteboardBorrower` against real, privately named pasteboards, never the general one.

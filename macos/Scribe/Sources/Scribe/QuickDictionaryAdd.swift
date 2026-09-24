@@ -14,7 +14,8 @@ enum QuickDictionaryAdd {
     /// punctuation: stripping every non-alphanumeric would turn "C++" into "C" and "#tag" into
     /// "tag", which are legitimate things to want a rule for. Trimming affects only the ends, so
     /// internal apostrophes in "don't" survive.
-    private static let edgePunctuation = CharacterSet(charactersIn: ".,!?;:\"'`()[]{}<>\u{2026}\u{2014}\u{2013}\u{00AB}\u{00BB}\u{201C}\u{201D}\u{2018}\u{2019}")
+    private static let edgePunctuation = CharacterSet(
+        charactersIn: ".,!?;:\"'`()[]{}<>\u{2026}\u{2014}\u{2013}\u{00AB}\u{00BB}\u{201C}\u{201D}\u{2018}\u{2019}")
 
     /// One selectable chip: the word as it appears, plus its span in the source transcript (as
     /// UTF-16 offsets, matching the C# `int` char-index semantics of `Token.Start`/`Length`).
@@ -200,7 +201,8 @@ enum QuickDictionaryAdd {
         // edit rather than an intent. Case-only differences ("copilot" to "Copilot") are the
         // single most common real rule, so the comparison is ordinal.
         if spoken == written {
-            return Plan(kind: .invalid, entry: nil, message: "That is already what Scribe writes, so nothing would change.")
+            return Plan(
+                kind: .invalid, entry: nil, message: "That is already what Scribe writes, so nothing would change.")
         }
 
         // The dictionary runs in a single pass: every rule matches the original transcript, and no
@@ -209,8 +211,10 @@ enum QuickDictionaryAdd {
         // in the popup is the finished text, which is exactly where those replacements appear.
         let producer = existing.first {
             $0.enabled
-                && $0.replacement.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(spoken) == .orderedSame
-                && $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(spoken) != .orderedSame
+                && $0.replacement.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(spoken)
+                    == .orderedSame
+                && $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(spoken)
+                    != .orderedSame
         }
 
         if let producer {
@@ -229,12 +233,14 @@ enum QuickDictionaryAdd {
         if let match {
             let matchReplacement = match.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
             if matchReplacement == written && match.wholeWord == wholeWord && match.enabled {
-                return Plan(kind: .noChange, entry: match, message: "\"\(spoken)\" already becomes \"\(describe(written))\".")
+                return Plan(
+                    kind: .noChange, entry: match, message: "\"\(spoken)\" already becomes \"\(describe(written))\".")
             }
 
             // Re-enable on update: the user is explicitly asking for this rule right now, so a
             // previously disabled row should start working rather than silently stay off.
-            let updated = DictionaryEntry(id: match.id, pattern: spoken, replacement: written, wholeWord: wholeWord, enabled: true)
+            let updated = DictionaryEntry(
+                id: match.id, pattern: spoken, replacement: written, wholeWord: wholeWord, enabled: true)
             return Plan(
                 kind: .update,
                 entry: updated,

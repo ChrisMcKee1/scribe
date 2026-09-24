@@ -1,5 +1,6 @@
 import CoreGraphics
 import XCTest
+
 @testable import Scribe
 
 /// Covers how dictated text becomes keystrokes for the typing fallback, and what each keystroke's events

@@ -98,13 +98,16 @@ struct AboutView: View {
     private var startupCard: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Open Scribe AI at Login", isOn: Binding(
-                    get: { loginItem.isOn },
-                    set: { requested in
-                        Task { await loginItem.setEnabled(requested) }
-                    }))
-                    .font(.headline)
-                    .disabled(!loginItem.canFlip)
+                Toggle(
+                    "Open Scribe AI at Login",
+                    isOn: Binding(
+                        get: { loginItem.isOn },
+                        set: { requested in
+                            Task { await loginItem.setEnabled(requested) }
+                        })
+                )
+                .font(.headline)
+                .disabled(!loginItem.canFlip)
                 Text(loginItem.message)
                     .font(.footnote)
                     .foregroundStyle(loginItem.refusal == nil ? Color.secondary : Color.red)
@@ -151,9 +154,11 @@ struct AboutView: View {
                 Text("Private by design")
                     .font(.headline)
                     .foregroundStyle(Color.accentColor)
-                Text("Speech recognition runs on this Mac, and audio never leaves it. Cloud AI is optional and sends text only when you enable or invoke a remote provider feature.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Speech recognition runs on this Mac, and audio never leaves it. Cloud AI is optional and sends text only when you enable or invoke a remote provider feature."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
                 Button("Read privacy policy") {
                     NSWorkspace.shared.open(Self.privacyPolicyURL)
                 }
@@ -186,9 +191,11 @@ struct AboutView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Support and source")
                         .font(.headline)
-                    Text("Report a problem, request a feature, or inspect the code that runs on your Mac. Never put transcripts, audio, credentials, or other sensitive information in a public issue.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "Report a problem, request a feature, or inspect the code that runs on your Mac. Never put transcripts, audio, credentials, or other sensitive information in a public issue."
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(spacing: 8) {
@@ -208,16 +215,20 @@ struct AboutView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Where your data is stored")
                     .font(.headline)
-                Text("Scribe keeps its local data file at this location. Copy the path to paste it elsewhere, or reveal it in Finder.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Scribe keeps its local data file at this location. Copy the path to paste it elsewhere, or reveal it in Finder."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
 
                 Text("Scribe data file")
                     .font(.subheadline.bold())
                     .padding(.top, 4)
-                Text("One database holding your dictation history, dictionary, snippets and app profiles. Never send or post this file: it contains everything you have dictated.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "One database holding your dictation history, dictionary, snippets and app profiles. Never send or post this file: it contains everything you have dictated."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
                 HStack {
                     Text(persistenceStore.databaseURL.path)

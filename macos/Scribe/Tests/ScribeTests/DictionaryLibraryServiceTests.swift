@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryLibraryServiceTests: XCTestCase {
@@ -50,7 +51,8 @@ final class DictionaryLibraryServiceTests: XCTestCase {
     }
 
     func testImportThrowsWhenNoUsableEntries() {
-        XCTAssertThrowsError(try service.import(csv: "# name: Empty\npattern,replacement\n", suggestedName: nil)) { error in
+        XCTAssertThrowsError(try service.import(csv: "# name: Empty\npattern,replacement\n", suggestedName: nil)) {
+            error in
             XCTAssertTrue(error is DictionaryLibraryServiceError)
         }
     }

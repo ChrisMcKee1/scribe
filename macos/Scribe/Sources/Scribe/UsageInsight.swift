@@ -27,7 +27,8 @@ enum UsageInsight {
             lines.append("- \(term.text): \(term.dictations) dictations")
         }
 
-        return truncate(lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), maxChars: maxChars)
+        return truncate(
+            lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), maxChars: maxChars)
     }
 
     static func parse(_ response: String?, maxChars: Int = 1_200) -> String? {
@@ -57,8 +58,9 @@ enum UsageInsight {
         // invalid UTF-16 and can break downstream encoding of the request or the UI text.
         var cut = maxChars
         if cut > 0, cut < nsValue.length,
-           CFStringIsSurrogateHighCharacter(nsValue.character(at: cut - 1)),
-           CFStringIsSurrogateLowCharacter(nsValue.character(at: cut)) {
+            CFStringIsSurrogateHighCharacter(nsValue.character(at: cut - 1)),
+            CFStringIsSurrogateLowCharacter(nsValue.character(at: cut))
+        {
             cut -= 1
         }
 
@@ -66,10 +68,10 @@ enum UsageInsight {
     }
 }
 
-private extension String {
+extension String {
     /// Right-trim only (mirrors C#'s `string.TrimEnd()`), used after truncation so a cut that
     /// lands mid-word doesn't also strip meaningful leading content.
-    func trimmingTrailingWhitespace() -> String {
+    fileprivate func trimmingTrailingWhitespace() -> String {
         var result = Substring(self)
         while let last = result.last, last.isWhitespace {
             result.removeLast()

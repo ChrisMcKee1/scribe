@@ -138,7 +138,9 @@ struct AudioDeviceStore {
             mElement: kAudioObjectPropertyElementMain)
 
         var dataSize: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize) == noErr,
+        guard
+            AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize)
+                == noErr,
             dataSize > 0
         else {
             return nil
@@ -146,7 +148,10 @@ struct AudioDeviceStore {
 
         let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
         var deviceIDs = [AudioDeviceID](repeating: 0, count: count)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceIDs) == noErr else {
+        guard
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceIDs)
+                == noErr
+        else {
             return nil
         }
         return deviceIDs
@@ -160,7 +165,10 @@ struct AudioDeviceStore {
 
         var deviceID = AudioDeviceID(0)
         var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceID) == noErr else {
+        guard
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceID)
+                == noErr
+        else {
             return nil
         }
         return deviceID
@@ -180,7 +188,8 @@ struct AudioDeviceStore {
             return false
         }
 
-        let bufferListPointer = UnsafeMutableRawPointer.allocate(byteCount: Int(dataSize), alignment: MemoryLayout<AudioBufferList>.alignment)
+        let bufferListPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(dataSize), alignment: MemoryLayout<AudioBufferList>.alignment)
         defer { bufferListPointer.deallocate() }
 
         guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, bufferListPointer) == noErr else {

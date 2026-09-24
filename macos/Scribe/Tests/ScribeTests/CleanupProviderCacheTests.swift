@@ -28,7 +28,9 @@ final class CleanupProviderCacheTests: XCTestCase {
         apiKeys: InMemorySecretStore = InMemorySecretStore(),
         clientSecrets: InMemorySecretStore = InMemorySecretStore(),
         checkDeadline: Duration? = nil,
-        reply: @escaping @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) = { StubReply.completion($0, "Cleaned.") },
+        reply: @escaping @Sendable (URLRequest) throws -> (HTTPURLResponse, Data) = {
+            StubReply.completion($0, "Cleaned.")
+        },
         checkTimer: (@Sendable (Duration) async throws -> Void)? = nil,
         foundryStatus: FoundryLocalStatusSource? = nil,
         azureCliLaunch: AzureCliCredentialProvider.Launch? = nil
@@ -175,8 +177,10 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertFalse(same(first, second))
         XCTAssertEqual(rig.azureCli.launches, 1)
-        XCTAssertEqual(rig.requests.all.map { $0.jsonBody["model"] as? String }, ["deployment-a", "deployment-a", "deployment-b"])
-        XCTAssertEqual(rig.requests.all.map { $0.header("Authorization") }, Array(repeating: "Bearer cli-token", count: 3))
+        XCTAssertEqual(
+            rig.requests.all.map { $0.jsonBody["model"] as? String }, ["deployment-a", "deployment-a", "deployment-b"])
+        XCTAssertEqual(
+            rig.requests.all.map { $0.header("Authorization") }, Array(repeating: "Bearer cli-token", count: 3))
     }
 
     func testANewTenantGetsANewCredential() async throws {
@@ -188,7 +192,8 @@ final class CleanupProviderCacheTests: XCTestCase {
         try await clean(rig)
 
         XCTAssertEqual(rig.azureCli.launches, 2)
-        XCTAssertEqual(rig.azureCli.commands.last.map { Array($0.arguments.suffix(2)) }, ["--tenant", "contoso.onmicrosoft.com"])
+        XCTAssertEqual(
+            rig.azureCli.commands.last.map { Array($0.arguments.suffix(2)) }, ["--tenant", "contoso.onmicrosoft.com"])
     }
 
     func testInvalidateDropsTheProviderAndItsToken() async throws {
@@ -238,7 +243,8 @@ final class CleanupProviderCacheTests: XCTestCase {
         try await clean(rig)
 
         let tokenRequests = rig.requests.all.filter { $0.host == Self.entraHost }
-        XCTAssertEqual(tokenRequests.map { FormDecoding.fields($0.body)["client_secret"] }, ["secret-old", "secret-new"])
+        XCTAssertEqual(
+            tokenRequests.map { FormDecoding.fields($0.body)["client_secret"] }, ["secret-old", "secret-new"])
         XCTAssertEqual(
             rig.requests.all.filter { $0.host != Self.entraHost }.map { $0.header("Authorization") },
             ["Bearer entra-token-1", "Bearer entra-token-1", "Bearer entra-token-2"])
@@ -277,7 +283,8 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         for _ in 0..<2 {
             XCTAssertThrowsError(try rig.cache.provider()) {
-                XCTAssertEqual($0 as? CleanupProviderError, .notConfigured(.azureClientSecretMissing, source: .settings))
+                XCTAssertEqual(
+                    $0 as? CleanupProviderError, .notConfigured(.azureClientSecretMissing, source: .settings))
             }
         }
         XCTAssertEqual(rig.fixture.clientSecrets.reads, 2)
@@ -337,7 +344,8 @@ final class CleanupProviderCacheTests: XCTestCase {
         let rig = try makeRig { request in
             StubReply.json(
                 request, status: 404,
-                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#)
+                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#
+            )
         }
         configureMicrosoftFoundry(rig.store)
 
@@ -635,7 +643,8 @@ final class CleanupProviderCacheTests: XCTestCase {
                 guard Set(RecordedRequest(request).jsonBody.keys).isSubset(of: allowed) else {
                     return StubReply.json(
                         request, status: status,
-                        #"{"object":"error","message":"Extra inputs are not permitted canary-field","type":"BadRequestError","code":\#(status)}"#)
+                        #"{"object":"error","message":"Extra inputs are not permitted canary-field","type":"BadRequestError","code":\#(status)}"#
+                    )
                 }
                 return StubReply.completion(request, "Cleaned.")
             }

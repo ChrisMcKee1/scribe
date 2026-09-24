@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryLibraryComposerTests: XCTestCase {
@@ -29,12 +30,15 @@ final class DictionaryLibraryComposerTests: XCTestCase {
         let composed = DictionaryLibraryComposer.composeLibraries([libraryA, libraryB])
 
         XCTAssertEqual(composed.count, 1)
-        XCTAssertEqual(composed[0].replacement, "Azure") // first occurrence wins
+        XCTAssertEqual(composed[0].replacement, "Azure")  // first occurrence wins
     }
 
     func testMergePrefersBaseEntriesOverLibraryEntriesOnConflict() {
         let base = [DictionaryEntry(pattern: "github", replacement: "GitHub (mine)")]
-        let library = [DictionaryEntry(pattern: "github", replacement: "GitHub"), DictionaryEntry(pattern: "azure", replacement: "Azure")]
+        let library = [
+            DictionaryEntry(pattern: "github", replacement: "GitHub"),
+            DictionaryEntry(pattern: "azure", replacement: "Azure"),
+        ]
 
         let merged = DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: library)
 

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// The Windows `SettingsSectionLoadTests` that apply on macOS: the ticket rules. Windows' saved-state snapshot and

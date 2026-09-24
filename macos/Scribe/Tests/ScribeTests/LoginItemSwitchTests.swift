@@ -1,6 +1,7 @@
 import AppKit
 import ServiceManagement
 import XCTest
+
 @testable import Scribe
 
 /// Stands in for macOS. Each call reads the state as it is when the call arrives, which is what lets a test hold a

@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryUsageAnalyzerTests: XCTestCase {
@@ -10,7 +11,8 @@ final class DictionaryUsageAnalyzerTests: XCTestCase {
             s.split(whereSeparator: { $0.isWhitespace }).count
         }
         while transcripts.count < DictionaryUsageAnalyzer.minimumTranscripts
-            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords {
+            || transcripts.reduce(0, { $0 + wordCount($1) }) < DictionaryUsageAnalyzer.minimumWords
+        {
             transcripts.append(Array(repeating: "the meeting went well today", count: 20).joined(separator: " "))
         }
         return transcripts
@@ -72,8 +74,10 @@ final class DictionaryUsageAnalyzerTests: XCTestCase {
 
         let text = corpus("this said nothing important")
 
-        XCTAssertEqual(DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [wholeWord]).unusedEntries.count, 1)
-        XCTAssertTrue(DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [substring]).unusedEntries.isEmpty)
+        XCTAssertEqual(
+            DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [wholeWord]).unusedEntries.count, 1)
+        XCTAssertTrue(
+            DictionaryUsageAnalyzer.analyze(transcripts: text, baseEntries: [substring]).unusedEntries.isEmpty)
     }
 
     func testEvidenceMatchingIgnoresCase() {

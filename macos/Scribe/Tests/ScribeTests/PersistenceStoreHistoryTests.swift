@@ -1,5 +1,6 @@
 import SQLite3
 import XCTest
+
 @testable import Scribe
 
 /// Schema, retention setting, bounded reads and failure handling of `PersistenceStore`.
@@ -18,14 +19,16 @@ final class PersistenceStoreHistoryTests: XCTestCase {
     private func makeStore(busyTimeoutMilliseconds: Int32 = PersistenceStore.defaultBusyTimeoutMilliseconds) throws
         -> PersistenceStore
     {
-        let store = PersistenceStore(databaseURL: directory.databaseURL, busyTimeoutMilliseconds: busyTimeoutMilliseconds)
+        let store = PersistenceStore(
+            databaseURL: directory.databaseURL, busyTimeoutMilliseconds: busyTimeoutMilliseconds)
         try store.initialize()
         return store
     }
 
     private func record(_ store: PersistenceStore, secondsAgo: TimeInterval, _ text: String?) throws {
         try store.recordDictation(
-            startedAt: now.addingTimeInterval(-secondsAgo), durationSeconds: 1, sampleCount: 16_000, transcriptText: text)
+            startedAt: now.addingTimeInterval(-secondsAgo), durationSeconds: 1, sampleCount: 16_000,
+            transcriptText: text)
     }
 
     private func primaryCode(_ error: Error) -> Int32? {
@@ -160,7 +163,8 @@ final class PersistenceStoreHistoryTests: XCTestCase {
             raw.close()
         }
 
-        XCTAssertThrowsError(try store.insertDictionaryEntry(DictionaryEntry(pattern: "a", replacement: "b"))) { error in
+        XCTAssertThrowsError(try store.insertDictionaryEntry(DictionaryEntry(pattern: "a", replacement: "b"))) {
+            error in
             XCTAssertEqual(self.primaryCode(error), SQLITE_BUSY)
         }
         // In WAL mode a writer elsewhere never blocks a read.
@@ -169,7 +173,8 @@ final class PersistenceStoreHistoryTests: XCTestCase {
 
     func testErrorsDescribeTheirShapeOnly() {
         let error = PersistenceError.sqlite(operation: .read, code: SQLITE_BUSY)
-        XCTAssertEqual(error.errorDescription, "Scribe could not read its database (SQLite error 5: database is locked).")
+        XCTAssertEqual(
+            error.errorDescription, "Scribe could not read its database (SQLite error 5: database is locked).")
     }
 
     // MARK: - Bounded reads
@@ -187,7 +192,8 @@ final class PersistenceStoreHistoryTests: XCTestCase {
             try store.fetchDictationHistory(since: since).compactMap(\.transcriptText),
             ["entry 5", "entry 6", "entry 7", "entry 8", "entry 9"])
         XCTAssertEqual(
-            try store.fetchDictationHistory(since: since, limit: 2).compactMap(\.transcriptText), ["entry 8", "entry 9"])
+            try store.fetchDictationHistory(since: since, limit: 2).compactMap(\.transcriptText),
+            ["entry 8", "entry 9"])
     }
 
     func testRecentTranscriptsAreNewestFirstNonBlankAndWithinTheChosenLimit() throws {

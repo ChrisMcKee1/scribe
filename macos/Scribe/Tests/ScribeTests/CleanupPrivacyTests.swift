@@ -43,9 +43,11 @@ final class CleanupPrivacyTests: XCTestCase {
 
         assertNothingLeaks(from: error)
         PrivacyCanary.assertAbsent(from: recorder.everyText)
-        XCTAssertEqual(FailureShape(error).description, "CleanupProviderError.rejected values=401 http=401 service=other")
+        XCTAssertEqual(
+            FailureShape(error).description, "CleanupProviderError.rejected values=401 http=401 service=other")
         let settingsText = CleanupFailureText.forSettings(error, providerName: "OpenAI-compatible endpoint")
-        XCTAssertTrue(settingsText.contains("is not valid for"), "the endpoint's own words reach Settings: \(settingsText)")
+        XCTAssertTrue(
+            settingsText.contains("is not valid for"), "the endpoint's own words reach Settings: \(settingsText)")
     }
 
     /// A successful cleanup logs its shape: the provider, the time and a character count, never the answer.
@@ -85,7 +87,8 @@ final class CleanupPrivacyTests: XCTestCase {
             """
         let credential = AzureServicePrincipalCredentialProvider(
             principal: AzureServicePrincipal(
-                tenantId: "canary-tenant.onmicrosoft.com", clientId: "canary-client", clientSecret: PrivacyCanary.secret),
+                tenantId: "canary-tenant.onmicrosoft.com", clientId: "canary-client", clientSecret: PrivacyCanary.secret
+            ),
             session: makeStubSession { request in StubReply.json(request, status: 401, body) })
         let provider = MicrosoftFoundryCleanupProvider(
             inferenceBase: MicrosoftFoundryCleanupProvider.inferenceBase(for: URL(string: canaryHost)!)!,
@@ -97,7 +100,8 @@ final class CleanupPrivacyTests: XCTestCase {
         XCTAssertEqual(
             error,
             .credentialUnavailable(
-                .tokenRejected(status: 401, aadsts: 7_000_215, reply: CleanupServiceReply(code: "invalid_client", message: nil))))
+                .tokenRejected(
+                    status: 401, aadsts: 7_000_215, reply: CleanupServiceReply(code: "invalid_client", message: nil))))
         assertNothingLeaks(from: error)
         PrivacyCanary.assertAbsent(from: CleanupFailureText.forSettings(error, providerName: "Microsoft Foundry"))
     }

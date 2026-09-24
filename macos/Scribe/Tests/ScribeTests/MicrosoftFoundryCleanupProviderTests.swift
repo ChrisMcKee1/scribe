@@ -7,7 +7,10 @@ final class MicrosoftFoundryEndpointTests: XCTestCase {
     /// (`AzureOpenAIResponsesClientFactory.GetV1Endpoint`), after a project's own route answered HTTP 500.
     func testEverySavedEndpointShapeReachesTheAccountsV1Base() {
         let cases: [(endpoint: String, base: String)] = [
-            ("https://my-res.services.ai.azure.com/api/projects/my-project", "https://my-res.services.ai.azure.com/openai/v1/"),
+            (
+                "https://my-res.services.ai.azure.com/api/projects/my-project",
+                "https://my-res.services.ai.azure.com/openai/v1/"
+            ),
             ("https://my-res.openai.azure.com/", "https://my-res.openai.azure.com/openai/v1/"),
             ("https://my-res.cognitiveservices.azure.com", "https://my-res.cognitiveservices.azure.com/openai/v1/"),
             ("https://my-res.openai.azure.com/openai/v1/", "https://my-res.openai.azure.com/openai/v1/"),
@@ -78,7 +81,9 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
 
     func testAForbiddenAnswerLeadsWithPropagationAndTheRightRoles() async throws {
         let provider = makeProvider { request in
-            StubReply.json(request, status: 403, #"{"error":{"code":"PermissionDenied","message":"Principal does not have access."}}"#)
+            StubReply.json(
+                request, status: 403,
+                #"{"error":{"code":"PermissionDenied","message":"Principal does not have access."}}"#)
         }
 
         let error = try await cleanupFailure(of: provider)
@@ -107,7 +112,8 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         let provider = makeProvider(deployment: "gpt-private-name") { request in
             StubReply.json(
                 request, status: 404,
-                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#)
+                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#
+            )
         }
 
         let error = try await cleanupFailure(of: provider)
@@ -116,7 +122,8 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         XCTAssertTrue(description.contains("could not find the deployment (404)"), description)
         XCTAssertFalse(description.contains("gpt-private-name"), description)
         XCTAssertEqual(
-            FailureShape(error).description, "CleanupProviderError.rejected values=404 http=404 service=DeploymentNotFound")
+            FailureShape(error).description,
+            "CleanupProviderError.rejected values=404 http=404 service=DeploymentNotFound")
     }
 
     func testACredentialFailureIsReportedWithoutSendingAnything() async throws {
@@ -199,7 +206,9 @@ final class AzureServicePrincipalTests: XCTestCase {
         for tenant in ["11111111-1111-1111-1111-111111111111", "contoso.onmicrosoft.com", "Contoso-Dev.example.org"] {
             XCTAssertTrue(AzureTenant.isValid(tenant), tenant)
         }
-        for tenant in ["", "a/b", "../x", "a?b", "a b", "--tenant", ".hidden", "t\u{e9}nant", String(repeating: "a", count: 254)] {
+        for tenant in [
+            "", "a/b", "../x", "a?b", "a b", "--tenant", ".hidden", "t\u{e9}nant", String(repeating: "a", count: 254),
+        ] {
             XCTAssertFalse(AzureTenant.isValid(tenant), tenant)
         }
     }
@@ -328,7 +337,8 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
 
     /// Entra's description repeats the app and tenant ids and carries trace ids; only the code and the number stay.
     func testARefusalKeepsTheCodeAndTheNumberButNotTheDescription() async throws {
-        let body = #"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided for app 'app-id-9'. Trace ID: trace-7","error_codes":[7000215]}"#
+        let body =
+            #"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided for app 'app-id-9'. Trace ID: trace-7","error_codes":[7000215]}"#
         let provider = makeProvider { request in StubReply.json(request, status: 401, body) }
 
         do {
@@ -337,7 +347,8 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
         } catch let error as AzureCredentialError {
             XCTAssertEqual(
                 error,
-                .tokenRejected(status: 401, aadsts: 7_000_215, reply: CleanupServiceReply(code: "invalid_client", message: nil)))
+                .tokenRejected(
+                    status: 401, aadsts: 7_000_215, reply: CleanupServiceReply(code: "invalid_client", message: nil)))
             let description = try XCTUnwrap(error.errorDescription)
             XCTAssertTrue(description.contains("AADSTS7000215"), description)
             XCTAssertTrue(description.contains("Value, not its Secret ID"), description)
@@ -355,7 +366,8 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
     /// An Entra number `FailureShape` does not list stays out of the shape, its values, the description and every
     /// printed form; the Settings text alone names it, so the user can look it up.
     func testAnUnlistedEntraCodeReachesOnlyTheSettingsText() async throws {
-        let body = #"{"error":"invalid_request","error_description":"AADSTS9999999: New failure.","error_codes":[9999999]}"#
+        let body =
+            #"{"error":"invalid_request","error_description":"AADSTS9999999: New failure.","error_codes":[9999999]}"#
         let provider = makeProvider { request in StubReply.json(request, status: 400, body) }
 
         do {
@@ -364,7 +376,8 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
         } catch let error as AzureCredentialError {
             XCTAssertEqual(
                 error,
-                .tokenRejected(status: 400, aadsts: 9_999_999, reply: CleanupServiceReply(code: "invalid_request", message: nil)))
+                .tokenRejected(
+                    status: 400, aadsts: 9_999_999, reply: CleanupServiceReply(code: "invalid_request", message: nil)))
             let shape = FailureShape(error).description
             XCTAssertTrue(shape.contains("http=400 service=AADSTS"), shape)
             let description = try XCTUnwrap(error.errorDescription)
@@ -375,7 +388,8 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
                 XCTAssertFalse(text.contains("9999999"), text)
             }
             XCTAssertEqual(
-                CleanupFailureText.forSettings(CleanupProviderError.credentialUnavailable(error), providerName: "Microsoft Foundry"),
+                CleanupFailureText.forSettings(
+                    CleanupProviderError.credentialUnavailable(error), providerName: "Microsoft Foundry"),
                 "Microsoft Foundry: \(description) Microsoft Entra reported AADSTS9999999.")
         }
     }
