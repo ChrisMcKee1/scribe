@@ -31,8 +31,9 @@ struct DictionaryUsageReport: Equatable {
 ///
 /// This exists because dead terms are not free: once AI cleanup glossary injection lands on
 /// macOS, the enabled dictionary will be rendered into the cleanup system prompt on every
-/// dictation, capped at `maxGlossaryTermsLocal` terms for on-device models. Past that cap, terms
-/// the user never says actively displace the ones they do.
+/// dictation, capped for on-device models (80 terms on Windows, `CleanupPrompt.MaxGlossaryTermsLocal`).
+/// Past that cap, terms the user never says actively displace the ones they do. Until then a term
+/// turned off only stops being applied, so the summary claims nothing about a model.
 ///
 /// **The inversion trap.** History stores the text that was actually typed, which is
 /// *post*-dictionary. So a rule that does its job rewrites its own pattern out of the record:
@@ -55,10 +56,6 @@ enum DictionaryUsageAnalyzer {
     /// Words required alongside the dictation count. Twenty-five two-word dictations are not a
     /// vocabulary sample, and without this a new user would be told to delete their whole dictionary.
     static let minimumWords = 1_500
-
-    /// Mirrors `Scribe.Core.Cleanup.CleanupPrompt.MaxGlossaryTermsLocal` on Windows: the cap on
-    /// dictionary terms folded into the AI cleanup system prompt for on-device models.
-    static let maxGlossaryTermsLocal = 80
 
     private static let wordLike: NSRegularExpression = {
         // swiftlint:disable:next force_try
@@ -163,22 +160,16 @@ enum DictionaryUsageAnalyzer {
         return regex.numberOfMatches(in: corpus, range: NSRange(corpus.startIndex..., in: corpus))
     }
 
+    /// Only what the scan found. Windows adds that turning the terms off frees room in the dictionary list its local
+    /// cleanup models are sent; macOS sends a cleanup model no dictionary terms, so that would not be true here.
     private static func describe(unusedCount: Int, transcripts: Int, examined: Int) -> String {
         guard unusedCount > 0 else {
             return "Every term in your dictionary turned up in your last \(transcripts) dictations. "
                 + "Nothing to clean up."
         }
 
-        let headline =
-            "Checked \(examined) terms against your last \(transcripts) dictations. "
-            + "\(unusedCount) of your own \(unusedCount == 1 ? "entry" : "entries") did not appear."
-
-        // The glossary cap only bites once the dictionary is bigger than it, so the number is only
-        // worth raising when it is actually costing the user something.
-        guard examined > maxGlossaryTermsLocal else {
-            return headline
-        }
-        return headline + " Turning them off frees room in the vocabulary list Scribe sends to a "
-            + "local AI model, which fits \(maxGlossaryTermsLocal) terms."
+        let terms = examined == 1 ? "term" : "terms"
+        return "Checked \(examined) \(terms) against your last \(transcripts) dictations. "
+            + "\(unusedCount) of your own entries did not appear."
     }
 }
