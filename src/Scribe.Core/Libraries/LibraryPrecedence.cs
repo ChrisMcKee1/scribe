@@ -19,9 +19,10 @@ public static class LibraryPrecedence
     /// <summary>
     /// Built-in library ids in precedence order: the order 0.4.3 composed them in (category, then name, both ordinal and
     /// case-insensitive), frozen as ids so that renaming or recategorizing a built-in never moves it. Append a new
-    /// built-in at the end, and never reorder this list: it decides which built-in supplies a spoken form two of them
-    /// share, and which terms a default install's on-device model receives. The macOS port reads the same list from
-    /// tests/fixtures/libraries/built-in-precedence.json, which a test keeps equal to this one.
+    /// built-in at the end, and never reorder or remove an id: the order decides which built-in supplies a spoken form
+    /// two of them share, and which terms a default install's on-device model receives. When a built-in stops shipping,
+    /// keep its id here and add it to <see cref="RetiredBuiltInIds"/>. The macOS port reads the same lists from
+    /// tests/fixtures/libraries/built-in-precedence.json, which a test keeps equal to these.
     /// </summary>
     public static IReadOnlyList<string> BuiltInOrder { get; } =
     [
@@ -37,6 +38,13 @@ public static class LibraryPrecedence
         "modern-developer-stack",
         "software-development",
     ];
+
+    /// <summary>
+    /// Ids in <see cref="BuiltInOrder"/> whose library no longer ships; none so far. A retired id stays in the order for
+    /// good, which costs nothing because precedence only compares libraries that exist, and listing it here is the only
+    /// way an id in the order may be missing from the shipped libraries, so a typo cannot pass for a retirement.
+    /// </summary>
+    public static IReadOnlyList<string> RetiredBuiltInIds { get; } = [];
 
     private static readonly Dictionary<string, int> BuiltInIndex = BuiltInOrder
         .Select((id, index) => (id, index))
