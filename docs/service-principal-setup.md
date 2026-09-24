@@ -9,8 +9,10 @@ A **service principal** fixes that. It is an identity that belongs to your app r
 so Scribe authenticates as exactly the same identity every time, in exactly the tenant you choose.
 
 Dictation itself never needs any of this. Scribe transcribes offline on your own machine, and AI
-cleanup is optional. Only the cleanup step talks to Azure, and it sends the transcribed text only,
-never audio.
+cleanup is optional. When it is on, each cleanup request sends Azure the transcribed text of that
+dictation, Scribe's cleanup instructions with your writing style, and your enabled dictionary and
+library terms, never audio. [PRIVACY.md](../PRIVACY.md#optional-ai-features-and-data-transmission)
+lists exactly what each request carries.
 
 > **Starting from nothing?** If you do not yet have a Foundry resource with a deployed model, use
 > [foundry-setup.md](foundry-setup.md) instead. That guide has a script that creates the resource,

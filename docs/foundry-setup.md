@@ -2,8 +2,11 @@
 
 Scribe transcribes on your own machine and works completely offline. **AI cleanup** is the optional
 extra: a language model tidies punctuation, capitalization, spoken self-corrections and repeated
-points before the text is typed out. Only the transcribed *text* is ever sent, never audio, and only
-to an endpoint you configure.
+points before the text is typed out. Scribe never sends audio. Each cleanup request sends the
+transcribed *text* of that dictation, Scribe's cleanup instructions with your writing style, and
+your enabled dictionary and library terms, whether or not the dictation mentions them, and only to
+an endpoint you configure. [PRIVACY.md](../PRIVACY.md#optional-ai-features-and-data-transmission)
+lists exactly what each request carries.
 
 This guide covers pointing Scribe at a frontier model running in **Microsoft Foundry** in the cloud,
 which is faster and noticeably better at the hard cases than running locally. For most people it
