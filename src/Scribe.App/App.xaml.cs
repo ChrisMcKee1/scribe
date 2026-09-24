@@ -475,7 +475,11 @@ public partial class App : Application
             () => controller.CurrentSettings,
             () => !controller.IsDictationInFlight && _settingsWindow is null && _quickAddWindow is null);
 
-        log.LogInformation("Scribe started. Hold {Key} to dictate.", _controller.CurrentSettings.Hotkey.DisplayName);
+        log.LogInformation(
+            "Scribe started. Dictation hotkey {Key} ({Mode}), dictation-only hotkey {DictationOnlyKey}.",
+            HotkeyText.Describe(_controller.CurrentSettings.Hotkey),
+            _controller.CurrentSettings.Hotkey.Mode,
+            _controller.CurrentSettings.DictationOnlyHotkey is { } dictationOnly ? HotkeyText.Describe(dictationOnly) : "none");
 
         // The accelerator inventory itself is on the session banner above ("compute: ..."); only
         // the advice is repeated here, because a recommendation deserves its own Warning line

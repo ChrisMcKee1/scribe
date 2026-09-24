@@ -451,17 +451,8 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    private static string DescribeBinding(HotkeyBinding binding)
-    {
-        if (!string.IsNullOrWhiteSpace(binding.DisplayName))
-        {
-            return binding.DisplayName!;
-        }
-
-        var modifiers = binding.Modifiers == KeyModifiers.None ? string.Empty : binding.Modifiers + "+";
-        var secondary = binding.SecondaryVirtualKey is { } second ? $"+0x{second:X2}" : string.Empty;
-        return $"{modifiers}0x{binding.VirtualKey:X2}{secondary}";
-    }
+    // Named from the virtual-key codes, as Settings names them: a stored name can be an alias such as "Next".
+    private static string DescribeBinding(HotkeyBinding binding) => HotkeyText.Describe(binding);
 
     public void Dispose() => Stop();
 

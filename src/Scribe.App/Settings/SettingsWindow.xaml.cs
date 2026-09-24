@@ -2295,7 +2295,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             else
             {
                 _capturedKeys.Add(key);
-                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(k => k.ToString())) +
+                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(HotkeyCapture.KeyName)) +
                     (_capturedKeys.Count == 1 ? "  (add another key or release)" : "  (release to set)");
             }
         }

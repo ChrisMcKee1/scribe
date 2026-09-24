@@ -53,6 +53,19 @@ public class SessionBannerTests : IDisposable
     }
 
     [Fact]
+    public void Banner_names_each_hotkey_by_its_code_whatever_name_was_stored()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = new HotkeyBinding(0x22, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Next");
+        settings.DictationOnlyHotkey = null;
+        var stored = Compose(settings);
+
+        Assert.Contains("primary='Page Down'(vk=0x22 mods=None mode=Hold suppress=True chord=False)", stored);
+        Assert.Contains("dictationOnly=none", stored);
+        Assert.DoesNotContain("Next", stored);
+    }
+
+    [Fact]
     public void Banner_never_contains_a_secret()
     {
         var settings = AppSettings.CreateDefault();

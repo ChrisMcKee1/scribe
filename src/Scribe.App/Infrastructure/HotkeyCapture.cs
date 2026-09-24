@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using System.Windows.Input;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 
 namespace Scribe.App.Infrastructure;
@@ -7,10 +9,15 @@ namespace Scribe.App.Infrastructure;
 /// Translates WPF keyboard events from the settings UI into a <see cref="HotkeyBinding"/> the
 /// low-level hook can match, and renders a binding as friendly text. Right/left modifier
 /// variants are preserved (the hook receives distinct virtual-key codes such as VK_RCONTROL),
-/// and Alt-involved presses are resolved through <see cref="KeyEventArgs.SystemKey"/>.
+/// and Alt-involved presses are resolved through <see cref="KeyEventArgs.SystemKey"/>. Keys are
+/// named by virtual-key code through <see cref="HotkeyText"/>, never by WPF's <see cref="Key"/>
+/// names: that enum gives several keys two names (Page Down is also <c>Key.Next</c>) and does not
+/// promise which one <c>ToString</c> returns.
 /// </summary>
 internal static class HotkeyCapture
 {
+    private const uint MapVkToChar = 2; // MAPVK_VK_TO_CHAR
+
     /// <summary>Builds an exact physical one- or two-key binding in the order keys were pressed.</summary>
     public static HotkeyBinding FromKeys(IReadOnlyList<Key> keys, HotkeyMode mode)
     {
@@ -22,7 +29,9 @@ internal static class HotkeyCapture
 
         var primary = (uint)KeyInterop.VirtualKeyFromKey(keys[0]);
         uint? secondary = keys.Count == 2 ? (uint)KeyInterop.VirtualKeyFromKey(keys[1]) : null;
-        var display = string.Join("+", keys.Select(FriendlyKeyName));
+
+        // Stored for older builds to show; Describe names the keys afresh from their codes.
+        var display = string.Join("+", keys.Select(KeyName));
         return new HotkeyBinding(
             primary,
             KeyModifiers.None,
@@ -46,36 +55,21 @@ internal static class HotkeyCapture
 
         if (IsModifierKey(key))
         {
-            return new HotkeyBinding(vk, KeyModifiers.None, mode, Suppress: true, FriendlyKeyName(key));
+            return new HotkeyBinding(vk, KeyModifiers.None, mode, Suppress: true, KeyName(key));
         }
 
         var modifiers = CurrentModifiers();
         var suppress = modifiers != KeyModifiers.None;
-        var display = Describe(modifiers, FriendlyKeyName(key));
-        return new HotkeyBinding(vk, modifiers, mode, suppress, display);
+        var binding = new HotkeyBinding(vk, modifiers, mode, suppress);
+        return binding with { DisplayName = Describe(binding) };
     }
 
     /// <summary>Renders an existing binding (mode included) as user-facing text.</summary>
-    public static string Describe(HotkeyBinding binding)
-    {
-        var keyName = binding.DisplayName;
-        if (string.IsNullOrWhiteSpace(keyName))
-        {
-            var key = KeyInterop.KeyFromVirtualKey((int)binding.VirtualKey);
-            keyName = FriendlyKeyName(key);
-        }
-        else if (binding.Modifiers != KeyModifiers.None && !keyName.Contains('+'))
-        {
-            keyName = Describe(binding.Modifiers, keyName);
-        }
+    public static string Describe(HotkeyBinding binding) => HotkeyText.Describe(binding, LayoutKeyName);
 
-        if (binding.SecondaryVirtualKey is { } second && !keyName.Contains('+'))
-        {
-            keyName += "+" + FriendlyKeyName(KeyInterop.KeyFromVirtualKey((int)second));
-        }
-
-        return keyName;
-    }
+    /// <summary>The name of one key, as the capture box shows it while the user presses it.</summary>
+    public static string KeyName(Key key) =>
+        HotkeyText.KeyName((uint)KeyInterop.VirtualKeyFromKey(key), LayoutKeyName) ?? key.ToString();
 
     public static bool IsReservedWindowsChord(HotkeyBinding binding)
     {
@@ -120,22 +114,6 @@ internal static class HotkeyCapture
         return keys;
     }
 
-    private static string Describe(KeyModifiers modifiers, string keyName)
-    {
-        if (modifiers == KeyModifiers.None)
-        {
-            return keyName;
-        }
-
-        var parts = new List<string>(4);
-        if (modifiers.HasFlag(KeyModifiers.Control)) parts.Add("Ctrl");
-        if (modifiers.HasFlag(KeyModifiers.Alt)) parts.Add("Alt");
-        if (modifiers.HasFlag(KeyModifiers.Shift)) parts.Add("Shift");
-        if (modifiers.HasFlag(KeyModifiers.Win)) parts.Add("Win");
-        parts.Add(keyName);
-        return string.Join("+", parts);
-    }
-
     private static KeyModifiers CurrentModifiers()
     {
         var result = KeyModifiers.None;
@@ -153,18 +131,11 @@ internal static class HotkeyCapture
         Key.LeftShift or Key.RightShift or
         Key.LWin or Key.RWin;
 
-    private static string FriendlyKeyName(Key key) => key switch
-    {
-        Key.LeftCtrl => "Left Ctrl",
-        Key.RightCtrl => "Right Ctrl",
-        Key.LeftAlt => "Left Alt",
-        Key.RightAlt => "Right Alt",
-        Key.LeftShift => "Left Shift",
-        Key.RightShift => "Right Shift",
-        Key.LWin => "Left Win",
-        Key.RWin => "Right Win",
-        Key.Space => "Space",
-        Key.Return => "Enter",
-        _ => key.ToString(),
-    };
+    // The punctuation keys type something different on each keyboard layout, so the table leaves them out and the
+    // current layout names them by the character they type.
+    private static string? LayoutKeyName(uint virtualKey) =>
+        KeyNames.FromMappedCharacter(MapVirtualKeyW(virtualKey, MapVkToChar));
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
 }

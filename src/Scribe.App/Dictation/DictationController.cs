@@ -219,7 +219,7 @@ internal sealed class DictationController : IDisposable
         _started = true;
         _lifecycle.Start(IdleReleaseDelay(settings));
 
-        _log.LogInformation("Dictation controller started; binding = {Binding}.", settings.Hotkey.DisplayName);
+        _log.LogInformation("Dictation controller started; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>
@@ -368,7 +368,7 @@ internal sealed class DictationController : IDisposable
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
         RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
-        _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
+        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>
@@ -681,7 +681,7 @@ internal sealed class DictationController : IDisposable
                 id,
                 e.Trigger,
                 (object?)binding?.Mode ?? "unknown",
-                binding?.DisplayName ?? "custom",
+                binding is null ? "custom" : HotkeyText.Describe(binding),
                 _audio.LastDeviceName ?? "unknown",
                 capture.TargetApp ?? "unknown",
                 settings.AutoStopOnSilence,
