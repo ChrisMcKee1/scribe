@@ -3042,56 +3042,33 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            _azureCliInstalled = await _azureCliInstaller.IsInstalledAsync();
-            _azureConnectionKnown = true;
-            if (!_azureCliInstalled)
-            {
-                _azureSignInStatus = new AzureSignInStatus(false, null);
-                ApplyAzureSettingsAccess();
-                AzureStatusText.Text =
-                    "Azure CLI was not found. Install it below, or use an endpoint and API key instead.";
-                return;
-            }
+            // Editing the tenant or switching the method retires this attempt during any of its waits, and
+            // AzureCliSignIn then stops before it changes anything, a browser sign-in included.
+            var result = await AzureCliSignIn.RunAsync(
+                new CliSignInSteps(this),
+                allowInteractiveLogin,
+                () => operationVersion == _azureSignInProbeVersion);
 
-            await ClearUnavailableSelectedSubscriptionAsync();
-            var status = await ProbeCurrentAzureSignInAsync();
-            if (!status.IsSignedIn && allowInteractiveLogin)
+            switch (result.Outcome)
             {
-                AzureStatusText.Text = "Opening Azure sign-in in your browser…";
-                using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-                var selectedSubscription = SelectedAzureSubscription;
-                var tenantId = selectedSubscription is null ||
-                               string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
-                    ? NullIfBlank(AzureTenantBox.Text)
-                    : selectedSubscription.TenantId;
-                var (ok, message) = await _azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
-                if (!ok)
-                {
-                    // The tenant box stays editable while the browser sign-in is open, and editing it
-                    // retires this attempt; its failure must not replace the newer status.
-                    if (operationVersion == _azureSignInProbeVersion)
-                    {
-                        _azureSignInStatus = new AzureSignInStatus(false, null);
-                        ApplyAzureSettingsAccess();
-                        AzureStatusText.Text = message;
-                    }
-
+                case AzureCliSignIn.Outcome.Retired:
                     return;
-                }
 
-                status = await ProbeCurrentAzureSignInAsync();
-                if (!status.IsSignedIn && SelectedAzureSubscription is not null)
-                {
-                    ClearSelectedAzureSubscription();
-                    status = await ProbeCurrentAzureSignInAsync();
-                }
+                case AzureCliSignIn.Outcome.CliMissing:
+                    _azureSignInStatus = new AzureSignInStatus(false, null);
+                    ApplyAzureSettingsAccess();
+                    AzureStatusText.Text =
+                        "Azure CLI was not found. Install it below, or use an endpoint and API key instead.";
+                    return;
+
+                case AzureCliSignIn.Outcome.LoginFailed:
+                    _azureSignInStatus = new AzureSignInStatus(false, null);
+                    ApplyAzureSettingsAccess();
+                    AzureStatusText.Text = result.Message;
+                    return;
             }
 
-            if (operationVersion != _azureSignInProbeVersion)
-            {
-                return;
-            }
-
+            var status = result.Status ?? new AzureSignInStatus(false, null);
             _azureSignInStatus = status;
             ApplyAzureSettingsAccess();
             if (!status.IsSignedIn)
@@ -3154,22 +3131,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             cts.Token);
     }
 
-    private async Task ClearUnavailableSelectedSubscriptionAsync()
+    /// <summary>
+    /// The window's steps for <see cref="AzureCliSignIn"/>. Each reads the page when it runs, so a check or a
+    /// browser sign-in uses the tenant and subscription shown at that moment.
+    /// </summary>
+    private sealed class CliSignInSteps(SettingsWindow window) : IAzureCliSignInSteps
     {
-        var selectedSubscription = SelectedAzureSubscription;
-        if (selectedSubscription is null)
+        public async Task<bool> IsCliInstalledAsync()
         {
-            return;
+            var installed = await window._azureCliInstaller.IsInstalledAsync();
+
+            // A fact about this PC rather than this attempt's result, so it is kept even when the attempt is retired.
+            window._azureCliInstalled = installed;
+            window._azureConnectionKnown = true;
+            return installed;
         }
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        var (ok, subscriptions, _) = await _azureCliInstaller.ListSubscriptionsAsync(cts.Token);
-        if (ok && subscriptions.All(subscription => !string.Equals(
+        public bool HasSelectedSubscription => window.SelectedAzureSubscription is not null;
+
+        public async Task<bool> IsSelectedSubscriptionUnavailableAsync()
+        {
+            var selectedSubscription = window.SelectedAzureSubscription;
+            if (selectedSubscription is null)
+            {
+                return false;
+            }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var (ok, subscriptions, _) = await window._azureCliInstaller.ListSubscriptionsAsync(cts.Token);
+            return ok && subscriptions.All(subscription => !string.Equals(
                 subscription.Id,
                 selectedSubscription.Id,
-                StringComparison.OrdinalIgnoreCase)))
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        public void ClearSelectedSubscription() => window.ClearSelectedAzureSubscription();
+
+        public Task<AzureSignInStatus> ProbeAsync() => window.ProbeCurrentAzureSignInAsync();
+
+        public void ReportBrowserSignIn() => window.AzureStatusText.Text = "Opening Azure sign-in in your browser…";
+
+        public async Task<(bool Ok, string Message)> LoginAsync()
         {
-            ClearSelectedAzureSubscription();
+            using var loginCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            var selectedSubscription = window.SelectedAzureSubscription;
+            var tenantId = selectedSubscription is null || string.IsNullOrWhiteSpace(selectedSubscription.TenantId)
+                ? NullIfBlank(window.AzureTenantBox.Text)
+                : selectedSubscription.TenantId;
+            return await window._azureCliInstaller.LoginAsync(tenantId, loginCts.Token);
         }
     }
 
