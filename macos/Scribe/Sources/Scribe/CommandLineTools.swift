@@ -150,9 +150,9 @@ enum CommandLineTranscriptionTool {
         return true
     }
 
-    /// Manual verification for the dictionary + snippet pipeline: seeds the real SQLite store
-    /// (respecting SCRIBE_STORE_DB_PATH-less default location, same as the live app) with a couple
-    /// of fixed entries if it's empty, then runs the given transcript through TextPostProcessor.
+    /// Manual verification for the dictionary and snippet pipeline: runs the given transcript through the user's
+    /// enabled rules and snippets, read without changing their database, or, when they have none, through fixed
+    /// verification fixtures in a temporary database of their own (`CommandLineInspection`).
     /// Usage: Scribe --post-process-text "raw text"
     private static func runPostProcess(arguments: [String]) -> Bool {
         guard arguments.count == 2 else {
@@ -160,26 +160,17 @@ enum CommandLineTranscriptionTool {
             exit(EXIT_FAILURE)
         }
 
-        let store = PersistenceStore()
         do {
-            try store.initialize()
-
-            var dictionaryEntries = try store.fetchEnabledDictionaryEntries()
-            var snippets = try store.fetchEnabledSnippets()
-
-            if dictionaryEntries.isEmpty && snippets.isEmpty {
-                fputs("No dictionary/snippet rows found; seeding verification fixtures.\n", stderr)
-                _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "sherpa onnx", replacement: "sherpa-onnx"))
-                _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "github", replacement: "GitHub"))
-                _ = try store.insertSnippet(Snippet(phrase: "sign off block", template: "Best regards,\nScribe Team"))
-                dictionaryEntries = try store.fetchEnabledDictionaryEntries()
-                snippets = try store.fetchEnabledSnippets()
+            let outcome = try CommandLineInspection.postProcess(
+                arguments[1], database: PersistenceStore.defaultDatabaseURL(),
+                scratch: FileManager.default.temporaryDirectory)
+            if outcome.usedFixtures {
+                let notice =
+                    "No dictionary or snippet rows found; used verification fixtures in a temporary database. "
+                    + "Your Scribe database was not changed.\n"
+                fputs(notice, stderr)
             }
-
-            let processor = TextPostProcessor()
-            processor.reload(dictionaryEntries: dictionaryEntries, snippets: snippets)
-            let result = processor.process(arguments[1])
-            fputs("\(result)\n", stdout)
+            fputs("\(outcome.text)\n", stdout)
             return true
         } catch {
             fputs("Post-process failed: \(error.localizedDescription)\n", stderr)
@@ -290,9 +281,9 @@ enum CommandLineTranscriptionTool {
         return true
     }
 
-    /// Manual verification for per-app profile resolution: seeds a couple of fixed profiles into
-    /// the real SQLite store if it's empty, then runs the matcher + newline application against a
-    /// given bundle identifier and sample text.
+    /// Manual verification for per-app profile resolution: matches a bundle identifier against the user's app
+    /// profiles, read without changing their database, or, when they have none, against fixed verification fixtures
+    /// in a temporary database of their own (`CommandLineInspection`), then applies the newline mode to sample text.
     /// Usage: Scribe --resolve-profile <bundle-identifier> "raw text"
     private static func runResolveProfile(arguments: [String]) -> Bool {
         guard arguments.count == 3 else {
@@ -300,43 +291,20 @@ enum CommandLineTranscriptionTool {
             exit(EXIT_FAILURE)
         }
 
-        let bundleIdentifier = arguments[1]
-        let rawText = arguments[2]
-
-        let store = PersistenceStore()
         do {
-            try store.initialize()
-
-            var profiles = try store.fetchAppProfiles()
-            if profiles.isEmpty {
-                fputs("No app profile rows found; seeding verification fixtures.\n", stderr)
-                _ = try store.insertAppProfile(
-                    AppProfile(
-                        name: "Terminal",
-                        bundleIdentifiers: ["com.apple.Terminal", "com.googlecode.iterm2"],
-                        processNames: ["Terminal", "iTerm2"],
-                        writingStylePrompt: "Be extremely terse. No filler words.",
-                        newlineHandling: .alwaysFlatten))
-                _ = try store.insertAppProfile(
-                    AppProfile(
-                        name: "Email",
-                        bundleIdentifiers: ["com.apple.mail", "com.microsoft.Outlook"],
-                        processNames: ["Mail", "Microsoft Outlook"],
-                        writingStylePrompt: "Use a formal, professional tone with complete sentences.",
-                        newlineHandling: .keepNewlines))
-                profiles = try store.fetchAppProfiles()
+            let outcome = try CommandLineInspection.resolveProfile(
+                bundleIdentifier: arguments[1], text: arguments[2], database: PersistenceStore.defaultDatabaseURL(),
+                scratch: FileManager.default.temporaryDirectory)
+            if outcome.usedFixtures {
+                let notice =
+                    "No app profile rows found; used verification fixtures in a temporary database. "
+                    + "Your Scribe database was not changed.\n"
+                fputs(notice, stderr)
             }
-
-            let matched = AppProfileMatcher.match(
-                profiles: profiles, bundleIdentifier: bundleIdentifier, processName: nil)
-            let mode = AppProfileMatcher.resolveNewlineMode(
-                profile: matched, globalDefault: .smartFlatten, bundleIdentifier: bundleIdentifier)
-            let result = AppProfileMatcher.applyNewlineMode(mode, to: rawText, bundleIdentifier: bundleIdentifier)
-
-            fputs("Matched profile: \(matched?.name ?? "none")\n", stderr)
-            fputs("Writing style override: \(matched?.writingStylePrompt ?? "(none, using global)")\n", stderr)
-            fputs("Newline mode: \(mode)\n", stderr)
-            fputs("\(result)\n", stdout)
+            fputs("Matched profile: \(outcome.profile?.name ?? "none")\n", stderr)
+            fputs("Writing style override: \(outcome.profile?.writingStylePrompt ?? "(none, using global)")\n", stderr)
+            fputs("Newline mode: \(outcome.newlineMode)\n", stderr)
+            fputs("\(outcome.text)\n", stdout)
             return true
         } catch {
             fputs("Profile resolution failed: \(error.localizedDescription)\n", stderr)
@@ -344,9 +312,10 @@ enum CommandLineTranscriptionTool {
         }
     }
 
-    /// Prints the Diagnostics panel numbers (P50/P95 decode latency, RTF) computed from real
-    /// `dictation_history` rows, mirroring Windows' Diagnostics tab. `--diagnostics [days]`
-    /// defaults to a 7-day window, matching `DictationStats`' typical panel window.
+    /// Prints the Diagnostics panel numbers (P50/P95 decode latency, RTF) computed from real `dictation_history`
+    /// rows, mirroring Windows' Diagnostics tab. `--diagnostics [days]` defaults to a 7-day window. It reads the
+    /// window the way the tab does, bounded to its newest dictations, says so when the window holds more, and never
+    /// changes the database (`CommandLineInspection`).
     private static func runDiagnostics(arguments: [String]) -> Bool {
         let windowDays: Double
         if arguments.count >= 2, let parsed = Double(arguments[1]) {
@@ -355,42 +324,11 @@ enum CommandLineTranscriptionTool {
             windowDays = 7
         }
 
-        let store = PersistenceStore()
+        let since = Date().addingTimeInterval(-windowDays * 86_400)
         do {
-            try store.initialize()
-            let history = try store.fetchDictationHistory()
-            let since = Date().addingTimeInterval(-windowDays * 86400)
-            guard let snapshot = DictationStats.compute(entries: history, since: since) else {
-                fputs("No dictations in the last \(windowDays) day(s).\n", stdout)
-                return true
-            }
-
-            fputs("Dictations: \(snapshot.count)\n", stdout)
-            fputs(
-                String(
-                    format: "Total audio: %.1f s (longest %.1f s)\n", snapshot.totalAudioSeconds,
-                    snapshot.longestAudioSeconds), stdout)
-            if let decodeMs = snapshot.decodeMs {
-                fputs(
-                    String(
-                        format: "Decode ms: avg %.0f, p50 %.0f, p95 %.0f, min %.0f, max %.0f (n=%d)\n",
-                        decodeMs.average, decodeMs.p50, decodeMs.p95, decodeMs.min, decodeMs.max, snapshot.decodeCount),
-                    stdout)
-                fputs(
-                    String(
-                        format: "RTF: fastest %.3f, p50 %.3f, p95 %.3f\n", snapshot.fastestRtf, snapshot.rtfP50,
-                        snapshot.rtfP95),
-                    stdout)
-            } else {
-                fputs("Decode ms: no timed dictations yet.\n", stdout)
-            }
-            if let cleanupMs = snapshot.cleanupMs {
-                fputs(
-                    String(
-                        format: "Cleanup ms: avg %.0f, min %.0f, max %.0f (n=%d)\n",
-                        cleanupMs.average, cleanupMs.min, cleanupMs.max, snapshot.cleanupCount),
-                    stdout)
-            }
+            let window = try CommandLineInspection.diagnostics(
+                database: PersistenceStore.defaultDatabaseURL(), since: since)
+            fputs(CommandLineInspection.diagnosticsReport(window, days: windowDays) + "\n", stdout)
             return true
         } catch {
             fputs("Diagnostics failed: \(error.localizedDescription)\n", stderr)

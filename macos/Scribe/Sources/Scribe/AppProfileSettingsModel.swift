@@ -28,7 +28,6 @@ final class AppProfileSettingsModel: ObservableObject {
     @Published private(set) var loadError: String?
     /// Why the last action (an add, switch, delete, import and the like) failed.
     @Published private(set) var errorMessage: String?
-    @Published private(set) var isAdding = false
     @Published private(set) var load = SettingsSectionLoad()
 
     let drafts: SettingsDrafts
@@ -39,6 +38,11 @@ final class AppProfileSettingsModel: ObservableObject {
         self.access = access
         self.drafts = drafts
         self.onChanged = onChanged
+    }
+
+    /// Whether the profile in the drafts is being added, by this model or by one built earlier for the same drafts.
+    var isAdding: Bool {
+        drafts.isAdding(.appProfile)
     }
 
     var canAdd: Bool {
@@ -68,11 +72,10 @@ final class AppProfileSettingsModel: ObservableObject {
         let identifiersText = drafts.profileBundleIdentifiers
         let writingStyle = drafts.profileWritingStyle
         let newlineMode = drafts.profileNewlineMode
-        guard canAdd else {
+        guard canAdd, drafts.beginAdding(.appProfile) else {
             return
         }
-        isAdding = true
-        defer { isAdding = false }
+        defer { drafts.finishAdding(.appProfile) }
 
         let profile = AppProfile(
             name: name,

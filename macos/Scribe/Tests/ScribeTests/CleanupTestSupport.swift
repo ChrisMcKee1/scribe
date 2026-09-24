@@ -230,15 +230,17 @@ enum FormDecoding {
 
 // MARK: - Secrets and settings
 
-/// A `SecretStore` in memory, which counts its reads and writes and can be told to fail the next one, or to hold the
-/// next read until the test releases it.
+/// A `SecretStore` in memory, which counts its reads and writes, records which accounts it was asked for, and can be
+/// told to fail the next read, write or removal, or to hold the next read until the test releases it.
 final class InMemorySecretStore: SecretStore {
     private struct State: Sendable {
         var secrets: [String: String]
         var reads = 0
         var writes = 0
+        var accountsRead: [String] = []
         var failNextRead: OSStatus?
         var failNextWrite: OSStatus?
+        var failNextRemoval: OSStatus?
         var pauseNextRead: ReadPause?
     }
 
@@ -251,6 +253,7 @@ final class InMemorySecretStore: SecretStore {
     func secret(for account: String) throws -> String? {
         let (result, pause) = state.withLock { current -> (Result<String?, KeychainStore.KeychainError>, ReadPause?) in
             current.reads += 1
+            current.accountsRead.append(account)
             let pause = current.pauseNextRead
             current.pauseNextRead = nil
             if let status = current.failNextRead {
@@ -276,6 +279,14 @@ final class InMemorySecretStore: SecretStore {
     }
 
     func removeSecret(for account: String) throws {
+        let failure = state.withLock { current -> OSStatus? in
+            let status = current.failNextRemoval
+            current.failNextRemoval = nil
+            return status
+        }
+        if let failure {
+            throw KeychainStore.KeychainError.unhandled(failure)
+        }
         try write { $0[account] = nil }
     }
 
@@ -291,12 +302,22 @@ final class InMemorySecretStore: SecretStore {
         state.withLock { $0.writes }
     }
 
+    /// Every account a read asked for, in order.
+    var accountsRead: [String] {
+        state.withLock { $0.accountsRead }
+    }
+
     func failNextRead(with status: OSStatus) {
         state.withLock { $0.failNextRead = status }
     }
 
     func failNextWrite(with status: OSStatus) {
         state.withLock { $0.failNextWrite = status }
+    }
+
+    /// Fails the next removal only, so a save just before it still succeeds.
+    func failNextRemoval(with status: OSStatus) {
+        state.withLock { $0.failNextRemoval = status }
     }
 
     private func write(_ change: @escaping @Sendable (inout [String: String]) -> Void) throws {

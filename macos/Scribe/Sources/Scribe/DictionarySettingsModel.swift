@@ -52,7 +52,6 @@ final class DictionarySettingsModel: ObservableObject {
     /// Why the last action (an add, switch, delete, import and the like) failed.
     @Published private(set) var errorMessage: String?
     @Published private(set) var statusMessage: String?
-    @Published private(set) var isAdding = false
     @Published private(set) var isImporting = false
     @Published private(set) var isLearning = false
     @Published private(set) var isCleaning = false
@@ -68,6 +67,11 @@ final class DictionarySettingsModel: ObservableObject {
         self.access = access
         self.drafts = drafts
         self.onChanged = onChanged
+    }
+
+    /// Whether the rule in the drafts is being added, by this model or by one built earlier for the same drafts.
+    var isAdding: Bool {
+        drafts.isAdding(.dictionaryRule)
     }
 
     var canAdd: Bool {
@@ -101,11 +105,10 @@ final class DictionarySettingsModel: ObservableObject {
     func addFromDrafts() async {
         let pattern = drafts.dictionaryPattern
         let replacement = drafts.dictionaryReplacement
-        guard canAdd else {
+        guard canAdd, drafts.beginAdding(.dictionaryRule) else {
             return
         }
-        isAdding = true
-        defer { isAdding = false }
+        defer { drafts.finishAdding(.dictionaryRule) }
 
         let added = await write {
             try await self.access.addEntry(DictionaryEntry(pattern: pattern, replacement: replacement))

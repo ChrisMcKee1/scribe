@@ -8,6 +8,23 @@ struct DiagnosticsWindowSummary: Sendable {
     let capped: Bool
 }
 
+extension DiagnosticsWindowSummary {
+    /// Shown under the figures when the window held more dictations than one read covers.
+    static var coverageNote: String {
+        "Covers the newest \(DiagnosticsSettingsAccess.readLimit.formatted()) dictations in this window."
+    }
+
+    /// The summary of a window's dictations, read newest first with a limit of one row past
+    /// `DiagnosticsSettingsAccess.readLimit`: that extra row is what shows the window holds more, and the figures
+    /// describe the newest `readLimit` alone.
+    init(records: [DictationHistoryRecord], since: Date) {
+        let limit = DiagnosticsSettingsAccess.readLimit
+        self.init(
+            stats: DictationStats.compute(entries: Array(records.suffix(limit)), since: since),
+            capped: records.count > limit)
+    }
+}
+
 /// How the Diagnostics tab reaches storage. `live(_:)` reads the window's newest dictations with the store's
 /// asynchronous form and computes the stats there too, off the main actor. Tests pass their own.
 struct DiagnosticsSettingsAccess: Sendable {
@@ -20,12 +37,8 @@ extension DiagnosticsSettingsAccess {
 
     static func live(_ store: PersistenceStore) -> DiagnosticsSettingsAccess {
         DiagnosticsSettingsAccess(loadWindow: { since in
-            let limit = DiagnosticsSettingsAccess.readLimit
-            // One row past the cap: that extra row is what shows the window holds more.
-            let records = try await store.loadDictationHistory(since: since, limit: limit + 1)
-            return DiagnosticsWindowSummary(
-                stats: DictationStats.compute(entries: Array(records.suffix(limit)), since: since),
-                capped: records.count > limit)
+            let records = try await store.loadDictationHistory(since: since, limit: readLimit + 1)
+            return DiagnosticsWindowSummary(records: records, since: since)
         })
     }
 }
@@ -52,10 +65,7 @@ final class DiagnosticsSettingsModel: ObservableObject {
 
     /// Shown under the figures when the window held more dictations than one read covers.
     var coverageNote: String? {
-        guard capped else {
-            return nil
-        }
-        return "Covers the newest \(DiagnosticsSettingsAccess.readLimit.formatted()) dictations in this window."
+        capped ? DiagnosticsWindowSummary.coverageNote : nil
     }
 
     func reload() async {

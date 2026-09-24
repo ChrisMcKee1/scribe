@@ -251,6 +251,35 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertEqual(rig.fixture.clientSecrets.reads, 2)
     }
 
+    /// A secret an earlier build saved under the client id exactly as configured, surrounding whitespace included,
+    /// still signs in, whether the id comes from Settings or from the environment, and it moves to the trimmed id.
+    func testASecretSavedUnderAnUntrimmedClientIdStillSignsIn() async throws {
+        let settings = try makeRig(clientSecrets: InMemorySecretStore([" client-1 ": "legacy-secret"]))
+        configureMicrosoftFoundry(settings.store)
+        settings.store.azureAuthMode = .servicePrincipal
+        settings.store.azureTenantId = "tenant-1"
+        settings.store.azureClientId = " client-1 "
+        let environment = try makeRig(
+            environment: [
+                "SCRIBE_CLEANUP_PROVIDER": "microsoft-foundry",
+                "SCRIBE_AZURE_FOUNDRY_ENDPOINT": "https://my-res.services.ai.azure.com",
+                "SCRIBE_AZURE_FOUNDRY_DEPLOYMENT": "gpt-5-mini",
+                "SCRIBE_AZURE_AUTH_MODE": "service-principal",
+                "SCRIBE_AZURE_TENANT_ID": "tenant-1",
+                "SCRIBE_AZURE_CLIENT_ID": "client-1\n",
+            ],
+            clientSecrets: InMemorySecretStore(["client-1\n": "legacy-secret"]))
+
+        for rig in [settings, environment] {
+            try await clean(rig)
+
+            let tokenRequests = rig.requests.all.filter { $0.host == Self.entraHost }
+            XCTAssertEqual(tokenRequests.map { FormDecoding.fields($0.body)["client_secret"] }, ["legacy-secret"])
+            XCTAssertEqual(tokenRequests.map { FormDecoding.fields($0.body)["client_id"] }, ["client-1"])
+            XCTAssertEqual(rig.fixture.clientSecrets.secrets, ["client-1": "legacy-secret"])
+        }
+    }
+
     func testASecretChangeLeavesAProviderWithoutSecretsAlone() throws {
         let rig = try makeRig()
         let first = try rig.cache.provider()
