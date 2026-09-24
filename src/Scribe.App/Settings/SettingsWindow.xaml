@@ -85,12 +85,20 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
-        <Style TargetType="ui:Card" x:Key="SettingCard">
+        <!-- SettingCard and FillCard replace ui:Card's own style instead of extending it, so they also drop the
+             two setters that make a WPF-UI card a plain container (Card.xaml in WPF-UI 4.3.0: Focusable and
+             KeyboardNavigation.IsTabStop, both False). Without them each card was a Tab stop of its own, an
+             empty focus rectangle before the controls inside it. -->
+        <Style TargetType="ui:Card" x:Key="PlainCard">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="IsTabStop" Value="False"/>
+        </Style>
+        <Style TargetType="ui:Card" x:Key="SettingCard" BasedOn="{StaticResource PlainCard}">
             <Setter Property="Margin" Value="0,0,0,10"/>
             <Setter Property="Padding" Value="18,14"/>
         </Style>
         <!-- Master-detail cards must fill their grid cell; ui:Card centres by default. -->
-        <Style TargetType="ui:Card" x:Key="FillCard">
+        <Style TargetType="ui:Card" x:Key="FillCard" BasedOn="{StaticResource PlainCard}">
             <Setter Property="VerticalAlignment" Value="Stretch"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="VerticalContentAlignment" Value="Stretch"/>
@@ -724,7 +732,13 @@
                                             </Grid.ColumnDefinitions>
 
                                             <!-- Mini monitor: a 16:9 screen mock-up with nine clickable
-                                                 anchor zones and a taskbar strip for orientation. -->
+                                                 anchor zones and a taskbar strip for orientation. Each zone
+                                                 stays a Tab stop of its own, in reading order, rather than one
+                                                 stop for the group: an arrow key cannot move focus between the
+                                                 zones, because the page's scroll viewer takes it and only
+                                                 scrolls. WPF moves focus on an arrow key only through a
+                                                 PART_ScrollContentPresenter, which WPF-UI 4.3.0's ScrollViewer
+                                                 template does not name. -->
                                             <Border Grid.Column="0" Width="300" Height="170" CornerRadius="8"
                                                     BorderThickness="2"
                                                     BorderBrush="{DynamicResource ControlFillColorSecondaryBrush}"
@@ -1808,7 +1822,12 @@
                                     <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
                                         <StackPanel>
                                             <TextBlock Text="Trend" Style="{StaticResource SettingTitle}"/>
-                                            <ItemsControl x:Name="UsageTrendChart" Height="72" Margin="0,10,0,2">
+                                            <!-- An ItemsControl is a Control, so WPF makes it a Tab stop of its own, an
+                                                 empty focus rectangle around its items; neither the Aero2 theme nor
+                                                 WPF-UI 4.3.0 turns that off. These lists only display, so they take no
+                                                 focus, and anything inside them that acts still does. -->
+                                            <ItemsControl x:Name="UsageTrendChart" Height="72" Margin="0,10,0,2"
+                                                          Focusable="False">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <UniformGrid Rows="1"/>
@@ -1865,7 +1884,7 @@
                                             <TextBlock Text="Recognized technologies" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Text="Terms already covered by your enabled dictionary and libraries."
                                                        Style="{StaticResource SettingHint}"/>
-                                            <ItemsControl x:Name="UsageKnownTerms" Margin="0,10,0,0"/>
+                                            <ItemsControl x:Name="UsageKnownTerms" Margin="0,10,0,0" Focusable="False"/>
                                         </StackPanel>
                                     </ui:Card>
                                     <ui:Card Grid.Column="2" Padding="18,14" Style="{StaticResource FillCard}">
@@ -1877,7 +1896,7 @@
                                                        Text="No recurring uncovered jargon in this period."
                                                        Style="{StaticResource SettingHint}" Margin="0,10,0,0"/>
                                             <ItemsControl x:Name="UsageNovelTerms" Margin="0,7,0,0"
-                                                          Visibility="Collapsed">
+                                                          Visibility="Collapsed" Focusable="False">
                                                 <ItemsControl.ItemContainerStyle>
                                                     <Style TargetType="ContentPresenter">
                                                         <Setter Property="HorizontalAlignment" Value="Stretch"/>
