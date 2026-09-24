@@ -111,11 +111,14 @@ internal sealed class HotkeyEngine
     /// Owner thread: the input desktop switched, to or from the lock screen or the secure desktop. The hook is not called
     /// for input there, so a key held as the desktop switched can be released unseen; each machine forgets the Narrator
     /// keys it holds, the one kind of key nothing else can take out of the hook's view (see
-    /// <see cref="ChordStateMachine.ForgetNarratorKeys"/>). Nothing starts or stops.
+    /// <see cref="ChordStateMachine.ForgetNarratorKeys"/>). Nothing starts or stops. The WinEvent callback that calls
+    /// this runs on the thread that set the hook, which is the owner; a call from any other thread once an owner is
+    /// attached is ignored rather than allowed to race the keyboard callback.
     /// </summary>
     public void OnDesktopSwitch()
     {
-        if (IsRetired)
+        var owner = OwnerThreadId;
+        if (IsRetired || (owner != 0 && owner != NativeMethods.GetCurrentThreadId()))
         {
             return;
         }

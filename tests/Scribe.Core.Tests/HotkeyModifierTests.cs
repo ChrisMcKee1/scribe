@@ -455,6 +455,21 @@ public sealed class HotkeyModifierTests
         Assert.Equal(0, h.Engine.DesktopSwitches);
     }
 
+    [Fact]
+    public void A_desktop_switch_from_a_thread_other_than_the_owner_is_ignored()
+    {
+        // The engine's key state has one owner. Once the hook thread has attached, only it may apply a switch; this test
+        // thread stands in for any other.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        h.Down(CapsLock);
+        h.Engine.AttachOwner(NativeMethods.GetCurrentThreadId() + 1);
+
+        h.Engine.OnDesktopSwitch();
+
+        Assert.Equal(0, h.Engine.DesktopSwitches);
+        Assert.True(h.Engine.IsPressed(CapsLock));
+    }
+
     [Theory]
     [MemberData(nameof(Modifiers))]
     public void A_modifier_windows_also_reports_down_still_makes_it_another_command(string combination, uint[] modifiers)
