@@ -1462,20 +1462,6 @@
                                               HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                               Background="Transparent" BorderThickness="0"
                                               AutomationProperties.LabeledBy="{Binding ElementName=LibraryDetailName}">
-                                        <!-- The rows are Core DictionaryEntry records, which UI Automation would read out
-                                             through the record's ToString ("DictionaryEntry { Id = 0, ... }"). -->
-                                        <DataGrid.RowStyle>
-                                            <Style TargetType="DataGridRow" BasedOn="{StaticResource KeyboardRow}">
-                                                <Setter Property="AutomationProperties.Name">
-                                                    <Setter.Value>
-                                                        <MultiBinding StringFormat="Spoken {0}, written {1}">
-                                                            <Binding Path="Pattern"/>
-                                                            <Binding Path="Replacement"/>
-                                                        </MultiBinding>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </DataGrid.RowStyle>
                                         <DataGrid.Columns>
                                             <DataGridTextColumn Header="Spoken" Binding="{Binding Pattern}" Width="*"/>
                                             <DataGridTextColumn Header="Written" Binding="{Binding Replacement}" Width="*"/>
@@ -1958,12 +1944,6 @@
                                                       HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                                       Background="Transparent" BorderThickness="0"
                                                       AutomationProperties.LabeledBy="{Binding ElementName=UsageAppsTitle}">
-                                                <!-- The rows are Core AppUsage records, whose ToString would be read out. -->
-                                                <DataGrid.RowStyle>
-                                                    <Style TargetType="DataGridRow" BasedOn="{StaticResource KeyboardRow}">
-                                                        <Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
-                                                    </Style>
-                                                </DataGrid.RowStyle>
                                                 <DataGrid.Columns>
                                                     <DataGridTextColumn Header="App" Binding="{Binding Name}" Width="*"/>
                                                     <DataGridTextColumn Header="Dictations" Binding="{Binding Dictations}" Width="Auto"/>

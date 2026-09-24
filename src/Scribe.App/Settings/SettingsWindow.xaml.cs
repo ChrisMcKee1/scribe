@@ -1782,7 +1782,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LibraryDetailDesc.Visibility =
             string.IsNullOrWhiteSpace(library.Description) ? Visibility.Collapsed : Visibility.Visible;
 
-        LibraryTermsGrid.ItemsSource = library.Entries;
+        LibraryTermsGrid.ItemsSource = library.Entries.Select(entry => new LibraryTermRow(entry)).ToList();
         LibraryTermsGrid.Visibility = Visibility.Visible;
         LibraryDetailEmpty.Visibility = Visibility.Collapsed;
     }
@@ -6091,7 +6091,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageActiveDaysText.Text = snapshot.ActiveDays.ToString("N0");
         UsageSpeechText.Text = FormatDuration(snapshot.Speech);
         UsageAverageText.Text = snapshot.AverageWords.ToString("0.#");
-        UsageAppsGrid.ItemsSource = snapshot.TopApps;
+        UsageAppsGrid.ItemsSource = snapshot.TopApps.Select(app => new UsageAppRow(app)).ToList();
 
         var weekly = snapshot.Granularity == UsageAnalyzer.TrendGranularity.Weekly;
         var trendRows = UsageTrendNormalizer.Normalize(snapshot.Trend)
@@ -6686,6 +6686,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         ];
     }
 
+    // Every DataGrid row type in this window compares by reference, never by value, which is why the records
+    // below override Equals and the Core records are copied into the row classes after them. When a grid's
+    // items are replaced, WPF reuses an old row's automation peer for any new item that merely Equals an old
+    // one (ItemsControlAutomationPeer.GetChildrenCore, ItemAutomationPeer.ReuseForItem), but the reused peer
+    // keeps the cell peers it made for the old item, and those hold that item only weakly
+    // (DataGridItemAutomationPeer.GetOrCreateCellItemPeer, DataGridCellItemAutomationPeer). A reload builds
+    // equal new rows, so once the old ones were collected every cell was announced as
+    // "Item: , Column Display Index: 0", had no bounds, and focus inside the grid went unannounced.
     private sealed record UsageTrendRow(
         string Period,
         int Dictations,
@@ -6698,6 +6706,32 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // UI Automation names a trend bar and a trend row after ToString(); a record's lists every field.
         public override string ToString() => ToolTip;
+
+        public bool Equals(UsageTrendRow? other) => ReferenceEquals(this, other);
+
+        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
+    }
+
+    /// <summary>One row of the Top apps grid, copied from Core's <see cref="UsageAnalyzer.AppUsage"/> record.</summary>
+    private sealed class UsageAppRow(UsageAnalyzer.AppUsage app)
+    {
+        public string Name { get; } = app.Name;
+
+        public int Dictations { get; } = app.Dictations;
+
+        public int Words { get; } = app.Words;
+
+        public override string ToString() => Name;
+    }
+
+    /// <summary>One read-only row of a library's term preview, copied from Core's <see cref="DictionaryEntry"/>.</summary>
+    private sealed class LibraryTermRow(DictionaryEntry entry)
+    {
+        public string Pattern { get; } = entry.Pattern;
+
+        public string Replacement { get; } = entry.Replacement;
+
+        public override string ToString() => $"Spoken {Pattern}, written {Replacement}";
     }
 
     private sealed record UsageTermRow(string Text, int Dictations)
@@ -6860,6 +6894,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // UI Automation names the row after ToString(), and so the Result cell too, which holds buttons rather
         // than text. A record's ToString lists every field.
         public override string ToString() => $"{When}, {Text}";
+
+        // Compared by reference, not by value: see the note above UsageTrendRow.
+        public bool Equals(HistoryRow? other) => ReferenceEquals(this, other);
+
+        public override int GetHashCode() => RuntimeHelpers.GetHashCode(this);
 
         public static HistoryRow From(HistoryEntry entry) => new(
             entry.Id,
