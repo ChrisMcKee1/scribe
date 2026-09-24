@@ -344,7 +344,8 @@ final class CleanupProviderCacheTests: XCTestCase {
         let rig = try makeRig { request in
             StubReply.json(
                 request, status: 404,
-                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#
+                #"{"error":{"code":"DeploymentNotFound","#
+                    + #""message":"The API deployment for this resource does not exist."}}"#
             )
         }
         configureMicrosoftFoundry(rig.store)
@@ -643,7 +644,8 @@ final class CleanupProviderCacheTests: XCTestCase {
                 guard Set(RecordedRequest(request).jsonBody.keys).isSubset(of: allowed) else {
                     return StubReply.json(
                         request, status: status,
-                        #"{"object":"error","message":"Extra inputs are not permitted canary-field","type":"BadRequestError","code":\#(status)}"#
+                        #"{"object":"error","message":"Extra inputs are not permitted canary-field","#
+                            + #""type":"BadRequestError","code":\#(status)}"#
                     )
                 }
                 return StubReply.completion(request, "Cleaned.")

@@ -93,7 +93,8 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 
     func testARefusalCarriesItsStatusAndCodeButNotTheBody() async throws {
         let body =
-            #"{"error":{"message":"Incorrect API key provided: sk-test.","type":"invalid_request_error","code":"invalid_api_key"}}"#
+            #"{"error":{"message":"Incorrect API key provided: sk-test.","#
+            + #""type":"invalid_request_error","code":"invalid_api_key"}}"#
         let provider = makeProvider(apiKey: "sk-test") { request in StubReply.json(request, status: 401, body) }
 
         let error = try await cleanupFailure(of: provider)

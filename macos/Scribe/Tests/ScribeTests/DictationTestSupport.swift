@@ -110,9 +110,9 @@ func within<Value: Sendable>(
     return try outcome.get()
 }
 
-/// A resampler flush the capture engine runs on its control queue, held there until the test lets it go. Only the
-/// first flush is held. A watchdog on another queue lets it go by itself after `watchdog` seconds when the test has not,
-/// and records that it did, so a regression that waits for the flush on the caller's thread neither hangs the suite nor
+/// A resampler flush the capture engine runs on its control queue, held there until the test lets it go. Only the first
+/// flush is held. A watchdog on another queue lets it go by itself after `watchdog` seconds when the test has not, and
+/// records that it did, so a regression that waits for the flush on the caller's thread neither hangs the suite nor
 /// passes: the test finds the flush let go by the watchdog instead of still held. No assertion measures time.
 final class HeldFlush: Sendable {
     enum Release: Equatable, Sendable {
@@ -585,7 +585,9 @@ final class FakeInjector: DictationInjecting {
         if inFlight == 0 {
             let waiting = idleWaiters
             idleWaiters.removeAll()
-            waiting.forEach { $0.resume() }
+            for waiter in waiting {
+                waiter.resume()
+            }
         }
         return result
     }

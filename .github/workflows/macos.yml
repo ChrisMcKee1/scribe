@@ -190,12 +190,14 @@ jobs:
             exit 1
           fi
 
+      # Strict: any finding against macos/Scribe/.swift-format fails the job. `swift format format --in-place
+      # --recursive --configuration macos/Scribe/.swift-format macos/Scribe/Sources macos/Scribe/Tests`, run with
+      # the same toolchain, fixes everything but the few lint-only rules.
       - name: swift format lint
         if: always()
         run: |
-          swift format lint --recursive --configuration macos/Scribe/.swift-format \
-            macos/Scribe/Sources macos/Scribe/Tests 2>&1 | tee lint.log || true
-          echo "$(grep -c 'warning:' lint.log || true) lint warning(s) against macos/Scribe/.swift-format"
+          swift format lint --strict --recursive --parallel --configuration macos/Scribe/.swift-format \
+            macos/Scribe/Sources macos/Scribe/Tests
 
   # Optional and never required: it runs only when the workflow is dispatched by hand with real_asr,
   # and its failure never fails the run. It installs Foundry Local with Homebrew, keeps the speech

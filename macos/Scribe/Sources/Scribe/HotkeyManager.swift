@@ -365,9 +365,9 @@ final class HotkeyManager: DictationTriggerSource {
         resynchronizeHeldState()
     }
 
-    /// Reads the bound key's state now and settles what events lost meanwhile would have (`HotkeyKeyState.resynchronize`):
-    /// a held key found up, or a Caps Lock whose lock changed an odd number of times, releases its recording. Nothing
-    /// presses; a key found down needs a fresh press.
+    /// Reads the bound key's state now and settles what events lost meanwhile would have
+    /// (`HotkeyKeyState.resynchronize`): a held key found up, or a Caps Lock whose lock changed an odd number of times,
+    /// releases its recording. Nothing presses; a key found down needs a fresh press.
     func resynchronizeHeldState() {
         let binding = state.binding
         let flags = readModifierFlags()

@@ -51,7 +51,10 @@ struct QuickAddView: View {
 
             if recentTranscripts.isEmpty {
                 Text(
-                    "No recent dictations to pick a word from yet. Dictate something first, or type the spoken form directly below."
+                    """
+                    No recent dictations to pick a word from yet. Dictate something first, or type the spoken form \
+                    directly below.
+                    """
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

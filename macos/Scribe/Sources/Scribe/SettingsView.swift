@@ -245,7 +245,10 @@ private struct HotkeySettingsTab: View {
             // the user has to add Scribe manually. Surfaced here because "the key does nothing"
             // is otherwise indistinguishable from a wrong binding.
             Text(
-                "If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > Privacy & Security > Input Monitoring, then relaunch Scribe."
+                """
+                If the key does nothing at all, grant Scribe Input Monitoring access in System Settings > \
+                Privacy & Security > Input Monitoring, then relaunch Scribe.
+                """
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -343,7 +346,10 @@ private struct HotkeySettingsTab: View {
             Text("Microphone")
                 .font(.headline)
             Text(
-                "Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as soon as macOS lists it here, no extra setup needed."
+                """
+                Choose which microphone Scribe listens to. A Bluetooth headset or AirPods works automatically as \
+                soon as macOS lists it here, no extra setup needed.
+                """
             )
             .foregroundStyle(.secondary)
 
@@ -817,7 +823,10 @@ private struct AppProfilesSettingsTab: View {
             Text("Per-App Profiles")
                 .font(.headline)
             Text(
-                "Override writing style or line-break handling for specific apps, matched by bundle identifier (e.g. com.apple.Terminal)."
+                """
+                Override writing style or line-break handling for specific apps, matched by bundle identifier \
+                (e.g. com.apple.Terminal).
+                """
             )
             .foregroundStyle(.secondary)
             .font(.caption)
@@ -1053,7 +1062,10 @@ private struct PlaygroundSettingsTab: View {
                 Text("Playground")
                     .font(.headline)
                 Text(
-                    "Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw transcript, dictionary/snippet replacements, and per-step timings for the most recent run."
+                    """
+                    Dictate normally (hotkey or \"Start Test Dictation\") while this tab is open to see the raw \
+                    transcript, dictionary/snippet replacements, and per-step timings for the most recent run.
+                    """
                 )
                 .foregroundStyle(.secondary)
 
@@ -1450,7 +1462,10 @@ private struct UsageInsightsSettingsTab: View {
             Text("AI summary")
                 .font(.subheadline.bold())
             Text(
-                "Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup provider. Novel terms and raw transcripts never leave this device."
+                """
+                Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup \
+                provider. Novel terms and raw transcripts never leave this device.
+                """
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1579,7 +1594,10 @@ private struct HistorySettingsTab: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                "This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be undone."
+                """
+                This deletes every stored dictation and empties Recent Dictations in the menu bar. It cannot be \
+                undone.
+                """
             )
         }
     }

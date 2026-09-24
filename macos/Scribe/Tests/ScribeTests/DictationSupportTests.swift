@@ -492,8 +492,9 @@ final class RecentDictationsMenuTests: XCTestCase {
     }
 }
 
-/// The test support's own guarantees: a gate settled at teardown stays settled, so a waiter that arrives afterwards goes
-/// on instead of parking for good, a gate the test opened keeps its value, and a closed clock refuses every later sleep.
+/// The test support's own guarantees: a gate settled at teardown stays settled, so a waiter that arrives afterwards
+/// goes on instead of parking for good, a gate the test opened keeps its value, and a closed clock refuses every later
+/// sleep.
 @MainActor
 final class DictationTestSupportTests: XCTestCase {
     func testAGateSettledAtTeardownLetsALaterWaiterGoOn() async {

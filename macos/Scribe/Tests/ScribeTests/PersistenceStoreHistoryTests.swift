@@ -105,7 +105,8 @@ final class PersistenceStoreHistoryTests: XCTestCase {
         let check = try StorageTestSQLite(directory.databaseURL)
         XCTAssertEqual(
             try check.scalarInt(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'ix_dictation_history_started_at';"),
+                "SELECT count(*) FROM sqlite_master "
+                    + "WHERE type = 'index' AND name = 'ix_dictation_history_started_at';"),
             1)
         XCTAssertEqual(try store.historyRetention(), .notChosen)
     }

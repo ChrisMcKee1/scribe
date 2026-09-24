@@ -384,14 +384,20 @@ final class HistoryWriter: @unchecked Sendable {
             let code = (failure as? PersistenceError)?.sqliteCode ?? -1
             let errorType = String(describing: type(of: failure))
             logger.error(
-                "#\(item.dictationID) history write failed after \(writeMilliseconds) ms (\(errorType, privacy: .public), SQLite \(code))."
+                """
+                #\(item.dictationID) history write failed after \(writeMilliseconds) ms \
+                (\(errorType, privacy: .public), SQLite \(code)).
+                """
             )
             return
         }
 
         let totalMilliseconds = (DispatchTime.now().uptimeNanoseconds - item.queuedAt) / 1_000_000
         logger.debug(
-            "#\(item.dictationID) history committed \(totalMilliseconds) ms after queueing (write \(writeMilliseconds) ms)."
+            """
+            #\(item.dictationID) history committed \(totalMilliseconds) ms after queueing \
+            (write \(writeMilliseconds) ms).
+            """
         )
     }
 

@@ -155,7 +155,10 @@ struct AboutView: View {
                     .font(.headline)
                     .foregroundStyle(Color.accentColor)
                 Text(
-                    "Speech recognition runs on this Mac, and audio never leaves it. Cloud AI is optional and sends text only when you enable or invoke a remote provider feature."
+                    """
+                    Speech recognition runs on this Mac, and audio never leaves it. Cloud AI is optional and sends \
+                    text only when you enable or invoke a remote provider feature.
+                    """
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -192,7 +195,10 @@ struct AboutView: View {
                     Text("Support and source")
                         .font(.headline)
                     Text(
-                        "Report a problem, request a feature, or inspect the code that runs on your Mac. Never put transcripts, audio, credentials, or other sensitive information in a public issue."
+                        """
+                        Report a problem, request a feature, or inspect the code that runs on your Mac. Never put \
+                        transcripts, audio, credentials, or other sensitive information in a public issue.
+                        """
                     )
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -216,7 +222,10 @@ struct AboutView: View {
                 Text("Where your data is stored")
                     .font(.headline)
                 Text(
-                    "Scribe keeps its local data file at this location. Copy the path to paste it elsewhere, or reveal it in Finder."
+                    """
+                    Scribe keeps its local data file at this location. Copy the path to paste it elsewhere, or \
+                    reveal it in Finder.
+                    """
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -225,7 +234,10 @@ struct AboutView: View {
                     .font(.subheadline.bold())
                     .padding(.top, 4)
                 Text(
-                    "One database holding your dictation history, dictionary, snippets and app profiles. Never send or post this file: it contains everything you have dictated."
+                    """
+                    One database holding your dictation history, dictionary, snippets and app profiles. Never send \
+                    or post this file: it contains everything you have dictated.
+                    """
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)

@@ -110,10 +110,8 @@ final class CaptureConversionScenarioTests: XCTestCase {
         let gain = device.layout.downmixGain
         let expected = clip.samples.map { $0 * gain }
         let match = ScenarioAudio.similarity(of: captured.samples, to: expected, maxLag: 64)
-        let levelChange =
-            ScenarioAudio.dbfs(ScenarioAudio.rms(captured.samples))
-            - ScenarioAudio.dbfs(
-                ScenarioAudio.rms(clip.samples))
+        let capturedLevel = ScenarioAudio.dbfs(ScenarioAudio.rms(captured.samples))
+        let levelChange = capturedLevel - ScenarioAudio.dbfs(ScenarioAudio.rms(clip.samples))
         if device.isExact {
             XCTAssertEqual(captured.samples.count, expected.count, file: file, line: line)
             XCTAssertTrue(

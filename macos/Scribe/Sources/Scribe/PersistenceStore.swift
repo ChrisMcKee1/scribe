@@ -2,7 +2,9 @@ import Foundation
 import OSLog
 import SQLite3
 
-private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+/// SQLite's `SQLITE_TRANSIENT`, which Swift cannot import because the C macro casts -1 to a function pointer: it
+/// tells a bind to copy the value before the call returns.
+private let sqliteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 /// What the store was doing when storage failed. The case name is safe to log and to show.
 enum PersistenceOperation: String, Sendable {
@@ -960,10 +962,8 @@ final class PersistenceStore: Sendable {
     }
 
     private static func readDictionaryEntries(enabledOnly: Bool, _ session: SQLiteSession) throws -> [DictionaryEntry] {
-        let sql =
-            enabledOnly
-            ? "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries WHERE enabled = 1 ORDER BY id;"
-            : "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries ORDER BY id;"
+        let filter = enabledOnly ? " WHERE enabled = 1" : ""
+        let sql = "SELECT id, pattern, replacement, whole_word, enabled FROM dictionary_entries\(filter) ORDER BY id;"
         return try session.withStatement(sql, .read) { statement in
             var entries: [DictionaryEntry] = []
             while try statement.step() {
@@ -995,7 +995,10 @@ final class PersistenceStore: Sendable {
 
     private static func updateDictionaryEntry(_ entry: DictionaryEntry, in session: SQLiteSession) throws {
         try session.withStatement(
-            "UPDATE dictionary_entries SET pattern = ?1, replacement = ?2, whole_word = ?3, enabled = ?4 WHERE id = ?5;",
+            """
+            UPDATE dictionary_entries SET pattern = ?1, replacement = ?2, whole_word = ?3, enabled = ?4
+            WHERE id = ?5;
+            """,
             .write
         ) { statement in
             try statement.bind(entry.pattern, at: 1)
@@ -1611,7 +1614,7 @@ private struct SQLiteStatement {
         let code: Int32
         if let value {
             // The byte count rather than -1, so text containing a NUL is stored whole.
-            code = sqlite3_bind_text(handle, index, value, Int32(clamping: value.utf8.count), SQLITE_TRANSIENT)
+            code = sqlite3_bind_text(handle, index, value, Int32(clamping: value.utf8.count), sqliteTransient)
         } else {
             code = sqlite3_bind_null(handle, index)
         }

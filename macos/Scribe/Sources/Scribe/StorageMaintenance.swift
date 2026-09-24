@@ -24,8 +24,10 @@ enum HistoryRetention: Hashable, Sendable {
     static let notChosenHint = "No limit has been chosen, so Scribe keeps all of your dictation history."
 
     /// Shown while the stored limit cannot be read, which also keeps everything.
-    static let unreadableHint =
-        "The saved limit could not be read, so Scribe keeps all of your dictation history. Choose a limit to replace it."
+    static let unreadableHint = """
+        The saved limit could not be read, so Scribe keeps all of your dictation history. Choose a limit to \
+        replace it.
+        """
 
     /// How a Settings picker names this choice.
     var label: String {
@@ -501,7 +503,10 @@ final class StorageMaintenance: @unchecked Sendable {
             let reclaimOutcome = reclaim()
             let checkpointOutcome = checkpointIfOwed()
             logger.info(
-                "Cleared \(removed) history entries; reclaim \(Self.describe(reclaimOutcome), privacy: .public); checkpoint \(Self.describe(checkpointOutcome), privacy: .public)."
+                """
+                Cleared \(removed) history entries; reclaim \(Self.describe(reclaimOutcome), privacy: .public); \
+                checkpoint \(Self.describe(checkpointOutcome), privacy: .public).
+                """
             )
         case .failure(let error):
             let code = Self.code(of: error)
@@ -829,11 +834,17 @@ final class StorageMaintenance: @unchecked Sendable {
 
         if eventful {
             logger.info(
-                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public)."
+                """
+                Storage maintenance: retention \(retentionText, privacy: .public); \
+                reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).
+                """
             )
         } else {
             logger.debug(
-                "Storage maintenance: retention \(retentionText, privacy: .public); reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public)."
+                """
+                Storage maintenance: retention \(retentionText, privacy: .public); \
+                reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).
+                """
             )
         }
     }

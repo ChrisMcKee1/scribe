@@ -15,7 +15,8 @@ final class MicrosoftFoundryEndpointTests: XCTestCase {
             ("https://my-res.cognitiveservices.azure.com", "https://my-res.cognitiveservices.azure.com/openai/v1/"),
             ("https://my-res.openai.azure.com/openai/v1/", "https://my-res.openai.azure.com/openai/v1/"),
             (
-                "https://my-res.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-08-01-preview",
+                "https://my-res.openai.azure.com/openai/deployments/gpt-4o/chat/completions"
+                    + "?api-version=2024-08-01-preview",
                 "https://my-res.openai.azure.com/openai/v1/"
             ),
             ("https://My-Res.OpenAI.Azure.com/openai/v1", "https://my-res.openai.azure.com/openai/v1/"),
@@ -112,7 +113,8 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         let provider = makeProvider(deployment: "gpt-private-name") { request in
             StubReply.json(
                 request, status: 404,
-                #"{"error":{"code":"DeploymentNotFound","message":"The API deployment for this resource does not exist."}}"#
+                #"{"error":{"code":"DeploymentNotFound","#
+                    + #""message":"The API deployment for this resource does not exist."}}"#
             )
         }
 
@@ -338,7 +340,9 @@ final class AzureServicePrincipalCredentialProviderTests: XCTestCase {
     /// Entra's description repeats the app and tenant ids and carries trace ids; only the code and the number stay.
     func testARefusalKeepsTheCodeAndTheNumberButNotTheDescription() async throws {
         let body =
-            #"{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided for app 'app-id-9'. Trace ID: trace-7","error_codes":[7000215]}"#
+            #"{"error":"invalid_client","#
+            + #""error_description":"AADSTS7000215: Invalid client secret provided for app 'app-id-9'. "#
+            + #"Trace ID: trace-7","error_codes":[7000215]}"#
         let provider = makeProvider { request in StubReply.json(request, status: 401, body) }
 
         do {
