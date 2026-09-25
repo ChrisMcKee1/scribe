@@ -77,6 +77,11 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
 
+        <!-- A check box row's box sits on the card's content edge, and the 28 DIP description indent (the box's 20 plus
+             WPF-UI's 8 DIP content margin) lines up with the title; WPF-UI's default 11 DIP left padding offset both. -->
+        <Style TargetType="CheckBox" x:Key="SettingCheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Setter Property="Padding" Value="0,5,0,6"/>
+        </Style>
         <Style TargetType="ui:Card" x:Key="SettingsCard" BasedOn="{StaticResource {x:Type ui:Card}}">
             <Setter Property="Margin" Value="0,0,0,4"/>
             <Setter Property="Padding" Value="16,12"/>
@@ -679,7 +684,7 @@
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="StoreAudioCheck"
+                                        <CheckBox x:Name="StoreAudioCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
                                                 <TextBlock x:Name="StoreAudioTitle" Text="Keep audio with history" Style="{StaticResource CardTitle}"/>
@@ -830,7 +835,7 @@
                                 <TextBlock Text="Capture" Style="{StaticResource SectionHeader}" Margin="2,4,0,10"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="VadCheck"
+                                        <CheckBox x:Name="VadCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=VadTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=VadDescription}">
                                                 <TextBlock x:Name="VadTitle" Text="Voice activity detection" Style="{StaticResource CardTitle}"/>
@@ -840,7 +845,7 @@
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="AutoStopCheck"
+                                        <CheckBox x:Name="AutoStopCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
                                                 <TextBlock x:Name="AutoStopTitle" Text="End dictation on silence (toggle mode)" Style="{StaticResource CardTitle}"/>
@@ -894,7 +899,7 @@
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="PostCheck"
+                                        <CheckBox x:Name="PostCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=PostDescription}"
                                                   Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled">
@@ -925,7 +930,7 @@
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="ShiftEnterCheck"
+                                        <CheckBox x:Name="ShiftEnterCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=ShiftEnterTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=ShiftEnterDescription}">
                                                 <TextBlock x:Name="ShiftEnterTitle" Text="Don't send chat messages early" Style="{StaticResource CardTitle}"/>
@@ -935,7 +940,7 @@
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="SpaceAfterDictationCheck"
+                                        <CheckBox x:Name="SpaceAfterDictationCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}">
                                                 <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
@@ -962,7 +967,7 @@
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="OverlayCheck"
+                                        <CheckBox x:Name="OverlayCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=OverlayTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=OverlayDescription}">
                                                 <TextBlock x:Name="OverlayTitle" Text="Show the recording overlay" Style="{StaticResource CardTitle}"/>
@@ -1055,7 +1060,7 @@
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
-                                        <CheckBox x:Name="AiCleanupCheck"
+                                        <CheckBox x:Name="AiCleanupCheck" Style="{StaticResource SettingCheckBox}"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=AiCleanupTitle}"
                                                   AutomationProperties.HelpText="{Binding Text, ElementName=AiCleanupDescription}"
                                                   Checked="AiCleanupCheck_Toggled"
@@ -1711,7 +1716,7 @@
                                                     AutomationProperties.LabeledBy="{Binding ElementName=SnippetPhraseTitle}"
                                                     TextChanged="SnippetPhraseBox_TextChanged"/>
                                         <StackPanel Margin="0,16,0,0">
-                                            <CheckBox x:Name="SnippetEnabledCheck"
+                                            <CheckBox x:Name="SnippetEnabledCheck" Style="{StaticResource SettingCheckBox}"
                                                       AutomationProperties.LabeledBy="{Binding ElementName=SnippetEnabledLabel}"
                                                       AutomationProperties.HelpText="{Binding Text, ElementName=SnippetEnabledDescription}"
                                                       Click="SnippetEnabledCheck_Click">
