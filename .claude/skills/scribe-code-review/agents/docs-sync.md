@@ -71,7 +71,7 @@ staying silent. Line numbers below are hints and the file names are the anchors.
 | `docs/model-leaderboard.md` | The golden-suite benchmark report. Hand-written prose on top (revision notes, TL;DR table, key findings), machine-generated report body below. | `CleanupModelCatalog`, `CleanupPrompt`. |
 | `docs/gpt56-phonetic-benchmark.md` | A focused prompt A/B report, linked from the leaderboard header. | Prompt work. |
 | `docs/local-performance-benchmark.md` | A BenchmarkDotNet report. | `tools/Scribe.Benchmarks`. |
-| `docs/release-notes-*.md` | Historical per-release notes. Present for 0.2.19, 0.2.20, 0.3.1, 0.3.2, 0.3.11, 0.4.0 and 0.4.3 only. | No workflow or script reads them; `AGENTS.md` names the latest one under Releases. See Exceptions. |
+| `docs/release-notes-*.md` | Historical per-release notes. Present for 0.2.19, 0.2.20, 0.3.1, 0.3.2, 0.3.11, 0.4.0, 0.4.3 and 0.4.4 only. | No workflow or script reads them; `AGENTS.md` names the latest one under Releases. See Exceptions. |
 | `Scribe-0.2.x-Teams-Update.md` | A one-off historical announcement covering 0.2.1 to 0.2.15. | Nothing. See Exceptions. |
 
 Two verified couplings that make `PRIVACY.md` different in kind from the rest:
@@ -361,7 +361,7 @@ This is the docs-only path, and it is where a review is most likely to wave a ch
 **Never** write a finding whose whole content is that a document is old, that a version number in
 prose is behind, or that a section "could be clearer". `AGENTS.md` closes the version case itself:
 *"Read `<VersionPrefix>` from that file rather than trusting a number quoted here; a version pinned
-in prose is stale the next time anyone ships."* The same reasoning covers its own "2695 as of 0.4.3"
+in prose is stale the next time anyone ships."* The same reasoning covers its own "3756 as of 0.4.4"
 test-count line, which is an as-of stamp and not a claim of currency.
 
 **Never** assert that a build or a test will catch a doc-code disagreement. Nothing in this

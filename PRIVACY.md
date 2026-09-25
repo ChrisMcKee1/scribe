@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** September 24, 2026
+**Effective date:** September 25, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice

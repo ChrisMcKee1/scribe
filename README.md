@@ -274,8 +274,9 @@ inserted, and the space Scribe adds after each dictation.
 
 | Feature | What it does |
 |---|---|
-| Tray quick actions | Pause (your push-to-talk key then works normally in other apps until you resume), AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
+| Tray quick actions | Pause (your push-to-talk key then works normally in other apps until you resume), choose the microphone, AI cleanup on/off, learn from history, copy recent dictations, reopen the welcome tour |
 | Start with Windows | Applies the moment you flip it, with nothing to save, and shows what Windows reports, including a choice made in Task Manager or Windows Settings |
+| Keyboard and screen readers | Tab follows the visible layout in every window, controls carry screen reader names, and text stays readable on any Windows accent colour, with Windows contrast themes left as they are |
 | Auto-updates | Microsoft Store installs are signed and updated by Microsoft; standalone GitHub installs use Velopack delta updates |
 | Offline by architecture | The dictation path needs no network, sends no telemetry, and keeps every stat on your disk |
 

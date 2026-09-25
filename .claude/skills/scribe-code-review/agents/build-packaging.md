@@ -127,7 +127,7 @@ maintainer approved it. That is §9, not this section.
 
 ## §3. The version lives in `Directory.Build.props`, and nowhere else
 
-`Directory.Build.props:6` carries `<VersionPrefix>` (currently `0.4.3`), and `:8-9` derive `Version`
+`Directory.Build.props:6` carries `<VersionPrefix>` (currently `0.4.4`), and `:8-9` derive `Version`
 from it so CI can pass `-p:VersionSuffix=rc.1` without editing the file. `AGENTS.md:61-63` states the
 consequence directly: *"Read `<VersionPrefix>` from that file rather than trusting a number quoted
 here; a version pinned in prose is stale the next time anyone ships."*
