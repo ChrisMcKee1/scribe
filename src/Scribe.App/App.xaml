@@ -30,6 +30,8 @@
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedRowOutline}" Color="Transparent"/>
             <FontWeight x:Key="{x:Static infra:AccentContrastKeys.SelectedRowNameWeight}">Normal</FontWeight>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemOutline}" Color="Transparent"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemIndicator}" Color="Transparent"/>
 
             <!-- A link. WPF-UI 4.3.0 has no style for Hyperlink, so a link draws in WPF's own: SystemColors.HotTrackColor
                  at rest, #0066CC, which is 2.93:1 on the dark page whatever the accent, and red while hovered, 4.07:1

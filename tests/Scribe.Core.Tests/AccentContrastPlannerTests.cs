@@ -53,6 +53,7 @@ public sealed class AccentContrastPlannerTests
             [ThemeColor.CardBackground] = C(light ? "#B3FFFFFF" : "#0DFFFFFF"),
             [ThemeColor.ControlFill] = C(light ? "#B3FFFFFF" : "#0FFFFFFF"),
             [ThemeColor.ControlFillSecondary] = C(light ? "#80F9F9F9" : "#15FFFFFF"),
+            [ThemeColor.SubtleFillSecondary] = C(light ? "#0A000000" : "#0FFFFFFF"),
             [ThemeColor.StrongStroke] = C(light ? "#72000000" : "#8BFFFFFF"),
             [ThemeColor.BodyText] = C(light ? "#E4000000" : "#FFFFFF"),
             [ThemeColor.BodyTextSecondary] = C(light ? "#9E000000" : "#C5FFFFFF"),
@@ -487,6 +488,41 @@ public sealed class AccentContrastPlannerTests
         Assert.Equal(Role(plan, AccentForegroundRole.SelectedItem).Foreground, plan.SelectedItemOutline.Color);
         Assert.True(plan.SelectedItemOutline.AgainstFill >= WcagContrast.NonTextMinimum);
         Assert.True(plan.SelectedItemOutline.AgainstSurfaces >= WcagContrast.NonTextMinimum);
+    }
+
+    [Theory]
+    [InlineData("navy", false)]
+    [InlineData("navy", true)]
+    [InlineData("gold", false)]
+    [InlineData("gold", true)]
+    [InlineData("blue", false)]
+    [InlineData("blue", true)]
+    public void The_phase_2_selected_item_treatment_keeps_text_and_indicator_visible(string accent, bool light)
+    {
+        var plan = Plan(accent, light);
+        var cue = plan.SelectedSubtleItemCue;
+
+        Assert.NotNull(cue);
+        Assert.True(Role(plan, AccentForegroundRole.SelectedSubtleItem).Choice.MeetsInEveryState);
+        Assert.True(cue.TextRatio >= WcagContrast.TextMinimum);
+        Assert.True(cue.IndicatorRatio >= WcagContrast.NonTextMinimum);
+        Assert.True(Shade(plan, AccentShadeRole.SelectionIndicator).Meets);
+    }
+
+    [Theory]
+    [InlineData("navy", false, "#7575B0")]
+    [InlineData("gold", true, "#B68400")]
+    public void The_selection_indicator_lightness_is_corrected_when_the_accent_is_too_close_to_the_background(
+        string accent,
+        bool light,
+        string expected)
+    {
+        var cue = Plan(accent, light).SelectedSubtleItemCue;
+
+        Assert.NotNull(cue);
+        Assert.Equal(C(expected), cue.Indicator);
+        Assert.True(cue.IndicatorOriginalRatio < WcagContrast.NonTextMinimum);
+        Assert.True(cue.IndicatorRatio >= WcagContrast.NonTextMinimum);
     }
 
     [Fact]

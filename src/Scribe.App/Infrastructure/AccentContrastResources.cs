@@ -49,6 +49,12 @@ internal static class AccentContrastKeys
 
     /// <summary>The outline of a selected list item where its accent fill is faint, else transparent.</summary>
     public const string SelectedItemOutline = "ScribeSelectedItemOutline";
+
+    /// <summary>The text of a selected list item in the Phase 2 subtle-fill treatment.</summary>
+    public const string SelectedItemForeground = "ScribeSelectedItemForeground";
+
+    /// <summary>The accent indicator of a selected list item in the Phase 2 subtle-fill treatment.</summary>
+    public const string SelectedItemIndicator = "ScribeSelectedItemIndicator";
 }
 
 /// <summary>
@@ -99,6 +105,7 @@ internal static class AccentContrastResources
         (ThemeColor.CardBackground, "CardBackgroundFillColorDefault"),
         (ThemeColor.ControlFill, "ControlFillColorDefault"),
         (ThemeColor.ControlFillSecondary, "ControlFillColorSecondary"),
+        (ThemeColor.SubtleFillSecondary, "SubtleFillColorSecondary"),
         (ThemeColor.StrongStroke, "ControlStrongStrokeColorDefault"),
         (ThemeColor.BodyText, "TextFillColorPrimary"),
         (ThemeColor.BodyTextSecondary, "TextFillColorSecondary"),
@@ -167,6 +174,7 @@ internal static class AccentContrastResources
 
     private const string StrongStrokeKey = "ControlStrongStrokeColorDefaultBrush";
     private const string ButtonPressedFillKey = "ButtonBackgroundPressed";
+    private const string TextPrimaryKey = "TextFillColorPrimaryBrush";
 
     // What this class last wrote to each key it overrides, so it knows which of the values now there are its own.
     private static readonly Dictionary<string, object> Written = new(StringComparer.Ordinal);
@@ -334,6 +342,10 @@ internal static class AccentContrastResources
         WriteScribe(resources, AccentContrastKeys.SelectedRowNameWeight, plan.SelectedRowCue ? FontWeights.SemiBold : FontWeights.Normal);
         WriteScribe(resources, AccentContrastKeys.SelectedItemOutline,
             plan.SelectedItemOutline is { } outline ? Frozen(outline.Color) : Brushes.Transparent);
+        WriteScribe(resources, AccentContrastKeys.SelectedItemForeground,
+            plan.For(AccentForegroundRole.SelectedSubtleItem) is { } selectedText ? Frozen(selectedText.Foreground) : resources[TextPrimaryKey] ?? Brushes.Black);
+        WriteScribe(resources, AccentContrastKeys.SelectedItemIndicator,
+            plan.SelectedSubtleItemCue is { } subtleCue ? Frozen(subtleCue.Indicator) : Brushes.Transparent);
 
         // On last when entering one, once every value its triggers read is in place.
         if (plan.Applies)
