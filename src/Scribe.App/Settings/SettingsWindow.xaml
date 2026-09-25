@@ -1,9 +1,10 @@
-﻿<ui:FluentWindow x:Class="Scribe.App.Settings.SettingsWindow"
+<ui:FluentWindow x:Class="Scribe.App.Settings.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:cleanup="clr-namespace:Scribe.Core.Cleanup;assembly=Scribe.Core"
         xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
+        xmlns:models="clr-namespace:Scribe.Core.Models;assembly=Scribe.Core"
         xmlns:settings="clr-namespace:Scribe.App.Settings"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
@@ -49,6 +50,10 @@
         <Style TargetType="TextBlock" x:Key="CardTitle">
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style TargetType="TextBlock" x:Key="RailLabel">
+            <Setter Property="FontSize" Value="14"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="CardDescription">
@@ -178,8 +183,15 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
                             </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                            </MultiTrigger>
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource ListBoxItemSelectedBackgroundThemeBrush}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource ListBoxItemSelectedForegroundThemeBrush}"/>
@@ -468,79 +480,79 @@
                 <ListBoxItem AutomationProperties.Name="General">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Settings24" FontSize="20"/>
-                        <TextBlock Text="General" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="General" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Dictation">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Mic24" FontSize="20"/>
-                        <TextBlock Text="Dictation" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Dictation" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Overlay">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Desktop24" FontSize="20"/>
-                        <TextBlock Text="Overlay" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Overlay" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="AI cleanup">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Wand24" FontSize="20"/>
-                        <TextBlock Text="AI cleanup" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="AI cleanup" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Dictionary">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Book24" FontSize="20"/>
-                        <TextBlock Text="Dictionary" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Dictionary" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Libraries">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Library24" FontSize="20"/>
-                        <TextBlock Text="Libraries" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Libraries" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Snippets">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="TextQuote24" FontSize="20"/>
-                        <TextBlock Text="Snippets" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Snippets" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Profiles">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Apps24" FontSize="20"/>
-                        <TextBlock Text="Profiles" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Profiles" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Playground">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Beaker24" FontSize="20"/>
-                        <TextBlock Text="Playground" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Playground" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="History">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="History24" FontSize="20"/>
-                        <TextBlock Text="History" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="History" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Usage">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="DataTrending24" FontSize="20"/>
-                        <TextBlock Text="Usage" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Usage" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Diagnostics">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Pulse24" FontSize="20"/>
-                        <TextBlock Text="Diagnostics" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Diagnostics" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="About">
                     <StackPanel Orientation="Horizontal">
                         <ui:SymbolIcon Symbol="Info24" FontSize="20"/>
-                        <TextBlock Text="About" Style="{StaticResource CardTitle}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="About" Style="{StaticResource RailLabel}" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
             </ListBox>
@@ -2009,19 +2021,47 @@
                                                     <StackPanel Orientation="Horizontal"
                                                                 Visibility="{Binding ProducedByAi, Converter={StaticResource BoolToVisibility}}">
                                                         <ui:Button Style="{StaticResource HistoryThumbButton}"
-                                                                Icon="{ui:SymbolIcon ThumbLike24}"
                                                                 Tag="{Binding Id}"
                                                                 IsEnabled="{Binding CanRate}"
                                                                 ToolTip="This rewrite was useful"
                                                                 AutomationProperties.Name="{Binding ThumbUpName}"
-                                                                Click="HistoryThumbUp_Click"/>
+                                                                Click="HistoryThumbUp_Click">
+                                                            <ui:Button.Icon>
+                                                                <ui:SymbolIcon Symbol="ThumbLike24">
+                                                                    <ui:SymbolIcon.Style>
+                                                                        <Style TargetType="ui:SymbolIcon">
+                                                                            <Setter Property="Filled" Value="False"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Rating}" Value="{x:Static models:AiRating.Useful}">
+                                                                                    <Setter Property="Filled" Value="True"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ui:SymbolIcon.Style>
+                                                                </ui:SymbolIcon>
+                                                            </ui:Button.Icon>
+                                                        </ui:Button>
                                                         <ui:Button Style="{StaticResource HistoryThumbButton}"
-                                                                Icon="{ui:SymbolIcon ThumbDislike24}"
                                                                 Tag="{Binding Id}"
                                                                 IsEnabled="{Binding CanRate}"
                                                                 ToolTip="This rewrite was not useful"
                                                                 AutomationProperties.Name="{Binding ThumbDownName}"
-                                                                Click="HistoryThumbDown_Click"/>
+                                                                Click="HistoryThumbDown_Click">
+                                                            <ui:Button.Icon>
+                                                                <ui:SymbolIcon Symbol="ThumbDislike24">
+                                                                    <ui:SymbolIcon.Style>
+                                                                        <Style TargetType="ui:SymbolIcon">
+                                                                            <Setter Property="Filled" Value="False"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding Rating}" Value="{x:Static models:AiRating.NotUseful}">
+                                                                                    <Setter Property="Filled" Value="True"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ui:SymbolIcon.Style>
+                                                                </ui:SymbolIcon>
+                                                            </ui:Button.Icon>
+                                                        </ui:Button>
                                                         <ui:Button Style="{StaticResource HistoryThumbButton}"
                                                                 Content="&#xE724;"
                                                                 Tag="{Binding Id}"

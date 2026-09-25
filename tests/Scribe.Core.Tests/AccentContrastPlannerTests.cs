@@ -501,17 +501,20 @@ public sealed class AccentContrastPlannerTests
     {
         var plan = Plan(accent, light);
         var cue = plan.SelectedSubtleItemCue;
+        var colours = Colours(accent, light);
+        var selectedCard = colours[ThemeColor.SubtleFillSecondary].Over(colours[ThemeColor.CardBackground].Over(colours[ThemeColor.Surface]));
 
         Assert.NotNull(cue);
         Assert.True(Role(plan, AccentForegroundRole.SelectedSubtleItem).Choice.MeetsInEveryState);
         Assert.True(cue.TextRatio >= WcagContrast.TextMinimum);
         Assert.True(cue.IndicatorRatio >= WcagContrast.NonTextMinimum);
+        Assert.True(WcagContrast.Ratio(cue.Indicator, selectedCard) >= WcagContrast.NonTextMinimum);
         Assert.True(Shade(plan, AccentShadeRole.SelectionIndicator).Meets);
     }
 
     [Theory]
-    [InlineData("navy", false, "#7575B0")]
-    [InlineData("gold", true, "#B68400")]
+    [InlineData("navy", false, "#7B7BB3")]
+    [InlineData("gold", true, "#AD7E00")]
     public void The_selection_indicator_lightness_is_corrected_when_the_accent_is_too_close_to_the_background(
         string accent,
         bool light,

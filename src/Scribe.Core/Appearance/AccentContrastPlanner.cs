@@ -417,8 +417,16 @@ public static class AccentContrastPlanner
         {
             if (colors.TryGetValue(spec.Source, out var source))
             {
+                var shadeSurfaces = spec.Role == AccentShadeRole.SelectionIndicator
+                    ? SelectionIndicatorSurfaces(colors, page)
+                    : surfaces;
+                if (shadeSurfaces.Count == 0)
+                {
+                    continue;
+                }
+
                 // Lighter in the dark theme, darker in the light one: away from the page, whatever side the colour is on.
-                var result = ContrastShade.Ensure(source, surfaces, spec.Required, lighter: !light);
+                var result = ContrastShade.Ensure(source, shadeSurfaces, spec.Required, lighter: !light);
                 shades.Add(new ShadeCorrection(spec.Role, result.Original, result.Color, spec.Required, result.OriginalRatio, result.Ratio));
             }
         }
@@ -549,14 +557,43 @@ public static class AccentContrastPlanner
             return null;
         }
 
-        var railAndPage = colors.TryGetValue(ThemeColor.WindowBackground, out var rail)
-            ? new[] { page, rail.Over(page) }
-            : [page];
+        var indicatorSurfaces = SelectionIndicatorSurfaces(colors, page);
         return new SelectedSubtleItemCue(
             textRatio,
             indicator.Color,
             indicator.OriginalRatio,
-            railAndPage.Min(surface => WcagContrast.Ratio(indicator.Color.Over(surface), surface)));
+            indicatorSurfaces.Count == 0
+                ? 0
+                : indicatorSurfaces.Min(surface => WcagContrast.Ratio(indicator.Color.Over(surface), surface)));
+    }
+
+    private static List<SrgbColor> SelectionIndicatorSurfaces(IReadOnlyDictionary<ThemeColor, SrgbColor> colors, SrgbColor page)
+    {
+        if (!colors.TryGetValue(ThemeColor.SubtleFillSecondary, out var subtleFill))
+        {
+            return [];
+        }
+
+        var under = new List<SrgbColor> { page };
+        foreach (var key in new[] { ThemeColor.WindowBackground, ThemeColor.CardBackground })
+        {
+            if (colors.TryGetValue(key, out var color) && !under.Contains(color.Over(page)))
+            {
+                under.Add(color.Over(page));
+            }
+        }
+
+        var selected = new List<SrgbColor>(under.Count);
+        foreach (var surface in under)
+        {
+            var composed = subtleFill.Over(surface);
+            if (!selected.Contains(composed))
+            {
+                selected.Add(composed);
+            }
+        }
+
+        return selected;
     }
 
     private static CheckBoxPerimeter? PlanPerimeter(
