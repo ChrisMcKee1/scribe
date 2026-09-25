@@ -12,12 +12,20 @@ namespace Scribe.Core.Libraries;
 /// <param name="Failure">Why the read failed; <see cref="LibraryIoFailure.SharingViolation"/> is another app holding it open.</param>
 /// <param name="AwaitingRelease">The bytes are a pending manifest's redo image whose operation is not done yet.</param>
 internal sealed record LibraryFileRead(
-    string Name, byte[]? Bytes, LibraryContentHash? Hash, LibraryIoFailure Failure = LibraryIoFailure.None, bool AwaitingRelease = false)
+    string Name, byte[]? Bytes, LibraryContentHash? Hash, LibraryIoFailure Failure = LibraryIoFailure.None, bool AwaitingRelease = false,
+    bool CommittedUnavailable = false)
 {
     public bool Readable => Bytes is not null;
 
     public static LibraryFileRead Of(string name, byte[] bytes, bool awaitingRelease = false) =>
         new(name, bytes, LibraryContentHashing.Of(bytes), LibraryIoFailure.None, awaitingRelease);
+
+    /// <summary>
+    /// A pending manifest's committed bytes for this file, which cannot be read right now (round 3, A13): the library is
+    /// held back, never read from the file on disk, which may still hold what the committed generation replaced.
+    /// </summary>
+    public static LibraryFileRead Unavailable(string name, LibraryIoFailure failure) =>
+        new(name, null, null, failure == LibraryIoFailure.None ? LibraryIoFailure.Other : failure, AwaitingRelease: true, CommittedUnavailable: true);
 }
 
 /// <summary>Whether the <see cref="LibrarySettingKeys.FileIds"/> row was found and understood (contract 6.3).</summary>
@@ -147,6 +155,12 @@ internal sealed class LibraryFolderSnapshot
 
     /// <summary><c>edits\</c> could not be listed: a built-in may have a document this read did not see.</summary>
     public bool EditsUnlisted { get; set; }
+
+    /// <summary>
+    /// The committed generation's manifest could not be read, and nothing of it is known: every library is held back,
+    /// custom and built-in, since any of them may be one it wrote (round 3, A13).
+    /// </summary>
+    public bool CommittedContentUnavailable { get; set; }
 }
 
 /// <summary>

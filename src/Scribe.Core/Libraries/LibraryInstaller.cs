@@ -122,9 +122,25 @@ internal sealed class LibraryInstaller
                 return !SafeExists(Absolute(operation.Target)) || SafeExists(Absolute(operation.To!));
             case LibraryOperationKind.Purge:
             {
-                var entry = Observe(Absolute(operation.Target), LibraryFileOperation.Read, report: false);
-                return entry is { Failed: false } && (!entry.Present || (operation.PreImage is { } expected && entry.Hash != expected)) &&
-                    TryListSeries(operation, _deletedDir, out var claims, out _) && claims.Count == 0;
+                if (!TryListSeries(operation, _deletedDir, out var claims, out _))
+                {
+                    return false;
+                }
+
+                if (operation.PreImage is { } expected)
+                {
+                    var entry = Observe(Absolute(operation.Target), LibraryFileOperation.Read, report: false);
+                    return entry is { Failed: false } && (!entry.Present || entry.Hash != expected) && claims.Count == 0;
+                }
+
+                // Unversioned: done once the one claim that took the entry holds it (kept until retirement, round 3,
+                // A12), or while there was never an entry to take. A file written to the name after the claim is not its.
+                if (claims.Count != 0)
+                {
+                    return claims.Count == 1;
+                }
+
+                return !SafeExists(Absolute(operation.Target), out var existsFailure) && existsFailure == LibraryIoFailure.None;
             }
 
             default:
@@ -284,6 +300,20 @@ internal sealed class LibraryInstaller
     /// <summary>Deletes a spent install copy; a failure leaves an orphan that recovery removes later.</summary>
     public void DeleteSpentInstallCopy(LibraryManifestOperation operation) =>
         TryDelete(InstallCopyPath(operation), LibraryFileOperation.DeleteSpent);
+
+    /// <summary>
+    /// At retirement, after the manifest is gone: deletes the entry an unversioned purge took, which its claim held as
+    /// the purge's evidence until now (round 3, A12). A failure, or a crash before it, leaves a claim no manifest names,
+    /// which orphan removal keeps among the orphan backups, as it keeps every backup it cannot judge.
+    /// </summary>
+    public void DeletePurgeEvidence(LibraryManifestOperation operation)
+    {
+        if (operation.Kind == LibraryOperationKind.Purge && operation.PreImage is null &&
+            TryListSeries(operation, _deletedDir, out var claims, out _) && claims.Count > 0)
+        {
+            TryDelete(claims[0].Path, LibraryFileOperation.Purge);
+        }
+    }
 
     // --- write: W1 to W7 ---------------------------------------------------------------------------------------------
 
@@ -697,7 +727,9 @@ internal sealed class LibraryInstaller
             else
             {
                 // An entry listed unreadable has no hash to compare: the user chose to delete it as it is, so it is taken
-                // unread, once; a file written to its name after that is a new entry, left alone.
+                // unread, once. The claim that took it is the only evidence that this purge already did, so it stays,
+                // unread, until the manifest retires (round 3, A12): a retry or a restart then finds it and never takes a
+                // file written to the entry's name afterwards, which is a new entry and is left alone.
                 var exists = SafeExists(entryPath, out var existsFailure);
                 if (existsFailure != LibraryIoFailure.None)
                 {
@@ -731,9 +763,10 @@ internal sealed class LibraryInstaller
     }
 
     // Claims of a Recently deleted entry, owned by the journal: the one holding exactly what the operation consumes (a
-    // restore's FromHash, a purge's pre-image, or for an entry listed unreadable the first one taken, which is deleted as it
-    // is, unread) is deleted; every other goes back to Recently deleted, under the entry's name when it is free and
-    // otherwise under the next free name of its stamp.
+    // restore's FromHash or a purge's pre-image) is deleted; for an entry listed unreadable the first one taken is what
+    // is consumed, and it stays, unread, as the purge's evidence until the manifest retires (round 3, A12); every other
+    // goes back to Recently deleted, under the entry's name when it is free and otherwise under the next free name of its
+    // stamp.
     private LibraryOperationOutcome JudgeEntryClaims(
         LibraryManifestOperation operation, string entryPath, IReadOnlyList<(int Index, string Path)> claims,
         LibraryContentHash? consumed, LibraryFileOperation fileOperation)
@@ -742,11 +775,6 @@ internal sealed class LibraryInstaller
         {
             if (consumed is null && index == claims[0].Index)
             {
-                if (!TryDelete(path, fileOperation))
-                {
-                    return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
-                }
-
                 continue;
             }
 
@@ -921,6 +949,9 @@ internal sealed class LibraryInstaller
 
         if (operation.Replaced == LibraryEditsReplacement.Previous)
         {
+            // The one overwrite rules R1 and R7 allow, and the contract's single stated exception to never overwriting
+            // (6.6.4; round 2's G2 was ruled that exception): the previous copy is a single slot, Scribe's one-step undo,
+            // and only ever receives the pre-image P. LibraryFaultInjectionTests pins that no other file is written over.
             return TryMove(path, PreviousPath(operation), overwrite: true, LibraryFileOperation.KeepPrevious, out var failure) is MoveResult.Failed
                 ? LibraryOperationOutcome.Deferred(failure)
                 : LibraryOperationOutcome.Completed;
@@ -961,10 +992,13 @@ internal sealed class LibraryInstaller
     }
 
     // C3 and S5: Scribe's committed bytes, copied from the redo image through the install copy to the first free
-    // candidate of the keepAs series, so the other app's file at the target is never touched.
+    // candidate of the keepAs series, so the other app's file at the target is never touched. The move counts only once
+    // the candidate is observed holding S (round 3, A14): a write landing there as the move returns belongs to the other
+    // app, stays where it landed, and S, still in the redo image, goes to the next free candidate.
     private (LibraryOperationOutcome Outcome, string? KeptPath) PreserveOwnContent(LibraryManifestOperation operation)
     {
         var candidate = CustomCandidate(operation);
+        var retries = 0;
         for (var k = 1; k <= MaxCandidates; k++)
         {
             var path = candidate(k);
@@ -990,19 +1024,34 @@ internal sealed class LibraryInstaller
                 return (copy, null);
             }
 
-            switch (TryMove(InstallCopyPath(operation), path, overwrite: false, LibraryFileOperation.KeepVersion, out var failure))
+            var moved = TryMove(InstallCopyPath(operation), path, overwrite: false, LibraryFileOperation.KeepVersion, out var failure);
+            if (moved is MoveResult.Failed)
             {
-                case MoveResult.Failed:
-                    return (LibraryOperationOutcome.Deferred(failure), null);
-                case MoveResult.DestinationExists:
-                    k--; // the candidate appeared meanwhile: observe it again
-                    continue;
-                case MoveResult.SourceMissing:
-                    k--; // the install copy went; the next probe remakes it
-                    continue;
-                default:
-                    return (LibraryOperationOutcome.Completed, path);
+                return (LibraryOperationOutcome.Deferred(failure), null);
             }
+
+            if (moved is MoveResult.Moved)
+            {
+                var kept = Observe(path, LibraryFileOperation.KeepVersion);
+                if (kept.Failed)
+                {
+                    return (LibraryOperationOutcome.Deferred(kept.Failure), null);
+                }
+
+                if (kept.Present && kept.Hash == operation.Staged)
+                {
+                    return (LibraryOperationOutcome.Completed, path);
+                }
+            }
+
+            // The candidate appeared meanwhile, the install copy went, or what was moved there is not S any more: observe
+            // the same candidate again, which skips it when it holds someone else's bytes and remakes the copy otherwise.
+            if (++retries > MaxSteps)
+            {
+                return (LibraryOperationOutcome.Deferred(LibraryIoFailure.Other), null);
+            }
+
+            k--;
         }
 
         return (LibraryOperationOutcome.Deferred(LibraryIoFailure.Other), null);

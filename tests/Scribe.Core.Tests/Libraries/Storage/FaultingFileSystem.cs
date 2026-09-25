@@ -125,7 +125,15 @@ internal sealed class FaultingFileSystem : ILibraryFileSystem
             {
                 _inner.Move(source, destination, overwrite);
             }
+
+            if (overwrite)
+            {
+                OverwriteDestinations.Add(destination);
+            }
         });
+
+    /// <summary>Every destination a move that may write over a file went to, for the one overwrite rule R1 allows.</summary>
+    public List<string> OverwriteDestinations { get; } = [];
 
     public void Delete(string path) => Mutate("delete", path, null, () => _inner.Delete(path));
 

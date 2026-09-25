@@ -52,12 +52,15 @@ public sealed class LibraryFaultInjectionTests
 
                 Assert.True(files.Faulted, $"call {n} {timing}: the fault never fired");
                 Assert.False(files.ReplaceCalledWithExistingBackup, $"call {n} {timing}: the native replace was handed an existing backup");
+                AssertOnlyThePreviousCopyIsWrittenOver(files, scenario.Fixture, $"call {n} {timing} ({mode})");
 
                 // J-10d (1): whatever the crash left, a database holding a library row sits beside a witness.
                 Assert.True(
                     !LibraryRowsStored(scenario.Fixture) || scenario.Fixture.Exists("journal/state.witness"),
                     $"call {n} {timing}: a library row without the witness");
-                var recovered = Recovered(scenario);
+                var recovering = new FaultingFileSystem();
+                var recovered = Recovered(scenario, recovering);
+                AssertOnlyThePreviousCopyIsWrittenOver(recovering, scenario.Fixture, $"recovery after call {n} {timing} ({mode})");
                 Assert.True(
                     recovered == old || recovered == @new,
                     $"call {n} {timing} ({mode}): the recovered state is neither the old nor the new one:\n{recovered}\n--- old ---\n{old}\n--- new ---\n{@new}");
@@ -97,6 +100,7 @@ public sealed class LibraryFaultInjectionTests
                     // Recovery died here.
                 }
 
+                AssertOnlyThePreviousCopyIsWrittenOver(files, scenario.Fixture, $"recovery call {n} {timing}");
                 Assert.Equal(@new, Recovered(scenario));
             }
         }
@@ -195,6 +199,7 @@ public sealed class LibraryFaultInjectionTests
                 }
 
                 Recovered(scenario);
+                AssertOnlyThePreviousCopyIsWrittenOver(files, scenario.Fixture, $"outside version, call {n} {timing}");
                 Assert.True(
                     !seeded || scenario.Fixture.AllFiles().Any(file => scenario.Fixture.HashOf(file) == outsideHash),
                     $"call {n} {timing}: the outside version's bytes are gone");
@@ -240,6 +245,45 @@ public sealed class LibraryFaultInjectionTests
     private static bool LibraryRowsStored(LibraryStorageFixture fixture) =>
         new[] { LibrarySettingKeys.Generation, LibrarySettingKeys.State, LibrarySettingKeys.FileIds }.Any(key => fixture.Row(key) is not null);
 
+    [Theory]
+    [InlineData(ReplaceMode.Native)]
+    [InlineData(ReplaceMode.Refused)]
+    [InlineData(ReplaceMode.LeavesReplacement)]
+    public void Only_the_previous_copy_of_an_edits_document_is_ever_written_over(ReplaceMode mode)
+    {
+        // The single-slot previous copy is the one overwrite rules R1 and R7 allow (contract 6.6.4): Grok's G2 of round 2
+        // was ruled that exception, not a finding. Every other move never overwrites, whatever it meets, outside versions
+        // at every kind of target included.
+        using var scenario = Scenario.Create();
+        var files = Faulting(mode);
+        var outside = Encoding.UTF8.GetBytes(LibraryStorageFixture.Csv("Team terms", ("kube", "Kube from another app")));
+
+        var saved = Changes.Save(scenario.Fixture.Service(files), scenario.Fixture.Settings, scenario.Changes, beforeCommit: () =>
+        {
+            scenario.Fixture.WriteBytes(EditedCsvName, outside);
+            scenario.Fixture.WriteBytes("custom-release-notes.csv", outside);
+            scenario.Fixture.WriteBytes("edits/github.json", JsonEditsOverlay.Document("github", ("get hub", "GitHub from another app")));
+            scenario.Fixture.WriteBytes("scratch.csv", outside);
+        });
+
+        Assert.Equal(LibrarySaveStatus.Applied, saved.Outcome!.Status);
+        var previous = Assert.Single(files.OverwriteDestinations);
+        Assert.Equal(scenario.Fixture.PathOf("edits/data-and-ai.previous.json"), previous, ignoreCase: true);
+        AssertOnlyThePreviousCopyIsWrittenOver(files, scenario.Fixture, mode.ToString());
+    }
+
+    // R1's exception, and the only one: a move that may write over a file only ever lands on an edits document's previous copy.
+    private static void AssertOnlyThePreviousCopyIsWrittenOver(FaultingFileSystem files, LibraryStorageFixture fixture, string context)
+    {
+        foreach (var destination in files.OverwriteDestinations)
+        {
+            Assert.True(
+                string.Equals(Path.GetDirectoryName(destination), fixture.Paths.LibraryEditsDir, StringComparison.OrdinalIgnoreCase) &&
+                destination.EndsWith(".previous.json", StringComparison.OrdinalIgnoreCase),
+                $"{context}: a move wrote over {Path.GetFileName(destination)}");
+        }
+    }
+
     private static (string Old, string New, int Calls) Reference(ReplaceMode mode)
     {
         using var scenario = Scenario.Create();
@@ -277,10 +321,10 @@ public sealed class LibraryFaultInjectionTests
     };
 
     // A new process over the same folder and database: recovery at its first load, then what it reads.
-    private static string Recovered(Scenario scenario)
+    private static string Recovered(Scenario scenario, FaultingFileSystem? files = null)
     {
         scenario.Fixture.Restart();
-        var catalog = scenario.Fixture.Service().LoadCatalog();
+        var catalog = scenario.Fixture.Service(files).LoadCatalog();
         Assert.Equal(0, catalog.FilesAwaitingRelease);
         return Fingerprint(catalog);
     }

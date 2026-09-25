@@ -25,6 +25,22 @@ internal sealed class LibraryRecoveryOutcome
     public LibraryManifest? Unresolved { get; set; }
 
     /// <summary>
+    /// The stored generation's own manifest, the only one of it, which this attempt found but could not read whole right
+    /// now: its content, or a redo image it needs (round 3, A13). It is committed and trusted, so it is neither set aside
+    /// nor resumed on that failure, and readers keep its logical result: with its content read it is
+    /// <see cref="Unresolved"/>; without, the service applies what it last read of it, or holds back what it cannot vouch
+    /// for (<see cref="StoredContentUnavailable"/>). Never a held manifest, which is one to set aside or discard.
+    /// </summary>
+    public LibraryJournalName? StoredUnreadable { get; set; }
+
+    /// <summary>
+    /// The stored generation's manifest could not be read and this process has not read it before, so which libraries
+    /// it wrote is unknown: every library is held back until it can be read (round 3, A13), never read from files that
+    /// may be older than the committed generation.
+    /// </summary>
+    public bool StoredContentUnavailable { get; set; }
+
+    /// <summary>
     /// A listing of pending or set-aside manifests failed, so this attempt could not see every manifest: counted as held,
     /// which fences every commit, and no orphan was removed (review finding A2 of round 2).
     /// </summary>
@@ -230,23 +246,39 @@ internal sealed class LibraryJournal
         return read;
     }
 
-    /// <summary>A redo image's bytes when it is on disk and holds S; null otherwise, which makes the manifest untrustworthy.</summary>
-    public byte[]? ReadRedo(LibraryManifest manifest, LibraryManifestOperation operation)
+    /// <summary>
+    /// A redo image's bytes when it is on disk and holds S (<see cref="RedoImagesState.Intact"/>); missing or failing S,
+    /// which makes the manifest untrustworthy (<see cref="RedoImagesState.Untrustworthy"/>); or not readable right now,
+    /// which says nothing about whether it holds S (<see cref="RedoImagesState.Unreadable"/>, round 3, A13).
+    /// </summary>
+    public RedoImagesState ReadRedo(LibraryManifest manifest, LibraryManifestOperation operation, out byte[]? bytes, out LibraryIoFailure failure)
     {
+        bytes = null;
+        failure = LibraryIoFailure.None;
+        byte[] read;
         try
         {
-            var bytes = _files.ReadAllBytes(Path.Combine(RedoFolderPath(manifest), LibraryJournalNames.RedoImage(operation.Number)));
-            return LibraryContentHashing.Of(bytes) == operation.Staged ? bytes : null;
+            read = _files.ReadAllBytes(Path.Combine(RedoFolderPath(manifest), LibraryJournalNames.RedoImage(operation.Number)));
+        }
+        catch (Exception ex) when (LibraryIoFailures.IsNotFound(ex))
+        {
+            return RedoImagesState.Untrustworthy;
         }
         catch (Exception ex)
         {
-            if (!LibraryIoFailures.IsNotFound(ex))
-            {
-                _onFailure(LibraryFileOperation.Read, ex);
-            }
-
-            return null;
+            _onFailure(LibraryFileOperation.Read, ex);
+            var classified = LibraryIoFailures.Classify(ex);
+            failure = classified == LibraryIoFailure.None ? LibraryIoFailure.Other : classified;
+            return RedoImagesState.Unreadable;
         }
+
+        if (LibraryContentHashing.Of(read) != operation.Staged)
+        {
+            return RedoImagesState.Untrustworthy;
+        }
+
+        bytes = read;
+        return RedoImagesState.Intact;
     }
 
     /// <summary>Whether every redo image the manifest needs is on disk and holds its S (rule R2's premise).</summary>
@@ -325,7 +357,13 @@ internal sealed class LibraryJournal
             return false;
         }
 
-        // A crash from here leaves files no manifest names, which orphan removal takes.
+        // A crash from here leaves files no manifest names, which orphan removal takes. An unversioned purge's evidence
+        // goes only now (round 3, A12): before this point a retry must still find it.
+        foreach (var operation in manifest.Operations)
+        {
+            installer.DeletePurgeEvidence(operation);
+        }
+
         DeleteFolderQuietly(RedoFolderPath(manifest));
         foreach (var operation in manifest.Operations)
         {
@@ -495,12 +533,19 @@ internal sealed class LibraryJournal
         var ofStored = names.Count(name => name.Generation == storedGeneration);
         foreach (var name in names)
         {
+            // The committed generation's own manifest: trusted, so a failure to read it now keeps its logical read (A13).
+            var committed = !generationLost && name.Generation == storedGeneration && ofStored == 1;
             var read = Read(name, out var readFailure);
             if (read is null)
             {
                 // Journal files are Scribe's own, so only a transient failure keeps one from opening: held, retried.
                 outcome.Held++;
                 outcome.NoteFailure(readFailure);
+                if (committed)
+                {
+                    outcome.StoredUnreadable = name;
+                }
+
                 continue;
             }
 
@@ -519,13 +564,25 @@ internal sealed class LibraryJournal
                 continue;
             }
 
-            // A redo image that cannot be read right now says nothing about whether it holds S: the manifest is held and
-            // tried again, never set aside for it (only a missing image or one that fails its hash is untrustworthy).
+            // A redo image that cannot be read right now says nothing about whether it holds S: the manifest is tried again,
+            // never set aside for it (only a missing image or one that fails its hash is untrustworthy). The committed
+            // generation's own is unresolved and still read logically, from what readers last read of it (round 3,
+            // A13); any other is held.
             var redo = CheckRedoImages(manifest, out var redoFailure);
             if (redo == RedoImagesState.Unreadable)
             {
-                outcome.Held++;
                 outcome.NoteFailure(redoFailure);
+                if (committed)
+                {
+                    outcome.Unresolved = manifest;
+                    outcome.StoredUnreadable = name;
+                    outcome.FilesAwaitingRelease += Math.Max(1, NotDone(manifest));
+                }
+                else
+                {
+                    outcome.Held++;
+                }
+
                 continue;
             }
 
@@ -763,6 +820,13 @@ internal sealed class LibraryJournal
     }
 
     // --- helpers ------------------------------------------------------------------------------------------------------
+
+    // The operations whose done-condition does not hold yet, observed without changing anything.
+    private int NotDone(LibraryManifest manifest)
+    {
+        var installer = Installer(manifest, []);
+        return manifest.Operations.Count(operation => !installer.IsDone(operation));
+    }
 
     public string ManifestPath(LibraryManifest manifest) =>
         Path.Combine(_journalDir, LibraryJournalNames.Manifest(manifest.Generation, manifest.Id));

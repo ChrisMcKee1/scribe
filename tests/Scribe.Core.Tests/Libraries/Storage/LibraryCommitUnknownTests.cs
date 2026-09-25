@@ -217,8 +217,10 @@ public sealed class LibraryCommitUnknownTests : IDisposable
         Assert.Equal(prepared.Save!.Generation, settled.CommittedGeneration);
     }
 
-    [Fact]
-    public void A_Save_a_later_read_shows_committed_is_applied_whole_and_stays_fenced_while_the_journal_cannot_be_listed()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_Save_a_later_read_shows_committed_is_applied_whole_and_stays_fenced_while_its_manifest_cannot_be_listed_or_read(bool unreadable)
     {
         var files = new FaultingFileSystem();
         var (service, settings, start, _) = Arrange(files);
@@ -229,12 +231,25 @@ public sealed class LibraryCommitUnknownTests : IDisposable
         var save = prepared.Save!;
         Assert.Equal(LibrarySaveStatus.CommitUnknown, outcome!.Status);
 
-        // The read recovers, but the journal's manifests cannot be listed, so recovery neither sees nor finishes this one.
-        // Readers still apply it whole (never the new state beside the old files), nothing commits, and it stays fenced.
-        files.EnumerateFault = (directory, pattern) =>
-            IsJournal(directory) && pattern.EndsWith(LibraryJournalNames.ManifestSuffix, StringComparison.OrdinalIgnoreCase)
-                ? FaultingFileSystem.SharingViolation()
-                : null;
+        // The read recovers, but the journal's manifests cannot be listed, or this one cannot be read (round 3, A13), so
+        // recovery neither sees nor finishes it. Readers still apply it whole (never the new state beside the old files),
+        // nothing commits, and it stays fenced.
+        if (unreadable)
+        {
+            files.ReadFault = path =>
+                path.StartsWith(Path.GetFullPath(_fixture.Paths.LibraryJournalDir), StringComparison.OrdinalIgnoreCase) &&
+                path.EndsWith(LibraryJournalNames.ManifestSuffix, StringComparison.OrdinalIgnoreCase)
+                    ? FaultingFileSystem.SharingViolation()
+                    : null;
+        }
+        else
+        {
+            files.EnumerateFault = (directory, pattern) =>
+                IsJournal(directory) && pattern.EndsWith(LibraryJournalNames.ManifestSuffix, StringComparison.OrdinalIgnoreCase)
+                    ? FaultingFileSystem.SharingViolation()
+                    : null;
+        }
+
         settings.Failing = false;
         _fixture.Write("dropped.csv", LibraryStorageFixture.Csv("Dropped", ("d", "D")));
 
@@ -257,8 +272,9 @@ public sealed class LibraryCommitUnknownTests : IDisposable
         Assert.False(service.TryHandOff(Holding(start, "newly"), () => Assert.Fail("A grant was handed over before its Save was settled.")));
         Assert.True(service.TryHandOff(Holding(start, "other"), () => { }));
 
-        // Once the journal lists, recovery finishes it, and the grant is in force.
+        // Once the journal lists and reads, recovery finishes it, and the grant is in force.
         files.EnumerateFault = null;
+        files.ReadFault = null;
         File.Delete(_fixture.PathOf("dropped.csv"));
         var settled = service.LoadCatalog();
 
