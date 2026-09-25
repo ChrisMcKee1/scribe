@@ -1,4 +1,5 @@
 using System.Text;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 
@@ -295,6 +296,65 @@ public static class QuickDictionaryAdd
     }
 
     private static string Describe(string written) => written.Length == 0 ? "nothing" : written;
+
+    /// <summary>
+    /// <see cref="Build(string, string, bool, IReadOnlyList{DictionaryEntry})"/> against the dictionary composed with
+    /// the committed libraries only (review finding R12): <paramref name="committedLibraries"/> is a
+    /// <see cref="LibraryVocabulary"/>, which only a committed catalog makes, so a library correction the Libraries page
+    /// has not saved can never make quick add say a rule "already becomes" something. The dictionary wins over the
+    /// libraries exactly as dictation merges them.
+    /// </summary>
+    public static Plan Build(
+        string? pattern,
+        string? replacement,
+        bool wholeWord,
+        IReadOnlyList<DictionaryEntry> dictionaryRows,
+        LibraryVocabulary committedLibraries)
+    {
+        ArgumentNullException.ThrowIfNull(dictionaryRows);
+        ArgumentNullException.ThrowIfNull(committedLibraries);
+        return Build(pattern, replacement, wholeWord, DictionaryLibraryComposer.Merge(dictionaryRows, committedLibraries.Entries));
+    }
+
+    /// <summary>
+    /// The unsaved libraries of <paramref name="draft"/> that would apply a rule for <paramref name="spoken"/> other than
+    /// the one the committed libraries apply, for "Also in an unsaved library": each is on in the draft, has unsaved
+    /// changes, and has an enabled row with that spoken form whose written form or whole-word value differs from the
+    /// committed rule, or the committed libraries have none. Ids, in precedence order.
+    /// </summary>
+    public static IReadOnlyList<string> UnsavedLibraryMatches(LibraryDraft draft, LibraryVocabulary committed, string spoken)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(committed);
+        var key = LibraryTermKey.From(spoken);
+        if (key.IsEmpty)
+        {
+            return [];
+        }
+
+        var applied = committed.Entries.FirstOrDefault(entry => LibraryTermKey.From(entry.Pattern) == key);
+        var matches = new List<string>();
+        foreach (var library in draft.Libraries)
+        {
+            if (!library.Unsaved || library.PendingDelete || !draft.LocalState.EnabledIds.Contains(library.Content.Id))
+            {
+                continue;
+            }
+
+            var differs = library.Content.Rows.Any(row =>
+                row.Values.Enabled
+                && LibraryTermKey.From(row.Values.Spoken) == key
+                && (applied is null
+                    || !string.Equals(row.Values.Written, applied.Replacement, StringComparison.Ordinal)
+                    || row.Values.WholeWord != applied.WholeWord));
+            if (differs)
+            {
+                matches.Add(library.Content.Id);
+            }
+        }
+
+        return matches;
+    }
 
     /// <summary>
     /// Applies one just-saved rule to a transcript the user has already seen, so the copy kept for
