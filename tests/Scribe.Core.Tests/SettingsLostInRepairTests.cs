@@ -337,6 +337,26 @@ public sealed class SettingsLostInRepairTests : IDisposable
         Assert.Empty(new HistoryRepository(next).GetRecent(100));
     }
 
+    [Fact]
+    public void A_session_on_a_document_lost_in_repair_keeps_right_ctrl_and_one_hotkey()
+    {
+        // Not a first run: whoever lost this document has been pressing Right Ctrl, and Page Up and Page Down still
+        // belong to their other apps until they choose otherwise.
+        var document = KeepEverything();
+        document.Hotkey = HotkeyBinding.Legacy;
+        document.DictationOnlyHotkey = null;
+        Seed(document, loseDocument: true);
+
+        using var repaired = _folder.Open();
+        var settings = new SettingsRepository(repaired);
+        var session = settings.Load();
+
+        Assert.True(repaired.SettingsLostInRepair);
+        Assert.True(settings.LastLoadFailed);
+        Assert.Equal(HotkeyBinding.Legacy, session.Hotkey);
+        Assert.Null(session.DictationOnlyHotkey);
+    }
+
     private static AppSettings KeepEverything()
     {
         var settings = AppSettings.CreateDefault();

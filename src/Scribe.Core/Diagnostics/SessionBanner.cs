@@ -1,4 +1,5 @@
 using System.Globalization;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
@@ -247,7 +248,7 @@ public static class SessionBanner
         return $"primary={primary} dictationOnly={secondary} autoStopOnSilence={settings.AutoStopOnSilence}";
 
         static string Describe(HotkeyBinding binding) =>
-            $"'{binding.DisplayName ?? "custom"}'(vk=0x{binding.VirtualKey:X2} mods={binding.Modifiers} " +
+            $"'{HotkeyText.Describe(binding)}'(vk=0x{binding.VirtualKey:X2} mods={binding.Modifiers} " +
             $"mode={binding.Mode} suppress={binding.Suppress} chord={binding.IsPhysicalChord})";
     }
 

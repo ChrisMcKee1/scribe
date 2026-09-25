@@ -30,9 +30,9 @@ public class HotkeyPauseTests
     private const uint Space = 0x20;
     private const uint F9 = 0x78;
 
-    private static readonly HotkeyBinding Hold = HotkeyBinding.Default; // Right Ctrl, swallowed
+    private static readonly HotkeyBinding Hold = HotkeyBinding.Legacy; // Right Ctrl, swallowed
 
-    private static readonly HotkeyBinding Toggle = HotkeyBinding.Default with { Mode = HotkeyMode.Toggle };
+    private static readonly HotkeyBinding Toggle = HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle };
 
     private static readonly HotkeyBinding CtrlShiftChord = new(
         RightCtrl, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Right Ctrl+Right Shift",

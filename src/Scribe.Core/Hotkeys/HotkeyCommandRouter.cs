@@ -18,6 +18,7 @@ namespace Scribe.Core.Hotkeys;
 internal sealed class HotkeyCommandRouter
 {
     private readonly object _gate;
+    private readonly Func<uint, bool>? _isLogicallyDown;
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
@@ -32,19 +33,31 @@ internal sealed class HotkeyCommandRouter
     }
 
     /// <param name="binding">The initial standard binding.</param>
+    /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
+    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown)
+        : this(binding, new object(), isLogicallyDown)
+    {
+    }
+
+    /// <param name="binding">The initial standard binding.</param>
     /// <param name="gate">
     /// The lock requesting threads serialize on. Injectable so a test can hold it and prove that
     /// nothing on the hook path ever needs it.
     /// </param>
-    internal HotkeyCommandRouter(HotkeyBinding binding, object gate)
+    /// <param name="isLogicallyDown">Windows' view of a key, or null to trust the hook's view alone.</param>
+    internal HotkeyCommandRouter(HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null)
     {
         _binding = binding;
         _gate = gate;
+        _isLogicallyDown = isLogicallyDown;
     }
 
     public HotkeyBinding Binding => _binding;
 
     public HotkeyBinding? DictationOnlyBinding => _dictationOnlyBinding;
+
+    /// <summary>Windows' view of a key that every engine is given, or null; for a test of the service's wiring.</summary>
+    internal Func<uint, bool>? WindowsKeyState => _isLogicallyDown;
 
     /// <summary>The engine that owns the hook right now, or null while the service is stopped.</summary>
     public HotkeyEngine? CurrentEngine => Volatile.Read(ref _engine);
@@ -132,12 +145,16 @@ internal sealed class HotkeyCommandRouter
         return (true, Post(HotkeyCommand.Paused(paused, generation)));
     }
 
-    /// <summary>Returns the engine to wake.</summary>
-    public HotkeyEngine? CancelToggle()
+    /// <summary>
+    /// Returns the engine to wake. Releases the press <paramref name="activation"/> names, if it still owns the dictation
+    /// (see <see cref="HotkeyEngine"/>). It starts no new epoch: a newer press is left alone, so its queued activation
+    /// stays current and its latch stays set.
+    /// </summary>
+    public HotkeyEngine? CancelToggle(long activation)
     {
         lock (_gate)
         {
-            return Post(HotkeyCommand.CancelToggle(CurrentGeneration));
+            return Post(HotkeyCommand.CancelToggle(CurrentGeneration, activation));
         }
     }
 
@@ -157,7 +174,7 @@ internal sealed class HotkeyCommandRouter
         {
             var interrupted = _engine?.Retire();
             var engine = new HotkeyEngine(
-                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions);
+                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }

@@ -307,8 +307,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     SettingsWriteLane (the tray's ordered settings writes), ExternalSwitchSync
     Diagnostics/                    DictationStats (P50/P95 latency + RTF percentiles), the background log
                                     writer, TraceTagPolicy, HistoricalLogRedaction, FailureShape
-    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); Right Ctrl push-to-talk
-                                    (HotkeyEngine, HotkeyCommandRouter)
+    TextInjection/ Hotkeys/         Unicode/clipboard injection (ClipboardBorrower); push-to-talk hotkeys
+                                    (HotkeyEngine, HotkeyCommandRouter; KeyNames and HotkeyText name the keys)
     Persistence/                    SQLite store, HistoryWriter + OrderedHistoryRepository, StorageMaintenance
     Security/ Infrastructure/ Models/ DependencyInjection/
   src/Scribe.App/                   WPF tray shell: bootstrap + DI, thin adapters over Core
@@ -472,7 +472,8 @@ matter are intermittent and hardware‑specific.
   over frequently has no record of how the process started. `OnExit` writes the matching
   `session end` line; its absence before the next banner means the process died.
 - **Every dictation is stamped `#<n>`** and logs its start (trigger, mode, key, device, target app),
-  its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`)
+  its stop (**with a reason**: `HotkeyReleased`, `SilenceAutoStop`, `MicrophoneFault`, `Paused`,
+  `DurationLimit`, `DesktopSwitch`)
   and the hold duration. `DictationController` warns when the captured audio is shorter
   than the hold, because WASAPI ends a stream cleanly with **no exception** when the endpoint is
   reconfigured mid‑capture and nothing else in the pipeline can see it.
@@ -585,6 +586,34 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   with its dictation id: it attaches only while that recording is live, whatever ends the recording
   drops it, and a firing tracker detaches itself and its stop names its own recording. The controller
   subscribes to level updates once, for its lifetime.
+- **A stop Scribe makes itself releases the hotkey press that started the recording, once admitted.**
+  The controller's shared `StopAndProcess` begins with `DictationStopPolicy.BeginStop` (Core, tested):
+  the lifecycle admits the stop first, and only an admitted stop for the silence auto-stop, a microphone
+  fault, a pause or the duration ceiling then calls `IHotkeyService.CancelToggle` with the activation the
+  recording kept (`HotkeyTriggerEventArgs.Activation`, stored in its context when it started): the hook
+  still believes that press is held or its toggle on, and would swallow the next press as the toggle-off
+  of a dictation that already ended (the fault path used to skip this). The engine releases that press
+  only while it still owns the dictation, and forgets any latch that owns none (a press the arbiter
+  refused). A press the user made meanwhile, still queued behind the consumer, keeps its latch, so the
+  recording it starts is still ended by its own release; releasing whatever the hook held, before the
+  admission, cleared that latch and left the microphone recording. A stop the lifecycle turns away
+  releases nothing. The two stops the hook sends itself, a release or second press and a desktop switch,
+  release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
+  turns away because the previous dictation is still processing releases its own latch the same way
+  (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
+  release had just made that tap a new start, a latch left on cost the user a third tap. The other
+  refusals keep the latch: a pause clears it in the hook, and while a recording is live the press the
+  hook took is what can still end it. Together these give, for every stop Scribe makes itself and for a
+  hold or a toggle binding: the first press after the stopped dictation has processed starts a
+  dictation, an activation handled while it still processes is refused and leaves no latch behind (it is
+  judged when the consumer handles it, not when the key was pressed, so a press still queued when the
+  processing finishes can start the next dictation when it is handled), and no queued press can start a
+  recording whose release the hook will not report. No activation is invalidated for
+  it: a release never clears a latch that a queued or live press depends on. A new `DictationStopReason`
+  releases by default and must be classified in `DictationStopPolicyTests` (it then joins the
+  `HotkeyStopReleaseTests` matrix by itself), and a new `ActivationDecision` in
+  `DictationStartPolicyTests`; `HotkeyStopReleaseTests` drives the hotkey and the lifecycle together
+  through these orderings.
 - **`ClosableTimer` records each schedule's due time.** A tick with nothing armed is dropped, an early
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
@@ -616,9 +645,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
   those can take a lock shared with another thread. One hook thread owns all key state.
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
-  during a reinstall never shares key state with its replacement. A replaced engine is retired: it
-  passes every key through, requests no leak check, applies no queued command, and exactly one side
-  sends the stop for a trigger it interrupted.
+  during a reinstall never shares key state, or the desktop-switch activation epoch, with its
+  replacement. A replaced engine is retired: it passes every key through, requests no leak check,
+  applies no queued command, and exactly one side sends the stop for a trigger it interrupted. A
+  call its thread was already inside when the retirement came (a key event, or a desktop switch,
+  which applies the pending commands first) still runs to its end, but against the retired engine's
+  own state: whatever it queues was decided before the retirement, a stop the retirement then does
+  not repeat or an Activated the replacement's generation rejects.
 - **Configuration reaches the hook through `HotkeyCommandRouter`.** `UpdateBindings`, `SetCaptureMode`,
   `CancelToggle` and `SetPaused` go into a lock-free inbox applied at the start of the next key event,
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
@@ -634,6 +667,61 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
+- **Only a bare Page Up or Page Down lets modified presses through.** For a binding whose only key is
+  Page Up or Page Down, with no modifier (the shipped defaults, or either key bound in Settings),
+  `ChordStateMachine` refuses the press that would complete it while any Ctrl, Alt, Shift or Win key
+  is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
+  keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
+  Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
+  dictation neither ends it nor lets the key through. No binding but a bare Page Up or Page Down
+  changes: every other one (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as
+  before whatever else is held, and widening the rule would change them. An install that had already
+  bound Page Up or Page Down on its own gets the pass-through too, because 0.4.3's capture stored that
+  key exactly so: after the upgrade its Ctrl, Shift, Alt, Win or Narrator key plus the Page key reaches
+  the app instead of dictating.
+- **A modifier counts only while Windows agrees it is down.** A hook is called only for input on its
+  own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
+  prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
+  a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`, the one native
+  query the keyboard callback makes besides `CallNextHookEx`: only on such a press, never on a bare
+  one, and never about the key the callback is for, whose async state Windows updates only after the
+  callback returns.
+- **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
+  out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
+  its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
+  thread). A notice is only a reason to check again: it also arrives for the switch back, and any
+  process can raise one with `NotifyWinEvent` (the wiring tests do), so the switch is applied only
+  when the hook thread's own desktop has stopped receiving input,
+  `GetUserObjectInformation(GetThreadDesktop(GetCurrentThreadId()), UOI_IO)` reporting FALSE, which
+  the lock screen, Ctrl+Alt+Del and the UAC secure desktop all cause. The switch back, a stray notice
+  and a check that fails apply nothing, so a notice while the desktop still has the input never cuts a
+  dictation short. Every key held as the desktop switched may be released where the hook cannot see it, so
+  both machines forget their key state, as a hook reinstall does (`ChordStateMachine.Reset`), whatever
+  they report (one can still latch a press or a toggle the arbiter refused), and the dictation the
+  arbiter says this engine started, if any (`HotkeyTriggerArbiter.TryTakeActive`, which names no
+  trigger when none owns a dictation), is ended the way its release or second press would have ended
+  it. The stop is an ordinary queued Deactivated marked `HotkeyDeactivation.DesktopSwitch`,
+  so the controller takes its usual stop path (`DictationStopReason.DesktopSwitch` in the log, at the
+  lock rather than at unlock): the
+  audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
+  recovery notice as for any failed insertion. An Activated still waiting for the consumer never
+  starts a recording after the switch: before anything it queues for the switch, the engine advances
+  its own activation epoch (one interlocked add; the requesters' generation and the router's lock are
+  never touched from the hook), every queued Activated carries its engine and the epoch it was
+  computed in, and the consumer drops one whose engine has moved past that epoch
+  (`HotkeyService.ShouldDispatch`); stops always go out. The epoch is per installation, never shared
+  through the queue: a retired engine's hook thread can still be finishing a switch it noticed just
+  before a reinstall, and a shared epoch let that late switch discard the replacement's first genuine
+  press. Without all this a key held through Win+L or a UAC prompt
+  kept the microphone recording while the PC was locked, and its stale state swallowed the next press
+  as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
+  Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
+  Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
+  installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
+  would report the key up while it is held, and the Narrator keys therefore go by the hook's view
+  alone. If the WinEvent hook cannot be set, the service logs a warning and everything else works as
+  before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and the
+  `HotkeyServiceTests.Start_` desktop-switch tests (desktop filter, so CI) the wiring and the check.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 
@@ -718,6 +806,47 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+
+## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
+
+- **The shipped hotkeys are a first-run default.** `AppSettings.CreateDefault` sets hold Page Down
+  (`HotkeyBinding.DefaultDictation`, VK_NEXT 0x22) for dictation with AI cleanup and hold Page Up
+  (`DefaultDictationOnly`, VK_PRIOR 0x21) for dictation only, both suppressed. The `Hotkey` initializer and
+  `SettingsRepository.Normalize` stay `HotkeyBinding.Legacy` (hold Right Ctrl, what every release up to 0.4.3
+  shipped) and `DictationOnlyHotkey` stays null, so a stored document keeps what that install had, keys it never
+  wrote included. Never move the new defaults into an initializer (pattern P-7).
+- **A session whose saved settings could not be used is not a first run.** `SettingsRepository.Load` returns
+  `AppSettings.CreateForExistingInstall()`, `CreateDefault` with the legacy hotkeys, for an unreadable document and
+  for one a repair lost, so the key that person presses keeps working and Page Up and Page Down keep reaching their
+  other apps. Only a missing `app_settings` row is a first run: an empty or white-space value is an unreadable
+  document like any other (`LastLoadFailed`, partial updates refused), in `Load` and `Update` alike. It is never
+  kept as the write-once recovery copy, though: it holds nothing to recover and would shut out the next unreadable
+  document that does, so a blank copy also gives way to the first one with content.
+  `DefaultHotkeyTests` pins each case.
+- **Restore default hotkeys** (Settings, General) stages `DefaultHotkeyRestore.Restore` like any other edit on the
+  page: Save applies it and Cancel discards it. It asks nothing first, because it deletes nothing and both rows show
+  the result at once. Its notice compares the defaults with the page and with the saved settings, so a second press
+  or a double click before Save still says Save applies them, and one that only undoes unsaved edits says so.
+- **Keys are named by virtual-key code, never by WPF's `Key.ToString()`.** That enum gives Page Down the alias
+  `Next` (Page Up `Prior`, Caps Lock `Capital`, Print Screen `Snapshot`), gives some codes two names that belong to
+  different keys (`KanaMode` and `HangulMode` are both 0x15, `KanjiMode` and `HanjaMode` 0x19, and 0xF0 to 0xFD each
+  have a Japanese IME (DBE) name and an old terminal key's), and .NET does not promise which name comes back.
+  `KeyNames` holds the layout-independent names. A key the table leaves out (punctuation, IME keys) is named by the
+  current layout in `HotkeyCapture`: the character it types (`MapVirtualKeyW`, MAPVK_VK_TO_CHAR), else the name
+  `GetKeyNameTextW` gives its scan code (MAPVK_VK_TO_VSC_EX, with the extended bit) unless the table gives that name
+  to another key (the US layout names the scan code of VK_ABNT_C2 "F15"), else `Key 0xNN`. `HotkeyText.Describe`
+  names each key on its own: the table, then the layout, then that key's own part of the stored `DisplayName` unless
+  that part is one of the shared WPF names, then its code. So a chord of a known key and one only the stored name can
+  name reads "Page Down+Oem1", never "Next+Oem1", and the modifiers always come from the binding. The hook matches
+  virtual-key codes and never reads the name.
+- **The trade-off is stated in Settings.** While Scribe runs unpaused, Page Up and Page Down pressed on their own
+  never reach other apps: documents, web pages and terminals stop paging, and a presentation remote stops changing
+  slides, because clickers such as the Logitech R400 are keyboards whose Next and Back buttons send Page Down and Page
+  Up, so the hint says to choose other keys if you present. With a modifier or a Narrator key held they do reach other
+  apps (see the hook section). The hook reads only the virtual-key code (never `LLKHF_EXTENDED`), so the numeric
+  keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
+  short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
+  maintainer.
 
 ## Startup (read before touching OnStartup)
 

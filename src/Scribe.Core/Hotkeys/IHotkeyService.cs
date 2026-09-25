@@ -33,11 +33,16 @@ public interface IHotkeyService : IDisposable
     void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding);
 
     /// <summary>
-    /// Resets toggle mode's internal on/off state without raising events. Called when the app ends
-    /// a toggle dictation itself (e.g. silence auto-stop), so the next press starts a new dictation
-    /// instead of being swallowed as the missing "toggle off".
+    /// Releases the latch of one press, without raising events: the press that started a dictation the app has just
+    /// ended itself (the silence auto-stop, a microphone fault, a pause, the duration ceiling), or a press the app turned
+    /// away because the previous dictation was still processing. Either way the next press starts a new dictation
+    /// instead of being swallowed as the missing toggle-off. <paramref name="activation"/> is that press's
+    /// <see cref="HotkeyTriggerEventArgs.Activation"/>. Only that press is released, and only while it still owns the
+    /// dictation: a newer press keeps its latch, so its own release or second press still ends the dictation it starts.
+    /// A latch that owns no dictation (a press refused while another owned one) is forgotten too. Call it only for a stop
+    /// the app actually admitted, never for one it turned away.
     /// </summary>
-    void CancelToggle();
+    void CancelToggle(long activation);
 
     /// <summary>
     /// While enabled, the hook passes every key event through untouched: nothing is suppressed and
@@ -82,7 +87,38 @@ public enum HotkeyTrigger
     DictationOnly,
 }
 
-public sealed class HotkeyTriggerEventArgs(HotkeyTrigger trigger) : EventArgs
+/// <summary>Why the hook ended a dictation it had started.</summary>
+public enum HotkeyDeactivation
+{
+    /// <summary>
+    /// The hold key was released or the toggle key pressed again, or a change to the hook itself (capture mode, a new
+    /// binding, a reinstall) ended it.
+    /// </summary>
+    Released,
+
+    /// <summary>
+    /// The input desktop switched (the lock screen, a secure desktop) while the key was held or the toggle was on. The
+    /// hook is not called for input there, so it cannot see the key's release, and it ends the recording the way the
+    /// binding would have ended it.
+    /// </summary>
+    DesktopSwitch,
+}
+
+public sealed class HotkeyTriggerEventArgs(
+    HotkeyTrigger trigger,
+    HotkeyDeactivation deactivation = HotkeyDeactivation.Released,
+    long activation = 0)
+    : EventArgs
 {
     public HotkeyTrigger Trigger { get; } = trigger;
+
+    /// <summary>For <see cref="IHotkeyService.Deactivated"/>, why the dictation ended.</summary>
+    public HotkeyDeactivation Deactivation { get; } = deactivation;
+
+    /// <summary>
+    /// For <see cref="IHotkeyService.Activated"/>, which press this is: positive, and different for every press. Keep it
+    /// with the dictation the press starts, and pass it to <see cref="IHotkeyService.CancelToggle"/> when the app ends
+    /// that dictation itself. Zero for a Deactivated.
+    /// </summary>
+    public long Activation { get; } = activation;
 }

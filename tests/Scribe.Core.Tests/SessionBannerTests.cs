@@ -53,6 +53,42 @@ public class SessionBannerTests : IDisposable
     }
 
     [Fact]
+    public void Banner_names_each_hotkey_by_its_code_whatever_name_was_stored()
+    {
+        var fresh = Compose(AppSettings.CreateDefault());
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = settings.Hotkey with { DisplayName = "Next" };
+        settings.DictationOnlyHotkey = null;
+        var stored = Compose(settings);
+
+        Assert.Contains("primary='Page Down'(vk=0x22 mods=None mode=Hold suppress=True chord=False)", fresh);
+        Assert.Contains("dictationOnly='Page Up'(vk=0x21 mods=None mode=Hold suppress=True chord=False)", fresh);
+        Assert.Contains("primary='Page Down'(vk=0x22", stored);
+        Assert.Contains("dictationOnly=none", stored);
+        Assert.DoesNotContain("Next", stored);
+    }
+
+    [Fact]
+    public void Banner_keeps_a_chord_member_s_true_name_beside_one_it_cannot_name()
+    {
+        // The banner asks no keyboard layout, so the OEM key keeps its stored part; the Page Down beside it must not.
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = new HotkeyBinding(
+            0x22, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Next+Oem1", SecondaryVirtualKey: 0xBA,
+            SuppressChordMembers: true);
+        settings.DictationOnlyHotkey = new HotkeyBinding(
+            0x21, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Prior+ImeConvert", SecondaryVirtualKey: 0x1C,
+            SuppressChordMembers: true);
+
+        var text = Compose(settings);
+
+        Assert.Contains("primary='Page Down+Oem1'(vk=0x22 mods=None mode=Hold suppress=True chord=True)", text);
+        Assert.Contains("dictationOnly='Page Up+ImeConvert'(vk=0x21", text);
+        Assert.DoesNotContain("Next", text);
+        Assert.DoesNotContain("Prior", text);
+    }
+
+    [Fact]
     public void Banner_never_contains_a_secret()
     {
         var settings = AppSettings.CreateDefault();

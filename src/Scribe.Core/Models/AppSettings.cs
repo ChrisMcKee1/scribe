@@ -21,11 +21,17 @@ public sealed class AppSettings
     /// </summary>
     public string? InputDeviceName { get; set; }
 
-    public HotkeyBinding Hotkey { get; set; } = HotkeyBinding.Default;
+    /// <summary>
+    /// The "Dictation with AI cleanup" trigger. The initializer is <see cref="HotkeyBinding.Legacy"/> on purpose: it only
+    /// ever applies to a stored document without this key, which belongs to an install that has been pressing Right
+    /// Ctrl. A new install gets <see cref="HotkeyBinding.DefaultDictation"/> from <see cref="CreateDefault"/>.
+    /// </summary>
+    public HotkeyBinding Hotkey { get; set; } = HotkeyBinding.Legacy;
 
     /// <summary>
-    /// Optional second trigger that always bypasses AI cleanup. Null keeps the legacy single-hotkey
-    /// behavior and lets existing settings continue unchanged.
+    /// Optional second trigger that always bypasses AI cleanup. Null keeps the single-hotkey behavior, and a stored
+    /// document without this key (every install from before the key existed) stays that way. A new install gets
+    /// <see cref="HotkeyBinding.DefaultDictationOnly"/> from <see cref="CreateDefault"/>.
     /// </summary>
     public HotkeyBinding? DictationOnlyHotkey { get; set; }
 
@@ -310,11 +316,30 @@ public sealed class AppSettings
     /// <summary>
     /// A settings object for a brand new install. Distinct from <c>new AppSettings()</c>: this is
     /// where first-run opt-ins live, so deserializing an existing install can never acquire them.
+    /// The hotkeys are among them: Page Down and Page Up are what a new install starts with, while an
+    /// install that already exists keeps whatever its settings hold.
     /// </summary>
     public static AppSettings CreateDefault() => new()
     {
+        Hotkey = HotkeyBinding.DefaultDictation,
+        DictationOnlyHotkey = HotkeyBinding.DefaultDictationOnly,
         EnabledDictionaryLibraryIds = [.. DefaultLibraryIds],
     };
+
+    /// <summary>
+    /// What a session runs on when this install's own settings cannot be used: the stored document is unreadable, or a
+    /// repair of a damaged database lost it. That is not a first run, so the hotkeys stay the ones every earlier release
+    /// shipped (<see cref="HotkeyBinding.Legacy"/>, no dictation-only key) rather than becoming keys this person never
+    /// chose: the key they have been pressing keeps working, and Page Up and Page Down keep reaching their other apps.
+    /// Everything else is what <see cref="CreateDefault"/> gives, as it always was for such a session.
+    /// </summary>
+    public static AppSettings CreateForExistingInstall()
+    {
+        var settings = CreateDefault();
+        settings.Hotkey = HotkeyBinding.Legacy;
+        settings.DictationOnlyHotkey = null;
+        return settings;
+    }
 
     public AppSettings Clone()
     {

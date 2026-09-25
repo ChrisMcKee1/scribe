@@ -108,24 +108,26 @@ public sealed class SettingsRepository : ISettingsRepository
 
     public AppSettings Load()
     {
-        var json = Get(SettingsKey);
-        if (string.IsNullOrWhiteSpace(json))
+        var (stored, json) = ReadDocument();
+        if (!stored)
         {
             // No document is a first run, unless a repair lost the one the user had. Those defaults are no more
-            // their choice than an unreadable document's, so they are reported the same way until one is saved.
+            // their choice than an unreadable document's, so they are reported the same way until one is saved, and
+            // they are an existing install's: a first run's hotkeys would move a key this person relies on.
             LastLoadFailed = _database.SettingsLostInRepair || Get(LostMarkerKey) is not null;
-            return AppSettings.CreateDefault();
+            return LastLoadFailed ? AppSettings.CreateForExistingInstall() : AppSettings.CreateDefault();
         }
 
-        if (TryDeserialize(json) is { } settings)
+        if (!string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is { } settings)
         {
             LastLoadFailed = false;
             return settings;
         }
 
+        // Unreadable, blank or white space included: a stored row, however empty, means this is no first run.
         LastLoadFailed = true;
         PreserveRecoveryCopy(json);
-        return AppSettings.CreateDefault();
+        return AppSettings.CreateForExistingInstall();
     }
 
     public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, setting: null, revision: null, out _);
@@ -407,7 +409,7 @@ public sealed class SettingsRepository : ISettingsRepository
     {
         try
         {
-            if (Get(RecoveryKey) is null)
+            if (TakesRecoverySlot(json, Get(RecoveryKey)))
             {
                 Set(RecoveryKey, json);
             }
@@ -417,6 +419,13 @@ public sealed class SettingsRepository : ISettingsRepository
             // Recovery metadata must never turn a settings fallback into a startup failure.
         }
     }
+
+    // The recovery copy keeps the first unreadable document that holds something. It is written once and never
+    // overwritten, so a blank document, which holds nothing to recover, must not take the slot: it would shut out the
+    // real document a later failure has to keep. For the same reason a blank copy, which only a hand edit or a
+    // pre-release build could have written, gives way to the first document with content.
+    private static bool TakesRecoverySlot(string json, string? existingCopy) =>
+        !string.IsNullOrWhiteSpace(json) && string.IsNullOrWhiteSpace(existingCopy);
 
     // The settings document the way Load reads it: the same options (so the DPAPI-protected
     // secrets decrypt exactly as they do there) and the same normalization. Null when unreadable.
@@ -434,16 +443,16 @@ public sealed class SettingsRepository : ISettingsRepository
         }
     }
 
-    // Load's rules inside Update's transaction: defaults when nothing is stored. A document that
-    // cannot be read is never written over, because defaults plus one field would discard everything
-    // else the user saved: it gets Load's recovery copy (written once, never overwritten), committed
-    // on its own, and the change is refused. The copy is written on this connection because a second
-    // one would wait behind this very transaction. A document a repair lost is refused the same way:
-    // defaults plus one field would stand in for it as if the user had chosen them.
+    // Load's rules inside Update's transaction: defaults when nothing is stored. A document that cannot be read, a blank
+    // one included, is never written over, because defaults plus one field would discard everything else the user
+    // saved: it gets Load's recovery copy (kept for the first such document with content, never overwritten),
+    // committed on its own, and the change is refused. The copy is written on this connection because a second one
+    // would wait behind this very transaction. A document a repair lost is refused the same way: defaults plus one
+    // field would stand in for it as if the user had chosen them.
     private AppSettings ReadForUpdate(SqliteConnection connection, SqliteTransaction transaction)
     {
-        var json = ReadValue(connection, transaction, SettingsKey);
-        if (string.IsNullOrWhiteSpace(json))
+        var (stored, json) = ReadDocument(connection, transaction);
+        if (!stored)
         {
             if (_database.SettingsLostInRepair || ReadValue(connection, transaction, LostMarkerKey) is not null)
             {
@@ -456,21 +465,16 @@ public sealed class SettingsRepository : ISettingsRepository
             return AppSettings.CreateDefault();
         }
 
-        if (TryDeserialize(json) is { } settings)
+        if (!string.IsNullOrWhiteSpace(json) && TryDeserialize(json) is { } settings)
         {
             LastLoadFailed = false;
             return settings;
         }
 
         LastLoadFailed = true;
-        using (var recovery = connection.CreateCommand())
+        if (TakesRecoverySlot(json, ReadValue(connection, transaction, RecoveryKey)))
         {
-            recovery.Transaction = transaction;
-            recovery.CommandText =
-                "INSERT INTO settings (key, value) VALUES ($key, $value) ON CONFLICT (key) DO NOTHING;";
-            recovery.Parameters.AddWithValue("$key", RecoveryKey);
-            recovery.Parameters.AddWithValue("$value", json);
-            recovery.ExecuteNonQuery();
+            WriteValue(connection, transaction, RecoveryKey, json);
         }
 
         transaction.Commit();
@@ -484,6 +488,30 @@ public sealed class SettingsRepository : ISettingsRepository
         command.CommandText = "SELECT value FROM settings WHERE key = $key;";
         command.Parameters.AddWithValue("$key", key);
         return command.ExecuteScalar() as string;
+    }
+
+    private (bool Stored, string Json) ReadDocument()
+    {
+        using var connection = _database.Open();
+        return ReadDocument(connection, transaction: null);
+    }
+
+    // Whether the document row exists, and its text. Only a missing row is a first run: an empty or white-space value
+    // was written by something, so it is judged, and copied for recovery, like any other unreadable document. The cast
+    // reads a value stored as another type (only a hand edit could store one) as the text it holds.
+    private static (bool Stored, string Json) ReadDocument(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT CAST(value AS TEXT) FROM settings WHERE key = $key;";
+        command.Parameters.AddWithValue("$key", SettingsKey);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return (false, string.Empty);
+        }
+
+        return (true, reader.IsDBNull(0) ? string.Empty : reader.GetString(0));
     }
 
     // A readable document is being stored, so a loss a repair recorded is over.
@@ -512,7 +540,8 @@ public sealed class SettingsRepository : ISettingsRepository
 
     private static AppSettings Normalize(AppSettings settings)
     {
-        settings.Hotkey ??= HotkeyBinding.Default;
+        // A stored document is an existing install's, so a missing hotkey is the one it has been using.
+        settings.Hotkey ??= HotkeyBinding.Legacy;
         settings.EnabledDictionaryLibraryIds ??= [];
         settings.Profiles ??= [];
         settings.Profiles = settings.Profiles

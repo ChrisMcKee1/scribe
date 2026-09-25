@@ -106,7 +106,9 @@ public class PersistenceTests
 
         var loaded = repo.Load();
 
-        Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
+        // An empty store is a first run, so it gets the hotkeys a new install ships with.
+        Assert.Equal(HotkeyBinding.DefaultDictation, loaded.Hotkey);
+        Assert.Equal(HotkeyBinding.DefaultDictationOnly, loaded.DictationOnlyHotkey);
         Assert.True(loaded.ShowOverlay);
         Assert.False(repo.LastLoadFailed);
     }
@@ -120,7 +122,7 @@ public class PersistenceTests
 
         var loaded = repo.Load();
 
-        Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
         Assert.True(repo.LastLoadFailed);
         Assert.Equal("{not-json", repo.Get("app_settings"));
         Assert.Equal("{not-json", repo.Get("app_settings_recovery"));
@@ -135,7 +137,7 @@ public class PersistenceTests
 
         var loaded = repo.Load();
 
-        Assert.Equal(HotkeyBinding.Default, loaded.Hotkey);
+        Assert.Equal(HotkeyBinding.Legacy, loaded.Hotkey);
         Assert.Empty(loaded.Profiles);
         Assert.Empty(loaded.EnabledDictionaryLibraryIds);
         Assert.False(repo.LastLoadFailed);

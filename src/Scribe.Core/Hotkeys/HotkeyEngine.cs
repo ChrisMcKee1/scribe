@@ -14,14 +14,15 @@ internal enum HotkeyCommandKind
 /// A change another thread asks the hook thread to make. It is built on the requesting thread, so
 /// the allocation never happens inside the hook callback, and the engine applies commands in the
 /// order they were requested. <paramref name="Generation"/> is the state epoch in force once the
-/// command has been applied.
+/// command has been applied, and <paramref name="Activation"/> the press a CancelToggle releases.
 /// </summary>
 internal sealed record HotkeyCommand(
     HotkeyCommandKind Kind,
     long Generation,
     HotkeyBinding? Binding = null,
     HotkeyBinding? DictationOnlyBinding = null,
-    bool Enabled = false)
+    bool Enabled = false,
+    long Activation = 0)
 {
     public static HotkeyCommand Bindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding, long generation) =>
         new(HotkeyCommandKind.UpdateBindings, generation, binding, dictationOnlyBinding);
@@ -32,8 +33,8 @@ internal sealed record HotkeyCommand(
     public static HotkeyCommand Paused(bool paused, long generation) =>
         new(HotkeyCommandKind.SetPaused, generation, Enabled: paused);
 
-    public static HotkeyCommand CancelToggle(long generation) =>
-        new(HotkeyCommandKind.CancelToggle, generation);
+    public static HotkeyCommand CancelToggle(long generation, long activation) =>
+        new(HotkeyCommandKind.CancelToggle, generation, Activation: activation);
 }
 
 /// <summary>What the hook callback does with one key event.</summary>
@@ -55,27 +56,42 @@ internal readonly record struct HookDecision(bool Suppress, bool RequestReconcil
 /// </summary>
 internal sealed class HotkeyEngine
 {
+    // Numbers every press that claims a dictation, across every installation and service in the process, so a release
+    // asked for one press can never match a newer press, on this engine or a replacement. Only hook threads take a
+    // number, with one interlocked add; it never wraps in practice (2^55 presses).
+    private static long _lastActivation;
+
     private readonly LockFreeInbox<HotkeyCommand> _commands = new();
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
+    private readonly Func<uint, bool>? _isLogicallyDown;
     private readonly ChordStateMachine _standard;
     private ChordStateMachine? _dictationOnly;
     private bool _captureMode;
     private bool _paused;
     private bool _retired;
     private long _generation;
+    private long _activationEpoch;
+    private long _desktopSwitches;
+    private long _desktopSwitchNotices;
     private int _wakePending;
     private uint _ownerThreadId;
 
+    /// <param name="isLogicallyDown">
+    /// Windows' view of a key, which each binding's machine asks about a modifier its own view holds (see
+    /// <see cref="ChordStateMachine"/>). Null trusts the hook's view alone.
+    /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnlyBinding,
         bool captureMode,
         bool paused,
         long generation,
-        HotkeyTransitionQueue transitions)
+        HotkeyTransitionQueue transitions,
+        Func<uint, bool>? isLogicallyDown = null)
     {
         _transitions = transitions;
+        _isLogicallyDown = isLogicallyDown;
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
@@ -95,6 +111,104 @@ internal sealed class HotkeyEngine
     /// </summary>
     public bool IsPressed(uint virtualKey) =>
         _standard.IsPressed(virtualKey) || Volatile.Read(ref _dictationOnly)?.IsPressed(virtualKey) == true;
+
+    /// <summary>Any thread. How many desktop switches the owner has applied.</summary>
+    public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
+
+    /// <summary>
+    /// Any thread. The epoch this engine's own queued activations are judged by (see <see cref="HotkeyService.ShouldDispatch"/>):
+    /// the owner advances it when it applies a desktop switch, before anything it queues for the switch. It belongs to this
+    /// installation alone. A retired engine's hook thread can still be finishing a switch it noticed before the reinstall;
+    /// with one epoch shared by every installation, that late switch discarded the replacement's genuine press. Now it
+    /// moves only this engine's epoch, which judges only activations its retirement had already made stale.
+    /// </summary>
+    public long ActivationEpoch => Interlocked.Read(ref _activationEpoch);
+
+    /// <summary>
+    /// Any thread. How many desktop-switch notices reached the owner, applied or not, for a test of the service's wiring.
+    /// </summary>
+    public long DesktopSwitchNotices => Interlocked.Read(ref _desktopSwitchNotices);
+
+    /// <summary>
+    /// Owner thread, for tests: whether a press still owns the dictation, or either machine holds a hold or toggle latch.
+    /// False means the next press of either binding starts afresh.
+    /// </summary>
+    internal bool HoldsAnyLatch =>
+        _arbiter.HasOwner || _standard.IsLatched || Volatile.Read(ref _dictationOnly)?.IsLatched == true;
+
+    /// <summary>
+    /// Owner thread: an <c>EVENT_SYSTEM_DESKTOPSWITCH</c> notice arrived. It is only a reason to check again: it also
+    /// arrives for the switch back, and any process can raise it with <c>NotifyWinEvent</c> (this repository's own wiring
+    /// test does). So the switch is applied (<see cref="OnDesktopSwitch"/>) only when this thread's desktop has stopped
+    /// receiving input, which the lock screen, Ctrl+Alt+Del and the UAC secure desktop all cause; the switch back, a stray
+    /// notice while this desktop still receives input, and an answer <paramref name="desktopReceivesInput"/> cannot give
+    /// (null) apply nothing. The notice is counted before the check, and only on the owner thread.
+    /// </summary>
+    /// <param name="desktopReceivesInput">
+    /// Whether this thread's desktop is receiving input (GetUserObjectInformation with UOI_IO in the service), or null
+    /// when that cannot be told.
+    /// </param>
+    public void OnDesktopSwitchNotice(Func<bool?> desktopReceivesInput)
+    {
+        if (!IsOwnerCall())
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _desktopSwitchNotices);
+        if (desktopReceivesInput() == false)
+        {
+            ApplyDesktopSwitch();
+        }
+    }
+
+    /// <summary>
+    /// Owner thread: the input desktop switched away, to the lock screen or a secure desktop. The hook is not called
+    /// for input there, so any key held as the desktop switched can be released unseen. Every machine forgets its key
+    /// state, as a hook reinstall does, so a stale key can neither block a bare Page Up or Page Down (a Narrator key
+    /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and the dictation the arbiter
+    /// says this engine started, if any, is ended the way its release or second press would have ended it, reported as
+    /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
+    /// An Activated this engine queued that is still waiting for the dispatcher is invalidated first, through this engine's
+    /// activation epoch (<see cref="ActivationEpoch"/>), so it cannot open the microphone after the lock. A switch with
+    /// nothing recording starts and stops nothing. The service reaches this through <see cref="OnDesktopSwitchNotice"/>,
+    /// from the WinEvent callback that runs on the thread that set the hook, which is the owner; a call from any other
+    /// thread once an owner is attached is ignored rather than allowed to race the keyboard callback.
+    /// </summary>
+    public void OnDesktopSwitch()
+    {
+        if (IsOwnerCall())
+        {
+            ApplyDesktopSwitch();
+        }
+    }
+
+    // Not retired, and on the owner thread once one is attached (the harness has none, and calls as the owner).
+    private bool IsOwnerCall()
+    {
+        var owner = OwnerThreadId;
+        return !IsRetired && (owner == 0 || owner == NativeMethods.GetCurrentThreadId());
+    }
+
+    private void ApplyDesktopSwitch()
+    {
+        // Commands requested before the switch took effect before it, as for a key event. Only this engine's epoch moves:
+        // this can run on a retired engine whose hook thread noticed the switch before a reinstall, and the replacement's
+        // activations are judged by the replacement's own epoch.
+        ApplyPendingCommands();
+        Interlocked.Increment(ref _activationEpoch);
+
+        // Both machines are reset whatever they report: one can still hold a press the arbiter refused, or a toggle it
+        // ignored, after the dictation it lost to has ended. Only the arbiter's real owner, if there is one, is stopped.
+        _ = _standard.Reset();
+        _ = _dictationOnly?.Reset();
+        if (_arbiter.TryTakeActive() is { } active)
+        {
+            EmitStateClear(HotkeyTransition.Deactivated, active, HotkeyDeactivation.DesktopSwitch);
+        }
+
+        Interlocked.Increment(ref _desktopSwitches);
+    }
 
     /// <summary>
     /// Any thread. Queues a command without blocking. Returns true when the caller must wake the
@@ -207,10 +321,27 @@ internal sealed class HotkeyEngine
                 ApplyPaused(command.Enabled);
                 break;
             case HotkeyCommandKind.CancelToggle:
-                _standard.CancelToggle();
-                _dictationOnly?.CancelToggle();
-                _arbiter.Reset();
+                ReleaseActivation(command.Activation);
                 break;
+        }
+    }
+
+    // Scribe itself ended the dictation this press started (the silence auto-stop, a microphone fault, a pause, the
+    // duration ceiling), so the press gives up the dictation and its latch, and the next press starts afresh instead of
+    // being swallowed as the missing toggle-off. A newer press that owns the dictation keeps both: clearing its latch would
+    // leave the recording it starts with no release to end it. Every other latch owns no dictation (a press the arbiter
+    // refused) and is forgotten, as before.
+    private void ReleaseActivation(long activation)
+    {
+        var owner = _arbiter.ReleaseActivation(activation);
+        if (owner != HotkeyTrigger.Standard)
+        {
+            _standard.CancelToggle();
+        }
+
+        if (owner != HotkeyTrigger.DictationOnly)
+        {
+            _dictationOnly?.CancelToggle();
         }
     }
 
@@ -279,7 +410,7 @@ internal sealed class HotkeyEngine
     // in force instead of starting live while Settings is capturing or dictation is paused.
     private ChordStateMachine CreateMachine(HotkeyBinding binding)
     {
-        var machine = new ChordStateMachine(binding);
+        var machine = new ChordStateMachine(binding, _isLogicallyDown);
         if (_captureMode)
         {
             _ = machine.SetCaptureMode(true);
@@ -295,9 +426,11 @@ internal sealed class HotkeyEngine
 
     private void EmitKeyTransition(HotkeyTransition transition, HotkeyTrigger trigger)
     {
+        long activation = 0;
         if (transition == HotkeyTransition.Activated)
         {
-            if (!_arbiter.TryActivate(trigger))
+            activation = Interlocked.Increment(ref _lastActivation);
+            if (!_arbiter.TryActivate(trigger, activation))
             {
                 return;
             }
@@ -314,17 +447,22 @@ internal sealed class HotkeyEngine
             return;
         }
 
+        // The activation epoch is this engine's, read here on the owner thread, the only one that advances it, so an
+        // Activated computed after a desktop switch always carries the new one; the item names this engine, whose epoch
+        // the consumer judges it by.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-            transition, trigger, _generation, AllowReconcile: true));
+            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this,
+            Activation: activation));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.
-    private void EmitStateClear(HotkeyTransition transition, HotkeyTrigger? trigger)
+    private void EmitStateClear(
+        HotkeyTransition transition, HotkeyTrigger? trigger, HotkeyDeactivation deactivation = HotkeyDeactivation.Released)
     {
         if (trigger is { } owner)
         {
             _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-                transition, owner, _generation, AllowReconcile: false));
+                transition, owner, _generation, AllowReconcile: false, deactivation));
         }
     }
 }

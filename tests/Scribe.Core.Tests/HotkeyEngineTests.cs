@@ -26,10 +26,10 @@ public class HotkeyEngineTests
     public async Task Hook_thread_processes_keys_while_a_configuration_writer_is_stalled_on_the_gate()
     {
         var gate = new object();
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, gate: gate);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, gate: gate);
 
         // A request already queued: applying it on the hook thread must not need the gate either.
-        h.Router.CancelToggle();
+        h.Router.CancelToggle(activation: 0);
 
         Task writer;
         (HookDecision Down, HookDecision Up) press;
@@ -58,7 +58,7 @@ public class HotkeyEngineTests
     public void Cross_thread_reads_never_wait_for_the_configuration_gate()
     {
         var gate = new object();
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, gate: gate);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, gate: gate);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -74,7 +74,7 @@ public class HotkeyEngineTests
 
             Assert.True(reads.Current);
             Assert.True(reads.Pressed);
-            Assert.Equal(HotkeyBinding.Default, reads.Binding);
+            Assert.Equal(HotkeyBinding.Legacy, reads.Binding);
             Assert.Null(reads.DictationOnly);
         }
     }
@@ -82,7 +82,7 @@ public class HotkeyEngineTests
     [Fact]
     public async Task Requests_from_another_thread_take_effect_on_the_hook_thread_in_request_order()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         Assert.True(h.Down(RightCtrl).Suppress);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -116,7 +116,7 @@ public class HotkeyEngineTests
     [Fact]
     public void An_activation_computed_before_a_queued_request_is_stale_before_the_hook_applies_it()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
         Assert.True(h.WouldDispatch(activation));
@@ -129,13 +129,14 @@ public class HotkeyEngineTests
     [Fact]
     public async Task A_toggle_reset_requested_before_a_key_event_applies_before_that_event()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default with { Mode = HotkeyMode.Toggle });
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle });
         h.Down(RightCtrl);
         h.Up(RightCtrl);
-        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+        var on = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Activated, on.Transition);
 
         // Silence auto-stop ended the dictation from another thread; no wake was processed yet.
-        await Task.Run(() => h.Router.CancelToggle());
+        await Task.Run(() => h.Router.CancelToggle(on.Activation));
 
         h.Down(RightCtrl);
         Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
@@ -144,26 +145,26 @@ public class HotkeyEngineTests
     [Fact]
     public void Wakes_are_coalesced_until_the_hook_thread_consumes_them()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
 
         // A thread's posted-message queue is finite, so one outstanding wake covers any number of
         // requests made before the hook thread gets to it.
-        Assert.Same(h.Engine, h.Router.CancelToggle());
-        Assert.Null(h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
+        Assert.Null(h.Router.CancelToggle(activation: 0));
         Assert.Null(h.Router.SetCaptureMode(false));
 
         h.Engine.OnWake();
-        Assert.Same(h.Engine, h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
 
         // An undeliverable wake is released so the next request asks again.
         h.Engine.CancelWake();
-        Assert.Same(h.Engine, h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
     }
 
     [Fact]
     public void Attaching_the_owner_applies_requests_queued_before_the_hook_existed()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         Assert.Equal(0u, h.Engine.OwnerThreadId);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
@@ -181,7 +182,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Reinstall_stops_the_interrupted_dictation_and_starts_the_replacement_clean()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         var activation = Assert.Single(h.TakeTransitions());
 
@@ -204,7 +205,7 @@ public class HotkeyEngineTests
     [Fact]
     public void An_idle_engine_reports_no_interrupted_dictation()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         h.Up(RightCtrl);
 
@@ -216,7 +217,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Replacement_engine_is_built_from_the_published_configuration()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Router.UpdateBindings(F8Hold, null);
         h.Router.SetCaptureMode(true); // queued on the old engine and never applied there
 
@@ -233,7 +234,7 @@ public class HotkeyEngineTests
     [Fact]
     public async Task Rebinding_from_another_thread_stops_whichever_trigger_was_active()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default, F9Hold);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, F9Hold);
         h.Down(F9);
         Assert.Equal(HotkeyTrigger.DictationOnly, Assert.Single(h.TakeTransitions()).Trigger);
 
@@ -249,7 +250,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Failed_install_detaches_only_its_own_engine()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
 
         Assert.Null(h.Router.EndEngine(h.Engine));
@@ -266,7 +267,7 @@ public class HotkeyEngineTests
     [Fact]
     public void A_replaced_engine_can_no_longer_stop_a_dictation_started_on_its_replacement()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
 
@@ -298,7 +299,7 @@ public class HotkeyEngineTests
     public void An_interrupted_dictation_is_stopped_exactly_once_whichever_side_takes_it_first(
         bool ownerThreadFirst, bool byStateClear)
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
         if (byStateClear)
@@ -341,21 +342,22 @@ public class HotkeyEngineTests
     {
         // The owner thread's state clear takes it first, so the owner sends the stop.
         var ownerFirst = new HotkeyTriggerArbiter();
-        Assert.True(ownerFirst.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(ownerFirst.TryActivate(HotkeyTrigger.DictationOnly, activation: 1));
         Assert.Equal(HotkeyTrigger.DictationOnly, ownerFirst.TryTake(HotkeyTrigger.Standard));
         Assert.Null(ownerFirst.Retire());
 
         // Retired first: the retirement reports it, and the owner's later take yields nothing.
         var retiredFirst = new HotkeyTriggerArbiter();
-        Assert.True(retiredFirst.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(retiredFirst.TryActivate(HotkeyTrigger.DictationOnly, activation: 2));
         Assert.Equal(HotkeyTrigger.DictationOnly, retiredFirst.Retire());
         Assert.Null(retiredFirst.TryTake(HotkeyTrigger.Standard));
 
-        // Retirement is terminal: nothing starts, stops, clears or reports anything afterwards.
+        // Retirement is terminal: nothing starts, stops, clears, releases or reports anything afterwards.
         retiredFirst.Reset();
-        Assert.False(retiredFirst.TryActivate(HotkeyTrigger.Standard));
+        Assert.False(retiredFirst.TryActivate(HotkeyTrigger.Standard, activation: 3));
         Assert.False(retiredFirst.TryDeactivate(HotkeyTrigger.DictationOnly));
         Assert.Null(retiredFirst.TryTake(HotkeyTrigger.Standard));
+        Assert.Null(retiredFirst.ReleaseActivation(2));
         Assert.Null(retiredFirst.Retire());
 
         // A live arbiter with nothing active still yields the fallback, as state clears expect.
@@ -363,9 +365,39 @@ public class HotkeyEngineTests
     }
 
     [Fact]
+    public void Trigger_arbiter_releases_only_the_press_that_owns_the_dictation()
+    {
+        // A stop Scribe made itself names the press that started its recording. A newer press that owns the dictation
+        // keeps it, and is reported as the owner still there.
+        var arbiter = new HotkeyTriggerArbiter();
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 7));
+        Assert.True(arbiter.TryDeactivate(HotkeyTrigger.Standard)); // the old press released
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 8)); // and the key pressed again
+
+        Assert.Equal(HotkeyTrigger.Standard, arbiter.ReleaseActivation(7));
+        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 9)); // 8 still owns it
+        Assert.Equal(HotkeyTrigger.DictationOnly, WithOwner(HotkeyTrigger.DictationOnly, 10).ReleaseActivation(8));
+
+        // The owning press is released, and nothing owns a dictation afterwards.
+        Assert.Null(arbiter.ReleaseActivation(8));
+        Assert.Null(arbiter.TryTakeActive());
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 11));
+
+        // With nothing owning a dictation there is nothing to release.
+        Assert.Null(new HotkeyTriggerArbiter().ReleaseActivation(7));
+
+        static HotkeyTriggerArbiter WithOwner(HotkeyTrigger trigger, long activation)
+        {
+            var owned = new HotkeyTriggerArbiter();
+            Assert.True(owned.TryActivate(trigger, activation));
+            return owned;
+        }
+    }
+
+    [Fact]
     public void A_stopped_engine_passes_keys_through_if_its_hook_thread_outlives_the_stop()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy);
         h.Down(RightCtrl);
         _ = h.TakeTransitions();
 
@@ -380,7 +412,7 @@ public class HotkeyEngineTests
     [Fact]
     public void A_reinstall_stops_only_a_dictation_the_app_was_told_about()
     {
-        using var h = new HotkeyEngineHarness(HotkeyBinding.Default with { Mode = HotkeyMode.Toggle }, F9Hold);
+        using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle }, F9Hold);
         h.Down(F9);        // the dictation-only binding starts a dictation
         h.Down(RightCtrl); // the standard toggle latches, but the arbiter refuses a second dictation
         h.Up(RightCtrl);
@@ -397,11 +429,11 @@ public class HotkeyEngineTests
     [Fact]
     public void Requests_while_stopped_only_update_the_published_configuration()
     {
-        var router = new HotkeyCommandRouter(HotkeyBinding.Default);
+        var router = new HotkeyCommandRouter(HotkeyBinding.Legacy);
 
         Assert.Equal((true, (HotkeyEngine?)null), router.UpdateBindings(F8Hold, F9Hold));
         Assert.Null(router.SetCaptureMode(true));
-        Assert.Null(router.CancelToggle());
+        Assert.Null(router.CancelToggle(activation: 0));
         Assert.Equal(F8Hold, router.Binding);
         Assert.Equal(F9Hold, router.DictationOnlyBinding);
         Assert.False(router.IsPressed(F8));
@@ -416,7 +448,7 @@ public class HotkeyEngineTests
         service.SetPaused(true);
         service.SetCaptureMode(true);
         service.SetCaptureMode(false);
-        service.CancelToggle();
+        service.CancelToggle(activation: 0);
         service.SetPaused(false);
         service.SetPaused(true, requestSequence: 1);
         service.SetPaused(false, requestSequence: 2);
@@ -636,7 +668,7 @@ public class HotkeyEngineTests
     [Fact]
     public void Codes_outside_the_hook_range_pass_through_untouched()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         var update = state.Process(0x1A3, isDown: true);
 

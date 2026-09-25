@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using System.Windows.Input;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 
 namespace Scribe.App.Infrastructure;
@@ -7,10 +9,16 @@ namespace Scribe.App.Infrastructure;
 /// Translates WPF keyboard events from the settings UI into a <see cref="HotkeyBinding"/> the
 /// low-level hook can match, and renders a binding as friendly text. Right/left modifier
 /// variants are preserved (the hook receives distinct virtual-key codes such as VK_RCONTROL),
-/// and Alt-involved presses are resolved through <see cref="KeyEventArgs.SystemKey"/>.
+/// and Alt-involved presses are resolved through <see cref="KeyEventArgs.SystemKey"/>. Keys are
+/// named by virtual-key code through <see cref="HotkeyText"/>, never by WPF's <see cref="Key"/>
+/// names: that enum gives several keys two names (Page Down is also <c>Key.Next</c>) and does not
+/// promise which one <c>ToString</c> returns.
 /// </summary>
 internal static class HotkeyCapture
 {
+    private const uint MapVkToChar = 2; // MAPVK_VK_TO_CHAR
+    private const uint MapVkToVscEx = 4; // MAPVK_VK_TO_VSC_EX
+
     /// <summary>Builds an exact physical one- or two-key binding in the order keys were pressed.</summary>
     public static HotkeyBinding FromKeys(IReadOnlyList<Key> keys, HotkeyMode mode)
     {
@@ -22,7 +30,9 @@ internal static class HotkeyCapture
 
         var primary = (uint)KeyInterop.VirtualKeyFromKey(keys[0]);
         uint? secondary = keys.Count == 2 ? (uint)KeyInterop.VirtualKeyFromKey(keys[1]) : null;
-        var display = string.Join("+", keys.Select(FriendlyKeyName));
+
+        // Stored for older builds to show; Describe names the keys afresh from their codes.
+        var display = string.Join("+", keys.Select(KeyName));
         return new HotkeyBinding(
             primary,
             KeyModifiers.None,
@@ -46,36 +56,28 @@ internal static class HotkeyCapture
 
         if (IsModifierKey(key))
         {
-            return new HotkeyBinding(vk, KeyModifiers.None, mode, Suppress: true, FriendlyKeyName(key));
+            return new HotkeyBinding(vk, KeyModifiers.None, mode, Suppress: true, KeyName(key));
         }
 
         var modifiers = CurrentModifiers();
         var suppress = modifiers != KeyModifiers.None;
-        var display = Describe(modifiers, FriendlyKeyName(key));
-        return new HotkeyBinding(vk, modifiers, mode, suppress, display);
+        var binding = new HotkeyBinding(vk, modifiers, mode, suppress);
+        return binding with { DisplayName = Describe(binding) };
     }
 
     /// <summary>Renders an existing binding (mode included) as user-facing text.</summary>
-    public static string Describe(HotkeyBinding binding)
-    {
-        var keyName = binding.DisplayName;
-        if (string.IsNullOrWhiteSpace(keyName))
-        {
-            var key = KeyInterop.KeyFromVirtualKey((int)binding.VirtualKey);
-            keyName = FriendlyKeyName(key);
-        }
-        else if (binding.Modifiers != KeyModifiers.None && !keyName.Contains('+'))
-        {
-            keyName = Describe(binding.Modifiers, keyName);
-        }
+    public static string Describe(HotkeyBinding binding) => HotkeyText.Describe(binding, LayoutKeyName);
 
-        if (binding.SecondaryVirtualKey is { } second && !keyName.Contains('+'))
-        {
-            keyName += "+" + FriendlyKeyName(KeyInterop.KeyFromVirtualKey((int)second));
-        }
+    /// <summary>What the welcome says about the push-to-talk gesture, with keys named as Settings names them.</summary>
+    public static (string Title, string Body) Gesture(AppSettings? settings) => HotkeyText.Gesture(settings, LayoutKeyName);
 
-        return keyName;
-    }
+    /// <summary>
+    /// The name of one key, as the capture box shows it while the user presses it and as a new binding stores it: the
+    /// canonical name, else the current layout's, else the key's code. Never <c>Key.ToString()</c>, which can give a
+    /// Korean keyboard's Hangul key the name "KanaMode" (both are 0x15).
+    /// </summary>
+    public static string KeyName(Key key) =>
+        HotkeyText.KeyNameOrCode((uint)KeyInterop.VirtualKeyFromKey(key), LayoutKeyName);
 
     public static bool IsReservedWindowsChord(HotkeyBinding binding)
     {
@@ -120,22 +122,6 @@ internal static class HotkeyCapture
         return keys;
     }
 
-    private static string Describe(KeyModifiers modifiers, string keyName)
-    {
-        if (modifiers == KeyModifiers.None)
-        {
-            return keyName;
-        }
-
-        var parts = new List<string>(4);
-        if (modifiers.HasFlag(KeyModifiers.Control)) parts.Add("Ctrl");
-        if (modifiers.HasFlag(KeyModifiers.Alt)) parts.Add("Alt");
-        if (modifiers.HasFlag(KeyModifiers.Shift)) parts.Add("Shift");
-        if (modifiers.HasFlag(KeyModifiers.Win)) parts.Add("Win");
-        parts.Add(keyName);
-        return string.Join("+", parts);
-    }
-
     private static KeyModifiers CurrentModifiers()
     {
         var result = KeyModifiers.None;
@@ -153,18 +139,36 @@ internal static class HotkeyCapture
         Key.LeftShift or Key.RightShift or
         Key.LWin or Key.RWin;
 
-    private static string FriendlyKeyName(Key key) => key switch
+    // The punctuation keys and the IME keys mean something different on each keyboard layout, so the table leaves them
+    // out and the current layout names them: by the character the key types, else, for a key that types none (an IME
+    // key, say), by the name the layout gives its scan code.
+    private static string? LayoutKeyName(uint virtualKey) =>
+        KeyNames.FromMappedCharacter(MapVirtualKeyW(virtualKey, MapVkToChar)) ?? LayoutKeyNameText(virtualKey);
+
+    // GetKeyNameTextW takes a keyboard message's lParam: the scan code in bits 16 to 23 and the extended-key flag in bit
+    // 24, which MAPVK_VK_TO_VSC_EX reports as an 0xE0 or 0xE1 prefix in the high byte.
+    private static string? LayoutKeyNameText(uint virtualKey)
     {
-        Key.LeftCtrl => "Left Ctrl",
-        Key.RightCtrl => "Right Ctrl",
-        Key.LeftAlt => "Left Alt",
-        Key.RightAlt => "Right Alt",
-        Key.LeftShift => "Left Shift",
-        Key.RightShift => "Right Shift",
-        Key.LWin => "Left Win",
-        Key.RWin => "Right Win",
-        Key.Space => "Space",
-        Key.Return => "Enter",
-        _ => key.ToString(),
-    };
+        var scanCode = MapVirtualKeyW(virtualKey, MapVkToVscEx);
+        if ((scanCode & 0xFF) == 0)
+        {
+            return null;
+        }
+
+        var lParam = (int)((scanCode & 0xFF) << 16);
+        if ((scanCode & 0xFF00) is 0xE000 or 0xE100)
+        {
+            lParam |= 1 << 24;
+        }
+
+        var buffer = new char[64];
+        var length = GetKeyNameTextW(lParam, buffer, buffer.Length);
+        return length > 0 ? KeyNames.FromLayoutKeyName(new string(buffer, 0, length), virtualKey) : null;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetKeyNameTextW(int lParam, [Out] char[] lpString, int cchSize);
 }
