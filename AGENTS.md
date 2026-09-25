@@ -605,8 +605,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   refusals keep the latch: a pause clears it in the hook, and while a recording is live the press the
   hook took is what can still end it. Together these give, for every stop Scribe makes itself and for a
   hold or a toggle binding: the first press after the stopped dictation has processed starts a
-  dictation, a press made while it still processes is refused and leaves no latch behind, and no queued
-  press can start a recording whose release the hook will not report. No activation is invalidated for
+  dictation, an activation handled while it still processes is refused and leaves no latch behind (it is
+  judged when the consumer handles it, not when the key was pressed, so a press still queued when the
+  processing finishes can start the next dictation when it is handled), and no queued press can start a
+  recording whose release the hook will not report. No activation is invalidated for
   it: a release never clears a latch that a queued or live press depends on. A new `DictationStopReason`
   releases by default and must be classified in `DictationStopPolicyTests` (it then joins the
   `HotkeyStopReleaseTests` matrix by itself), and a new `ActivationDecision` in

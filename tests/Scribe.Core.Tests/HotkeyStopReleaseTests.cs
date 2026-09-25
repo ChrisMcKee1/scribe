@@ -11,9 +11,10 @@ namespace Scribe.Core.Tests;
 /// consumer step, each recording keeps the press that started it, every stop goes through
 /// <see cref="DictationStopPolicy.BeginStop"/> and every start through <see cref="DictationStartPolicy.BeginRecording"/>,
 /// the controller's own first steps. For every stop Scribe makes itself, with a hold or a toggle binding: the first press
-/// after the stopped dictation has processed starts a dictation; a press made while it still processes is refused and
-/// leaves no latch behind; and no queued press can start a recording whose release the hook will not report, because a
-/// stop releases only the press that started the recording it ended, and only once the stop is admitted.
+/// after the stopped dictation has processed starts a dictation; an activation handled while it still processes is refused
+/// and leaves no latch behind (a press still queued when the processing finishes can start the next dictation when it is
+/// handled); and no queued press can start a recording whose release the hook will not report, because a stop releases
+/// only the press that started the recording it ended, and only once the stop is admitted.
 /// </summary>
 public sealed class HotkeyStopReleaseTests
 {
