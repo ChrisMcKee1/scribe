@@ -123,9 +123,16 @@ public sealed class HotkeyService : IHotkeyService
 
     // GetAsyncKeyState on the hook path, rarely: on a press that completes a bare Page Up or Page Down binding while the
     // hook's view shows a modifier held, only about that modifier (see ChordStateMachine), and for the release of a mouse
-    // button whose press the hook swallowed, only about that button (see HotkeyEngine.OnMouseButtonEvent).
-    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding) =>
-        new(binding, NativeMethods.IsKeyLogicallyDown, WindowsMouseView.Native);
+    // button whose press the hook swallowed, only about that button (see HotkeyEngine.OnMouseButtonEvent). Both delegates
+    // are made here, as the service is constructed and before either hook exists; the callbacks only invoke them. The
+    // runtime also allocates on the first call a process makes to any P/Invoke, so that first call is made here too, for
+    // a key nobody presses (VK_PROBE), rather than inside a hook callback.
+    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding)
+    {
+        Func<uint, bool> keyDown = NativeMethods.IsKeyLogicallyDown;
+        _ = keyDown(NativeMethods.VK_PROBE);
+        return new(binding, keyDown, keyDown);
+    }
 
     public bool IsRunning { get; private set; }
 
@@ -137,7 +144,7 @@ public sealed class HotkeyService : IHotkeyService
     internal Func<uint, bool>? WindowsKeyState => _router.WindowsKeyState;
 
     /// <summary>What the hook asks about a mouse button whose release it owes (see HotkeyEngine); for tests.</summary>
-    internal WindowsMouseView? WindowsButtonView => _router.WindowsButtonView;
+    internal Func<uint, bool>? WindowsButtonState => _router.WindowsButtonState;
 
     /// <summary>How many desktop switches the current hook's engine has applied.</summary>
     internal long DesktopSwitchesSeen => _router.CurrentEngine?.DesktopSwitches ?? 0;
@@ -221,9 +228,7 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             // A fresh engine in a fresh epoch, built from the published configuration: no consumer
-            // exists yet, so nothing from a previous run can leak into this one. The integrity level the mouse hook's
-            // owed-release reading compares against is read here, before any hook exists, never in a callback.
-            NativeMethods.PrimeOwnIntegrityLevel();
+            // exists yet, so nothing from a previous run can leak into this one.
             var transitions = new HotkeyTransitionQueue();
             var reconcileSignal = new HotkeyReconcileSignal(ScheduleReconcile);
             var (engine, _) = _router.BeginEngine(transitions);
@@ -1045,10 +1050,10 @@ public sealed class HotkeyService : IHotkeyService
             // The old registration is released, or found already gone, before the count moves, so a reader that sees
             // the count sees everything this renewal did. Found gone, it was removed by Windows (a missed deadline), and
             // for as long as it was gone no hook saw the mouse: the engine ends a dictation a button was driving, since
-            // its release may be the input nobody saw, and makes every owed release uncertain, here between messages and
+            // its release may be the input nobody saw, and drops every release it owed, here between messages and
             // before any button event reaches the new registration. A registration where there was none needs nothing
-            // of the kind: no debt is committed while this installation has no mouse hook, and the ones a reinstall
-            // hands on arrive uncertain already.
+            // of the kind: no debt is committed while this installation has no mouse hook, and a reinstall's engine
+            // starts owing nothing.
             Volatile.Write(ref _mouseHookId, replacement);
             Volatile.Write(ref _mouseHookError, 0);
             if (current != 0 && !NativeMethods.UnhookWindowsHookEx(current))

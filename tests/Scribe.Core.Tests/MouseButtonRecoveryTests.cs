@@ -78,16 +78,18 @@ public sealed class MouseButtonRecoveryTests
     }
 
     [Fact]
-    public void A_lost_mouse_hook_keeps_the_release_of_a_button_still_held_from_the_app()
+    public void A_lost_mouse_hook_lets_the_release_of_a_button_still_held_through()
     {
-        // Still held when the renewal found the hook gone: the release reaches the renewed hook, and since the press was
-        // swallowed, the app under the pointer must not get the release either.
+        // Still held when the renewal found the hook gone. Since round 7 a gap in the hook's view drops what it owed, so
+        // this release reaches the app under the pointer: the accepted cost of a hook Windows removed, one release (for
+        // Back or Forward one navigation), never a button left down in Windows.
         using var h = new HotkeyEngineHarness(Bare(Back));
         h.ButtonDown(Back);
         h.Engine.OnMouseHookLost();
         h.TakeTransitions();
 
-        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.Equal(0, h.Engine.OwedButtonReleases);
+        Assert.False(h.ButtonUp(Back).Suppress);
         Assert.Empty(h.TakeTransitions());
     }
 
@@ -119,7 +121,7 @@ public sealed class MouseButtonRecoveryTests
 
         Assert.Equal(new[] { (HotkeyTransition.Deactivated, HotkeyDeactivation.MouseHookLost) }, Transitions(h));
         Assert.True(h.Engine.IsPressed(LeftCtrl));
-        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.False(h.ButtonUp(Back).Suppress); // the gap dropped Back's debt (round 7): its release reaches the app
         Assert.True(h.ButtonDown(Back).Suppress); // Ctrl is still held, so this is the chord again
         Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
     }
@@ -232,20 +234,18 @@ public sealed class MouseButtonRecoveryTests
     public static TheoryData<string> EveryStateClear => new()
     {
         "a desktop switch", "a rebind", "entering Set", "entering and leaving Set", "the dictation-only trigger removed",
-        "a lost mouse hook", "a reinstall",
     };
 
     [Theory]
     [MemberData(nameof(EveryStateClear))]
     public void Every_state_clear_keeps_a_swallowed_button_s_release_from_the_app_once(string clear)
     {
-        // Each path that clears the machines' state (ChordStateMachine.ClearState, or a new engine whose state starts
-        // over): Back held and swallowed, then the clear, then Back's release is still swallowed and starts nothing.
+        // Each path that clears the machines' state (ChordStateMachine.ClearState) while the hook keeps seeing the mouse:
+        // Back held and swallowed, then the clear, then Back's release is still swallowed and starts nothing.
         using var h = new HotkeyEngineHarness(Bare(Back), Bare(Forward));
         Assert.True(h.ButtonDown(Back).Suppress);
         h.TakeTransitions();
 
-        var engine = h.Engine;
         switch (clear)
         {
             case "a desktop switch":
@@ -268,24 +268,46 @@ public sealed class MouseButtonRecoveryTests
                 h.Router.UpdateBindings(Bare(Back), null);
                 h.Engine.OnWake();
                 break;
-            case "a lost mouse hook":
-                h.Engine.OnMouseHookLost();
-                break;
-            case "a reinstall":
-                engine = h.Router.BeginEngine(h.Transitions).Engine;
-                break;
         }
 
         h.TakeTransitions();
-        Assert.True(engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
+        Assert.True(h.Engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
         Assert.Empty(h.TakeTransitions());
 
         // Exactly once: a second release, with no press between, is nobody's.
+        Assert.False(h.Engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
+    }
+
+    // The two gaps in the hook's view, a mouse hook found gone and a reinstall, drop what the engine owed (round 7): a
+    // press may have reached Windows while no hook saw the mouse, and no reading in the callback can tell a swallowed
+    // press from that one when Windows' answer may have failed. The release reaches the app once and starts nothing.
+    [Theory]
+    [InlineData("a lost mouse hook")]
+    [InlineData("a reinstall")]
+    public void A_gap_in_the_hook_s_view_lets_a_swallowed_button_s_release_through(string gap)
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back), Bare(Forward));
+        Assert.True(h.ButtonDown(Back).Suppress);
+        h.TakeTransitions();
+
+        var engine = h.Engine;
+        if (gap == "a lost mouse hook")
+        {
+            h.Engine.OnMouseHookLost();
+        }
+        else
+        {
+            engine = h.Router.BeginEngine(h.Transitions).Engine;
+        }
+
+        h.TakeTransitions();
+        Assert.Equal(0, engine.OwedButtonReleases);
         Assert.False(engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
+        Assert.Empty(h.TakeTransitions());
     }
 
     [Fact]
-    public void A_reinstall_hands_the_replacement_only_the_releases_still_owed()
+    public void A_reinstall_hands_the_replacement_no_release_to_swallow()
     {
         using var h = new HotkeyEngineHarness(Bare(Back), Bare(Middle));
         Assert.True(h.ButtonDown(Back).Suppress);
@@ -294,9 +316,8 @@ public sealed class MouseButtonRecoveryTests
 
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
 
-        Assert.Equal(1 << (int)Back, replacement.OwedButtonReleases);
-        Assert.True(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
         Assert.Equal(0, replacement.OwedButtonReleases);
+        Assert.False(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
 
         // The replacement dictates as usual: its first press is its own.
         Assert.True(replacement.OnMouseButtonEvent(Middle, isDown: true).Suppress);

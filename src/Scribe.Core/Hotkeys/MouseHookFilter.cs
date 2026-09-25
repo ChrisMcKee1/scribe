@@ -23,13 +23,14 @@ internal static class MouseHookFilter
     private const uint XButton1 = 0x0001;
     private const uint XButton2 = 0x0002;
 
-    // Computed once: the two MSLLHOOKSTRUCT fields a button message needs. Direct reads, as the keyboard callback does,
-    // because PtrToStructure would marshal the whole struct on a path the pointer waits for.
-    private static readonly int MouseDataOffset =
-        (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.mouseData));
+    // The two MSLLHOOKSTRUCT fields a button message needs, at the offsets Windows lays them out at (POINT pt, then DWORD
+    // mouseData, DWORD flags, DWORD time, ULONG_PTR dwExtraInfo; the layout test pins both against the struct). Written
+    // out rather than taken from Marshal.OffsetOf, whose reflection would allocate in this class's initializer, which the
+    // first button callback runs. Direct reads, as the keyboard callback does, because PtrToStructure would marshal the
+    // whole struct on a path the pointer waits for.
+    internal const int MouseDataOffset = 8;
 
-    private static readonly int ExtraInfoOffset =
-        (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.dwExtraInfo));
+    internal static readonly int ExtraInfoOffset = IntPtr.Size == 8 ? 24 : 20;
 
     /// <summary>
     /// The part of <see cref="SyntheticInputMarker"/> a low-level mouse hook can see. Windows keeps only the low 32 bits
