@@ -136,6 +136,14 @@ internal static partial class NativeMethods
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
+    /// <summary>
+    /// Windows' own view of a mouse button (GetAsyncKeyState, which "works with mouse buttons"), or null when it cannot be
+    /// trusted: GetAsyncKeyState returns zero, the same as up, when it fails, and it fails when "The current desktop is
+    /// not the active desktop", which the caller's desktop not receiving input tells (see the round 4 notes in AGENTS.md).
+    /// </summary>
+    internal static bool? MouseButtonStateInWindows(uint button) =>
+        ThreadDesktopReceivesInput() == true ? IsKeyLogicallyDown(button) : null;
+
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 

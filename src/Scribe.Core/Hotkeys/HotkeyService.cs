@@ -122,7 +122,8 @@ public sealed class HotkeyService : IHotkeyService
 
     // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding while
     // the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
-    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding) => new(binding, NativeMethods.IsKeyLogicallyDown);
+    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding) =>
+        new(binding, NativeMethods.IsKeyLogicallyDown, NativeMethods.MouseButtonStateInWindows);
 
     public bool IsRunning { get; private set; }
 

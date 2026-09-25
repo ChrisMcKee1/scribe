@@ -754,7 +754,20 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   one, found gone or not, and tries again next period). **A renewal that finds the old registration already gone is a lost
   hook, and the engine is told** (`HotkeyEngine.OnMouseHookLost`, on the hook thread between
   messages, before any button event reaches the new registration): while it was gone no hook saw the
-  mouse, so a held button's release, or a toggle's second click, may be the input nobody saw. Both
+  mouse, so a held button's release, or a toggle's second click, may be the input nobody saw. First the
+  **recovery decision**: every button whose release is still owed is asked about in Windows' own view
+  (`NativeMethods.MouseButtonStateInWindows`, GetAsyncKeyState through a seam), and if Windows holds it,
+  or cannot tell (GetAsyncKeyState returns zero, the same as up, when it fails, as off the active
+  desktop), the debt is dropped: Windows holding the button means it received a press the hook did not
+  swallow (the callback that missed its deadline passed its press on before Windows removed the hook,
+  or a press came while no hook existed), and that press's release must reach the app, or the app keeps
+  the button down and every later swallowed click keeps it so (review round 4, A5). Only a button Windows
+  reports up keeps its debt: a press the hook swallows never reaches Windows' view (measured on CI,
+  `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`; the keyboard hook's
+  documentation says a callback runs before the key's asynchronous state is updated, and nothing documents
+  the mouse), and Windows reporting up holds nothing a swallowed release could strand. A reinstall makes
+  the same decision for the debts it hands on (`HotkeyEngine.ReleasesWindowsDoesNotHold`,
+  `MouseButtonRound4Tests`). Then both
   machines forget their mouse buttons (keys stay: the keyboard hook saw them), a binding that presses
   one gives up its latch, and if the arbiter's owner is such a binding, the engine advances its
   activation epoch and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
@@ -789,8 +802,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   hook existed, and even a claim made on better evidence was overtaken, in review, by a new press
   during capture before the injection, which then ended the user's drag. Nothing needs that repair:
   buttons do not repeat, and on Windows 7 and later a hook that misses its deadline is removed rather
-  than skipped, so a release after a leaked press reaches the app like the press did, and the
-  recording it started ends through the lost-hook recovery above, not through an injected release. So
+  than skipped, so a leaked press is one Windows received. Its release reaches the app too, unless the
+  watchdog's renewal registered the hook again before it came, and then the recovery decision above,
+  which drops the debt of every owed button Windows holds, lets it through; the recording that press
+  started ends through the lost-hook recovery, not through an injected release. So
   no button-up, and no mouse input of any kind, is ever injected by this feature. Keys keep the older
   rule, which can still misjudge a key held since before a keyboard hook reinstall (a new engine never
   saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only

@@ -19,6 +19,7 @@ internal sealed class HotkeyCommandRouter
 {
     private readonly object _gate;
     private readonly Func<uint, bool>? _isLogicallyDown;
+    private readonly Func<uint, bool?>? _buttonHeldInWindows;
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
@@ -34,8 +35,12 @@ internal sealed class HotkeyCommandRouter
 
     /// <param name="binding">The initial standard binding.</param>
     /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
-    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown)
-        : this(binding, new object(), isLogicallyDown)
+    /// <param name="buttonHeldInWindows">
+    /// Windows' own view of a mouse button, null when it cannot be told, which a recovery asks about every release still
+    /// owed (see <see cref="HotkeyEngine.OnMouseHookLost"/> and <see cref="BeginEngine"/>).
+    /// </param>
+    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, Func<uint, bool?>? buttonHeldInWindows = null)
+        : this(binding, new object(), isLogicallyDown, buttonHeldInWindows)
     {
     }
 
@@ -45,11 +50,17 @@ internal sealed class HotkeyCommandRouter
     /// nothing on the hook path ever needs it.
     /// </param>
     /// <param name="isLogicallyDown">Windows' view of a key, or null to trust the hook's view alone.</param>
-    internal HotkeyCommandRouter(HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null)
+    /// <param name="buttonHeldInWindows">
+    /// Windows' view of a mouse button, null when it cannot be told; null for the whole function keeps every owed release
+    /// through a recovery, as the tests that do not script Windows expect.
+    /// </param>
+    internal HotkeyCommandRouter(
+        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, Func<uint, bool?>? buttonHeldInWindows = null)
     {
         _binding = binding;
         _gate = gate;
         _isLogicallyDown = isLogicallyDown;
+        _buttonHeldInWindows = buttonHeldInWindows;
     }
 
     public HotkeyBinding Binding => _binding;
@@ -181,7 +192,8 @@ internal sealed class HotkeyCommandRouter
             var interrupted = previous?.Retire();
             var engine = new HotkeyEngine(
                 _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
-                previous?.OwedButtonReleases ?? 0);
+                HotkeyEngine.ReleasesWindowsDoesNotHold(previous?.OwedButtonReleases ?? 0, _buttonHeldInWindows),
+                _buttonHeldInWindows);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }
