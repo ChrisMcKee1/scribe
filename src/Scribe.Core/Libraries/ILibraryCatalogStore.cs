@@ -76,12 +76,13 @@ public interface ILibraryCatalogStore
     /// startup, from <see cref="LoadCatalog"/>, and on the storage maintenance schedule while a committed manifest is
     /// unresolved. A manifest of the stored generation is finished; one above it is discarded; one below it, one whose
     /// redo image fails its hash, and any manifest while the generation row is absent or unparsable, are set aside. Before
-    /// a manifest with backups is set aside or discarded, the files are made whole: a target an interrupted install left
-    /// absent gets back the bytes it last held, and every backup holding someone else's bytes is kept as an outside
-    /// version. Quarantine then holds only the manifest's own journal files (its redo images, install copies and spare
-    /// backups), never a library file it names (a target, a kept version, a set-aside document, a Recently deleted
-    /// entry), which nothing in the quarantine ever deletes (review finding G11). Orphan install copies and redo folders
-    /// are removed; an orphan backup is kept.
+    /// a manifest is set aside or discarded, the files are made whole: a target an interrupted install left absent gets
+    /// back the bytes it last held, and every backup holding someone else's bytes is kept as an outside version; a
+    /// manifest whose files cannot yet be made whole is held, pending and neither set aside nor discarded, until an
+    /// attempt succeeds (review finding G14), so the quarantine never holds an only copy. Quarantine then holds only the
+    /// manifest's own journal files (its redo images, install copies and spare backups), never a library file it names (a
+    /// target, a kept version, a set-aside document, a Recently deleted entry), which nothing in the quarantine ever deletes
+    /// (review finding G11). Orphan install copies and redo folders are removed; an orphan backup is kept.
     /// </summary>
     LibraryRecoveryResult Recover();
 

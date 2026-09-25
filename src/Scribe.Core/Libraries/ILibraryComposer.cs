@@ -18,7 +18,7 @@ public interface ILibraryComposer
     /// no readable document holds it: a session on defaults) and the value of <see cref="LibrarySettingKeys.State"/>
     /// (null when the row is absent), for the libraries <paramref name="libraries"/> names (every library of the catalog;
     /// an unreadable file counts). An absent row reads as <see cref="LocalStateHealth.Absent"/> only when
-    /// <paramref name="context"/> gives no sign it was lost (no stored generation, no repair record, no session on
+    /// <paramref name="context"/> gives no sign it was lost (no stored generation, no repair at this start, no session on
     /// defaults, no witness file); otherwise it reads as <see cref="LocalStateHealth.Unreadable"/>, so a lost row never
     /// re-grants AI permission, on this start or the next.
     /// </summary>
