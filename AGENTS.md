@@ -753,7 +753,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
   swallow that release and nothing else (no binding can use a button then), and it is removed at the
   thread's next sync once the debt is gone: the swallowed release asks for that sync at once, and a new
-  press of the button leaves it to the watchdog, within one period. Its callback's first act is the one comparison
+  press of the button leaves it to the watchdog, within one period. A debt whose release went up where
+  no hook could see it (the lock screen, a secure desktop, a lost hook) keeps the drain-only hook until
+  that button is pressed once more, which is the cost of never guessing. Its callback's first act is the one comparison
   (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
   hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
   `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
@@ -1194,8 +1196,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
   directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
   here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
-  modifier; that holds through desktop switches, capture, rebinding and a reinstall (the owed release above), and not
-  while Windows has removed the mouse hook, when a press or release no hook sees reaches the app until the renewal.
+  modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture, any rebinding (one
+  that leaves no mouse binding keeps the drain-only hook for it) and a reinstall (the owed release above); a press or
+  release made while Windows has removed the mouse hook, before the next successful renewal, can still reach the app,
+  and the hint says so in plain words.
   It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
   press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
   so the text promises no more than that. The same holds for a swallowed key.
