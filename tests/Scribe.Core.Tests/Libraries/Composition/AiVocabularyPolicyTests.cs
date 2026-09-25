@@ -321,8 +321,10 @@ public sealed class AiVocabularyPolicyTests
         var deleted = Catalog(2, state, Committed(shippedOnly));
         source.Publish(LibraryComposer.Instance.ComposeVocabulary(deleted));
 
-        // Before any adoption the scope is bound to what is there now, no document, so the old request is refused.
-        Assert.Null(source.Current.AiScope.PermittedContent["github"]);
+        // Before any adoption a built-in whose accepted document is gone is permitted for nothing (round 3, Astra A5):
+        // the old request is refused, and not even the shipped rows are carried.
+        Assert.False(source.Current.AiScope.PermittedContent.ContainsKey("github"));
+        Assert.Empty(source.Current.AiEntries);
         Assert.True(LibraryComposer.Instance.HasNarrowed(admitted, source.Current.AiScope));
         Assert.False(source.TryHandOff(admitted, () => sent.Add("first attempt")));
 
@@ -363,7 +365,8 @@ public sealed class AiVocabularyPolicyTests
     [Fact]
     public void A_built_in_whose_edits_document_cannot_be_read_is_not_taken_for_one_that_is_gone()
     {
-        // Only an available built-in with no document has none; a paused or locked one may still have it.
+        // Only an available built-in with no document has none; a paused or locked one may still have it. Until it can be
+        // read, the content it holds is unknown and its accepted entry remains, so it is not permitted either (round 3).
         var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
         var context = new LibraryStateContext(false, false, true, true);
         foreach (var fileState in new[] { LibraryFileState.Unreadable, LibraryFileState.AwaitingRelease, LibraryFileState.Newer })
@@ -371,27 +374,67 @@ public sealed class AiVocabularyPolicyTests
             var catalog = Catalog(2, state, Committed(BuiltInLibrary("github"), hash: null, state: fileState));
             Assert.Null(LibraryComposer.Instance.PlanAdoption(catalog, context));
         }
+
+        Assert.False(AiVocabularyPolicy.IsPermitted(state, "github", builtIn: true, content: null));
+    }
+
+    [Fact]
+    public void A_built_in_whose_edits_document_vanished_in_a_session_on_defaults_carries_nothing_to_AI_while_its_hash_remains()
+    {
+        // Round 3 (Astra A5): no adoption runs on defaults, so the healthy state still accepts H1 for github's edits
+        // document, which turned the shipped "get hub" off, and it is gone. The shipped rows are back in the catalog; none
+        // of them may reach AI cleanup until the user permits github again, while the unedited built-in and the accepted
+        // custom library beside it stay permitted.
+        var edited = BuiltInLibrary("github", TurnedOff("get hub", "GitHub"), Shipped("octo cat", "Octocat"));
+        var shippedOnly = BuiltInLibrary("github", Shipped("get hub", "GitHub"), Shipped("octo cat", "Octocat"));
+        var microsoft = Committed(BuiltInLibrary("microsoft-365", Shipped("teams", "Teams")));
+        var team = Committed(CustomLibrary("team", Custom("kube", "K8s")), H2);
+        var state = State(
+            enabled: ["github", "microsoft-365", "team"], ai: [("github", true), ("team", true)], accepted: [("github", H1), ("team", H2)]);
+        var admitted = LibraryComposer.Instance.ComposeVocabulary(Catalog(1, state, Committed(edited, H1), microsoft, team)).AiScope;
+        var onDefaults = new LibraryStateContext(RunningOnDefaults: true, DatabaseRepaired: false, GenerationStored: true, CommitWitnessed: true);
+
+        var vanished = Catalog(2, state, Committed(shippedOnly), microsoft, team);
+
+        Assert.Null(LibraryComposer.Instance.PlanAdoption(vanished, onDefaults));
+        Assert.False(AiVocabularyPolicy.IsPermitted(state, "github", builtIn: true, content: null));
+        var vocabulary = LibraryComposer.Instance.ComposeVocabulary(vanished);
+        Assert.Equal(["microsoft-365", "team"], vocabulary.AiScope.PermittedContent.Keys.Order(StringComparer.Ordinal));
+        Assert.Null(vocabulary.AiScope.PermittedContent["microsoft-365"]);
+        Assert.Equal(H2, vocabulary.AiScope.PermittedContent["team"]);
+        Assert.Equal(["K8s", "Teams"], vocabulary.AiEntries.Select(e => e.Replacement).Order(StringComparer.Ordinal));
+        Assert.Contains(vocabulary.Entries, entry => entry.Replacement == "GitHub");
+        Assert.True(LibraryComposer.Instance.HasNarrowed(admitted, vocabulary.AiScope));
+        var composition = LibraryComposition.Committed(vanished, [], new GlossaryBudget(80));
+        Assert.Equal(GlossaryInclusion.NotPermitted, composition.StatusOf("github", Key("get hub")).Glossary);
     }
 
     [Fact]
     public void The_scope_pairs_each_permitted_library_with_the_hash_the_catalog_holds_not_a_stale_accepted_one()
     {
-        // Round 2, part 2 (Grok G1): github is on and permitted with its edits document H1 accepted; the document is then
-        // gone (available, no content hash) while the state still accepts H1. 3.3.3 lets the shipped rows pass the content
-        // check, so the binding is the scope's: github is paired with null, the hash in force, never with H1.
-        var state = State(enabled: ["github", "team"], ai: [("github", true), ("team", true)], accepted: [("github", H1), ("team", H2)]);
+        // Round 2, part 2 (Grok G1), round 3 (Astra A5): github is on and permitted with its edits document H1 accepted;
+        // the document is then gone (available, no content hash) while the state still accepts H1. A built-in with no
+        // document passes the content check only when no accepted entry remains, so github is permitted for nothing, and
+        // the admission at H1 is not covered. Every library the scope keeps is paired with the hash the catalog holds: H2
+        // for the accepted custom file, none for the unedited built-in, and none for github once the user permits it again
+        // after the entry is dropped.
+        var state = State(
+            enabled: ["github", "microsoft-365", "team"], ai: [("github", true), ("team", true)], accepted: [("github", H1), ("team", H2)]);
         var team = Committed(CustomLibrary("team", Custom("kube", "K8s")), H2);
-        var withDocument = Catalog(1, state, Committed(BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub")), H1), team);
-        var withoutDocument = Catalog(2, state, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))), team);
+        var microsoft = Committed(BuiltInLibrary("microsoft-365", Shipped("teams", "Teams")));
+        var withDocument = Catalog(
+            1, state, Committed(BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub")), H1), microsoft, team);
+        var withoutDocument = Catalog(2, state, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))), microsoft, team);
 
         var admitted = AiVocabularyPolicy.ScopeOf(withDocument);
         Assert.Equal(H1, admitted.PermittedContent["github"]);
+        Assert.Null(admitted.PermittedContent["microsoft-365"]);
         Assert.Equal(H2, admitted.PermittedContent["team"]);
 
-        Assert.True(AiVocabularyPolicy.IsPermitted(state, "github", builtIn: true, content: null));
+        Assert.False(AiVocabularyPolicy.IsPermitted(state, "github", builtIn: true, content: null));
         var current = AiVocabularyPolicy.ScopeOf(withoutDocument);
-        Assert.True(current.PermittedContent.ContainsKey("github"));
-        Assert.Null(current.PermittedContent["github"]);
+        Assert.Equal(["microsoft-365", "team"], current.PermittedContent.Keys.Order(StringComparer.Ordinal));
+        Assert.Null(current.PermittedContent["microsoft-365"]);
         Assert.Equal(H2, current.PermittedContent["team"]);
         Assert.False(current.Covers(admitted));
         Assert.True(AiVocabularyPolicy.HasNarrowed(admitted, current));
@@ -399,6 +442,13 @@ public sealed class AiVocabularyPolicyTests
         // What is admitted now carries what is there now; the custom library's pairing, its accepted hash, still holds.
         Assert.False(AiVocabularyPolicy.HasNarrowed(current, AiVocabularyPolicy.ScopeOf(withoutDocument)));
         Assert.False(AiVocabularyPolicy.HasNarrowed(new AiVocabularyScope(1, [new("team", H2)]), current));
+
+        // With the stale entry dropped and github permitted again, it is paired with the hash it holds: none.
+        var permittedAgain = State(enabled: ["github", "microsoft-365", "team"], ai: [("github", true), ("team", true)], accepted: [("team", H2)]);
+        var again = AiVocabularyPolicy.ScopeOf(Catalog(3, permittedAgain, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))), microsoft, team));
+        Assert.True(again.PermittedContent.ContainsKey("github"));
+        Assert.Null(again.PermittedContent["github"]);
+        Assert.False(again.Covers(admitted));
     }
 
     [Fact]
@@ -416,9 +466,11 @@ public sealed class AiVocabularyPolicyTests
         Assert.Contains(source.Current.AiEntries, entry => entry.Replacement == "Nightjar Hub");
         var sent = new List<string>();
 
-        // Deleted outside Scribe: from that moment no scope of the catalog covers the admission (3.3.3).
+        // Deleted outside Scribe: from that moment no scope of the catalog covers the admission (3.3.3), and since round 3
+        // (Astra A5) no scope permits github at all while its accepted entry remains.
         var reloaded = Catalog(2, state, Committed(shippedOnly));
         Assert.True(AiVocabularyPolicy.HasNarrowed(admitted, AiVocabularyPolicy.ScopeOf(reloaded)));
+        Assert.False(AiVocabularyPolicy.ScopeOf(reloaded).PermittedContent.ContainsKey("github"));
 
         // The load adopts the disappearance and publishes: github is still on for dictation, and permitted for nothing.
         var adoption = LibraryComposer.Instance.PlanAdoption(reloaded, context);
