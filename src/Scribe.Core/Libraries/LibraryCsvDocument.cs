@@ -62,7 +62,10 @@ public enum LibraryCsvIssues
 {
     None = 0,
 
-    /// <summary>Header lines held spreadsheet padding (unquoted trailing empty fields) that was dropped.</summary>
+    /// <summary>
+    /// Metadata records held spreadsheet padding (unquoted trailing empty fields) that was dropped. Reported by imports
+    /// only: a managed read takes metadata from its raw lines and never removes anything from them.
+    /// </summary>
     HeaderPaddingRemoved = 1,
 
     /// <summary>More rows than the per-file cap; the rows past it were not read.</summary>

@@ -26,4 +26,12 @@ public static class LibraryLimits
 
     /// <summary>Days a deleted custom library stays in Recently deleted before the janitor removes it.</summary>
     public const int RecentlyDeletedRetentionDays = 30;
+
+    /// <summary>
+    /// Days a set-aside journal manifest, and every redo image, install copy and backup it names, stays quarantined
+    /// before the janitor removes them together: the retention damaged database copies get
+    /// (<see cref="Persistence.StorageRetentionPolicy.DamagedCopyRetentionDays"/>), because both hold what a failure
+    /// left behind and may be the only copy of it (review finding G5).
+    /// </summary>
+    public const int QuarantineRetentionDays = Persistence.StorageRetentionPolicy.DamagedCopyRetentionDays;
 }
