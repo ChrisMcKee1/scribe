@@ -505,7 +505,11 @@ internal sealed class HotkeyEngine
             suppress = !WindowsHoldsButton(button);
         }
 
-        return new HookDecision(suppress, RequestReconcile: !isDown && suppress);
+        // A swallowed release asks for the leak check, as a key's does; so does any event that settled a debt, passed or
+        // swallowed, a release that paid it or a new press that forgave it, because the check is also when a drain-only
+        // mouse hook kept for that debt is removed (HotkeyService.ScheduleReconcile), at once rather than at the next
+        // watchdog period, with every pointer move waiting for this thread meanwhile.
+        return new HookDecision(suppress, RequestReconcile: owed || (!isDown && suppress));
     }
 
     private HookDecision OnInput(uint virtualKey, bool isDown)

@@ -733,11 +733,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   keys alone gets a system-wide mouse hook: every pointer move on the desktop waits for this thread
   while one is installed. The one exception is drain-only: while a swallowed press still owes its
   release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
-  judge that release and nothing else (no binding can use a button then), and it is removed at the
-  thread's next sync once the debt is gone: the swallowed release asks for that sync at once, and a new
-  press of the button leaves it to the watchdog, within one period, as does a lost hook, which drops the
-  debt. A debt whose release went up on the lock screen or a secure desktop, where no hook could see it,
-  keeps the drain-only hook until that button is pressed once more. Its callback's first act is the one comparison
+  judge that release and nothing else (no binding can use a button then), and it is removed as soon as
+  the debt is gone: any event that settles it, its release swallowed or let through or a new press
+  that forgives it, asks for that sync at once (`HookDecision.RequestReconcile`, which
+  `HotkeyService.ScheduleReconcile` turns into the sync), and a renewal that finds the hook gone, which
+  drops the debt, removes it in that same renewal (Grok's G5, round 7). A debt whose release went up on
+  the lock screen or a secure desktop, where no hook could see it, keeps the drain-only hook until that
+  button is pressed once more. Its callback's first act is the one comparison
   (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
   hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
   `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event

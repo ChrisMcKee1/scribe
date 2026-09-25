@@ -176,6 +176,21 @@ public sealed class HotkeyService : IHotkeyService
     /// </summary>
     internal HotkeyEngine? CurrentEngineForTests => _router.CurrentEngine;
 
+    /// <summary>
+    /// The reconcile signal the current installation's hook callbacks raise, or null while stopped; for tests that play a
+    /// hook callback between the hook thread's messages.
+    /// </summary>
+    internal HotkeyReconcileSignal? ReconcileSignalForTests
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _reconcileSignal;
+            }
+        }
+    }
+
     /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
     internal void MaintainMouseHookNow()
     {
@@ -497,8 +512,9 @@ public sealed class HotkeyService : IHotkeyService
         {
             await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
 
-            // A swallowed release asks for this check, so it is also the moment a drain-only mouse hook, kept only for
-            // that release, stops being needed: the hook thread removes it at its next sync, which this asks for now.
+            // Any mouse event that settled a debt asks for this check (a release swallowed or let through, a press that
+            // forgave one), so it is also the moment a drain-only mouse hook, kept only for that debt, stops being needed:
+            // the hook thread removes it at its next sync, which this asks for now.
             if (CurrentInstallation is { MouseHookInstalled: true, MouseHookWanted: false } drained)
             {
                 drained.RequestMouseHookRefresh();
@@ -1060,6 +1076,13 @@ public sealed class HotkeyService : IHotkeyService
             {
                 Interlocked.Increment(ref _mouseHookLosses);
                 _engine.OnMouseHookLost();
+
+                // The loss dropped what the engine owed, so a drain-only hook has nothing left to judge: removed now, in
+                // this renewal, rather than at the next sync.
+                if (!MouseHookWanted)
+                {
+                    RemoveMouseHook();
+                }
             }
 
             Interlocked.Increment(ref _mouseHookRegistrations);

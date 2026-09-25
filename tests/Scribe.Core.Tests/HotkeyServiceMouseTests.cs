@@ -242,6 +242,91 @@ public partial class HotkeyServiceTests
         AwaitMouseHookRemoved(service);
     }
 
+    // G5 (Grok, round 6): after the last mouse binding went, the drain-only mouse hook is removed as soon as the release it
+    // was kept for settles, whichever way: swallowed (Windows up), let through (Windows holds the button), or forgiven by a
+    // new press of the button, with no watchdog upkeep. Until then every pointer move waits for the hook thread. The test
+    // plays the hook callback through MouseHookFilter, with the service's own reconcile signal, between the hook thread's
+    // messages.
+    [Theory]
+    [InlineData("swallowed")]
+    [InlineData("let through")]
+    [InlineData("forgiven by a new press")]
+    public void Start_removes_the_drain_only_mouse_hook_as_soon_as_its_owed_release_settles(string settled)
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var windowsHoldsBack = settled == "let through";
+        var router = new HotkeyCommandRouter(BareButton(MouseButtons.Back), new object(), isLogicallyDown: null, _ => windowsHoldsBack);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
+        service.Start();
+        using var message = new XButtonMessage(0x0001);
+        Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
+        AwaitRenewal(service);
+        Assert.True(service.MouseHookInstalled, "The mouse hook was removed while a swallowed press still owed its release.");
+
+        switch (settled)
+        {
+            case "swallowed":
+                Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
+                break;
+            case "let through":
+                Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
+                break;
+            default:
+                Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message)); // no binding: the user's own
+                break;
+        }
+
+        AwaitMouseHookRemoved(service, allowUpkeep: false);
+    }
+
+    // The same when the debt goes with a lost hook: the renewal that finds the registration gone drops what the engine owed,
+    // and with no binding pressing a mouse button the hook it just registered goes too, in that same renewal.
+    [Fact]
+    public void Start_removes_the_drain_only_mouse_hook_in_the_renewal_that_drops_its_debt()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        service.Start();
+        Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
+        AwaitRenewal(service);
+        Assert.True(service.MouseHookInstalled);
+
+        Assert.True(UnhookWindowsHookEx(service.MouseHookHandle), $"Could not remove the registration (Win32 error {Marshal.GetLastWin32Error()}).");
+        AwaitRenewal(service);
+
+        Assert.Equal(1, service.MouseHookLossesHandled);
+        Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
+        Assert.False(service.MouseHookInstalled, "The drain-only mouse hook outlived the debt the lost hook dropped.");
+    }
+
+    // A button message as the mouse hook callback gets it, and the callback's own decision on it.
+    private static bool PlayMouseCallback(HotkeyService service, int message, XButtonMessage data) =>
+        MouseHookFilter.Swallows(0, message, data.Pointer, service.CurrentEngineForTests!, service.ReconcileSignalForTests);
+
+    // An MSLLHOOKSTRUCT in native memory for an X button (1 for Back, 2 for Forward), as the mouse hook receives one.
+    private sealed class XButtonMessage : IDisposable
+    {
+        public XButtonMessage(uint xButton)
+        {
+            Pointer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.MSLLHOOKSTRUCT>());
+            Marshal.StructureToPtr(new NativeMethods.MSLLHOOKSTRUCT { mouseData = xButton << 16 }, Pointer, fDeleteOld: false);
+        }
+
+        public nint Pointer { get; }
+
+        public void Dispose() => Marshal.FreeHGlobal(Pointer);
+    }
+
     [Fact]
     public void Start_swallows_an_owed_button_release_after_the_last_mouse_binding_is_gone()
     {
