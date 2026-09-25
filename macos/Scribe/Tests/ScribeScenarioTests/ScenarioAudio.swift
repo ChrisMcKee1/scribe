@@ -321,21 +321,31 @@ struct ScenarioDeviceAudio: Sendable {
     /// One buffer holding `frames`, as the device's tap would hand it over.
     func buffer(frames: Range<Int>) -> AVAudioPCMBuffer? {
         guard let format = format(),
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(1, frames.count)))
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(1, frames.count))),
+            fill(buffer, with: frames)
         else {
             return nil
+        }
+        return buffer
+    }
+
+    /// Writes `frames` into `buffer`, which has this device's format, from its first frame on, and sets its length to
+    /// them. False when the buffer cannot hold them.
+    func fill(_ buffer: AVAudioPCMBuffer, with frames: Range<Int>) -> Bool {
+        guard frames.count <= Int(buffer.frameCapacity) else {
+            return false
         }
         buffer.frameLength = AVAudioFrameCount(frames.count)
         switch encoding {
         case .float32:
-            guard let data = buffer.floatChannelData else { return nil }
+            guard let data = buffer.floatChannelData else { return false }
             for (channel, samples) in channels.enumerated() {
                 for (offset, frame) in frames.enumerated() {
                     data[channel][offset] = samples[frame]
                 }
             }
         case .int16Interleaved:
-            guard let data = buffer.int16ChannelData else { return nil }
+            guard let data = buffer.int16ChannelData else { return false }
             let stride = channels.count
             for (channel, samples) in channels.enumerated() {
                 for (offset, frame) in frames.enumerated() {
@@ -343,7 +353,7 @@ struct ScenarioDeviceAudio: Sendable {
                 }
             }
         }
-        return buffer
+        return true
     }
 
     /// The 16-bit value a device would store for `value`. Exact for a fixture's own samples, which are 16-bit values

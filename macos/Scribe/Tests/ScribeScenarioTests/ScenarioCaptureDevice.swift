@@ -7,13 +7,21 @@ import os
 
 /// A capture device that plays a scenario's audio. The production engine opens it as it would the microphone, and the
 /// test streams its buffers from the device's own serial queue, the way AVAudioEngine's tap thread delivers them.
-/// Buffers are built on that queue from sendable sample arrays, so no `AVAudioPCMBuffer` ever crosses threads.
+/// Buffers are filled on that queue from sendable sample arrays, so no `AVAudioPCMBuffer` ever crosses threads.
+///
+/// Every delivery is filled into a buffer the device allocated on its own queue and keeps for as long as it exists
+/// (`DeliveryBuffers`), never into a new one it lets go of straight after. An `AVAudioPCMBuffer`'s sample storage comes
+/// from an allocator the thread sanitizer does not track, so it cannot see storage one queue lets go of being handed
+/// to the next buffer allocated on another: while a device whose recording was stopped goes on delivering beside the
+/// next recording's device, that reuse would read as a race between the two queues' writes. The engine reads a
+/// buffer only while `deliver` runs, so refilling one is safe.
 final class ScenarioCaptureDevice: CaptureDevice, Sendable {
     let audio: ScenarioDeviceAudio
     /// Opened when the engine starts the device, which is when its tap would begin delivering.
     let started = ScenarioLatch()
     private let queue = DispatchQueue(label: "com.scribe.macos.scenario-device", qos: .userInitiated)
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let buffers = DeliveryBuffers()
 
     private struct State: Sendable {
         var deliver: (@Sendable (AVAudioPCMBuffer) -> Void)?
@@ -75,7 +83,10 @@ final class ScenarioCaptureDevice: CaptureDevice, Sendable {
         let stream = ScenarioStream()
         let audio = audio
         let state = state
+        let buffers = buffers
         queue.async {
+            let largest = frameCounts.max() ?? 0
+            let buffer = audio.format().flatMap { buffers.buffer(format: $0, holding: largest) }
             var start = 0
             for (index, count) in frameCounts.enumerated() {
                 if index == signalAt {
@@ -88,7 +99,7 @@ final class ScenarioCaptureDevice: CaptureDevice, Sendable {
                 let end = min(audio.frameCount, start + count)
                 guard start < end else { break }
                 let deliver = state.withLock { $0.deliver }
-                if let deliver, let buffer = audio.buffer(frames: start..<end) {
+                if let deliver, let buffer, audio.fill(buffer, with: start..<end) {
                     deliver(buffer)
                 }
                 start = end
@@ -99,6 +110,29 @@ final class ScenarioCaptureDevice: CaptureDevice, Sendable {
             stream.finished.open()
         }
         return stream
+    }
+}
+
+/// The buffers one device delivers from. Each is allocated on the device's queue the first time a stream needs one
+/// that large, and kept until the device goes, so none of their storage is handed back while a device may be
+/// delivering.
+///
+/// `@unchecked Sendable` because the compiler cannot see the confinement: `allocated` is only read or written in
+/// `buffer(format:holding:)`, which only `ScenarioCaptureDevice.stream` calls, on the device's serial queue, where
+/// every buffer it returns is also filled and delivered.
+private final class DeliveryBuffers: @unchecked Sendable {
+    private var allocated: [AVAudioPCMBuffer] = []
+
+    /// A buffer of `format` that holds at least `frames` frames.
+    func buffer(format: AVAudioFormat, holding frames: Int) -> AVAudioPCMBuffer? {
+        if let kept = allocated.first(where: { $0.format == format && Int($0.frameCapacity) >= frames }) {
+            return kept
+        }
+        guard let made = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(max(1, frames))) else {
+            return nil
+        }
+        allocated.append(made)
+        return made
     }
 }
 
