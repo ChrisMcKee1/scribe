@@ -246,7 +246,7 @@ inserted.
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
-| Hotkey self-healing | Repairs stuck modifiers and mouse buttons, and restores keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
+| Hotkey self-healing | Detects and repairs stuck modifiers, and restores the keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 
