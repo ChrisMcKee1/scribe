@@ -5855,8 +5855,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 + "keeps them in the list so you can switch them back on later."
                 + (libraryTargets.Count > 0
                     ? $" The {libraryTargets.Count} selected "
-                        + $"{(libraryTargets.Count == 1 ? "library is" : "libraries are")} switched off "
-                        + "rather than deleted, because their terms are not stored in your dictionary."
+                        + $"{(libraryTargets.Count == 1 ? "library is" : "libraries are")} not deleted, "
+                        + "because their terms are not stored in your dictionary."
                     : string.Empty),
                 "Delete"))
         {
@@ -5882,10 +5882,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // working terms with it. Copying those into the user's own dictionary first is what makes a
         // partly used library actionable at all, which is the common case for a shipped pack. Core works out which
         // libraries dictation applies before and after the switch from the list's rows, the way Save stores them (by id, so
-        // a hand-placed file that reuses a built-in's id goes on and off with it), and copies a rule dictation applies
-        // today unless leaving it out provably keeps what dictation writes, judged by running the real matcher. So it gets
-        // every loaded library, every row of the list, the review's verdicts, and each dictionary row's written form and
-        // word-boundary rule as well as its spoken form.
+        // a hand-placed file that reuses a built-in's id goes on and off with it), copies what a library switched off still
+        // uses, and keeps on any library whose terms overlap what stays in effect, since switching that one off could change
+        // what dictation writes. So it gets every loaded library, every row of the list, the review's verdicts, and each
+        // dictionary row's written form and word-boundary rule as well as its spoken form.
         var copy = LibrarySwitchOffCopy.Plan(
             _rows.Select(r => new LibrarySwitchOffCopy.Row(r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
             _loadedLibraries,
@@ -5893,7 +5893,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             libraryTargets.Select(t => t.Usage).ToList(),
             verdicts);
 
-        foreach (var (_, row) in libraryTargets)
+        var switchedOff = libraryTargets.Where(t => !copy.KeepsOn(t.Usage.Id, t.Usage.BuiltIn)).ToList();
+        foreach (var (_, row) in switchedOff)
         {
             row!.Enabled = false;
         }
@@ -5924,10 +5925,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 + (choice.Delete ? "removed" : "turned off"));
         }
 
-        if (libraryTargets.Count > 0)
+        if (switchedOff.Count > 0)
         {
-            parts.Add($"{libraryTargets.Count} "
-                + $"{(libraryTargets.Count == 1 ? "library" : "libraries")} turned off");
+            parts.Add($"{switchedOff.Count} "
+                + $"{(switchedOff.Count == 1 ? "library" : "libraries")} turned off");
         }
 
         if (preserved > 0)
@@ -5935,23 +5936,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             parts.Add($"{preserved} still-used {(preserved == 1 ? "term" : "terms")} kept in your dictionary");
         }
 
-        if (parts.Count == 0)
-        {
-            return;
-        }
-
-        var message = $"{string.Join(", ", parts)}. Review the change, then save to apply it.";
+        // A library kept on is named, never its terms: the switch left it as it was.
+        var warnings = new List<string>();
         if (collided > 0)
         {
-            ShowInfo(
-                message + $" {collided} {(collided == 1 ? "term was" : "terms were")} not copied across "
+            warnings.Add($"{collided} {(collided == 1 ? "term was" : "terms were")} not copied across "
                 + "because you already have an entry with the same wording that is switched off. Turn "
-                + "it back on if you still want it.",
-                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                + "it back on if you still want it.");
+        }
+
+        if (copy.KeptOn.Count > 0)
+        {
+            warnings.Add(LibrarySwitchOffCopy.DescribeKeptOn(copy.KeptOn));
+        }
+
+        var sentences = new List<string>();
+        if (parts.Count > 0)
+        {
+            sentences.Add($"{string.Join(", ", parts)}. Review the change, then save to apply it.");
+        }
+
+        sentences.AddRange(warnings);
+        if (sentences.Count == 0)
+        {
             return;
         }
 
-        ShowInfo(message);
+        ShowInfo(
+            string.Join(" ", sentences),
+            warnings.Count > 0 ? Wpf.Ui.Controls.InfoBarSeverity.Warning : Wpf.Ui.Controls.InfoBarSeverity.Success);
     }
 
     // --- History --------------------------------------------------------------------------
