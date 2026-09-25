@@ -72,6 +72,7 @@ public sealed class HotkeyService : IHotkeyService
     // What the log last said about an installation's mouse hook (ReportMouseHookLocked). Guarded by _sync.
     private HookInstallation? _mouseReportFor;
     private bool _mouseReportedInstalled;
+    private bool _mouseReportedDrainOnly;
     private int _mouseReportedError;
     private long _mouseReportedLosses;
 
@@ -604,29 +605,38 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     // Logs each change in an installation's mouse hook once: from the threads that start and watch the hooks, never from
-    // the hook thread, which must not log. Shapes only: installed or removed, a Win32 error code, a count. Callers hold
-    // _sync.
+    // the hook thread, which must not log. Shapes only: installed or removed, why (a binding, or drain-only for a release
+    // still owed), a Win32 error code, a count. Callers hold _sync.
     private void ReportMouseHookLocked(HookInstallation installation)
     {
         if (!ReferenceEquals(_mouseReportFor, installation))
         {
             _mouseReportFor = installation;
             _mouseReportedInstalled = false;
+            _mouseReportedDrainOnly = false;
             _mouseReportedError = 0;
             _mouseReportedLosses = 0;
         }
 
         var installed = installation.MouseHookInstalled;
-        if (installed != _mouseReportedInstalled)
+        var drainOnly = installed && installation.MouseHookDrainOnly;
+        if (installed != _mouseReportedInstalled || drainOnly != _mouseReportedDrainOnly)
         {
             _mouseReportedInstalled = installed;
-            if (installed)
+            _mouseReportedDrainOnly = drainOnly;
+            if (drainOnly)
+            {
+                _logger.LogInformation(
+                    "Mouse hook kept drain-only: no hotkey presses a mouse button, but a swallowed press still owes " +
+                    "its release.");
+            }
+            else if (installed)
             {
                 _logger.LogInformation("Mouse hook installed: a hotkey presses a mouse button.");
             }
             else
             {
-                _logger.LogInformation("Mouse hook removed: no hotkey presses a mouse button.");
+                _logger.LogInformation("Mouse hook removed: no hotkey presses a mouse button and no release is owed.");
             }
         }
 
@@ -807,6 +817,9 @@ public sealed class HotkeyService : IHotkeyService
         /// press still owes its release, which a drain-only hook must still swallow once the last mouse binding is gone.
         /// </summary>
         public bool MouseHookWanted => !_engine.IsRetired && (_engine.UsesMouseButtons || _engine.OwesButtonRelease);
+
+        /// <summary>Any thread: whether the mouse hook is wanted only to drain a release still owed, for the log.</summary>
+        public bool MouseHookDrainOnly => !_engine.IsRetired && !_engine.UsesMouseButtons && _engine.OwesButtonRelease;
 
         /// <summary>
         /// Any thread: the Win32 error of the last failed attempt to register the mouse hook, or 0 once one succeeded or
