@@ -77,9 +77,11 @@ public static class LibraryPrecedence
     /// </para>
     /// <para>
     /// The file name is the library's physical one (<paramref name="fileName"/>, or <c>id + ".csv"</c> when null). They
-    /// differ only for a hand-placed file whose logical id was remapped away from a built-in id: <c>github.csv</c> is
-    /// <c>custom-github</c> in the local state and still ranks as <c>github.csv</c>, where 0.4.3 ranked it, so an
-    /// <c>epsilon.csv</c> beside it keeps winning the spoken forms both supply (review finding A16).
+    /// differ only for a hand-placed file whose id is not its stem: one remapped away from a built-in id, where
+    /// <c>github.csv</c> is <c>custom-github</c> in the local state and still ranks as <c>github.csv</c>, where 0.4.3
+    /// ranked it, so an <c>epsilon.csv</c> beside it keeps winning the spoken forms both supply (review finding A16); and a
+    /// newcomer whose stem another existing file's recorded id already holds (<c>custom-github.csv</c> as
+    /// <c>custom-github-2</c>), which ranks as <c>custom-github.csv</c> the same way.
     /// </para>
     /// </remarks>
     public static int Compare(

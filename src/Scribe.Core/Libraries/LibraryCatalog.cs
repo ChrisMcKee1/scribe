@@ -11,8 +11,9 @@ namespace Scribe.Core.Libraries;
 /// </param>
 /// <param name="State">Whether its file could be used.</param>
 /// <param name="FileName">
-/// Custom: the CSV's file name in the libraries folder, <c>Id + ".csv"</c> except for a hand-placed file remapped
-/// because its stem is a built-in id, which keeps its own name (no physical rename). It is the library's precedence
+/// Custom: the CSV's file name in the libraries folder, <c>Id + ".csv"</c> except for a hand-placed file whose id is not
+/// its stem (remapped because its stem is a built-in id, or suffixed because its stem is an id recorded for another file
+/// that still exists), which keeps its own name (no physical rename). It is the library's precedence
 /// identity (review finding A16) and, without <c>.csv</c>, the id older builds load it as (A15). Built-in: null.
 /// </param>
 /// <param name="ContentHash">

@@ -20,8 +20,11 @@ public static class LibrarySettingKeys
     public const string State = "libraries.state";
 
     /// <summary>
-    /// The ids given to hand-placed custom files whose stem is a built-in id, so a remapped id never changes while its
-    /// file exists: versioned JSON whose format the storage stream owns.
+    /// The ids given to hand-placed custom files whose id is not their stem, so such an id never changes while its file
+    /// exists: a file whose stem is a built-in id (<c>github.csv</c> as <c>custom-github</c>), and a newcomer whose stem
+    /// is an id already recorded for another file that still exists, which takes the next free suffix instead
+    /// (<c>custom-github.csv</c> as <c>custom-github-2</c>; review finding A10 on the storage stream). Versioned JSON whose
+    /// format the storage stream owns.
     /// </summary>
     public const string FileIds = "libraries.file_ids";
 }
@@ -99,7 +102,8 @@ public readonly record struct LibraryChangeCounts(int Created, int Updated, int 
 /// <c>CompleteSave</c> returns for it: recovery never touches its manifest meanwhile, and nothing else advances the
 /// generation. Hand <see cref="Payload"/> to <c>SaveBundle</c>, then pass this to <c>CompleteSave</c> exactly once,
 /// whether or not <c>SaveBundle</c> threw (from a <c>finally</c>): completion reads the committed generation and
-/// finishes or discards accordingly.
+/// finishes or discards accordingly, or, when it cannot read it, reports <see cref="LibrarySaveStatus.CommitUnknown"/>
+/// and leaves the manifest pending until a later read settles it.
 /// </summary>
 public sealed class PreparedLibrarySave
 {
@@ -237,8 +241,11 @@ public enum LibraryPrepareStatus
     /// <summary>
     /// The committed generation's files are not all in place yet, or a manifest recovery must set aside or discard is
     /// held because its files cannot yet be made whole (review finding G14; <see cref="LibraryPrepareResult.Failure"/>
-    /// says why, most often another app holding a file open). Nothing advances the generation until they are, so nothing
-    /// was written; the shell asks the user to close the file, and the next attempt finishes the earlier work first.
+    /// says why, most often another app holding a file open), or an earlier Save's outcome is not known yet
+    /// (<see cref="LibrarySaveStatus.CommitUnknown"/>: the stored generation could not be read, and
+    /// <see cref="LibraryPrepareResult.Failure"/> is <see cref="LibraryIoFailure.None"/>). Nothing advances the generation
+    /// until they are settled, so nothing was written; the shell asks the user to close the file, or to try again in a
+    /// moment, and the next attempt finishes the earlier work first.
     /// </summary>
     PreviousSaveUnfinished,
 
@@ -258,7 +265,8 @@ public enum LibraryPrepareStatus
 /// <param name="OutsideEditIds">For <see cref="LibraryPrepareStatus.OutsideEdit"/>: the libraries changed outside Scribe. Empty otherwise.</param>
 /// <param name="Failure">
 /// For <see cref="LibraryPrepareStatus.Failed"/>: why staging failed. For
-/// <see cref="LibraryPrepareStatus.PreviousSaveUnfinished"/>: why the earlier Save's files are not in place.
+/// <see cref="LibraryPrepareStatus.PreviousSaveUnfinished"/>: why the earlier Save's files are not in place, or
+/// <see cref="LibraryIoFailure.None"/> while that Save's outcome is not known yet (<see cref="LibrarySaveStatus.CommitUnknown"/>).
 /// </param>
 public sealed record LibraryPrepareResult(
     LibraryPrepareStatus Status,
@@ -287,6 +295,20 @@ public enum LibrarySaveStatus
     /// discarded; reload.
     /// </summary>
     Superseded,
+
+    /// <summary>
+    /// The outcome is not known: the settings transaction may have committed, but the stored generation could not be read
+    /// afterwards (review finding A8 on the storage stream), so reporting <see cref="NotCommitted"/> could call a durable
+    /// Save unsaved. The preparation's manifest stays pending and is never discarded on this evidence: a later read of the
+    /// generation settles it by the journal's ordinary rules, installing it when this Save's generation is the one stored
+    /// and discarding it when the base is. Until then new Saves are fenced
+    /// (<see cref="LibraryPrepareStatus.PreviousSaveUnfinished"/>, with no <see cref="LibraryIoFailure"/>), and the
+    /// published vocabulary scope stays at the narrowed intersection it took at prepare: nothing this Save grants, and
+    /// nothing it revokes or deletes. The workspace keeps the draft unsaved (the shell does not mark it saved), and the
+    /// shell says the Save could not be confirmed and that Scribe will finish it.
+    /// <see cref="LibrarySaveOutcome.CommittedGeneration"/> is the base generation, the last one known to be committed.
+    /// </summary>
+    CommitUnknown,
 }
 
 /// <summary>What a kept version is.</summary>
@@ -326,10 +348,17 @@ public sealed record LibraryKeptVersion(string LibraryId, LibraryKeptVersionKind
 
 /// <summary>The result of completing a Save.</summary>
 /// <param name="Status">Where the Save stands.</param>
-/// <param name="CommittedGeneration">The stored generation after completion.</param>
+/// <param name="CommittedGeneration">
+/// The stored generation after completion; for <see cref="LibrarySaveStatus.CommitUnknown"/>, which could not read it,
+/// the base generation, the last one known to be committed.
+/// </param>
 /// <param name="FilesAwaitingRelease">Files of the committed generation not in place yet.</param>
 /// <param name="KeptVersions">Versions kept rather than overwritten; empty when there were none.</param>
-/// <param name="Failure">Why files are not in place, when some are not; the Save stands regardless.</param>
+/// <param name="Failure">
+/// Why files are not in place, when some are not; the Save stands regardless. <see cref="LibraryIoFailure.None"/> for
+/// <see cref="LibrarySaveStatus.CommitUnknown"/>: the read that failed was the settings store's, which the log describes
+/// by its shape.
+/// </param>
 public sealed record LibrarySaveOutcome(
     LibrarySaveStatus Status,
     long CommittedGeneration,

@@ -1,9 +1,13 @@
 namespace Scribe.Core.Libraries;
 
 /// <summary>
-/// The names one library has, which differ only for a hand-placed file remapped away from a built-in id: its logical
+/// The names one library has, which differ only for a hand-placed file whose id is not its stem: its logical
 /// <see cref="Id"/>, which the local state refers to; its physical <see cref="FileName"/>, which decides its precedence
-/// among custom libraries; and <see cref="LegacyId"/>, the id 0.4.3 and 0.4.2 load it as.
+/// among custom libraries; and <see cref="LegacyId"/>, the id 0.4.3 and 0.4.2 load it as. That is a file remapped away
+/// from a built-in id, and a newcomer whose stem is an id recorded for another file that still exists, which takes the
+/// next free suffix instead (a hand-placed <c>custom-github.csv</c> beside a <c>github.csv</c> recorded as
+/// <c>custom-github</c> is <c>custom-github-2</c>, and older builds still load it as <c>custom-github</c>; review finding
+/// A10 on the storage stream).
 /// </summary>
 /// <remarks>
 /// <para>

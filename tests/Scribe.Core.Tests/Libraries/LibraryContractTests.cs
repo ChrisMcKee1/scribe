@@ -225,6 +225,22 @@ public sealed class LibraryContractTests
         }
     }
 
+    // CommitUnknown (review finding A8 on the storage stream) was appended, so every earlier status keeps its number.
+    [Fact]
+    public void Save_statuses_are_only_ever_appended()
+    {
+        var expected = new (LibrarySaveStatus Status, int Number)[]
+        {
+            (LibrarySaveStatus.Applied, 0),
+            (LibrarySaveStatus.AppliedAwaitingRelease, 1),
+            (LibrarySaveStatus.NotCommitted, 2),
+            (LibrarySaveStatus.Superseded, 3),
+            (LibrarySaveStatus.CommitUnknown, 4),
+        };
+
+        Assert.Equal(expected, Enum.GetValues<LibrarySaveStatus>().Select(status => (status, (int)status)).ToArray());
+    }
+
     [Fact]
     public void The_empty_vocabulary_permits_nothing()
     {

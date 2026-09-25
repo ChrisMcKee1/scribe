@@ -15,8 +15,10 @@ namespace Scribe.Core.Libraries;
 /// <param name="Id">
 /// The stable id the enabled lists, AI permissions and legacy markers refer to. Built-ins: the eleven 0.4.3 ids, or a
 /// dotted <c>scribe.&lt;name&gt;</c> for any built-in added later. Custom: the file stem for libraries that existed
-/// before this version, <c>custom-&lt;slug&gt;</c> for libraries created from now on, and <c>custom-&lt;stem&gt;</c>
-/// for a hand-placed file whose stem is a built-in id. Compared case-insensitively.
+/// before this version, <c>custom-&lt;slug&gt;</c> for libraries created from now on, <c>custom-&lt;stem&gt;</c>
+/// for a hand-placed file whose stem is a built-in id, and the stem with the next free suffix for a hand-placed file
+/// whose stem is an id recorded for another file that still exists (<c>custom-github-2</c>). Compared
+/// case-insensitively.
 /// </param>
 /// <param name="BuiltIn">Whether the library ships with Scribe.</param>
 /// <param name="Name">The display name; unique names are suggested, never forced on an untouched legacy name.</param>

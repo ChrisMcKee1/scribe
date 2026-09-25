@@ -12,7 +12,8 @@ namespace Scribe.Core.Libraries;
 /// generation; on the dispatcher, <c>ISettingsRepository.SaveBundle</c> commits <see cref="PreparedLibrarySave.Payload"/>
 /// with the settings; off it, <see cref="CompleteSave"/> installs or discards by the committed generation, whatever
 /// <c>SaveBundle</c> reported, and the new vocabulary is published; back on the dispatcher, the workspace marks the
-/// captured revision saved.
+/// captured revision saved (never for <see cref="LibrarySaveStatus.CommitUnknown"/>, which keeps the draft unsaved until
+/// a later read settles the Save).
 /// </para>
 /// <para>
 /// A fence covers a Save's whole lifetime (review finding A1). From the moment <see cref="PrepareSave"/> returns
@@ -23,7 +24,9 @@ namespace Scribe.Core.Libraries;
 /// only fail for a reason outside this process. A committed generation whose files are not all in place yet (a target
 /// another app holds open, access denied, a full disk) is unresolved, and stays so until recovery installs them: until
 /// then <see cref="PrepareSave"/> returns <see cref="LibraryPrepareStatus.PreviousSaveUnfinished"/>, adoption still
-/// waits, and the wrappers still refuse. There are no chained manifests.
+/// waits, and the wrappers still refuse. A Save whose outcome is unknown (<see cref="LibrarySaveStatus.CommitUnknown"/>)
+/// is fenced the same way, with the narrowed vocabulary scope kept, until a read of the stored generation settles its
+/// manifest. There are no chained manifests.
 /// </para>
 /// <para>
 /// One read path (review finding G2). While a manifest of the stored generation is pending, whether it is this process's
@@ -69,8 +72,11 @@ public interface ILibraryCatalogStore
     /// is brought to its committed result from whatever it finds on disk (each one is idempotent, so a retry, a crash
     /// and a second process start all resume it), versions found outside Scribe are kept rather than overwritten, and
     /// the manifest is retired once every operation is done. Equal to the base: the preparation is discarded. Anything
-    /// else: the Save was superseded and the preparation is discarded. Ends the preparation's live state in every case.
-    /// Call it exactly once per prepared Save, after <c>SaveBundle</c> returned or threw.
+    /// else: the Save was superseded and the preparation is discarded. When the stored generation cannot be read, the
+    /// outcome is <see cref="LibrarySaveStatus.CommitUnknown"/>: the manifest stays pending, never discarded on that
+    /// evidence, and a later read of the generation settles it (review finding A8 on the storage stream). Ends the
+    /// preparation's live state in every case. Call it exactly once per prepared Save, after <c>SaveBundle</c> returned
+    /// or threw.
     /// </summary>
     LibrarySaveOutcome CompleteSave(PreparedLibrarySave prepared);
 
