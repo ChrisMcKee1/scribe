@@ -44,7 +44,7 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 - **🔒 Private by architecture, not by promise.** Audio is captured and transcribed locally, then
   discarded unless you explicitly enable local audio history, which keeps a compact copy for at
   most 7 days and 250 MB.
-- **⚡ Two keys, your choice.** Hold **Page Down** (or any key you pick), talk, release. **Page Up**
+- **⚡ Two keys, your choice.** Hold **Page Down** (or any key or spare mouse button you pick), talk, release. **Page Up**
   is set up too, for dictation that always skips AI cleanup. No Page Down key on your laptop? Most
   put it on Fn with the Down arrow. Present with a clicker? Its buttons send those same two keys, so
   pick other keys in Settings. Prefer hands-free? Toggle mode ends the dictation by itself when you
@@ -240,14 +240,14 @@ inserted, and the space Scribe adds after each dictation.
 
 | Feature | What it does |
 |---|---|
-| Push-to-talk | Separate AI-capable and dictation-only hotkeys (hold Page Down and hold Page Up on a new install), each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind and a one-click restore of the defaults |
+| Push-to-talk | Separate AI-capable and dictation-only hotkeys (hold Page Down and hold Page Up on a new install), each hold or toggle on any key, two-key chord, or a spare mouse button (middle, back or forward, alone or after a key), with a capture UI that pauses dictation while you rebind and a one-click restore of the defaults |
 | Microphone choice | Follows the Windows default input device (the one Windows Settings shows under Sound, Input) from your next dictation, with no restart; or pick any microphone in Settings or from the tray's Microphone menu. A chosen microphone that is unplugged falls back to the Windows default, and Scribe tells you once |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
-| Hotkey self-healing | Detects and repairs stuck modifiers and silently removed keyboard hooks, so push-to-talk keeps working across long sessions |
+| Hotkey self-healing | Repairs stuck modifiers and mouse buttons, and restores keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 
