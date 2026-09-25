@@ -12,8 +12,9 @@ namespace Scribe.Core.Tests.Libraries;
 /// <summary>
 /// The dictionary cleanup switches a library off only when that cannot change what dictation writes: it copies the
 /// library's still-used rules into the dictionary, and keeps on, with nothing copied, any library whose spoken forms
-/// overlap a rule that stays in effect, a rule copied from another library, or one another. Most cases compare finished
-/// text before and after the switch through the real repository, composer and post-processor.
+/// overlap a rule that stays in effect, a rule copied from another library, or one another, or whose rows that would go
+/// meet a copy or a row kept on, directly or through rules that stay in effect. Most cases compare finished text before
+/// and after the switch through the real repository, composer and post-processor.
 /// </summary>
 public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 {
@@ -54,15 +55,21 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Only_the_row_dictation_applies_is_copied_when_a_library_repeats_a_spoken_form()
+    public void A_repeated_spoken_form_is_never_copied_and_keeps_its_library_on_beside_a_copy()
     {
-        // A second row for the same spoken form never applies (the first wins), so keeping it keeps nothing dictation uses.
+        // A second row for the same spoken form never applies (the first wins), so keeping only it keeps nothing dictation
+        // uses: nothing is copied and the library goes off. Keeping both copies the first, and the second then goes as a
+        // row equal to a copy, which the round 5 rule refuses however harmless this one is, so the library stays on.
         var team = new DictionaryLibrary("team-terms", "Team terms", "Custom", Description: null, BuiltIn: false,
             [DictionaryEntry.New("acme", "Acme"), DictionaryEntry.New("acme", "ACME")]);
         var keepsTheSecondRow = new LibraryUsage(team.Id, team.Name, [team.Entries[1]], UnusedCount: 1, BuiltIn: false);
 
-        Assert.Empty(PlanWithTicked([], [team], [keepsTheSecondRow]).Copies);
-        Assert.Equal(["acme=Acme"], Describe(PlanWithTicked([], [team], [Usage(team, unused: 1)]).Copies));
+        var secondOnly = PlanWithTicked([], [team], [keepsTheSecondRow]);
+        Assert.Empty(secondOnly.Copies);
+        Assert.Empty(secondOnly.KeptOn);
+
+        LibraryUsage[] both = [Usage(team, unused: 1)];
+        AssertKeptOnAndUnchanged(PlanWithTicked([], [team], both), "team-terms", [], [team], both, ["acme", "use acme"]);
     }
 
     [Fact]
@@ -144,8 +151,9 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     public void A_dictionary_row_that_is_off_blocks_its_copy_and_is_reported()
     {
         // The row is switched off, so it applies nothing and overlaps nothing in effect, but Save refuses a second row with
-        // its spoken form: that term is reported instead of copied, and the library still goes off.
-        var team = Library("team-terms", builtIn: false, ("north star", "North Star"), ("retro", "Retro"));
+        // its spoken form: that term is reported instead of copied, and the library still goes off. The blocked term goes
+        // with the library, so it must not meet the copy either; "north star" and "kube" share no letter at their ends.
+        var team = Library("team-terms", builtIn: false, ("north star", "North Star"), ("kube", "Kubernetes"));
         LibrarySwitchOffCopy.Row[] rows =
         [
             new(" north star", "North star", WholeWord: true, Enabled: false),
@@ -154,9 +162,24 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 
         var plan = PlanWithTicked(rows, [team], [Usage(team, unused: 9)]);
 
-        Assert.Equal(["retro=Retro"], Describe(plan.Copies));
+        Assert.Equal(["kube=Kubernetes"], Describe(plan.Copies));
         Assert.Equal(1, plan.Collided);
         Assert.Empty(plan.KeptOn);
+    }
+
+    [Fact]
+    public void A_blocked_term_that_runs_into_a_copy_keeps_its_library_on()
+    {
+        // The same, with "retro" beside "north star": the blocked term would go and it ends with the letter the copy begins
+        // with, so the library stays on and nothing is reported.
+        var team = Library("team-terms", builtIn: false, ("north star", "North Star"), ("retro", "Retro"));
+        LibrarySwitchOffCopy.Row[] rows = [new(" north star", "North star", WholeWord: true, Enabled: false)];
+
+        var plan = PlanWithTicked(rows, [team], [Usage(team, unused: 9)]);
+
+        Assert.Empty(plan.Copies);
+        Assert.Equal(0, plan.Collided);
+        Assert.Equal(["team-terms"], plan.KeptOn.Select(k => k.Id));
     }
 
     // --- Kept on: its spoken forms overlap something that stays in effect ---
@@ -319,12 +342,13 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     // The same file without its unused row, for a history that mentions both of its rows.
     private const string FullyUsedTwinFile = "# name: Team GitHub\npattern,replacement\nget hub,GitHub Enterprise\nkube,Kubernetes\n";
 
-    // A file whose spoken forms overlap none of the built-in's.
+    // A file whose spoken forms meet none of the built-in's, nor one another: none contains another or ends with a letter
+    // that begins another (the built-in's forms begin with c, d, g, o, r or s, and none ends with q or z).
     private const string SeparateTwinFile =
-        "# name: Team GitHub\npattern,replacement\nkube,Kubernetes\nnorth star,North Star\nteam sync,Team Sync\n";
+        "# name: Team GitHub\npattern,replacement\nzulu,Zulu\nquiz,Quiz\nvivid,Vivid\n";
 
     private static readonly string[] TwinInputs =
-        ["get hub", "kube", "push get hub and kube", "git hub", "github", "north star", "team sync"];
+        ["get hub", "kube", "push get hub and kube", "git hub", "github", "github copilot", "zulu", "quiz", "vivid"];
 
     [Fact]
     public void Unticking_a_hand_placed_twin_whose_built_in_row_is_off_keeps_both_on_when_they_overlap()
@@ -338,7 +362,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             switchOff: ("github", BuiltIn: false),
             transcript: "GitHub has the Kubernetes charts");
 
-        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "north star", "Team Sync"], before);
+        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "GitHub Copilot", "zulu", "quiz", "vivid"], before);
         Assert.Equal(before, after);
         Assert.Empty(plan.Copies);
         Assert.Equal([("github", false)], plan.KeptOn.Select(k => (k.Id, k.BuiltIn)));
@@ -354,7 +378,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             switchOff: ("github", BuiltIn: true),
             transcript: "GitHub Enterprise has the Kubernetes charts");
 
-        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "north star", "team sync"], before);
+        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "GitHub Copilot", "zulu", "quiz", "vivid"], before);
         Assert.Equal(before, after);
         Assert.Empty(plan.Copies);
         Assert.Equal([("github", true)], plan.KeptOn.Select(k => (k.Id, k.BuiltIn)));
@@ -363,19 +387,15 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     [Fact]
     public void Unticking_a_hand_placed_twin_whose_built_in_row_is_off_takes_both_off_and_copies_what_each_still_uses()
     {
-        // The same switch with a file that overlaps nothing of the built-in's: both go off, and the rules dictation applied
-        // from each that the history shows in use are copied.
+        // The same switch with a file whose forms meet nothing of the built-in's, and a history that shows none of the
+        // built-in's terms: both go off, the file's two used rows are copied, and everything else of both is dropped.
         var (before, after, plan) = SwitchOffThroughTheService(
             [("github.csv", SeparateTwinFile)],
             [("github", BuiltIn: true, Ticked: false), ("github", BuiltIn: false, Ticked: true)],
             switchOff: ("github", BuiltIn: false),
-            transcript: "GitHub has the Kubernetes charts for North Star");
+            transcript: "Zulu and Quiz time");
 
-        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "North Star", "Team Sync"], before);
-        Assert.Empty(plan.KeptOn);
-        AssertCopiesWhatEachTwinStillUses(plan);
-        Assert.Equal(before[..^1], after[..^1]);
-        Assert.Equal("team sync", after[^1]);
+        AssertBothTwinsWentOff(before, after, plan);
     }
 
     [Fact]
@@ -385,26 +405,35 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             [("github.csv", SeparateTwinFile)],
             [("github", BuiltIn: true, Ticked: true), ("github", BuiltIn: false, Ticked: false)],
             switchOff: ("github", BuiltIn: true),
-            transcript: "GitHub has the Kubernetes charts for North Star");
+            transcript: "Zulu and Quiz time");
 
-        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub", "North Star", "Team Sync"], before);
-        Assert.Empty(plan.KeptOn);
-        AssertCopiesWhatEachTwinStillUses(plan);
-        Assert.Equal(before[..^1], after[..^1]);
-        Assert.Equal("team sync", after[^1]);
+        AssertBothTwinsWentOff(before, after, plan);
     }
 
-    // The built-in's "get hub" and the file's "kube" and "north star" are what dictation applied and the history shows in
-    // use; the file's unused "team sync" is dropped, and so is a built-in row the history never shows. The built-in's other
-    // rows the history mentions ("git hub" and "github" also write GitHub) are copied too, so no exact list is pinned here.
-    private static void AssertCopiesWhatEachTwinStillUses(LibrarySwitchOffCopy.Result plan)
+    private static void AssertBothTwinsWentOff(string[] before, string[] after, LibrarySwitchOffCopy.Result plan)
     {
-        var copies = Describe(plan.Copies);
-        Assert.Contains("get hub=GitHub", copies);
-        Assert.Contains("kube=Kubernetes", copies);
-        Assert.Contains("north star=North Star", copies);
-        Assert.DoesNotContain("team sync=Team Sync", copies);
-        Assert.DoesNotContain("github copilot=GitHub Copilot", copies);
+        Assert.Equal(["GitHub", "kube", "push GitHub and kube", "GitHub", "GitHub", "GitHub Copilot", "Zulu", "Quiz", "Vivid"], before);
+        Assert.Empty(plan.KeptOn);
+        Assert.Equal(["zulu=Zulu", "quiz=Quiz"], Describe(plan.Copies));
+        Assert.Equal(["get hub", "kube", "push get hub and kube", "git hub", "github", "github copilot", "Zulu", "Quiz", "vivid"], after);
+    }
+
+    [Fact]
+    public void The_shipped_GitHub_library_stays_on_when_its_used_and_unused_terms_nest()
+    {
+        // Grok's G4 in shipped data. The history shows GitHub, so "get hub", "git hub" and "github" are kept, while
+        // "github copilot" and the other longer forms around "github" are not. Copying the kept ones and dropping the rest
+        // would turn "github copilot" from "GitHub Copilot" into "GitHub copilot", so the library stays on.
+        var (before, after, plan) = SwitchOffThroughTheService(
+            [],
+            [("github", BuiltIn: true, Ticked: true)],
+            switchOff: ("github", BuiltIn: true),
+            transcript: "GitHub is where the code lives");
+
+        Assert.Equal(["GitHub", "kube", "push GitHub and kube", "GitHub", "GitHub", "GitHub Copilot", "zulu", "quiz", "vivid"], before);
+        Assert.Equal(before, after);
+        Assert.Empty(plan.Copies);
+        Assert.Equal([("github", true)], plan.KeptOn.Select(k => (k.Id, k.BuiltIn)));
     }
 
     [Fact]
@@ -600,16 +629,213 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         Assert.NotEqual(before, Dictated([zebraK], [aardvark], inputs));
     }
 
+    // --- Round 5, Grok's G4 and G5: inside one library, a row the switch drops can stand in a copied row's way. The
+    // matcher takes the match that starts first, then the longer one, so a dropped row that contains a copied row, sits
+    // inside it, or runs into it (one ends where the other begins) decides texts the copy would take once it is gone. ---
+
+    [Fact]
+    public void Round_5_Grok_G4_a_dropped_row_that_contains_a_copied_row_of_its_library()
+    {
+        // "kilo" writes "kilogram" (whole word) and the review finds it unused; "k" writes "K" anywhere in a word and is
+        // used. Today "kilo" is "kilogram", the longer match at the same place; with the library off and only "k" copied,
+        // "kilo" would become "Kilo", the copy writing where the library never let it.
+        var kilo = DictionaryEntry.New("kilo", "kilogram");
+        var k = DictionaryEntry.New("k", "K", wholeWord: false);
+        var team = new DictionaryLibrary("team", "team", "Custom", Description: null, BuiltIn: false, [kilo, k]);
+        var usage = UsageFromHistory([team], "the K team", "team");
+        Assert.Equal([k], usage.KeepTerms);
+        LibraryUsage[] asked = [usage];
+
+        var plan = PlanWithTicked([], [team], asked);
+
+        string[] inputs = ["kilo", "k", "a kilo of k"];
+        string[] before = ["kilogram", "K", "a kilogram of K"];
+        Assert.Equal(before, Dictated([], [team], inputs));
+        Assert.Equal(before, Dictated(plan.Copies, StillOn([team], asked, plan), inputs));
+        AssertKeptOnAndUnchanged(plan, "team", [], [team], asked, inputs, before);
+        Assert.Equal(["Kilo", "K", "a Kilo of K"], Dictated([k], [], inputs));
+    }
+
+    [Fact]
+    public void Round_5_Grok_G5_a_dropped_row_that_runs_into_a_copied_row_of_its_library()
+    {
+        // Neither spoken form contains the other, but "ab" ends where "bc" begins, and both match anywhere in a word. The
+        // review finds "ab" unused and "bc" used. Today the match that starts first wins, so "abc" is "Yc"; with the
+        // library off and only "bc" copied, it would become "aX".
+        var ab = DictionaryEntry.New("ab", "Y", wholeWord: false);
+        var bc = DictionaryEntry.New("bc", "X", wholeWord: false);
+        var team = new DictionaryLibrary("team", "team", "Custom", Description: null, BuiltIn: false, [ab, bc]);
+        var usage = UsageFromHistory([team], "the X factor", "team");
+        Assert.Equal([bc], usage.KeepTerms);
+        LibraryUsage[] asked = [usage];
+
+        var plan = PlanWithTicked([], [team], asked);
+
+        string[] inputs = ["abc", "bc", "ab", "abcabc"];
+        string[] before = ["Yc", "X", "Y", "YcYc"];
+        Assert.Equal(before, Dictated([], [team], inputs));
+        Assert.Equal(before, Dictated(plan.Copies, StillOn([team], asked, plan), inputs));
+        AssertKeptOnAndUnchanged(plan, "team", [], [team], asked, inputs, before);
+        Assert.Equal(["aX", "X", "ab", "aXaX"], Dictated([bc], [], inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_runs_into_another_librarys_copy_keeps_its_library_on()
+    {
+        // Both are switched off: alpha's unused "ab" would go and beta's used "bc" would be copied. "abc" is "Yc" today; had
+        // alpha gone, the copy would take it and write "aX". So alpha stays on, beta goes with its copy, and the copy, ahead
+        // of alpha now, still loses "abc" to the match that starts first.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("ab", "Y", wholeWord: false)]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false,
+            [DictionaryEntry.New("bc", "X", wholeWord: false), DictionaryEntry.New("unused term", "Unused Term")]);
+        LibraryUsage[] asked =
+        [
+            new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false),
+            new(beta.Id, beta.Name, [beta.Entries[0]], UnusedCount: 1, BuiltIn: false),
+        ];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        Assert.Equal(["alpha"], plan.KeptOn.Select(k => k.Id));
+        Assert.Equal(["bc=X"], Describe(plan.Copies));
+        string[] inputs = ["abc", "bc", "ab"];
+        Assert.Equal(["Yc", "X", "Y"], Dictated([], [alpha, beta], inputs));
+        Assert.Equal(["Yc", "X", "Y"], Dictated(plan.Copies, StillOn([alpha, beta], asked, plan), inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_runs_into_a_row_of_a_library_kept_on_keeps_its_library_on()
+    {
+        // Alpha and gamma are asked about. Alpha's "bc" shares its spoken form with beta, which stays on, so alpha is kept
+        // on. Gamma's unused "ab" would then go beside alpha's "bc", which stays in effect: "abc" is "Yc" today and would
+        // become "aX". Nothing of alpha is copied, so only its being kept on finds this.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("bc", "X", wholeWord: false)]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("bc", "Z", wholeWord: false)]);
+        var gamma = new DictionaryLibrary("gamma", "gamma", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("ab", "Y", wholeWord: false)]);
+        DictionaryLibrary[] ticked = [alpha, beta, gamma];
+        LibraryUsage[] asked =
+        [
+            new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false),
+            new(gamma.Id, gamma.Name, [], UnusedCount: 1, BuiltIn: false),
+        ];
+
+        var plan = PlanWithTicked([], ticked, asked);
+
+        Assert.Equal(["alpha", "gamma"], plan.KeptOn.Select(k => k.Id));
+        Assert.Empty(plan.Copies);
+        string[] inputs = ["abc", "bc", "ab"];
+        Assert.Equal(["Yc", "X", "Y"], Dictated([], ticked, inputs));
+        Assert.Equal(["Yc", "X", "Y"], Dictated(plan.Copies, StillOn(ticked, asked, plan), inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_reaches_its_own_copy_through_a_rule_that_stays_keeps_its_library_on()
+    {
+        // Alpha's unused "ab" and used "cd" do not meet, but beta, which stays on, has "bc", which meets both. Today "abcd"
+        // is "YZ": "ab" starts first and pushes "bc" out, which leaves "cd" free to apply. Without "ab", "bc" would apply and
+        // push the copy of "cd" out, so "abcd" would become "aXd". So alpha stays on.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false,
+            [DictionaryEntry.New("ab", "Y", wholeWord: false), DictionaryEntry.New("cd", "Z", wholeWord: false)]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("bc", "X", wholeWord: false)]);
+        LibraryUsage[] asked = [new(alpha.Id, alpha.Name, [alpha.Entries[1]], UnusedCount: 1, BuiltIn: false)];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        string[] inputs = ["abcd", "bcd", "cd", "ab"];
+        AssertKeptOnAndUnchanged(plan, "alpha", [], [alpha, beta], asked, inputs, before: ["YZ", "Xd", "Z", "Y"]);
+        Assert.Equal(["aXd", "Xd", "Z", "ab"], Dictated([alpha.Entries[1]], [beta], inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_reaches_its_own_copy_through_two_rules_that_stay_keeps_its_library_on()
+    {
+        // Alpha's unused "ab" meets only beta's "bc", and its used "de" only beta's "cd", but "bc" and "cd" meet each other.
+        // Today "abcde" is "YZe": "ab" pushes "bc" out, so "cd" applies and pushes "de" out. Without "ab", "bc" would push
+        // "cd" out and let the copy of "de" apply, writing "aXW". So alpha stays on.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false,
+            [DictionaryEntry.New("ab", "Y", wholeWord: false), DictionaryEntry.New("de", "W", wholeWord: false)]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false,
+            [DictionaryEntry.New("bc", "X", wholeWord: false), DictionaryEntry.New("cd", "Z", wholeWord: false)]);
+        LibraryUsage[] asked = [new(alpha.Id, alpha.Name, [alpha.Entries[1]], UnusedCount: 1, BuiltIn: false)];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        string[] inputs = ["abcde", "cde", "de", "ab"];
+        AssertKeptOnAndUnchanged(plan, "alpha", [], [alpha, beta], asked, inputs, before: ["YZe", "Ze", "W", "Y"]);
+        Assert.Equal(["aXW", "Ze", "W", "ab"], Dictated([alpha.Entries[1]], [beta], inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_reaches_a_library_kept_on_through_a_dictionary_row_keeps_its_library_on()
+    {
+        // Gamma stays on, since its unused "kx" contains its used "k". Alpha's unused "ab" meets no row of gamma's, but the
+        // dictionary's "bc" meets both "ab" and gamma's unused "cd": today "abcd" is "YZ", and without "ab" the dictionary's
+        // "bc" would push gamma's "cd" out of it and write "aXd". So alpha stays on too, though the row it reaches is one
+        // gamma would not have copied.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("ab", "Y", wholeWord: false)]);
+        var gamma = new DictionaryLibrary("gamma", "gamma", "Custom", Description: null, BuiltIn: false,
+        [
+            DictionaryEntry.New("k", "K1", wholeWord: false),
+            DictionaryEntry.New("kx", "KX", wholeWord: false),
+            DictionaryEntry.New("cd", "Z", wholeWord: false),
+        ]);
+        DictionaryEntry[] dictionary = [DictionaryEntry.New("bc", "X", wholeWord: false)];
+        LibraryUsage[] asked =
+        [
+            new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false),
+            new(gamma.Id, gamma.Name, [gamma.Entries[0]], UnusedCount: 2, BuiltIn: false),
+        ];
+
+        var plan = PlanWithTicked(Rows(dictionary), [alpha, gamma], asked);
+
+        Assert.Equal(["alpha", "gamma"], plan.KeptOn.Select(k => k.Id));
+        Assert.Empty(plan.Copies);
+        string[] inputs = ["abcd", "bcd", "cd", "ab", "kx"];
+        Assert.Equal(["YZ", "Xd", "Z", "Y", "KX"], Dictated(dictionary, [alpha, gamma], inputs));
+        Assert.Equal(["YZ", "Xd", "Z", "Y", "KX"], Dictated(dictionary, StillOn([alpha, gamma], asked, plan), inputs));
+        // Had alpha gone with gamma kept on, gamma's "cd" would lose "abcd".
+        Assert.Equal(["aXd", "Xd", "Z", "ab", "KX"], Dictated(dictionary, [gamma], inputs));
+    }
+
+    [Fact]
+    public void A_row_that_goes_and_runs_into_an_unused_row_of_a_library_kept_on_keeps_its_library_on()
+    {
+        // Alpha stays on, since its unused "bcd" contains its used "cd". Gamma's unused "ab" meets none of alpha's copies and
+        // nothing else is on, but it runs into "bcd", which stays on with alpha: today "abcd" is "YZ", and without "ab",
+        // "bcd" would take it and write "aW". So gamma stays on too.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false,
+            [DictionaryEntry.New("cd", "Z", wholeWord: false), DictionaryEntry.New("bcd", "W", wholeWord: false)]);
+        var gamma = new DictionaryLibrary("gamma", "gamma", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("ab", "Y", wholeWord: false)]);
+        LibraryUsage[] asked =
+        [
+            new(alpha.Id, alpha.Name, [alpha.Entries[0]], UnusedCount: 1, BuiltIn: false),
+            new(gamma.Id, gamma.Name, [], UnusedCount: 1, BuiltIn: false),
+        ];
+
+        var plan = PlanWithTicked([], [alpha, gamma], asked);
+
+        Assert.Equal(["alpha", "gamma"], plan.KeptOn.Select(k => k.Id));
+        Assert.Empty(plan.Copies);
+        string[] inputs = ["abcd", "bcd", "cd", "ab"];
+        Assert.Equal(["YZ", "W", "Z", "Y"], Dictated([], [alpha, gamma], inputs));
+        Assert.Equal(["YZ", "W", "Z", "Y"], Dictated(plan.Copies, StillOn([alpha, gamma], asked, plan), inputs));
+        // Had gamma gone with alpha kept on, alpha's "bcd" would take "abcd".
+        Assert.Equal(["aW", "W", "Z", "ab"], Dictated([], [alpha], inputs));
+    }
+
     // --- The property ---
 
     [Fact]
     public void Across_random_libraries_the_switch_writes_exactly_what_it_promises_in_any_text()
     {
         // Families of spoken forms that meet the same text in different ways: one inside another ("hub" in "get hub", "k" in
-        // "kube"), the Greek final sigma (one key with its capital and medial forms, another letter to the matcher), the
-        // Kelvin sign and the capital sharp s (keys of their own, the same letters as k and ß to the matcher), dotted and
-        // dotless i, the long s, and written forms that contain their own spoken form ("New York", "New K"), so the guard
-        // against expanding text already in its written form takes part.
+        // "kube", "ilo" in "kilo"), one running into another ("ab" ends where "bc" begins, and "bc" where "cd" does), the
+        // Greek final sigma (one key with its capital and medial forms, another letter to the matcher), the Kelvin sign and
+        // the capital sharp s (keys of their own, the same letters as k and ß to the matcher), dotted and dotless i, the long
+        // s, and written forms that contain their own spoken form ("New York", "New K"), so the guard against expanding text
+        // already in its written form takes part. A library that takes a family often keeps one of its forms and drops
+        // another, which is how a dropped row comes to stand in a copied row's way (Grok's G4 and G5), and a rule that stays
+        // on between them links the two ("ab" gone beside "bc" and a copy of "cd").
         (string Spoken, string[] Written)[][] families =
         [
             [("acme", ["Acme", "ACME"])],
@@ -622,7 +848,12 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             [("sun", ["Sun", "SUN"]), ("\u017Fun", ["Sun", "SUN"])],
             [("kube", ["Kubernetes", "K8s"])],
             [("retro", ["Retro"])],
+            [("kilo", ["kilogram", "Kilo"]), ("ilo", ["ILO", "Ilo"])],
+            [("ab", ["Y", "AB"]), ("bc", ["X", "BC"]), ("cd", ["Z", "CD"])],
         ];
+
+        // These meet inside words, so their rows match anywhere in a word more often than the others.
+        string[] insideWords = ["kilo", "ilo", "ab", "bc", "cd"];
         (string Id, bool BuiltIn)[] ids =
         [
             ("github", true), ("ai-terminology", true), ("microsoft-azure", true), ("github", false),
@@ -631,11 +862,14 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 
         // Texts to check, for each family: every spoken form as it is and in invariant lower and upper case, alone, inside a
         // word, repeated with and without a space and in a sentence, and every written form alone, repeated and in a
-        // sentence, which is text already in canonical form.
+        // sentence, which is text already in canonical form; and texts where forms run into one another in a chain, so a
+        // row that goes can free the next rule to apply, which then pushes out the one after it.
+        string[] chains = ["abc", "bcd", "abcd", "ABCD", "Abcd", "abcdab", "cdab", "bcab", "xabcdx", "abcd abcd", "we said abcd today"];
         var probes = families.Select(family => family
             .SelectMany(form => new[] { form.Spoken, form.Spoken.ToLowerInvariant(), form.Spoken.ToUpperInvariant() }
                 .SelectMany(v => new[] { v, $"a{v}b", $"{v} {v}", v + v, $"we said {v} today" })
                 .Concat(form.Written.SelectMany(w => new[] { w, $"{w} {w}", $"we said {w} today" })))
+            .Concat(family.Any(form => form.Spoken == "cd") ? chains : [])
             .Distinct(StringComparer.Ordinal)
             .ToArray()).ToArray();
 
@@ -643,7 +877,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         void Count(string outcome, int by = 1) => counts[outcome] = counts.GetValueOrDefault(outcome) + by;
 
-        for (var round = 0; round < 700; round++)
+        for (var round = 0; round < 1000; round++)
         {
             // Every library in the round is loaded and most rows are ticked. A library whose row is not ticked still applies
             // while a row with its id is, as the saved id says.
@@ -656,10 +890,10 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
                 return library;
             }
 
-            // Half the rounds load a built-in and a hand-placed file with the same id, one of them the row the cleanup
-            // unticks and the other one's row already unticked, so both would go off through the shared id.
+            // Most rounds load a built-in and a hand-placed file with the same id, one of them the row the cleanup unticks and
+            // the other one's row already unticked, so both would go off through the shared id.
             DictionaryLibrary? collapsing = null;
-            if (random.Next(2) == 0)
+            if (random.Next(10) < 7)
             {
                 var twinId = random.Next(2) == 0 ? "github" : "ai-terminology";
                 var twins = new[] { true, false }
@@ -710,7 +944,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             }
 
             var switchedRows = switching.SelectMany(u => u.KeepTerms).ToList();
-            if (switchedRows.Count > 0 && random.Next(10) < 4)
+            if (switchedRows.Count > 0 && random.Next(10) < 6)
             {
                 var row = switchedRows[random.Next(switchedRows.Count)];
                 AddToDictionary(DictionaryEntry.New(row.Pattern, "Blocked", row.WholeWord) with { Enabled = false });
@@ -767,23 +1001,44 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             Count("copied", plan.Copies.Count);
             Count("reported", plan.Collided);
 
-            // Finished text, in every context, is exactly what was promised.
-            var before = Dictation(dictionary, today);
+            // Finished text, in every context, is exactly what was promised; and copies and libraries kept on write exactly
+            // where they wrote, found from each rule's own replacements (TextPostProcessor's traces, put back into the
+            // text's coordinates). A dropped row may change the texts it applied to, but never let one of those write
+            // somewhere new, which a check of the finished text alone would count as part of the promise.
+            var beforeProcessor = Processor(dictionary, today);
             var intended = Dictation(dictionary, promised);
-            var now = Dictation([.. dictionary, .. plan.Copies], after);
+            var nowProcessor = Processor([.. dictionary, .. plan.Copies], after);
+            var keptOnLibraries = today.Where(l => plan.KeptOn.Any(k => string.Equals(k.Id, l.Id, StringComparison.OrdinalIgnoreCase))).ToList();
+            var protectedRules = plan.Copies.Select(c => c.Pattern)
+                .Concat(keptOnLibraries.SelectMany(l => l.Entries.Where(compiled.Contains)).Select(e => e.Pattern))
+                .ToHashSet(StringComparer.Ordinal);
             var present = libraries.SelectMany(l => l.Entries).Select(e => FamilyOf(e.Pattern)).Concat(dictionaryFamilies).Where(f => f >= 0).ToHashSet();
             var pool = present.SelectMany(family => probes[family]).ToArray();
             for (var n = 0; n < 36 && pool.Length > 0; n++)
             {
                 var probe = pool[random.Next(pool.Length)];
                 var expected = intended(probe);
-                var actual = now(probe);
-                Assert.True(actual == expected, $"round {round}: '{probe}' should be '{expected}' and is '{actual}'.\n" +
+                var was = beforeProcessor.ProcessDetailed(probe);
+                var now = nowProcessor.ProcessDetailed(probe);
+                Assert.True(now.Text == expected, $"round {round}: '{probe}' should be '{expected}' and is '{now.Text}'.\n" +
                     Scenario(dictionary, libraries, listRows, switching, verdicts, plan));
                 Count("checked: dictation writes what was promised");
-                if (before(probe) != expected)
+                if (was.Text != expected)
                 {
                     Count("checked: the promise drops an unused rule here");
+                }
+
+                // The traces are read back into the text exactly, or the footprints below would compare nothing.
+                Assert.Equal(was.Text, Rebuilt(probe, was));
+                Assert.Equal(now.Text, Rebuilt(probe, now));
+                var wrote = Footprint(was, protectedRules);
+                var writes = Footprint(now, protectedRules);
+                Assert.True(wrote.SequenceEqual(writes), $"round {round}: in '{probe}' ('{was.Text}', now '{now.Text}') a copy or a " +
+                    $"library kept on wrote at [{string.Join(", ", wrote)}] and now writes at [{string.Join(", ", writes)}].\n" +
+                    Scenario(dictionary, libraries, listRows, switching, verdicts, plan));
+                if (wrote.Count > 0)
+                {
+                    Count("checked: copies and libraries kept on write exactly where they wrote");
                 }
             }
 
@@ -797,9 +1052,44 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             }
 
             // Kept on only for a reason: a row of a library that would go off overlaps a rule in the dictionary or in
-            // another library that is on, or two of its own copies read as one. Checked with the comparison the decision
-            // describes (invariant upper and lower case, either containing the other, after the known specials), written
-            // here independently of SpokenFormFold.
+            // another library that is on, two of its own copies read as one, a row that goes meets a copy of its own or a
+            // row of another library that is on, or a row that goes reaches a copy or a row kept on through rules that stay
+            // in effect. Checked with the comparison the decisions describe (invariant upper and lower case, either
+            // containing the other or, for a row that goes, running into it, after the known specials), written here
+            // independently of SpokenFormFold.
+            var dictionaryStaysOn = Saves(dictionary).Entries.Where(e => e.Enabled).Select(e => e.Pattern);
+            var staysUnasked = dictionaryStaysOn
+                .Concat(after.Where(l => !keptOnLibraries.Contains(l)).SelectMany(l => l.EnabledEntries).Select(e => e.Pattern))
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            bool Meets(string a, string b) => LiteralOverlap(a, b) || LiteralRunsInto(a, b);
+            bool ReachesThroughRulesThatStay(string start, DictionaryLibrary member)
+            {
+                var guarded = plan.Copies.Select(c => c.Pattern)
+                    .Concat(keptOnLibraries.Where(l => l != member).SelectMany(l => l.EnabledEntries).Select(e => e.Pattern))
+                    .Concat(Promised(member).Select(e => e.Pattern))
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .ToList();
+                var seen = staysUnasked.Where(rule => Meets(start, rule)).ToHashSet(StringComparer.Ordinal);
+                var queue = new Queue<string>(seen);
+                while (queue.TryDequeue(out var rule))
+                {
+                    if (guarded.Any(g => Meets(rule, g)))
+                    {
+                        return true;
+                    }
+
+                    foreach (var next in staysUnasked.Where(next => !seen.Contains(next) && Meets(rule, next)))
+                    {
+                        seen.Add(next);
+                        queue.Enqueue(next);
+                    }
+                }
+
+                return false;
+            }
+
             foreach (var library in asked.Where(l => plan.KeepsOn(l.Id, l.BuiltIn)))
             {
                 var dictionaryOn = Saves(dictionary).Entries.Where(e => e.Enabled).ToList();
@@ -812,10 +1102,11 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
                     foreach (var row in member.EnabledEntries.Where(e => !string.IsNullOrWhiteSpace(e.Pattern)))
                     {
                         var dictionaryOverlaps = dictionaryOn.Where(e => LiteralOverlap(row.Pattern, e.Pattern)).ToList();
-                        var libraryOverlaps = today.Where(l => l != member)
+                        var otherRows = today.Where(l => l != member)
                             .SelectMany(l => l.EnabledEntries)
-                            .Where(e => !string.IsNullOrWhiteSpace(e.Pattern) && LiteralOverlap(row.Pattern, e.Pattern))
+                            .Where(e => !string.IsNullOrWhiteSpace(e.Pattern))
                             .ToList();
+                        var libraryOverlaps = otherRows.Where(e => LiteralOverlap(row.Pattern, e.Pattern)).ToList();
                         if (dictionaryOverlaps.Count > 0)
                         {
                             reasons.Add("overlaps the dictionary");
@@ -827,9 +1118,33 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
                         }
 
                         onlyContainment &= dictionaryOverlaps.Concat(libraryOverlaps).All(e => !LiteralSame(row.Pattern, e.Pattern));
-                        if (copies.Contains(row) && copies.Any(other => !ReferenceEquals(other, row) && LiteralSame(row.Pattern, other.Pattern)))
+                        var copied = copies.Any(copy => ReferenceEquals(copy, row));
+                        if (copied && copies.Any(other => !ReferenceEquals(other, row) && LiteralSame(row.Pattern, other.Pattern)))
                         {
                             reasons.Add("two of its own copies read as one");
+                            onlyContainment = false;
+                        }
+
+                        if (!copied && copies.Any(copy => LiteralOverlap(row.Pattern, copy.Pattern)))
+                        {
+                            reasons.Add("a row that goes contains or sits in a copy of its own");
+                            onlyContainment = false;
+                        }
+                        else if (!copied && copies.Any(copy => LiteralRunsInto(row.Pattern, copy.Pattern)))
+                        {
+                            reasons.Add("a row that goes runs into a copy of its own");
+                            onlyContainment = false;
+                        }
+
+                        if (!copied && otherRows.Any(e => LiteralRunsInto(row.Pattern, e.Pattern)))
+                        {
+                            reasons.Add("a row that goes runs into a row of another library that is on");
+                            onlyContainment = false;
+                        }
+
+                        if (!copied && ReachesThroughRulesThatStay(row.Pattern, member))
+                        {
+                            reasons.Add("a row that goes reaches a copy or a row kept on through rules that stay in effect");
                             onlyContainment = false;
                         }
                     }
@@ -864,9 +1179,13 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         string[] required =
         [
             "checked: dictation writes what was promised", "checked: the promise drops an unused rule here",
+            "checked: copies and libraries kept on write exactly where they wrote",
             "switched off", "switched off: with copies", "copied", "reported",
             "kept on", "kept on: overlaps the dictionary", "kept on: overlaps another library that is on",
             "kept on: two of its own copies read as one", "kept on: only by containment", "kept on through a shared id",
+            "kept on: a row that goes contains or sits in a copy of its own", "kept on: a row that goes runs into a copy of its own",
+            "kept on: a row that goes runs into a row of another library that is on",
+            "kept on: a row that goes reaches a copy or a row kept on through rules that stay in effect",
             "went off through a shared id", "stayed on through a shared id",
         ];
         Assert.All(required, outcome => Assert.True(
@@ -892,7 +1211,50 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         }
 
         DictionaryEntry RandomEntry((string Spoken, string[] Written) form) =>
-            DictionaryEntry.New(form.Spoken, form.Written[random.Next(form.Written.Length)], wholeWord: random.Next(4) != 0);
+            DictionaryEntry.New(form.Spoken, form.Written[random.Next(form.Written.Length)],
+                wholeWord: insideWords.Contains(form.Spoken) ? random.Next(2) == 0 : random.Next(4) != 0);
+    }
+
+    /// <summary>Finished text and each rule's replacements, from the real post-processor over this dictionary and these libraries.</summary>
+    private static TextPostProcessor Processor(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
+        new(new StoredDictionary(Saves(dictionary).Entries), NullLogger<TextPostProcessor>.Instance, snippets: null,
+            libraries: new ComposedLibraries([.. libraries]));
+
+    // Where each of these rules wrote in `text`, in the text's own coordinates. A trace sits in the finished text, which is
+    // shifted from the input by the replacements before it; a spoken form matches exactly its own length, so the shift is
+    // what each replacement added. A rule whose replacement writes what it matched leaves no trace and changes nothing.
+    private static List<(int Start, string Rule)> Footprint(TextPostProcessingResult result, IReadOnlySet<string> rules)
+    {
+        var spans = new List<(int Start, string Rule)>();
+        var shift = 0;
+        foreach (var replacement in result.Replacements.OrderBy(r => r.Start))
+        {
+            if (rules.Contains(replacement.Pattern))
+            {
+                spans.Add((replacement.Start - shift, replacement.Pattern));
+            }
+
+            shift += replacement.Length - replacement.Pattern.Length;
+        }
+
+        return spans;
+    }
+
+    // The finished text rebuilt from the input and the traces read back as Footprint reads them, to show that reading is exact.
+    private static string Rebuilt(string text, TextPostProcessingResult result)
+    {
+        var rebuilt = new System.Text.StringBuilder();
+        var read = 0;
+        var shift = 0;
+        foreach (var replacement in result.Replacements.OrderBy(r => r.Start))
+        {
+            var start = replacement.Start - shift;
+            rebuilt.Append(text, read, start - read).Append(replacement.Replacement);
+            read = start + replacement.Pattern.Length;
+            shift += replacement.Length - replacement.Pattern.Length;
+        }
+
+        return rebuilt.Append(text, read, text.Length - read).ToString();
     }
 
     // The comparison the decision describes, independent of SpokenFormFold: invariant upper and lower case of each spoken
@@ -909,6 +1271,11 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         Foldings(a).Any(x => Foldings(b).Any(y => x.Contains(y, StringComparison.Ordinal) || y.Contains(x, StringComparison.Ordinal)));
 
     private static bool LiteralSame(string a, string b) => Foldings(a).Any(x => Foldings(b).Contains(x, StringComparer.Ordinal));
+
+    // A nonempty proper suffix of one folding is a proper prefix of the other, either way round.
+    private static bool LiteralRunsInto(string a, string b) =>
+        Foldings(a).Any(x => Foldings(b).Any(y => Enumerable.Range(1, Math.Max(0, Math.Min(x.Length, y.Length) - 1))
+            .Any(shared => x[^shared..] == y[..shared] || y[^shared..] == x[..shared])));
 
     private static bool IsFor(LibraryUsage usage, DictionaryLibrary library) =>
         usage.Id == library.Id && usage.BuiltIn == library.BuiltIn;
@@ -984,13 +1351,8 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     /// Finished text from the real post-processor over this dictionary and these libraries, with the dictionary stored as
     /// Save stores it and read back in the repository's order.
     /// </summary>
-    private static Func<string, string> Dictation(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries)
-    {
-        var processor = new TextPostProcessor(
-            new StoredDictionary(Saves(dictionary).Entries), NullLogger<TextPostProcessor>.Instance, snippets: null,
-            libraries: new ComposedLibraries([.. libraries]));
-        return processor.Process;
-    }
+    private static Func<string, string> Dictation(IEnumerable<DictionaryEntry> dictionary, IEnumerable<DictionaryLibrary> libraries) =>
+        Processor(dictionary, libraries).Process;
 
     /// <summary>
     /// A dictionary read back in the order <see cref="DictionaryRepository"/> returns it, which

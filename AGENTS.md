@@ -957,22 +957,36 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
   first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
   that stays in effect (an enabled dictionary row, or an enabled row of a library that stays on) or a copy from
-  another library, and none of its own copies folds to the same text as another; it then copies each kept row
-  dictation compiles today. Otherwise it is kept on, whole, with every library sharing its id, nothing of it is copied,
-  and the window names it in a notice (`DescribeKeptOn`: library names, never terms). Two spoken forms overlap when
-  one, folded by `SpokenFormFold`, equals or contains the other. The fold is read at run time from the matcher's own
-  regex equivalence (`TextPostProcessor.DictionaryMatchOptions`), `OrdinalIgnoreCase` and invariant case mapping, plus
-  dotted and dotless i, and must stay broader than every comparison dictation makes: invariant case mapping comes from
-  the operating system and lacks pairs the regex engine has (U+0264 with U+A7CB), and `OrdinalIgnoreCase` folds the
-  Greek final sigma and some characters outside the Basic Multilingual Plane, which the regex does not.
-  `SpokenFormFoldTests` checks it on every character. Never treat two rules as equivalent because the composer gives
-  them one key, and never judge a rule by running it over its own spoken form: a substring rule meets text inside
-  words, the guard against expanding a written form meets text already written, and rule order breaks ties between
-  rules that match the same text. Which libraries are on before and after the switch comes from the Libraries list's
-  rows the way Save stores them, as ids, and the library service applies every loaded library with a saved id: a
-  hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of the two while the other's
-  row stays ticked switches nothing off, and unticking the last row with the id switches both off. The window passes
-  every row and every loaded library, leaves the rows of libraries kept on ticked, and Core decides.
+  another library, none of its own copies folds to the same text as another, and no row of it that goes (an enabled
+  row it does not copy, a blocked copy included) meets a row it copies, a copy from another library or a row of a
+  library kept on, or reaches one of those through rules that stay in effect; it then copies each kept row dictation
+  compiles today. Otherwise it is kept on, whole, with every library sharing its id, nothing of it is copied, and the
+  window names it in a notice (`DescribeKeptOn`: library names, never terms). Two spoken forms overlap when one,
+  folded by `SpokenFormFold`, equals or contains the other, and meet when they overlap or a nonempty proper suffix of
+  one is a proper prefix of the other, either way round, whole-word flags ignored. A row that goes must not meet those
+  because the matcher takes the match that starts first, then the longer one: beside a used "k", an unused whole-word
+  "kilo" writes "kilogram" where "k" alone writes "Kilo", and beside a used "bc", an unused "ab" turns "abc" into "Yc"
+  where "bc" alone writes "aX". The same push passes along rules that stay in effect: with "bc" on, an unused "ab"
+  beside a used "cd" writes "YZ" for "abcd", and without "ab" the freed "bc" pushes the copy of "cd" out and writes
+  "aXd". So rules that stay in effect and meet one another form linked groups, and a row that goes must meet no group
+  that a copy or a row of a library kept on meets. Copies of one library may meet one another, since where they start
+  and how long they are decide between them before their order does. A row that goes may still run into a dictionary
+  row or a row of a library that stays on without being asked about, which may then apply where the row that goes used
+  to. In practice any shipped library with a term in use is kept on (its terms nest, or one ends as another begins),
+  and with the default libraries on, whose rules form one linked group that every shipped spoken form meets, a library
+  with a row that goes is switched off only when nothing is copied and nothing is kept on. The fold is read at run
+  time from the matcher's own regex equivalence (`TextPostProcessor.DictionaryMatchOptions`), `OrdinalIgnoreCase` and
+  invariant case mapping, plus dotted and dotless i, and must stay broader than every comparison dictation makes:
+  invariant case mapping comes from the operating system and lacks pairs the regex engine has (U+0264 with U+A7CB),
+  and `OrdinalIgnoreCase` folds the Greek final sigma and some characters outside the Basic Multilingual Plane, which
+  the regex does not. `SpokenFormFoldTests` checks it on every character. Never treat two rules as equivalent because
+  the composer gives them one key, and never judge a rule by running it over its own spoken form: a substring rule
+  meets text inside words, the guard against expanding a written form meets text already written, and rule order
+  breaks ties between rules that match the same text. Which libraries are on before and after the switch comes from
+  the Libraries list's rows the way Save stores them, as ids, and the library service applies every loaded library
+  with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of the two
+  while the other's row stays ticked switches nothing off, and unticking the last row with the id switches both off.
+  The window passes every row and every loaded library, leaves the rows of libraries kept on ticked, and Core decides.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
