@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 
@@ -21,12 +22,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
         _logger = logger;
     }
 
-    public IReadOnlyList<DictionaryLibrary> GetLibraries()
-    {
-        var result = new List<DictionaryLibrary>(BuiltInDictionaryLibraries.All);
-        result.AddRange(LoadCustom());
-        return result;
-    }
+    public IReadOnlyList<DictionaryLibrary> GetLibraries() =>
+        LibraryPrecedence.Order(BuiltInDictionaryLibraries.All.Concat(LoadCustom()));
 
     public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries()
     {

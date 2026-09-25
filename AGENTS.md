@@ -18,7 +18,8 @@ within its budget), whether or not the dictation mentions them; see
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
-suggestions); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
+suggestions); **dictionary libraries** (eleven built-in packs plus imported CSVs, shown as one A to Z
+list; see the libraries section below); **voice snippets** (spoken trigger → saved template); **per‑app profiles**
 (writing style + newline mode by focused process); **AI cleanup** across four providers
 (Foundry Local on‑device, Microsoft Foundry via `az login` **or an Entra service principal**, or
 any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence auto‑stop** for toggle mode;
@@ -207,7 +208,9 @@ anything was dictated.
 - **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
   suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
   glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
-  collation, `SqliteBinaryCollation`), the libraries in the order the service loads them, then the shared
+  collation, `SqliteBinaryCollation`), the enabled libraries' entries as the page composes them
+  (`DictionaryLibraryComposer.ComposeLibraries`, precedence order, as the library service gives dictation),
+  which it counts as given and never reorders, then the shared
   `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
   `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
   and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
@@ -351,6 +354,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     (TranscriptionChunker plans long-capture seams)
     PostProcessing/ Cleanup/        dictionary + snippets; optional AI cleanup (Agent Framework), Foundry
                                     Local storage policy and janitor
+    Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
+                                    (which library wins a spoken form: frozen built-in ids, then file names)
     Lifecycle/                      DictationLifecycle (phase, epoch, admission, timers, shutdown order),
                                     ClosableTimer, IdleModelRelease, InFlightWork, StagedTeardown,
                                     PresentationRelay, UiThreadDispatch, RecordingCapture,
@@ -382,6 +387,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
+  tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
+                                    will read in stream M1) and composition-golden.txt (what the libraries
+                                    decide, captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -946,6 +954,82 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   selection falls back to it. `LibrarySelectionInUseTests` pins both consumers through the real library service and
   post-processor, and the callers by source. This is the seam the dictionary library program replaces with a
   vocabulary source.
+
+## Dictionary libraries: order and precedence (read before touching library order)
+
+- **What the list shows and what wins are separate.** The Libraries page lists built-in and custom libraries in one
+  A to Z list (`LibraryOrdering`: `CompareInfo` of the current culture with `IgnoreCase | NumericOrdering`, then
+  ordinal name, then ordinal id), with the ordering captured when the page loads, the source ("Built-in" or "Your
+  library") under each name, no sortable column, and no row that moves when its box is ticked. Which library supplies
+  a spoken form is `LibraryPrecedence`: the built-ins in the frozen `BuiltInOrder`, then custom libraries by file
+  name. Never derive a winner from the list's order.
+- **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
+  ids so that a rename or a new category moves nothing. It decides which built-in supplies a spoken form two of them
+  share and which terms fill a default install's 80 on-device glossary slots, so never reorder it or remove an id.
+  Append a new built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`. A built-in that
+  stops shipping keeps its id in the order and is added to `RetiredBuiltInIds` (and the fixture's "retired"), the only
+  way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
+  appears exactly once, every other listed id is retired, the catalog follows the order with the retired ids left
+  out, and the C# lists agree with the fixture.
+- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
+  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
+  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
+  `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
+  prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)
+  is the exception by design: it takes entries, not libraries, and a flattened list has no library of origin left to
+  order by, so the window hands it `ComposeLibraries` over `LibraryPrecedence.Enabled` and the hint never reorders
+  them. The window also hands the cleanup scan its libraries through `LibraryPrecedence.Enabled`, and saves the
+  enabled ids in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display,
+  reversed and random orders.
+- **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
+  decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
+  first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
+  that stays in effect (an enabled dictionary row, or an enabled row of a library that stays on) or a copy from
+  another library, none of its own copies folds to the same text as another, and no row of it that goes (an enabled
+  row it does not copy, a blocked copy included) meets a rule that stays in effect, a row it copies, a copy from
+  another library or a row of a library kept on; it then copies each kept row dictation compiles today. Otherwise it
+  is kept on, whole, with every library sharing its id, nothing of it is copied, and the window names it in a notice
+  (`DescribeKeptOn`: library names, never terms). Two spoken forms overlap when one, folded by `SpokenFormFold`,
+  equals or contains the other, and meet when they overlap or a nonempty proper suffix of one is a proper prefix of
+  the other, either way round, whole-word flags ignored. A row that goes must meet nothing that stays because the
+  matcher takes the match that starts first, then the longer one: beside a used "k", an unused whole-word "kilo"
+  writes "kilogram" where "k" alone writes "Kilo"; beside "bc", an unused "ab" turns "abc" into "Yc" where "bc" alone
+  writes "aX"; and the push passes along rules ("abcd" is "YZ" with "ab", "bc" and "cd", and "aXd" without "ab").
+  Never trust the review's "unused" to make a meeting safe: history holds text as dictation wrote it, and a row whose
+  guard found its written form already in the text keeps that span as it is, so a rule that then edits the text around
+  it can erase every trace of it ("c#" writing "C#-code", beside a dictionary that removes "-" and writes "Sharp" for
+  "#-code": history says "c#code", and without "c#" the same dictation writes "cSharp"). With nothing met, every rule
+  that stays, every copy and every library kept on writes exactly where it wrote, in any text, and where a dropped row
+  wrote, the text is left as dictated. Copies of one library may meet one another, since where they start and how long
+  they are decide between them before their order does. In practice any shipped library with a term in use is kept on
+  (its terms nest, or one ends as another begins), and while the default libraries stay on, every row of every other
+  shipped library meets one of theirs, so the cleanup keeps on every other shipped library the review offers. The fold
+  is read at run time from the matcher's own regex equivalence (`TextPostProcessor.DictionaryMatchOptions`),
+  `OrdinalIgnoreCase` and invariant case mapping, plus dotted and dotless i, and must stay broader than every
+  comparison dictation makes: invariant case mapping comes from the operating system and lacks pairs the regex engine
+  has (U+0264 with U+A7CB), and `OrdinalIgnoreCase` folds the Greek final sigma and some characters outside the Basic
+  Multilingual Plane, which the regex does not. `SpokenFormFoldTests` checks it on every character. Never treat two
+  rules as equivalent because the composer gives them one key, and never judge a rule by running it over its own
+  spoken form: a substring rule meets text inside words, the guard against expanding a written form meets text already
+  written, and rule order breaks ties between rules that match the same text. Which libraries are on before and after
+  the switch comes from the Libraries list's rows the way Save stores them, as ids, and the library service applies
+  every loaded library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so
+  unticking one of the two while the other's row stays ticked switches nothing off, and unticking the last row with
+  the id switches both off. The window passes every row and every loaded library, leaves the rows of libraries kept on
+  ticked, and Core decides.
+- **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
+  winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
+  quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
+  turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
+  It also reads shipped data: every built-in's id and name, the shipped rows for four spoken forms, and every shipped
+  rule the matcher finds anywhere in a fixture sentence, so a CSV edit can move it; two precondition tests in
+  `LibraryCompositionGoldenTests` name the rule when that happens.
+- **The macOS port does not follow this yet.** It reads no fixture and keeps its own library order. Stream M1, which
+  ports these library changes to macOS, will read `built-in-precedence.json` and sort the list with
+  `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
+  cleanup rows of `macos/PORTING-PLAN.md` are stale, and, as the mono-repo note says, nothing keeps the C# and Swift
+  orders in step.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 

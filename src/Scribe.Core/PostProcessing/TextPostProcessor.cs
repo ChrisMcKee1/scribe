@@ -441,6 +441,12 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                 new ReplacementCandidate(match.Index, match.Length, _template, order, _phrase, match.Value));
     }
 
+    /// <summary>
+    /// The options every dictionary rule's regular expression is built with. <see cref="SpokenFormFold"/> reads the
+    /// matcher's case equivalence from the regex engine with these same options, so the two cannot drift apart.
+    /// </summary>
+    internal const RegexOptions DictionaryMatchOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
     private sealed class CompiledRule
     {
@@ -455,8 +461,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             _replacement = entry.Replacement;
             var escaped = Regex.Escape(entry.Pattern);
             var pattern = entry.WholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
-            _regex = new Regex(pattern,
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            _regex = new Regex(pattern, DictionaryMatchOptions);
 
             // Only an expansion whose replacement is strictly longer than its pattern AND embeds that
             // pattern (e.g. "york" -> "New York") can double-fire: when AI cleanup is enabled the

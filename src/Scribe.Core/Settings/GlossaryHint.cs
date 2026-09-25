@@ -14,9 +14,10 @@ namespace Scribe.Core.Settings;
 /// <para>
 /// The number is the one dictation sends. The page's rows are built the way Save builds them
 /// (<see cref="DictionaryEntryBuilder.Build"/>) and put in the order dictation reads the saved dictionary
-/// (<see cref="DictionaryRepository.GetEnabled"/>, by pattern under SQLite's BINARY collation), the enabled
-/// libraries in the order it loads them (<see cref="DictionaryLibraryService.GetLibraries"/>), and then the
-/// pipeline's own composition, budget and selection count them (<see cref="CleanupPrompt.ComposeVocabulary"/>,
+/// (<see cref="DictionaryRepository.GetEnabled"/>, by pattern under SQLite's BINARY collation). The enabled
+/// libraries arrive already composed, the way the library service hands them to dictation's glossary
+/// (<see cref="DictionaryLibraryComposer.ComposeLibraries"/>, in precedence order), and are never reordered here.
+/// Then the pipeline's own composition, budget and selection count them (<see cref="CleanupPrompt.ComposeVocabulary"/>,
 /// <see cref="CleanupPrompt.GlossaryTermBudget"/>, <see cref="CleanupPrompt.CountGlossary"/>). Counting in the
 /// grid's own order said "the first 312 of 3,100" after an out-of-order import when 3,000 were sent, because
 /// the size budget stops at a different line in a different order.
@@ -24,10 +25,16 @@ namespace Scribe.Core.Settings;
 /// </summary>
 public static class GlossaryHint
 {
-    /// <summary>What the page shows: its rows as typed, the libraries switched on, and the settings on screen.</summary>
+    /// <summary>What the page shows: its rows as typed, its enabled libraries' entries, and the settings on screen.</summary>
+    /// <param name="LibraryEntries">
+    /// The enabled libraries' entries as <see cref="DictionaryLibraryComposer.ComposeLibraries"/> returns them: one row per
+    /// spoken form, in precedence order (<see cref="Libraries.LibraryPrecedence"/>), which is what the library service
+    /// gives dictation's glossary. They are counted as given: a flattened list no longer says which library a row came
+    /// from, so any reordering here could only lose which library's row wins.
+    /// </param>
     public sealed record Input(
         IReadOnlyList<DictionaryEntryBuilder.Row> Rows,
-        IReadOnlyList<DictionaryLibrary> EnabledLibraries,
+        IReadOnlyList<DictionaryEntry> LibraryEntries,
         bool AiCleanupOn,
         bool PostProcessingOn,
         CleanupProvider Provider,
@@ -44,9 +51,10 @@ public static class GlossaryHint
         var text = new StringBuilder($"{Count(enabled.Count)} of {Count(entries.Count)} entries enabled");
 
         // Dictation reads only enabled entries, so a disabled row never keeps a library term with the same
-        // spoken form out of the vocabulary.
+        // spoken form out of the vocabulary. The page's own rows are put in the order the repository reads the
+        // saved dictionary back; that is the only reordering here, and it touches no library entry.
         var personal = enabled.OrderBy(e => e.Pattern, SqliteBinaryCollation.Instance).ToList();
-        var libraries = DictionaryLibraryComposer.ComposeLibraries(InLoadOrder(input.EnabledLibraries));
+        var libraries = input.LibraryEntries;
         var effective = CleanupPrompt.ComposeVocabulary(personal, libraries);
         var personalTerms = DictionaryLibraryComposer.Merge(personal, []).Count;
 
@@ -108,22 +116,6 @@ public static class GlossaryHint
         }
 
         return text.ToString();
-    }
-
-    /// <summary>
-    /// The order dictation composes enabled libraries in (<see cref="DictionaryLibraryService.GetLibraries"/>):
-    /// the built-in catalog in its own order, then imported libraries by file name, which is the id plus
-    /// ".csv", the way the service sorts the folder. The page appends a library it imports during the session,
-    /// so its own list is not always in this order.
-    /// </summary>
-    internal static IEnumerable<DictionaryLibrary> InLoadOrder(IEnumerable<DictionaryLibrary> libraries)
-    {
-        var catalog = BuiltInDictionaryLibraries.All
-            .Select((library, index) => (library.Id, index))
-            .ToDictionary(pair => pair.Id, pair => pair.index, StringComparer.OrdinalIgnoreCase);
-        return libraries
-            .OrderBy(library => library.BuiltIn && catalog.TryGetValue(library.Id, out var index) ? index : int.MaxValue)
-            .ThenBy(library => library.Id + ".csv", StringComparer.OrdinalIgnoreCase);
     }
 
     // Whether the entries are applied to dictation here: the post-processing switch decides, whatever AI

@@ -56,9 +56,10 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
         FootnoteText.Text = hasLibraries
             ? "Turning a term off is reversible: it stays in your dictionary with its tick cleared and "
-                + "stops being applied. Switching a library off keeps any of its terms that are still "
-                + "working, by copying them into your own dictionary first. Nothing is written until "
-                + "you save the settings window."
+                + "stops being applied. Switching a library off keeps the terms you still use working, "
+                + "copying them into your own dictionary where needed. A library whose terms overlap other "
+                + "terms dictation applies stays on, because switching it off could change what dictation "
+                + "writes. Nothing is written until you save the settings window."
             : "Turning a term off is reversible: it stays in your dictionary with its tick cleared and "
                 + "stops being applied. Deleting removes it for good. Either way, nothing is written "
                 + "until you save the settings window.";
@@ -91,6 +92,11 @@ public partial class DictionaryCleanupWindow : FluentWindow
     /// States the size of the win and, crucially, what survives. A user will not switch off a library
     /// they believe they are partly relying on unless they are told the working terms are carried over.
     /// </summary>
+    /// <remarks>
+    /// It quotes no count of copies: the plan copies a term only where nothing else would write it the
+    /// same way, which depends on everything else switched off together, so the notice after the switch
+    /// reports the real number.
+    /// </remarks>
     private static string DescribeLibrary(LibraryUsage usage, string window)
     {
         var unused = $"{usage.UnusedCount:N0} of {usage.TermCount:N0} "
@@ -98,8 +104,8 @@ public partial class DictionaryCleanupWindow : FluentWindow
 
         return usage.KeepTerms.Count == 0
             ? $"{unused} Switching this library off removes nothing you are using."
-            : $"{unused} Switching it off copies the other "
-                + $"{usage.KeepTerms.Count:N0} into your own dictionary so they keep working.";
+            : $"{unused} Switching it off keeps the terms you still use working, copying them into your "
+                + "own dictionary where needed.";
     }
 
     private void UpdateButtons()

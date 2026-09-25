@@ -25,6 +25,7 @@ using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -84,8 +85,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly ObservableCollection<DictionaryRow> _rows = new();
     private readonly ObservableCollection<LibraryRow> _libraryRows = new();
     // Cached snapshot of the loaded libraries (built-in + custom) so the preview panel resolves a
-    // selected row without re-reading files on every click. Kept in sync on import/remove.
+    // selected row without re-reading files on every click. Kept in sync on import/remove. It starts
+    // in the precedence order GetLibraries returns and an import is appended, but nothing reads its
+    // order: the rows above show it A to Z, placed with the ordering captured when they loaded, and
+    // everything that picks a winner from it applies LibraryPrecedence itself.
     private readonly List<DictionaryLibrary> _loadedLibraries = new();
+    private LibraryOrdering? _libraryOrdering;
     private readonly ObservableCollection<SnippetRow> _snippetRows = new();
     private bool _loadingSnippet;
     private readonly ObservableCollection<ProfileRow> _profileRows = new();
@@ -1483,25 +1488,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return;
             }
 
-            var enabledLibraries = _loadedLibraries
-                .Where(l => _libraryRows.Any(r =>
-                    r.Enabled && string.Equals(r.Id, l.Id, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            var covering = new Dictionary<string, (DictionaryEntry Entry, string Library)>(
-                StringComparer.OrdinalIgnoreCase);
-            foreach (var library in enabledLibraries)
-            {
-                foreach (var entry in library.Entries)
-                {
-                    if (!entry.Enabled || string.IsNullOrWhiteSpace(entry.Pattern))
-                    {
-                        continue;
-                    }
-
-                    covering.TryAdd(entry.Pattern.Trim(), (entry, library.Name));
-                }
-            }
+            // Precedence, not the list's A to Z order: the badge must name the library dictation uses.
+            var covering = DictionaryLibraryOverlapAnalyzer.Coverage(_loadedLibraries, EnabledLibraryRowIds());
 
             foreach (var row in _rows)
             {
@@ -1520,9 +1508,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
                 row.Coverage = same ? DictionaryRowCoverage.Duplicate : DictionaryRowCoverage.Override;
                 row.CoverageTooltip = same
-                    ? $"\"{hit.Library}\" already writes this as \"{theirs}\". Removing this entry " +
+                    ? $"\"{hit.LibraryName}\" already writes this as \"{theirs}\". Removing this entry " +
                       "changes nothing and frees room in the AI cleanup glossary."
-                    : $"\"{hit.Library}\" writes this as \"{theirs}\". Your entry wins. " +
+                    : $"\"{hit.LibraryName}\" writes this as \"{theirs}\". Your entry wins. " +
                       "Clear Enabled to fall back to the library.";
             }
         }
@@ -1588,14 +1576,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        var enabledLibraries = _loadedLibraries
-            .Where(library => _libraryRows.Any(r => r.Enabled &&
-                string.Equals(r.Id, library.Id, StringComparison.OrdinalIgnoreCase)))
-            .ToList();
+        // The entries the enabled libraries compose to, as the library service hands them to dictation's glossary:
+        // precedence, not the list's A to Z order, decides which library's row survives a shared spoken form, and so
+        // what the count below includes. The hint counts them as given and never reorders them.
+        var libraryEntries = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()));
 
         DictionaryGlossaryHint.Text = GlossaryHint.Describe(new GlossaryHint.Input(
             _rows.Select(r => new DictionaryEntryBuilder.Row(r.Id, r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
-            enabledLibraries,
+            libraryEntries,
             AiCleanupOn: AiCleanupCheck.IsChecked == true,
             PostProcessingOn: PostCheck.IsChecked == true,
             SelectedProvider,
@@ -1693,19 +1681,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             stale.PropertyChanged -= LibraryRow_PropertyChanged;
         }
 
+        // One A to Z list of built-in and custom libraries. The ordering is captured now, so a library imported later is
+        // placed by the same rules as the rows already shown.
+        _libraryOrdering = LibraryOrdering.ForCurrentCulture();
         _libraryRows.Clear();
-        foreach (var library in _loadedLibraries)
+        foreach (var library in _libraryOrdering.Sort(_loadedLibraries, l => l.Name, l => l.Id))
         {
-            _libraryRows.Add(new LibraryRow
-            {
-                Id = library.Id,
-                Name = library.Name,
-                Category = library.Category,
-                Terms = library.EnabledEntryCount,
-                Source = library.BuiltIn ? "Built-in" : "Custom",
-                BuiltIn = library.BuiltIn,
-                Enabled = enabled.Contains(library.Id),
-            });
+            _libraryRows.Add(NewLibraryRow(library, enabled.Contains(library.Id)));
         }
 
         _libraryLoad.Publish(ticket, LibrarySignature());
@@ -1753,7 +1735,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var count = library.Entries.Count;
         LibraryDetailName.Text = library.Name;
         LibraryDetailMeta.Text =
-            $"{library.Category} \u00b7 {count} {(count == 1 ? "term" : "terms")} \u00b7 {(library.BuiltIn ? "Built-in" : "Custom")}";
+            $"{library.Category} \u00b7 {count} {(count == 1 ? "term" : "terms")} \u00b7 {LibrarySource(library.BuiltIn)}";
         LibraryDetailDesc.Text = library.Description ?? string.Empty;
         LibraryDetailDesc.Visibility =
             string.IsNullOrWhiteSpace(library.Description) ? Visibility.Collapsed : Visibility.Visible;
@@ -1763,9 +1745,27 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         LibraryDetailEmpty.Visibility = Visibility.Collapsed;
     }
 
-    // The enabled-set persisted in settings: the ids of every ticked library still in the list.
+    // The enabled-set persisted in settings: the ids of every ticked library still in the list, in precedence order, so
+    // what Save writes never depends on the order the rows are shown in (after a fresh load it is the list 0.4.3 wrote).
     private List<string> CollectEnabledLibraryIds() =>
-        _libraryRows.Where(r => r.Enabled).Select(r => r.Id).ToList();
+        LibraryPrecedence.Order(_libraryRows.Where(r => r.Enabled), r => r.Id, r => r.BuiltIn).Select(r => r.Id).ToList();
+
+    // The ids of the ticked libraries, for the checks that read the live boxes rather than the saved set.
+    private IEnumerable<string> EnabledLibraryRowIds() => _libraryRows.Where(r => r.Enabled).Select(r => r.Id);
+
+    // Where a library comes from, shown under its name in the list and at the end of the preview's meta line.
+    private static string LibrarySource(bool builtIn) => builtIn ? "Built-in" : "Your library";
+
+    private static LibraryRow NewLibraryRow(DictionaryLibrary library, bool enabled) => new()
+    {
+        Id = library.Id,
+        Name = library.Name,
+        Category = library.Category,
+        Terms = library.EnabledEntryCount,
+        Source = LibrarySource(library.BuiltIn),
+        BuiltIn = library.BuiltIn,
+        Enabled = enabled,
+    };
 
     private void LibraryImportButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1792,25 +1792,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        // Newly imported libraries start switched off, like the built-in ones, so an import never
-        // silently changes how dictation is spelled until the user turns it on and saves.
-        _loadedLibraries.Add(imported);
-        var newRow = new LibraryRow
-        {
-            Id = imported.Id,
-            Name = imported.Name,
-            Category = imported.Category,
-            Terms = imported.EnabledEntryCount,
-            Source = "Custom",
-            BuiltIn = false,
-            Enabled = false,
-        };
-        _libraryRows.Add(newRow);
-        LibraryGrid.SelectedItem = newRow; // preview it immediately
-        LibraryGrid.ScrollIntoView(newRow);
-
+        AddImportedLibrary(imported);
         ShowInfo($"Imported \"{imported.Name}\" with {imported.EnabledEntryCount} " +
                  $"{(imported.EnabledEntryCount == 1 ? "term" : "terms")}. Turn it on, then save to apply.");
+    }
+
+    // Newly imported libraries start switched off, like the built-in ones, so an import never silently changes how
+    // dictation is spelled until the user turns it on and saves. The row takes its place in the A to Z list once, now,
+    // and is selected and scrolled into view so the preview shows it.
+    private void AddImportedLibrary(DictionaryLibrary imported)
+    {
+        _loadedLibraries.Add(imported);
+        var newRow = NewLibraryRow(imported, enabled: false);
+        var ordering = _libraryOrdering ??= LibraryOrdering.ForCurrentCulture();
+        _libraryRows.Insert(ordering.InsertionIndex(_libraryRows, newRow, r => r.Name, r => r.Id), newRow);
+        LibraryGrid.SelectedItem = newRow;
+        LibraryGrid.ScrollIntoView(newRow);
     }
 
     private void LibraryExportButton_Click(object sender, RoutedEventArgs e)
@@ -4810,26 +4807,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 return true; // TrySaveAsync reports the duplicate; don't stack two dialogs
             }
 
-            var libraries = _loadedLibraries
-                .Where(l => _libraryRows.Any(r =>
-                    r.Enabled && string.Equals(r.Id, l.Id, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            var libraryEntries = new List<DictionaryEntry>();
-            var sourceByPattern = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var library in libraries)
-            {
-                foreach (var entry in library.Entries)
-                {
-                    libraryEntries.Add(entry);
-                    if (!string.IsNullOrWhiteSpace(entry.Pattern))
-                    {
-                        sourceByPattern.TryAdd(entry.Pattern.Trim(), library.Name);
-                    }
-                }
-            }
-
-            var report = DictionaryLibraryOverlapAnalyzer.Analyze(entries, libraryEntries, sourceByPattern);
+            // Precedence, not the list's A to Z order: the prompt must name the library dictation uses.
+            var report = DictionaryLibraryOverlapAnalyzer.AnalyzeEnabledLibraries(
+                entries, _loadedLibraries, EnabledLibraryRowIds());
             if (report.RedundantCount == 0)
             {
                 return true; // overrides alone are legitimate; warning about them every save is noise
@@ -5783,11 +5763,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .ToList();
 
         // Likewise for libraries: a library toggled on in this session but not yet saved is part of
-        // the effective dictionary the moment the user saves, so it belongs in the scan.
+        // the effective dictionary the moment the user saves, so it belongs in the scan. Taken in precedence order,
+        // like the badges, whatever order the list shows or an import left the snapshot in.
         var enabledIds = new HashSet<string>(
             _libraryRows.Where(r => r.Enabled).Select(r => r.Id),
             StringComparer.OrdinalIgnoreCase);
-        var enabledLibraries = _loadedLibraries.Where(l => enabledIds.Contains(l.Id)).ToList();
+        var enabledLibraries = LibraryPrecedence.Enabled(_loadedLibraries, enabledIds);
 
         // The scan is asynchronous and its findings name specific rows, so anything the user changes
         // while it runs invalidates the result. Applying a stale verdict could turn off a rule they
@@ -5853,10 +5834,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        await ApplyCleanupAsync(choice);
+        await ApplyCleanupAsync(choice, report.Libraries);
     }
 
-    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice)
+    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice, IReadOnlyList<LibraryUsage> verdicts)
     {
         // Match back by spoken form rather than id: the grid can hold a row that has never been
         // saved (id 0), and two of those would be indistinguishable by id.
@@ -5869,8 +5850,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .ToList();
 
         var libraryTargets = choice.Libraries
-            .Select(usage => (Usage: usage, Row: _libraryRows.FirstOrDefault(
-                r => string.Equals(r.Id, usage.Id, StringComparison.OrdinalIgnoreCase))))
+            .Select(usage => (Usage: usage, Row: _libraryRows.FirstOrDefault(r => r.BuiltIn == usage.BuiltIn
+                && string.Equals(r.Id, usage.Id, StringComparison.OrdinalIgnoreCase))))
             .Where(t => t.Row is { Enabled: true })
             .ToList();
 
@@ -5881,8 +5862,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 + "keeps them in the list so you can switch them back on later."
                 + (libraryTargets.Count > 0
                     ? $" The {libraryTargets.Count} selected "
-                        + $"{(libraryTargets.Count == 1 ? "library is" : "libraries are")} switched off "
-                        + "rather than deleted, because their terms are not stored in your dictionary."
+                        + $"{(libraryTargets.Count == 1 ? "library is" : "libraries are")} not deleted, "
+                        + "because their terms are not stored in your dictionary."
                     : string.Empty),
                 "Delete"))
         {
@@ -5906,64 +5887,42 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // A library is all or nothing, so switching one off to shed its dead weight would take its
         // working terms with it. Copying those into the user's own dictionary first is what makes a
-        // partly used library actionable at all, which is the common case for a shipped pack.
-        var existing = new HashSet<string>(
-            _rows.Where(r => !string.IsNullOrWhiteSpace(r.Pattern)).Select(r => r.Pattern.Trim()),
-            StringComparer.OrdinalIgnoreCase);
+        // partly used library actionable at all, which is the common case for a shipped pack. Core works out which
+        // libraries dictation applies before and after the switch from the list's rows, the way Save stores them (by id, so
+        // a hand-placed file that reuses a built-in's id goes on and off with it), copies what a library switched off still
+        // uses, and keeps on any library whose terms overlap what stays in effect, since switching that one off could change
+        // what dictation writes. So it gets every loaded library, every row of the list, the review's verdicts, and each
+        // dictionary row's written form and word-boundary rule as well as its spoken form.
+        var copy = LibrarySwitchOffCopy.Plan(
+            _rows.Select(r => new LibrarySwitchOffCopy.Row(r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
+            _loadedLibraries,
+            _libraryRows.Select(r => new LibrarySwitchOffCopy.LibraryRow(r.Id, r.BuiltIn, r.Enabled)).ToList(),
+            libraryTargets.Select(t => t.Usage).ToList(),
+            verdicts);
 
-        var preserved = 0;
-        var collided = 0;
-        foreach (var (usage, row) in libraryTargets)
+        var switchedOff = libraryTargets.Where(t => !copy.KeepsOn(t.Usage.Id, t.Usage.BuiltIn)).ToList();
+        foreach (var (_, row) in switchedOff)
         {
             row!.Enabled = false;
-
-            foreach (var term in usage.KeepTerms)
-            {
-                var pattern = term.Pattern.Trim();
-                if (pattern.Length == 0)
-                {
-                    continue;
-                }
-
-                // A duplicate spoken form blocks the whole save, so a colliding term can never be
-                // copied in. Usually the existing row already does the same job, but if it is
-                // switched off it does not, and the user has to be told rather than quietly losing
-                // a rule that works today.
-                if (!existing.Add(pattern))
-                {
-                    if (!_rows.Any(r => r.Enabled
-                        && !string.IsNullOrWhiteSpace(r.Pattern)
-                        && string.Equals(r.Pattern.Trim(), pattern, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        collided++;
-                    }
-
-                    continue;
-                }
-
-                _rows.Add(new DictionaryRow
-                {
-                    Id = 0,
-                    Pattern = pattern,
-                    Replacement = term.Replacement,
-                    WholeWord = term.WholeWord,
-                    Enabled = true,
-                });
-                preserved++;
-            }
         }
 
-        // The rows' notifications update the ticks, but a sorted view only places an item when it is
-        // added, committed from an edit, or refreshed, so a library switched off here would keep its
-        // old place under a sort on the On column. The collection view itself is refreshed: the grid's
-        // Items.Refresh() only re-sorts a view that already needs a refresh, which a changed property
-        // never causes, so it merely repaints. Committing first because refreshing during an edit throws.
-        if (libraryTargets.Count > 0)
+        foreach (var entry in copy.Copies)
         {
-            LibraryGrid.CommitEdit(DataGridEditingUnit.Row, exitEditingMode: true);
-            System.Windows.Data.CollectionViewSource.GetDefaultView(LibraryGrid.ItemsSource)?.Refresh();
+            _rows.Add(new DictionaryRow
+            {
+                Id = 0,
+                Pattern = entry.Pattern,
+                Replacement = entry.Replacement,
+                WholeWord = entry.WholeWord,
+                Enabled = true,
+            });
         }
 
+        var preserved = copy.Copies.Count;
+        var collided = copy.Collided;
+
+        // The rows' notifications update the ticks. The list is never sorted by anything a switch changes (it has no
+        // sortable columns), so a library switched off here stays where it is and needs no refresh of the view.
         RefreshDictionaryStatus();
 
         var parts = new List<string>();
@@ -5973,10 +5932,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 + (choice.Delete ? "removed" : "turned off"));
         }
 
-        if (libraryTargets.Count > 0)
+        if (switchedOff.Count > 0)
         {
-            parts.Add($"{libraryTargets.Count} "
-                + $"{(libraryTargets.Count == 1 ? "library" : "libraries")} turned off");
+            parts.Add($"{switchedOff.Count} "
+                + $"{(switchedOff.Count == 1 ? "library" : "libraries")} turned off");
         }
 
         if (preserved > 0)
@@ -5984,23 +5943,35 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             parts.Add($"{preserved} still-used {(preserved == 1 ? "term" : "terms")} kept in your dictionary");
         }
 
-        if (parts.Count == 0)
-        {
-            return;
-        }
-
-        var message = $"{string.Join(", ", parts)}. Review the change, then save to apply it.";
+        // A library kept on is named, never its terms: the switch left it as it was.
+        var warnings = new List<string>();
         if (collided > 0)
         {
-            ShowInfo(
-                message + $" {collided} {(collided == 1 ? "term was" : "terms were")} not copied across "
+            warnings.Add($"{collided} {(collided == 1 ? "term was" : "terms were")} not copied across "
                 + "because you already have an entry with the same wording that is switched off. Turn "
-                + "it back on if you still want it.",
-                Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                + "it back on if you still want it.");
+        }
+
+        if (copy.KeptOn.Count > 0)
+        {
+            warnings.Add(LibrarySwitchOffCopy.DescribeKeptOn(copy.KeptOn));
+        }
+
+        var sentences = new List<string>();
+        if (parts.Count > 0)
+        {
+            sentences.Add($"{string.Join(", ", parts)}. Review the change, then save to apply it.");
+        }
+
+        sentences.AddRange(warnings);
+        if (sentences.Count == 0)
+        {
             return;
         }
 
-        ShowInfo(message);
+        ShowInfo(
+            string.Join(" ", sentences),
+            warnings.Count > 0 ? Wpf.Ui.Controls.InfoBarSeverity.Warning : Wpf.Ui.Controls.InfoBarSeverity.Success);
     }
 
     // --- History --------------------------------------------------------------------------
@@ -6997,8 +6968,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string Name { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public int Terms { get; set; }
+
+        /// <summary>Where the library comes from, "Built-in" or "Your library": the secondary line under its name.</summary>
         public string Source { get; set; } = string.Empty;
         public bool BuiltIn { get; set; }
+
+        /// <summary>What UI Automation reads for the name cell, which shows both lines.</summary>
+        public string AccessibleName => $"{Name}, {Source}";
 
         public bool Enabled
         {
