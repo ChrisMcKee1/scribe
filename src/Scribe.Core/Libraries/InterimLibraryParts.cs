@@ -179,7 +179,7 @@ internal sealed class InterimComposer : ILibraryComposer
     {
         ArgumentNullException.ThrowIfNull(libraries);
         var listed = new HashSet<string>(documentEnabledIds ?? [], StringComparer.OrdinalIgnoreCase);
-        var enabled = libraries.Where(library => listed.Contains(library.Id) || listed.Contains(library.LegacyId)).Select(library => library.Id);
+        var enabled = libraries.Where(library => listed.Contains(library.LegacyId)).Select(library => library.Id);
         return LibraryLocalState.Create(
             enabled, documentEnabledIds, aiPermissions: null, legacyMarkers: null, aiUpgradeNotice: null,
             storedState is null ? LocalStateHealth.Absent : LocalStateHealth.Newer);
@@ -216,7 +216,8 @@ internal sealed class InterimComposer : ILibraryComposer
                 library => library.Id, library => library.BuiltIn, library => library.FileName)
             .Select(library => library.LegacyId)
             .ToList();
-        ordered.AddRange(list.Where(id => !ordered.Contains(id, StringComparer.OrdinalIgnoreCase)).Order(StringComparer.Ordinal));
+        ordered.AddRange(list.Where(id => !ordered.Contains(id, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ThenBy(id => id, StringComparer.Ordinal));
         return new LibraryStateEncoding(ordered, StateValue: null);
     }
 

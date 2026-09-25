@@ -19,13 +19,18 @@ namespace Scribe.Benchmarks;
 /// pre-image and writes the redo image and the manifest, both flushed.</item>
 /// <item><see cref="Commit"/>: the settings transaction that commits the generation.</item>
 /// <item><see cref="Install"/>: <see cref="ILibraryCatalogStore.CompleteSave"/>, which installs the file, retires the
-/// manifest and publishes the vocabulary, so it ends when the next dictation can use the Save.</item>
+/// manifest and publishes the vocabulary; the post-processor's rules are rebuilt from it afterwards (see
+/// <see cref="Readiness"/>).</item>
 /// <item><see cref="Compose"/>: the committed catalog composed into the vocabulary.</item>
 /// <item><see cref="Compile"/>: the post-processor's rules rebuilt from that vocabulary, which the next dictation runs.</item>
 /// <item><see cref="Publish"/>: the first read of a new service over the same data, from the files to a published
 /// vocabulary: what every start pays before <see cref="ILibraryVocabularySource.Current"/> holds the libraries.</item>
-/// <item><see cref="FullSave"/>: stage, commit and install in one invocation.</item>
+/// <item><see cref="FullSave"/>: stage, commit and install in one invocation. It stops when the vocabulary is published,
+/// before the rules are rebuilt, so it is not readiness for the next dictation on its own.</item>
+/// <item><see cref="Readiness"/>: the whole Save and then the rules rebuilt from the published vocabulary: from the Save to
+/// the next dictation being able to use it.</item>
 /// </list>
+/// <see cref="Publish"/> measures a fresh service's first load, what a start pays, not a step of a Save.
 /// Each Save changes one term, so every file write is real. The iteration setups force one invocation per iteration,
 /// which is why each phase runs fifteen iterations; these are costs on this machine and disk, not user-visible latency
 /// on their own.
@@ -95,7 +100,7 @@ public class LibrarySaveBenchmarks
         }
     }
 
-    [IterationSetup(Targets = [nameof(Stage), nameof(FullSave)])]
+    [IterationSetup(Targets = [nameof(Stage), nameof(FullSave), nameof(Readiness)])]
     public void NextChangeSet()
     {
         _catalog = _service.LoadCatalog();
@@ -182,6 +187,15 @@ public class LibrarySaveBenchmarks
         }
 
         return Install();
+    }
+
+    // The whole Save and then the rules the next dictation matches with, rebuilt from the published vocabulary: from the
+    // user's Save to the next dictation being ready, with this branch's interim parts (integration measures the real ones).
+    [Benchmark]
+    public string Readiness()
+    {
+        FullSave();
+        return Compile();
     }
 
     private DictionaryLibraryService NewService() => new(_paths, _settings, NullLogger<DictionaryLibraryService>.Instance);

@@ -139,6 +139,44 @@ public sealed class SettingsRepository : ISettingsRepository
         return AppSettings.CreateForExistingInstall();
     }
 
+    /// <summary>For tests: raised inside the read transaction of the library settings read, after the document is read.</summary>
+    internal Action<string>? ReadStep { get; set; }
+
+    // One SQLite read transaction: whatever commits meanwhile, every value comes from one committed generation (round 2,
+    // A6). Load's rules for whether the document can be used, without its side effects: the recovery copy is Load's to
+    // write, and LastLoadFailed stays the session's.
+    LibrarySettingsRead ISettingsRepository.ReadLibrarySettings()
+    {
+        bool stored;
+        string json;
+        bool lost;
+        string? generation;
+        string? state;
+        string? fileIds;
+        using (var connection = _database.Open())
+        using (var transaction = connection.BeginTransaction(deferred: true))
+        {
+            (stored, json) = ReadDocument(connection, transaction);
+            ReadStep?.Invoke("document read");
+            lost = ReadValue(connection, transaction, LostMarkerKey) is not null;
+            generation = ReadValue(connection, transaction, LibrarySettingKeys.Generation);
+            state = ReadValue(connection, transaction, LibrarySettingKeys.State);
+            fileIds = ReadValue(connection, transaction, LibrarySettingKeys.FileIds);
+            transaction.Commit();
+        }
+
+        if (!stored)
+        {
+            var unusable = _database.SettingsLostInRepair || lost;
+            return new LibrarySettingsRead(
+                unusable ? null : [.. AppSettings.CreateDefault().EnabledDictionaryLibraryIds], unusable, generation, state, fileIds);
+        }
+
+        var document = string.IsNullOrWhiteSpace(json) ? null : TryDeserialize(json);
+        return new LibrarySettingsRead(
+            document is null ? null : [.. document.EnabledDictionaryLibraryIds], document is null, generation, state, fileIds);
+    }
+
     public AppSettings Update(Action<AppSettings> mutate) => UpdateCore(mutate, setting: null, revision: null, out _);
 
     public AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded) =>

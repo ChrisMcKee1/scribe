@@ -49,6 +49,76 @@ public sealed class LibraryIdentityStorageTests : IDisposable
     }
 
     [Fact]
+    public void A_recorded_id_stays_with_its_file_when_a_later_file_has_that_id_for_a_stem()
+    {
+        // Round 2, A10: github.csv is recorded as custom-github at the first commit; a hand-placed custom-github.csv appears
+        // later. The recorded mapping of a file that still exists wins, and the newcomer takes the next free suffix.
+        SeedTwin();
+        _fixture.SaveEnabled("github");
+        var first = _fixture.Service().LoadCatalog();
+        Assert.Equal("github.csv", first.Find("custom-github")!.FileName);
+        Assert.Contains("custom-github", first.LocalState.EnabledIds);
+        Assert.True(ContractComposer.IsPermitted(first.LocalState, "custom-github", false, first.Find("custom-github")!.ContentHash));
+        _fixture.Write("custom-github.csv", LibraryStorageFixture.Csv("Newcomer", ("newcomer term", "Newcomer")));
+
+        _fixture.Restart();
+        var later = _fixture.Service().LoadCatalog();
+
+        Assert.Equal("github.csv", later.Find("custom-github")!.FileName);
+        Assert.Equal("custom-github.csv", later.Find("custom-github-2")!.FileName);
+        Assert.Contains("custom-github", later.LocalState.EnabledIds);
+        Assert.True(ContractComposer.IsPermitted(later.LocalState, "custom-github", false, later.Find("custom-github")!.ContentHash));
+        Assert.DoesNotContain("custom-github-2", later.LocalState.EnabledIds);
+        Assert.False(ContractComposer.IsPermitted(later.LocalState, "custom-github-2", false, later.Find("custom-github-2")!.ContentHash));
+        Assert.Contains("\"custom-github.csv\":\"custom-github-2\"", _fixture.Row(LibrarySettingKeys.FileIds)!, StringComparison.Ordinal);
+        Assert.Contains("\"github.csv\":\"custom-github\"", _fixture.Row(LibrarySettingKeys.FileIds)!, StringComparison.Ordinal);
+
+        // The older build loads github.csv as github and custom-github.csv as custom-github: the list keeps both twins on,
+        // as before this version, and never names the newcomer, which starts off.
+        Assert.Contains(OlderBuildApplies(), entry => entry.Replacement == Canary);
+        Assert.DoesNotContain(OlderBuildApplies(), entry => entry.Replacement == "Newcomer");
+        Assert.DoesNotContain(_fixture.Service().Current.Entries, entry => entry.Replacement == "Newcomer");
+
+        // Both stay put across a Save and a restart; turned on and permitted, the newcomer reaches the older build too.
+        var service = _fixture.Service();
+        var catalog = service.LoadCatalog();
+        Changes.Save(service, _fixture.Settings, Changes.Of(catalog, state: Changes.With(catalog.LocalState, enable: ["custom-github-2"], ai: [("custom-github-2", true)])));
+        _fixture.Restart();
+        var reloaded = _fixture.Service().LoadCatalog();
+        Assert.Equal("github.csv", reloaded.Find("custom-github")!.FileName);
+        Assert.Equal("custom-github.csv", reloaded.Find("custom-github-2")!.FileName);
+        Assert.Contains(OlderBuildApplies(), entry => entry.Replacement == "Newcomer");
+        Assert.Contains(OlderBuildApplies(), entry => entry.Replacement == Canary);
+    }
+
+    [Fact]
+    public void A_list_entry_no_file_answers_to_selects_nothing_even_when_a_remapped_file_took_it_as_its_logical_id()
+    {
+        // Round 2, A1: the list keeps custom-github from a custom-github.csv that was removed; a hand-placed github.csv is
+        // then remapped to the logical id custom-github. 0.4.3 selects neither, and neither does this build's legacy seam.
+        _fixture.SaveEnabled("custom-github");
+        SeedTwin();
+
+        // The interim parts first: they adopt nothing, so the stored list still names custom-github when they read it.
+        foreach (var service in (Scribe.Core.PostProcessing.DictionaryLibraryService[])
+                 [new(_fixture.Paths, _fixture.Settings, _fixture.Log), _fixture.Service()])
+        {
+            Assert.Equal(["custom-github"], _fixture.StoredEnabledList());
+            var catalog = service.LoadCatalog();
+            Assert.Equal("github.csv", catalog.Find("custom-github")!.FileName);
+            Assert.DoesNotContain(Legacy043LibrarySelection.EnabledEntries(["custom-github"], _fixture.LibrariesDir), entry => entry.Replacement == Canary);
+            Assert.DoesNotContain(service.GetEnabledLibraryEntries(["custom-github"]), entry => entry.Replacement == Canary);
+            Assert.DoesNotContain(service.GetEnabledLibraryEntries(), entry => entry.Replacement == Canary);
+            Assert.DoesNotContain(service.Current.Entries, entry => entry.Replacement == Canary);
+            Assert.DoesNotContain(service.Current.AiEntries, entry => entry.Replacement == Canary);
+        }
+
+        // The legacy id still selects it, as 0.4.3 does.
+        Assert.Contains(_fixture.Service().GetEnabledLibraryEntries(["github"]), entry => entry.Replacement == Canary);
+        Assert.Contains(Legacy043LibrarySelection.EnabledEntries(["github"], _fixture.LibrariesDir), entry => entry.Replacement == Canary);
+    }
+
+    [Fact]
     public void A_twin_placed_after_the_first_start_starts_off_and_is_not_sent()
     {
         // J-11 (decision 5 as Grok reviewed it): a file remapped at a later start is a new file.

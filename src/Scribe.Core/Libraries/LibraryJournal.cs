@@ -24,6 +24,12 @@ internal sealed class LibraryRecoveryOutcome
     /// <summary>A manifest of the stored generation still pending: the libraries are unresolved and it is read logically.</summary>
     public LibraryManifest? Unresolved { get; set; }
 
+    /// <summary>
+    /// A listing of pending or set-aside manifests failed, so this attempt could not see every manifest: counted as held,
+    /// which fences every commit, and no orphan was removed (review finding A2 of round 2).
+    /// </summary>
+    public bool InventoryIncomplete { get; set; }
+
     /// <summary>Whether anything on disk changed, so the service publishes again.</summary>
     public bool ChangedFiles => Completed > 0 || Discarded > 0 || SetAside > 0;
 
@@ -36,6 +42,19 @@ internal sealed class LibraryRecoveryOutcome
             Failure = failure;
         }
     }
+}
+
+/// <summary>What the redo images of a manifest were found to be.</summary>
+internal enum RedoImagesState
+{
+    /// <summary>Every image the manifest needs is there and holds its S.</summary>
+    Intact,
+
+    /// <summary>One is missing or fails its hash: what the manifest would install cannot be trusted.</summary>
+    Untrustworthy,
+
+    /// <summary>One could not be read right now (a lock, a denied read): nothing can be concluded yet.</summary>
+    Unreadable,
 }
 
 /// <summary>What completing one manifest achieved.</summary>
@@ -64,6 +83,7 @@ internal sealed class LibraryJournal
     private readonly string _librariesDir;
     private readonly string _journalDir;
     private readonly string _editsDir;
+    private readonly string _deletedDir;
     private readonly string _orphansDir;
     private readonly Action<LibraryFileOperation, Exception> _onFailure;
 
@@ -73,6 +93,7 @@ internal sealed class LibraryJournal
         _librariesDir = paths.LibrariesDir;
         _journalDir = paths.LibraryJournalDir;
         _editsDir = paths.LibraryEditsDir;
+        _deletedDir = paths.LibraryDeletedDir;
         _orphansDir = Path.Combine(_journalDir, OrphansFolderName);
         _onFailure = onFailure;
     }
@@ -229,8 +250,36 @@ internal sealed class LibraryJournal
     }
 
     /// <summary>Whether every redo image the manifest needs is on disk and holds its S (rule R2's premise).</summary>
-    public bool RedoImagesIntact(LibraryManifest manifest) =>
-        manifest.Operations.Where(operation => operation.HasPostImage).All(operation => ReadRedo(manifest, operation) is not null);
+    public RedoImagesState CheckRedoImages(LibraryManifest manifest, out LibraryIoFailure failure)
+    {
+        failure = LibraryIoFailure.None;
+        foreach (var operation in manifest.Operations.Where(operation => operation.HasPostImage))
+        {
+            byte[] bytes;
+            try
+            {
+                bytes = _files.ReadAllBytes(Path.Combine(RedoFolderPath(manifest), LibraryJournalNames.RedoImage(operation.Number)));
+            }
+            catch (Exception ex) when (LibraryIoFailures.IsNotFound(ex))
+            {
+                return RedoImagesState.Untrustworthy;
+            }
+            catch (Exception ex)
+            {
+                _onFailure(LibraryFileOperation.Read, ex);
+                var classified = LibraryIoFailures.Classify(ex);
+                failure = classified == LibraryIoFailure.None ? LibraryIoFailure.Other : classified;
+                return RedoImagesState.Unreadable;
+            }
+
+            if (LibraryContentHashing.Of(bytes) != operation.Staged)
+            {
+                return RedoImagesState.Untrustworthy;
+            }
+        }
+
+        return RedoImagesState.Intact;
+    }
 
     public LibraryInstaller Installer(LibraryManifest manifest, List<LibraryKeptVersion> kept) =>
         new(_files, _librariesDir, _journalDir, manifest, _onFailure, kept);
@@ -332,12 +381,13 @@ internal sealed class LibraryJournal
 
     /// <summary>
     /// Sets aside a manifest whose operations cannot be read, which has nothing to make whole by: first every backup whose
-    /// name parses to it is moved into <c>journal\orphans\</c> and kept, never expired; a move that fails holds it.
+    /// name parses to it (a claimed Recently deleted entry included) is moved into <c>journal\orphans\</c> and kept, never
+    /// expired; a move that fails holds it.
     /// </summary>
     public bool SetAsideUnreadable(LibraryJournalName name, DateTimeOffset now, out LibraryIoFailure failure)
     {
         failure = LibraryIoFailure.None;
-        foreach (var folder in (string[])[_librariesDir, _editsDir])
+        foreach (var folder in (string[])[_librariesDir, _editsDir, _deletedDir])
         {
             IEnumerable<string> files;
             try
@@ -432,7 +482,16 @@ internal sealed class LibraryJournal
         var names = ListManifests(out var listFailure)
             .Where(name => liveManifestId is null || !string.Equals(name.ManifestId, liveManifestId, StringComparison.OrdinalIgnoreCase))
             .ToList();
-        outcome.NoteFailure(listFailure);
+        ListSetAside(out var setAsideListFailure);
+        if (listFailure != LibraryIoFailure.None || setAsideListFailure != LibraryIoFailure.None)
+        {
+            // Unresolved storage until both inventories succeed: nothing may commit past a manifest this attempt cannot see.
+            outcome.InventoryIncomplete = true;
+            outcome.Held++;
+            outcome.NoteFailure(listFailure);
+            outcome.NoteFailure(setAsideListFailure);
+        }
+
         var ofStored = names.Count(name => name.Generation == storedGeneration);
         foreach (var name in names)
         {
@@ -460,7 +519,17 @@ internal sealed class LibraryJournal
                 continue;
             }
 
-            if (!generationLost && manifest.Generation == storedGeneration && ofStored == 1 && RedoImagesIntact(manifest))
+            // A redo image that cannot be read right now says nothing about whether it holds S: the manifest is held and
+            // tried again, never set aside for it (only a missing image or one that fails its hash is untrustworthy).
+            var redo = CheckRedoImages(manifest, out var redoFailure);
+            if (redo == RedoImagesState.Unreadable)
+            {
+                outcome.Held++;
+                outcome.NoteFailure(redoFailure);
+                continue;
+            }
+
+            if (!generationLost && manifest.Generation == storedGeneration && ofStored == 1 && redo == RedoImagesState.Intact)
             {
                 var completion = Complete(manifest, kept);
                 if (completion.Retired)
@@ -503,7 +572,7 @@ internal sealed class LibraryJournal
             }
         }
 
-        if (!runningOnDefaults)
+        if (!runningOnDefaults && !outcome.InventoryIncomplete)
         {
             RemoveOrphans(liveManifestId, outcome);
         }
@@ -513,11 +582,21 @@ internal sealed class LibraryJournal
 
     // Install copies, redo folders and temporary manifests whose manifest no live, pending or set-aside manifest is, are
     // removed; a backup of that kind is kept in journal\orphans\, because without a manifest nothing tells a spare copy
-    // from someone's only copy (decision 31). Names that do not parse are not the journal's and stay where they are.
+    // from someone's only copy (decision 31). Names that do not parse are not the journal's and stay where they are. Both
+    // inventories are taken again, after this attempt's changes, and a failure of either removes nothing at all.
     private void RemoveOrphans(string? liveManifestId, LibraryRecoveryOutcome outcome)
     {
+        var manifests = ListManifests(out var manifestFailure);
+        var setAside = ListSetAside(out var setAsideFailure);
+        if (manifestFailure != LibraryIoFailure.None || setAsideFailure != LibraryIoFailure.None)
+        {
+            outcome.NoteFailure(manifestFailure);
+            outcome.NoteFailure(setAsideFailure);
+            return;
+        }
+
         var known = new HashSet<(long, string)>();
-        foreach (var name in ListManifests(out _).Concat(ListSetAside(out _)))
+        foreach (var name in manifests.Concat(setAside))
         {
             known.Add((name.Generation, name.ManifestId.ToLowerInvariant()));
         }
@@ -555,7 +634,8 @@ internal sealed class LibraryJournal
                 }
             }
 
-            foreach (var folder in (string[])[_librariesDir, _editsDir])
+            // deleted\ holds only claims of Recently deleted entries: an orphan one is kept like any backup, never deleted.
+            foreach (var folder in (string[])[_librariesDir, _editsDir, _deletedDir])
             {
                 foreach (var path in _files.EnumerateFiles(folder, "~g*").ToList())
                 {
@@ -706,8 +786,11 @@ internal sealed class LibraryJournal
         }
         catch (Exception ex)
         {
+            // An inventory is complete or it is nothing: a partial one would make a live manifest's files look orphaned.
             _onFailure(LibraryFileOperation.Enumerate, ex);
-            failure = LibraryIoFailures.Classify(ex);
+            var classified = LibraryIoFailures.Classify(ex);
+            failure = classified == LibraryIoFailure.None ? LibraryIoFailure.Other : classified;
+            return [];
         }
 
         return [.. names.OrderBy(name => name.Generation).ThenBy(name => name.ManifestId, StringComparer.OrdinalIgnoreCase)];

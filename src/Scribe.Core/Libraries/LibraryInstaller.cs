@@ -47,6 +47,7 @@ internal sealed class LibraryInstaller
 
     private readonly ILibraryFileSystem _files;
     private readonly string _librariesDir;
+    private readonly string _deletedDir;
     private readonly string _orphansDir;
     private readonly string _redoFolder;
     private readonly LibraryManifest _manifest;
@@ -63,6 +64,7 @@ internal sealed class LibraryInstaller
     {
         _files = files;
         _librariesDir = librariesDir;
+        _deletedDir = Path.Combine(librariesDir, Infrastructure.AppPaths.LibraryDeletedFolderName);
         _orphansDir = Path.Combine(journalDir, LibraryJournal.OrphansFolderName);
         _redoFolder = Path.Combine(journalDir, LibraryJournalNames.RedoFolder(manifest.Generation, manifest.Id));
         _manifest = manifest;
@@ -110,17 +112,19 @@ internal sealed class LibraryInstaller
                 var target = Observe(Absolute(operation.Target), LibraryFileOperation.Read, report: false);
                 var entry = Observe(Absolute(operation.From!), LibraryFileOperation.Read, report: false);
                 return target is { Failed: false, Present: true } && target.Hash == operation.Staged &&
-                    entry is { Failed: false } && (!entry.Present || entry.Hash != operation.FromHash);
+                    entry is { Failed: false } && (!entry.Present || entry.Hash != operation.FromHash) &&
+                    TryListSeries(operation, _deletedDir, out var claims, out _) && claims.Count == 0;
             }
 
             case LibraryOperationKind.Remove:
-                return !SafeExists(Absolute(operation.Target));
+                return !SafeExists(Absolute(operation.Target)) && TryListSeries(operation, out var taken, out _) && taken.Count == 0;
             case LibraryOperationKind.Delete:
                 return !SafeExists(Absolute(operation.Target)) || SafeExists(Absolute(operation.To!));
             case LibraryOperationKind.Purge:
             {
                 var entry = Observe(Absolute(operation.Target), LibraryFileOperation.Read, report: false);
-                return entry is { Failed: false } && (!entry.Present || (operation.PreImage is { } expected && entry.Hash != expected));
+                return entry is { Failed: false } && (!entry.Present || (operation.PreImage is { } expected && entry.Hash != expected)) &&
+                    TryListSeries(operation, _deletedDir, out var claims, out _) && claims.Count == 0;
             }
 
             default:
@@ -136,6 +140,11 @@ internal sealed class LibraryInstaller
     /// </summary>
     public LibraryOperationOutcome MakeWhole(LibraryManifestOperation operation)
     {
+        if (operation.Kind is LibraryOperationKind.Restore or LibraryOperationKind.Purge)
+        {
+            return ReturnEntryClaims(operation);
+        }
+
         for (var step = 0; step < MaxSteps; step++)
         {
             if (!TryListSeries(operation, out var series, out var failure))
@@ -199,6 +208,18 @@ internal sealed class LibraryInstaller
     /// </summary>
     public bool IsWhole(LibraryManifestOperation operation, out LibraryIoFailure failure)
     {
+        if (operation.Kind is LibraryOperationKind.Restore or LibraryOperationKind.Purge)
+        {
+            // A Recently deleted entry the journal took and has not judged yet goes back before anything leaves.
+            if (!TryListSeries(operation, _deletedDir, out var claims, out failure))
+            {
+                return false;
+            }
+
+            failure = claims.Count == 0 ? LibraryIoFailure.None : LibraryIoFailure.Other;
+            return claims.Count == 0;
+        }
+
         if (!TryListSeries(operation, out var series, out failure))
         {
             return false;
@@ -239,6 +260,12 @@ internal sealed class LibraryInstaller
     public bool DeleteJournalFiles(LibraryManifestOperation operation)
     {
         var deleted = TryDelete(InstallCopyPath(operation), LibraryFileOperation.DeleteSpent);
+        if (operation.Kind is LibraryOperationKind.Restore or LibraryOperationKind.Purge)
+        {
+            // Their claims hold Recently deleted entries, which only judging or returning them ever lets go.
+            return deleted;
+        }
+
         if (TryListSeries(operation, out var series, out _))
         {
             foreach (var (_, path) in series)
@@ -386,8 +413,25 @@ internal sealed class LibraryInstaller
                 return LibraryOperationOutcome.Deferred(observed.Failure);
             }
 
+            if (!TryListSeries(operation, out var series, out var listFailure))
+            {
+                return LibraryOperationOutcome.Deferred(listFailure);
+            }
+
             if (observed.Present && observed.Hash == operation.Staged)
             {
+                // In place; every version this operation took aside is judged before it counts as done.
+                if (series.Count > 0)
+                {
+                    var resolved = ResolveBackups(operation, series);
+                    if (!resolved.Done)
+                    {
+                        return resolved;
+                    }
+
+                    continue;
+                }
+
                 DeleteSpentInstallCopy(operation);
                 return LibraryOperationOutcome.Completed;
             }
@@ -408,13 +452,15 @@ internal sealed class LibraryInstaller
                 continue;
             }
 
-            // C3: another app created the target after prepare (review finding G3). Its file is never overwritten.
+            // C3: another app created the target after prepare (review finding G3). An edits document is taken, by one
+            // rename that never overwrites, into this operation's backups and judged there (rule R3), so only a copy the
+            // journal owns is ever deleted (round 2, A4); a custom file is never touched at all.
             if (operation.IsEditsTarget)
             {
-                var setAside = PreserveOutsideVersion(operation, observed, target);
-                if (!setAside.Done)
+                var claimed = Claim(operation, target, FolderOf(operation), series, LibraryFileOperation.CheckedReplace);
+                if (!claimed.Done)
                 {
-                    return setAside;
+                    return claimed;
                 }
 
                 continue;
@@ -436,9 +482,13 @@ internal sealed class LibraryInstaller
 
     // --- remove: M1 to M3 --------------------------------------------------------------------------------------------
 
+    // Whatever the target holds is first taken, by a rename that never overwrites, into the operation's own backups; only
+    // there, owned, is it judged (rule R3): P becomes the previous copy or is set aside, anything else is preserved. A
+    // version written to the target meanwhile is taken and judged the same way, so none is ever deleted (round 2, A4).
     private LibraryOperationOutcome ResumeRemove(LibraryManifestOperation operation)
     {
         var target = Absolute(operation.Target);
+        var reappearances = 0;
         for (var step = 0; step < MaxSteps; step++)
         {
             var observed = Observe(target, LibraryFileOperation.Read);
@@ -447,37 +497,38 @@ internal sealed class LibraryInstaller
                 return LibraryOperationOutcome.Deferred(observed.Failure);
             }
 
-            if (!observed.Present)
+            if (!TryListSeries(operation, out var series, out var listFailure))
             {
-                return LibraryOperationOutcome.Completed;
+                return LibraryOperationOutcome.Deferred(listFailure);
             }
 
-            if (observed.Hash == operation.PreImage)
+            if (observed.Present)
             {
-                if (operation.Replaced == LibraryEditsReplacement.Previous)
+                if (series.Count > 0 && ++reappearances > MaxReappearances)
                 {
-                    // The previous copy is the one single slot the journal overwrites, and only ever with the pre-image.
-                    if (TryMove(target, PreviousPath(operation), overwrite: true, LibraryFileOperation.KeepPrevious, out var failure) is MoveResult.Failed)
-                    {
-                        return LibraryOperationOutcome.Deferred(failure);
-                    }
-
-                    continue;
+                    // Another app keeps recreating the document: every version it wrote is owned or preserved, and the
+                    // operation waits for the next attempt rather than race it.
+                    return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
                 }
 
-                var setAside = Preserve(observed, target, EditsCandidate(operation, observed.Hash));
-                if (!setAside.Outcome.Done)
+                var claimed = Claim(operation, target, FolderOf(operation), series, LibraryFileOperation.CheckedReplace);
+                if (!claimed.Done)
                 {
-                    return setAside.Outcome;
+                    return claimed;
                 }
 
                 continue;
             }
 
-            var outside = PreserveOutsideVersion(operation, observed, target);
-            if (!outside.Done)
+            if (series.Count == 0)
             {
-                return outside;
+                return LibraryOperationOutcome.Completed;
+            }
+
+            var resolved = ResolveBackups(operation, series);
+            if (!resolved.Done)
+            {
+                return resolved;
             }
         }
 
@@ -575,48 +626,237 @@ internal sealed class LibraryInstaller
         return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
     }
 
-    // S1 to S3: the entry leaves Recently deleted only when it still holds what was restored from it.
+    // S1 to S3: the entry leaves Recently deleted only when it still holds what was restored from it. It is first taken,
+    // by a rename that never overwrites, into this operation's claims in deleted\, and only that owned copy is judged:
+    // the restored bytes are deleted, anything else goes back to Recently deleted (round 2, A4).
     private LibraryOperationOutcome ConsumeEntry(LibraryManifestOperation operation, string entryPath)
     {
-        var entry = Observe(entryPath, LibraryFileOperation.Read);
-        if (entry.Failed)
+        for (var step = 0; step < MaxSteps; step++)
         {
-            return LibraryOperationOutcome.Deferred(entry.Failure);
+            if (!TryListSeries(operation, _deletedDir, out var claims, out var listFailure))
+            {
+                return LibraryOperationOutcome.Deferred(listFailure);
+            }
+
+            var entry = Observe(entryPath, LibraryFileOperation.Read);
+            if (entry.Failed)
+            {
+                return LibraryOperationOutcome.Deferred(entry.Failure);
+            }
+
+            if (entry.Present && entry.Hash == operation.FromHash)
+            {
+                var claimed = Claim(operation, entryPath, _deletedDir, claims, LibraryFileOperation.RestoreFromRecentlyDeleted);
+                if (!claimed.Done)
+                {
+                    return claimed;
+                }
+
+                continue;
+            }
+
+            // Absent, or changed after prepare and so left as it is: what remains is to judge what was taken.
+            var judged = JudgeEntryClaims(operation, entryPath, claims, operation.FromHash, LibraryFileOperation.RestoreFromRecentlyDeleted);
+            if (!judged.Done)
+            {
+                return judged;
+            }
+
+            return LibraryOperationOutcome.Completed;
         }
 
-        if (entry.Present && entry.Hash == operation.FromHash && !TryDelete(entryPath, LibraryFileOperation.RestoreFromRecentlyDeleted))
+        return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+    }
+
+    // --- purge: U1 to U3 ---------------------------------------------------------------------------------------------
+
+    // The entry is taken into this operation's claims first and only the owned copy is deleted, when it holds what the user
+    // chose to delete (or, for an entry listed unreadable, whatever it held when taken); an entry changed after prepare is
+    // left as it is (U3), and bytes written to its name while it was being taken go back to Recently deleted.
+    private LibraryOperationOutcome ResumePurge(LibraryManifestOperation operation)
+    {
+        var entryPath = Absolute(operation.Target);
+        for (var step = 0; step < MaxSteps; step++)
         {
-            return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+            if (!TryListSeries(operation, _deletedDir, out var claims, out var listFailure))
+            {
+                return LibraryOperationOutcome.Deferred(listFailure);
+            }
+
+            bool take;
+            if (operation.PreImage is { } expected)
+            {
+                var entry = Observe(entryPath, LibraryFileOperation.Read);
+                if (entry.Failed)
+                {
+                    return LibraryOperationOutcome.Deferred(entry.Failure);
+                }
+
+                take = entry.Present && entry.Hash == expected;
+            }
+            else
+            {
+                // An entry listed unreadable has no hash to compare: the user chose to delete it as it is, so it is taken
+                // unread, once; a file written to its name after that is a new entry, left alone.
+                var exists = SafeExists(entryPath, out var existsFailure);
+                if (existsFailure != LibraryIoFailure.None)
+                {
+                    return LibraryOperationOutcome.Deferred(existsFailure);
+                }
+
+                take = exists && claims.Count == 0;
+            }
+
+            if (take)
+            {
+                var claimed = Claim(operation, entryPath, _deletedDir, claims, LibraryFileOperation.Purge);
+                if (!claimed.Done)
+                {
+                    return claimed;
+                }
+
+                continue;
+            }
+
+            var judged = JudgeEntryClaims(operation, entryPath, claims, operation.PreImage, LibraryFileOperation.Purge);
+            if (!judged.Done)
+            {
+                return judged;
+            }
+
+            return LibraryOperationOutcome.Completed; // U1, U2, or U3: changed after prepare, so left as it is
+        }
+
+        return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+    }
+
+    // Claims of a Recently deleted entry, owned by the journal: the one holding exactly what the operation consumes (a
+    // restore's FromHash, a purge's pre-image, or for an entry listed unreadable the first one taken, which is deleted as it
+    // is, unread) is deleted; every other goes back to Recently deleted, under the entry's name when it is free and
+    // otherwise under the next free name of its stamp.
+    private LibraryOperationOutcome JudgeEntryClaims(
+        LibraryManifestOperation operation, string entryPath, IReadOnlyList<(int Index, string Path)> claims,
+        LibraryContentHash? consumed, LibraryFileOperation fileOperation)
+    {
+        foreach (var (index, path) in claims)
+        {
+            if (consumed is null && index == claims[0].Index)
+            {
+                if (!TryDelete(path, fileOperation))
+                {
+                    return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+                }
+
+                continue;
+            }
+
+            var claim = Observe(path, LibraryFileOperation.Read);
+            if (claim.Failed)
+            {
+                return LibraryOperationOutcome.Deferred(claim.Failure);
+            }
+
+            if (!claim.Present)
+            {
+                continue;
+            }
+
+            if (claim.Hash == consumed)
+            {
+                if (!TryDelete(path, fileOperation))
+                {
+                    return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+                }
+
+                continue;
+            }
+
+            var returned = ReturnToRecentlyDeleted(path, entryPath, fileOperation);
+            if (!returned.Done)
+            {
+                return returned;
+            }
         }
 
         return LibraryOperationOutcome.Completed;
     }
 
-    // --- purge: U1 to U3 ---------------------------------------------------------------------------------------------
-
-    private LibraryOperationOutcome ResumePurge(LibraryManifestOperation operation)
+    // Bytes the journal took from Recently deleted that are not what it consumes: back under the entry's own name, or, when
+    // another file has it by now, under the next free name of the same stamp, never over anything.
+    private LibraryOperationOutcome ReturnToRecentlyDeleted(string claimPath, string entryPath, LibraryFileOperation fileOperation)
     {
-        var entryPath = Absolute(operation.Target);
-        if (operation.PreImage is not { } expected)
+        var entryName = Path.GetFileName(entryPath);
+        for (var attempt = 0; attempt < MaxCandidates; attempt++)
         {
-            // An entry listed unreadable has no hash to compare; the user chose to delete it as it is.
-            return TryDelete(entryPath, LibraryFileOperation.Purge)
-                ? LibraryOperationOutcome.Completed
-                : LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+            var destination = entryPath;
+            if (attempt > 0)
+            {
+                if (!RecentlyDeletedStore.TryParseEntryName(entryName, out var stamp, out _, out var originalFileName))
+                {
+                    return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+                }
+
+                var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    taken.UnionWith(_files.EnumerateFiles(_deletedDir, "*").Select(Path.GetFileName).OfType<string>());
+                }
+                catch (Exception ex)
+                {
+                    _onFailure(LibraryFileOperation.Enumerate, ex);
+                    return LibraryOperationOutcome.Deferred(LibraryIoFailures.Classify(ex));
+                }
+
+                destination = Path.Combine(_deletedDir, RecentlyDeletedStore.NextEntryName(originalFileName, stamp, taken));
+            }
+
+            switch (TryMove(claimPath, destination, overwrite: false, fileOperation, out var failure))
+            {
+                case MoveResult.Moved:
+                case MoveResult.SourceMissing:
+                    return LibraryOperationOutcome.Completed;
+                case MoveResult.Failed:
+                    return LibraryOperationOutcome.Deferred(failure);
+            }
         }
 
-        var entry = Observe(entryPath, LibraryFileOperation.Read);
-        if (entry.Failed)
+        return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+    }
+
+    // Before a set-aside or a discard: every Recently deleted entry this operation took goes back, judged by nothing, since
+    // whether its Save committed is not what these paths decide by.
+    private LibraryOperationOutcome ReturnEntryClaims(LibraryManifestOperation operation)
+    {
+        if (!TryListSeries(operation, _deletedDir, out var claims, out var failure))
         {
-            return LibraryOperationOutcome.Deferred(entry.Failure);
+            return LibraryOperationOutcome.Deferred(failure);
         }
 
-        if (entry.Present && entry.Hash == expected && !TryDelete(entryPath, LibraryFileOperation.Purge))
+        var entryPath = Absolute(operation.Kind == LibraryOperationKind.Restore ? operation.From! : operation.Target);
+        foreach (var (_, path) in claims)
         {
-            return LibraryOperationOutcome.Deferred(LibraryIoFailure.Other);
+            var returned = ReturnToRecentlyDeleted(path, entryPath, LibraryFileOperation.RestoreFromRecentlyDeleted);
+            if (!returned.Done)
+            {
+                return returned;
+            }
         }
 
-        return LibraryOperationOutcome.Completed; // U1, U2, or U3: changed after prepare, so left as it is
+        return LibraryOperationOutcome.Completed;
+    }
+
+    // Takes whatever a file holds, by one rename that never overwrites, into the operation's own series in `folder` (the
+    // next index after the largest there): after it, the bytes are the journal's to judge, and a write landing at `source`
+    // meanwhile is a new file the next observation meets (round 2, A4).
+    private LibraryOperationOutcome Claim(
+        LibraryManifestOperation operation, string source, string folder, IReadOnlyList<(int Index, string Path)> series,
+        LibraryFileOperation fileOperation)
+    {
+        var index = series.Count == 0 ? 1 : series[^1].Index + 1;
+        var destination = Path.Combine(folder, LibraryJournalNames.Backup(_manifest.Generation, _manifest.Id, operation.Number, index));
+        return TryMove(source, destination, overwrite: false, fileOperation, out var failure) is MoveResult.Failed
+            ? LibraryOperationOutcome.Deferred(failure)
+            : LibraryOperationOutcome.Completed;
     }
 
     // --- backups (R3) and preservation (R7) ---------------------------------------------------------------------------
@@ -771,7 +1011,9 @@ internal sealed class LibraryInstaller
     // Rule R7: a deterministic candidate series, hash-checked, never overwriting. A candidate holding the same bytes is
     // done (the same version observed again after a crash lands where it landed before); one holding other bytes, for any
     // reason, is skipped; the version moves to the first free candidate, and a move that fails because the candidate
-    // appeared meanwhile observes it again and probes on.
+    // appeared meanwhile observes it again and probes on. The source is always a copy the journal owns (a backup or a
+    // claim, round 2, A4), so deleting a spare one never deletes a version written after it was observed; and a move is
+    // only counted once the candidate is observed holding the bytes.
     private (LibraryOperationOutcome Outcome, string? KeptPath) Preserve(
         Observed version, string source, Func<int, string> candidate)
     {
@@ -791,7 +1033,7 @@ internal sealed class LibraryInstaller
                     continue;
                 }
 
-                // An identical copy is already kept: the source is spare.
+                // An identical copy is already kept: the owned source is spare.
                 return TryDelete(source, LibraryFileOperation.DeleteSpent)
                     ? (LibraryOperationOutcome.Completed, path)
                     : (LibraryOperationOutcome.Deferred(LibraryIoFailure.Other), null);
@@ -813,7 +1055,10 @@ internal sealed class LibraryInstaller
                     // The version is gone from the source: already kept by an earlier attempt, or removed by hand.
                     return (LibraryOperationOutcome.Completed, FoundAtPreservation(candidate, version.Hash));
                 default:
-                    return (LibraryOperationOutcome.Completed, path);
+                    var kept = Observe(path, LibraryFileOperation.KeepVersion);
+                    return kept is { Failed: false, Present: true } && kept.Hash == version.Hash
+                        ? (LibraryOperationOutcome.Completed, path)
+                        : (LibraryOperationOutcome.Deferred(kept.Failed ? kept.Failure : LibraryIoFailure.Other), null);
             }
         }
 
@@ -978,13 +1223,18 @@ internal sealed class LibraryInstaller
     // The operation's own backups: listed and parsed whole, so operation 1 never takes operation 10's (review finding
     // A19). Sorted by their place in the series, the largest last.
     private bool TryListSeries(
-        LibraryManifestOperation operation, out List<(int Index, string Path)> series, out LibraryIoFailure failure)
+        LibraryManifestOperation operation, out List<(int Index, string Path)> series, out LibraryIoFailure failure) =>
+        TryListSeries(operation, FolderOf(operation), out series, out failure);
+
+    // The same for a series kept in another folder: the claims of a Recently deleted entry, in deleted\.
+    private bool TryListSeries(
+        LibraryManifestOperation operation, string folder, out List<(int Index, string Path)> series, out LibraryIoFailure failure)
     {
         series = [];
         failure = LibraryIoFailure.None;
         try
         {
-            foreach (var path in _files.EnumerateFiles(FolderOf(operation), "~g*" + LibraryJournalNames.BackupSuffix))
+            foreach (var path in _files.EnumerateFiles(folder, "~g*" + LibraryJournalNames.BackupSuffix))
             {
                 if (LibraryJournalNames.TryParse(Path.GetFileName(path), out var name) &&
                     name.Kind == LibraryJournalNameKind.Backup &&

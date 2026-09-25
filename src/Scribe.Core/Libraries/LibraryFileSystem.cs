@@ -12,8 +12,10 @@ namespace Scribe.Core.Libraries;
 /// </remarks>
 internal interface ILibraryFileSystem
 {
+    /// <summary>Whether a file is at <paramref name="path"/>: false only when nothing is there; a check that fails throws.</summary>
     bool Exists(string path);
 
+    /// <summary>Whether a folder is at <paramref name="path"/>: false only when nothing is there; a check that fails throws.</summary>
     bool DirectoryExists(string path);
 
     byte[] ReadAllBytes(string path);
@@ -30,10 +32,13 @@ internal interface ILibraryFileSystem
     /// <summary>Deletes a file; no error when it is absent.</summary>
     void Delete(string path);
 
-    /// <summary>Files directly in <paramref name="directory"/> whose names match <paramref name="pattern"/>; none when it is absent.</summary>
+    /// <summary>
+    /// Files directly in <paramref name="directory"/> whose names match <paramref name="pattern"/>; none when the folder
+    /// is not there. A folder that cannot be listed throws: it may hold files, so it is never reported empty.
+    /// </summary>
     IEnumerable<string> EnumerateFiles(string directory, string pattern);
 
-    /// <summary>Folders directly in <paramref name="directory"/>; none when it is absent.</summary>
+    /// <summary>Folders directly in <paramref name="directory"/>; none when it is not there, and a failed listing throws.</summary>
     IEnumerable<string> EnumerateDirectories(string directory);
 
     void CreateDirectory(string path);
@@ -43,6 +48,12 @@ internal interface ILibraryFileSystem
 }
 
 /// <summary>The real file system, for the app and for tests that drive the journal over real files.</summary>
+/// <remarks>
+/// Only a genuine not-found is an empty listing or an absent file. <see cref="Directory.Exists"/> and
+/// <see cref="File.Exists"/> answer false on any error, access denied included, so a check made with them would turn a
+/// folder Windows refuses to list into an empty, successful listing, and a file it refuses to show into a missing one:
+/// every question here goes to the operation itself, and every other failure reaches the caller.
+/// </remarks>
 internal sealed class PhysicalLibraryFileSystem : ILibraryFileSystem
 {
     public static PhysicalLibraryFileSystem Instance { get; } = new();
@@ -51,9 +62,29 @@ internal sealed class PhysicalLibraryFileSystem : ILibraryFileSystem
     {
     }
 
-    public bool Exists(string path) => File.Exists(path);
+    public bool Exists(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.Directory) == 0;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
-    public bool DirectoryExists(string path) => Directory.Exists(path);
+    public bool DirectoryExists(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.Directory) != 0;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
 
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
@@ -97,23 +128,41 @@ internal sealed class PhysicalLibraryFileSystem : ILibraryFileSystem
         }
     }
 
-    public IEnumerable<string> EnumerateFiles(string directory, string pattern) =>
-        Directory.Exists(directory)
-            ? Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly)
-            : [];
+    public IEnumerable<string> EnumerateFiles(string directory, string pattern)
+    {
+        try
+        {
+            return Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
 
-    public IEnumerable<string> EnumerateDirectories(string directory) =>
-        Directory.Exists(directory)
-            ? Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly)
-            : [];
+    public IEnumerable<string> EnumerateDirectories(string directory)
+    {
+        try
+        {
+            return Directory.GetDirectories(directory, "*", SearchOption.TopDirectoryOnly);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+    }
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public void DeleteDirectory(string path)
     {
-        if (Directory.Exists(path))
+        try
         {
             Directory.Delete(path, recursive: true);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // Already gone.
         }
     }
 

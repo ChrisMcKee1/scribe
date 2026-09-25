@@ -142,9 +142,48 @@ public interface ISettingsRepository
     void CommitLibraryState(Libraries.LibrarySavePayload payload) =>
         throw new NotSupportedException("This settings store cannot commit library state.");
 
+    /// <summary>
+    /// What the library service reads from the settings store before a load, all of one committed generation (round 2,
+    /// A6): the document's enabled list (null when the document cannot be used), whether it can be used, and the library
+    /// rows. A commit landing between these reads must never leave the old list beside the new state row, which reads as
+    /// an older build's change. <see cref="SettingsRepository"/> reads them in one SQLite read transaction; this default,
+    /// for test fakes, reads the generation before and after and reads again until the two agree, which every library
+    /// commit makes observable because each one advances the generation.
+    /// </summary>
+    internal LibrarySettingsRead ReadLibrarySettings()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var before = Get(Libraries.LibrarySettingKeys.Generation);
+            var document = Load();
+            var unusable = LastLoadFailed;
+            var state = Get(Libraries.LibrarySettingKeys.State);
+            var fileIds = Get(Libraries.LibrarySettingKeys.FileIds);
+            var generation = Get(Libraries.LibrarySettingKeys.Generation);
+            if (string.Equals(before, generation, StringComparison.Ordinal) || attempt == 16)
+            {
+                return new LibrarySettingsRead(
+                    unusable ? null : [.. document.EnabledDictionaryLibraryIds], unusable, generation, state, fileIds);
+            }
+        }
+    }
+
     /// <summary>Reads a single raw value by key, or <see langword="null"/> when absent.</summary>
     string? Get(string key);
 
     /// <summary>Inserts or updates a single raw value by key.</summary>
     void Set(string key, string value);
 }
+
+/// <summary>The settings a library load reads, all of one committed generation (<see cref="ISettingsRepository.ReadLibrarySettings"/>).</summary>
+/// <param name="DocumentEnabledIds">The stored document's enabled-library list, or null when the document cannot be used.</param>
+/// <param name="DocumentUnusable">The document is missing after a loss, unreadable, or the session runs on defaults.</param>
+/// <param name="GenerationRow">The raw <see cref="Libraries.LibrarySettingKeys.Generation"/> row, or null when absent.</param>
+/// <param name="StateRow">The raw <see cref="Libraries.LibrarySettingKeys.State"/> row, or null.</param>
+/// <param name="FileIdsRow">The raw <see cref="Libraries.LibrarySettingKeys.FileIds"/> row, or null.</param>
+internal sealed record LibrarySettingsRead(
+    IReadOnlyList<string>? DocumentEnabledIds,
+    bool DocumentUnusable,
+    string? GenerationRow,
+    string? StateRow,
+    string? FileIdsRow);

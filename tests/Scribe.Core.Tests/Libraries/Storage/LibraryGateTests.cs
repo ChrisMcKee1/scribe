@@ -70,6 +70,36 @@ public sealed class LibraryGateTests : IDisposable
     }
 
     [Fact]
+    public void An_adoption_that_revokes_a_grant_refuses_the_old_scope_before_its_commit()
+    {
+        // Round 2, A5 (contract 2.10): a load finds team replaced outside Scribe and commits the revocation; a request
+        // admitted for the old content is refused from before that commit, never only once the load publishes after it.
+        var (service, _) = TwoPermitted();
+        var admitted = service.Current.AiScope;
+        _fixture.Write("team.csv", LibraryStorageFixture.Csv("Team", ("kube", "K8s from another app")));
+        var handedOver = new Dictionary<string, bool>();
+        _fixture.Settings.WriteStep = (step, _, _) =>
+        {
+            if (step is "library rows written" or "library state committing" or "library state committed")
+            {
+                handedOver[step] = service.TryHandOff(admitted, () => { });
+            }
+        };
+
+        var catalog = service.LoadCatalog();
+        _fixture.Settings.WriteStep = null;
+
+        Assert.False(catalog.LocalState.AiPermissions.GetValueOrDefault("team"));
+        Assert.Equal(["library rows written", "library state committed", "library state committing"], handedOver.Keys.Order(StringComparer.Ordinal));
+        Assert.All(handedOver, pair => Assert.False(pair.Value, $"handed over at {pair.Key}"));
+        Assert.False(service.TryHandOff(admitted, () => { }));
+
+        // What the adoption did not revoke is still handed over, and nothing it would widen is before its publication.
+        var other = new AiVocabularyScope(admitted.Generation, admitted.PermittedContent.Where(pair => pair.Key == "other"));
+        Assert.True(service.TryHandOff(other, () => { }));
+    }
+
+    [Fact]
     public void Nothing_is_handed_over_before_anything_is_published_but_a_request_carrying_no_library()
     {
         var service = _fixture.Service();

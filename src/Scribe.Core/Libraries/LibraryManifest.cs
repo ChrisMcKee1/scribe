@@ -193,10 +193,12 @@ internal sealed class LibraryManifest
     {
         try
         {
-            using var document = JsonDocument.Parse(json.ToArray());
+            // A member twice is ambiguous, so the parser refuses it; an escaped unpaired surrogate parses but GetString
+            // refuses it (InvalidOperationException). Either way the manifest is unreadable, never a load that throws.
+            using var document = JsonDocument.Parse(json.ToArray(), new JsonDocumentOptions { AllowDuplicateProperties = false });
             return ParseDocument(document.RootElement);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException or FormatException)
         {
             return new LibraryManifestRead(LibraryManifestReadStatus.Unreadable, null);
         }
@@ -635,6 +637,27 @@ internal static class LibrarySavePlanner
             restoredCount++;
         }
 
+        // Consent is bound to content (A4), for a Save that changes only a library's switches too (round 2, A3): a grant
+        // this Save makes, or keeps and re-encodes into the list older builds read, covers the content the draft accepted.
+        // A library this Save does not rewrite whose file no longer holds that content was changed outside Scribe since:
+        // an outside edit, so the user reloads and decides again, never a grant carried onto bytes nobody saw.
+        var rewritten = new HashSet<string>(changes.Writes.Select(write => write.LibraryId), StringComparer.OrdinalIgnoreCase);
+        rewritten.UnionWith(restoreIds);
+        rewritten.UnionWith(deletedIds);
+        foreach (var id in ConsentsToCheck(catalog.LocalState, changes.LocalState))
+        {
+            if (rewritten.Contains(id) || catalog.Find(id) is not { } library)
+            {
+                continue;
+            }
+
+            LibraryContentHash? consented = changes.LocalState.AcceptedContent.TryGetValue(id, out var hash) ? hash : null;
+            if (library.ContentHash != consented && !outside.Contains(id, StringComparer.OrdinalIgnoreCase))
+            {
+                Refuse(id);
+            }
+        }
+
         if (outside.Count > 0 || failure != LibraryIoFailure.None)
         {
             return LibrarySavePlan.Refused(outside, failure, now);
@@ -847,6 +870,33 @@ internal static class LibrarySavePlanner
         }
 
         return false;
+    }
+
+    // The libraries whose consent a Save carries: every one it turns on or grants AI permission (a denial of permissions
+    // withdrawn counts as a grant for every library it leaves on), and every one it leaves both on and explicitly
+    // permitted, since the list older builds read is written again from that grant. Narrowing never needs checking.
+    private static IEnumerable<string> ConsentsToCheck(LibraryLocalState committed, LibraryLocalState next)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in next.EnabledIds)
+        {
+            if (!committed.EnabledIds.Contains(id) ||
+                (committed.AiPermissionsLost && !next.AiPermissionsLost) ||
+                next.AiPermissions.TryGetValue(id, out var permitted) && permitted)
+            {
+                ids.Add(id);
+            }
+        }
+
+        foreach (var (id, permitted) in next.AiPermissions)
+        {
+            if (permitted && !(committed.AiPermissions.TryGetValue(id, out var before) && before))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
     }
 
     private static void RequireName(bool valid)

@@ -129,15 +129,28 @@ internal sealed class FaultingFileSystem : ILibraryFileSystem
 
     public void Delete(string path) => Mutate("delete", path, null, () => _inner.Delete(path));
 
+    /// <summary>A listing to fail, by folder and pattern (a folder's own listing passes "*" for folders): the exception, or null.</summary>
+    public Func<string, string, Exception?>? EnumerateFault { get; set; }
+
     public IEnumerable<string> EnumerateFiles(string directory, string pattern)
     {
         ThrowIfCrashed();
+        if (EnumerateFault?.Invoke(directory, pattern) is { } fault)
+        {
+            throw fault;
+        }
+
         return _inner.EnumerateFiles(directory, pattern).ToList();
     }
 
     public IEnumerable<string> EnumerateDirectories(string directory)
     {
         ThrowIfCrashed();
+        if (EnumerateFault?.Invoke(directory, "<folders>") is { } fault)
+        {
+            throw fault;
+        }
+
         return _inner.EnumerateDirectories(directory).ToList();
     }
 

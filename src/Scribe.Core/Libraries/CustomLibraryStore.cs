@@ -41,7 +41,11 @@ internal sealed record LibraryFileIds(LibraryFileIdsHealth Health, IReadOnlyDict
     public static LibraryFileIds Absent { get; } =
         new(LibraryFileIdsHealth.Absent, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
-    /// <summary><c>{"version":1,"files":{"github.csv":"custom-github"}}</c>, read leniently entry by entry.</summary>
+    /// <summary>
+    /// <c>{"version":1,"files":{"github.csv":"custom-github"}}</c>, read leniently entry by entry. JSON that cannot be
+    /// handed over whole (a member twice, an escaped unpaired surrogate) is unreadable with an empty map, never a map
+    /// read halfway, so every id is recomputed by the deterministic rule.
+    /// </summary>
     public static LibraryFileIds Parse(string? value)
     {
         if (value is null)
@@ -49,27 +53,29 @@ internal sealed record LibraryFileIds(LibraryFileIdsHealth Health, IReadOnlyDict
             return Absent;
         }
 
+        var unreadable = new LibraryFileIds(
+            LibraryFileIdsHealth.Unreadable, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         var files = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (JsonNode.Parse(value) is not JsonObject root ||
+            if (JsonNode.Parse(value, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false }) is not JsonObject root ||
                 root["version"] is not JsonValue versionValue || !versionValue.TryGetValue<long>(out var version) ||
                 version < CurrentVersion)
             {
-                return new LibraryFileIds(LibraryFileIdsHealth.Unreadable, files);
+                return unreadable;
             }
 
             var health = version > CurrentVersion ? LibraryFileIdsHealth.Newer : LibraryFileIdsHealth.Ok;
             if (root["files"] is not JsonObject entries)
             {
                 // Version 1 requires the map; a later version is used as far as it reads, which here is nothing.
-                return new LibraryFileIds(health == LibraryFileIdsHealth.Newer ? health : LibraryFileIdsHealth.Unreadable, files);
+                return health == LibraryFileIdsHealth.Newer ? new LibraryFileIds(health, files) : unreadable;
             }
 
             foreach (var (fileName, idNode) in entries)
             {
                 if (idNode is JsonValue idValue && idValue.TryGetValue<string>(out var id) &&
-                    LibraryManifest.IsTopLevelCsv(fileName) && !string.IsNullOrWhiteSpace(id))
+                    LibraryManifest.IsTopLevelCsv(fileName) && LibraryText.IsWellFormed(fileName) && !string.IsNullOrWhiteSpace(id))
                 {
                     files.TryAdd(fileName, id.Trim());
                 }
@@ -77,9 +83,9 @@ internal sealed record LibraryFileIds(LibraryFileIdsHealth Health, IReadOnlyDict
 
             return new LibraryFileIds(health, files);
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or ArgumentException or FormatException)
         {
-            return new LibraryFileIds(LibraryFileIdsHealth.Unreadable, files);
+            return unreadable;
         }
     }
 
@@ -132,6 +138,15 @@ internal sealed class LibraryFolderSnapshot
     /// such a name never becomes an id, a manifest path or a state entry (contract 3.1.4).
     /// </summary>
     public int SkippedNames { get; set; }
+
+    /// <summary>
+    /// The first failure to list the libraries folder, <c>edits\</c> or <c>deleted\</c>, or none. A folder that could not
+    /// be listed says nothing about the files it holds, so nothing is planned or adopted against this read.
+    /// </summary>
+    public LibraryIoFailure ListingFailure { get; set; }
+
+    /// <summary><c>edits\</c> could not be listed: a built-in may have a document this read did not see.</summary>
+    public bool EditsUnlisted { get; set; }
 }
 
 /// <summary>
@@ -180,13 +195,15 @@ internal sealed class CustomLibraryStore
     public LibraryFolderSnapshot Read()
     {
         var snapshot = new LibraryFolderSnapshot();
-        snapshot.TopLevelNames.UnionWith(List(_paths.LibrariesDir, "*"));
-        foreach (var name in List(_paths.LibrariesDir, CsvPattern, snapshot))
+        snapshot.TopLevelNames.UnionWith(List(_paths.LibrariesDir, "*", snapshot, out _));
+        foreach (var name in List(_paths.LibrariesDir, CsvPattern, snapshot, out _, countSkipped: true))
         {
             snapshot.Custom[name] = ReadFile(name, Path.Combine(_paths.LibrariesDir, name));
         }
 
-        foreach (var name in List(_paths.LibraryEditsDir, JsonPattern))
+        var editsNames = List(_paths.LibraryEditsDir, JsonPattern, snapshot, out var editsListed);
+        snapshot.EditsUnlisted = !editsListed;
+        foreach (var name in editsNames)
         {
             // Recognition by suffix, in this order (review finding G15): every *.backup.json is a set-aside copy, every
             // *.previous.json a last good copy, and only then is <x>.json the edits document of x.
@@ -214,7 +231,7 @@ internal sealed class CustomLibraryStore
             // Any other <x>.json (a newer version's built-in, a stray file) is nobody's: never read, listed or touched.
         }
 
-        foreach (var name in List(_paths.LibraryDeletedDir, CsvPattern, snapshot))
+        foreach (var name in List(_paths.LibraryDeletedDir, CsvPattern, snapshot, out _, countSkipped: true))
         {
             snapshot.Deleted[name] = ReadFile(LibraryManifest.DeletedPrefix + name, Path.Combine(_paths.LibraryDeletedDir, name));
         }
@@ -227,9 +244,11 @@ internal sealed class CustomLibraryStore
         ReadFile(relative, LibraryManifest.ToAbsolute(_paths.LibrariesDir, relative));
 
     /// <summary>
-    /// The logical id of every custom file (contract 6.3): its stem, except a stem that is a built-in id, which gets the
-    /// id recorded for its file name or, when none is usable, <c>custom-&lt;stem&gt;</c> with <c>-2</c>, <c>-3</c> while
-    /// taken. Files are taken in name order, so the answer is the same at every load until a commit records it.
+    /// The logical id of every custom file (contract 6.3): first, the id recorded for a file that still exists, which
+    /// always stays with it (round 2, A10), then its stem, except a stem that is a built-in id, which gets
+    /// <c>custom-&lt;stem&gt;</c>, and a stem that is an id recorded for another existing file, which gets
+    /// <c>&lt;stem&gt;-2</c>; each with <c>-2</c>, <c>-3</c> while taken. Files are taken in name order, so the answer is
+    /// the same at every load until a commit records it.
     /// </summary>
     public static IReadOnlyDictionary<string, string> AssignIds(
         IEnumerable<string> fileNames, LibraryFileIds recorded, IEnumerable<string> recentlyDeletedIds)
@@ -241,28 +260,50 @@ internal sealed class CustomLibraryStore
         taken.UnionWith(recentlyDeletedIds);
         var ids = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // A recorded mapping of a file that still exists is reserved before anything else is assigned, so no later file,
+        // however it is named, can take that id and re-key the library it belongs to.
         foreach (var name in names)
         {
-            var stem = Stem(name);
-            if (!BuiltInIds.Contains(stem) && assigned.Add(stem))
+            if (recorded.Files.TryGetValue(name, out var kept) && !BuiltInIds.Contains(kept) && LibraryText.IsWellFormed(kept) &&
+                !assigned.Contains(kept))
             {
-                ids[name] = stem;
+                ids[name] = kept;
+                assigned.Add(kept);
+                taken.Add(kept);
             }
         }
 
         foreach (var name in names)
         {
             var stem = Stem(name);
-            if (!BuiltInIds.Contains(stem))
+            if (ids.ContainsKey(name) || BuiltInIds.Contains(stem))
             {
                 continue;
             }
 
-            // A recorded id stays while its file exists, unless it now collides with a built-in or another file's own id.
-            var id = recorded.Files.TryGetValue(name, out var kept) && !BuiltInIds.Contains(kept) && !assigned.Contains(kept) &&
-                     !stems.Contains(kept)
-                ? kept
-                : RemapId(stem, taken);
+            if (assigned.Add(stem))
+            {
+                ids[name] = stem;
+                continue;
+            }
+
+            // The stem is an id recorded for another file that still exists: this file is the newcomer.
+            var id = InterimLibraryNaming.Suffixed(stem, candidate => taken.Contains(candidate) || assigned.Contains(candidate));
+            taken.Add(id);
+            assigned.Add(id);
+            ids[name] = id;
+        }
+
+        foreach (var name in names)
+        {
+            var stem = Stem(name);
+            if (ids.ContainsKey(name) || !BuiltInIds.Contains(stem))
+            {
+                continue;
+            }
+
+            var id = RemapId(stem, new HashSet<string>(taken.Concat(assigned), StringComparer.OrdinalIgnoreCase));
             taken.Add(id);
             assigned.Add(id);
             ids[name] = id;
@@ -290,7 +331,9 @@ internal sealed class CustomLibraryStore
         fileName.EndsWith(CsvSuffix, StringComparison.OrdinalIgnoreCase) ? fileName[..^CsvSuffix.Length] : Path.GetFileNameWithoutExtension(fileName);
 
     // Names that are not well-formed UTF-16 are left out of every listing, and counted when the listing is of libraries.
-    private List<string> List(string directory, string pattern, LibraryFolderSnapshot? counted = null)
+    // A listing that fails is recorded on the snapshot, because it says nothing about the files the folder holds.
+    private List<string> List(
+        string directory, string pattern, LibraryFolderSnapshot snapshot, out bool listed, bool countSkipped = false)
     {
         List<string> paths;
         try
@@ -300,9 +343,17 @@ internal sealed class CustomLibraryStore
         catch (Exception ex)
         {
             _onFailure(LibraryFileOperation.Enumerate, ex);
+            if (snapshot.ListingFailure == LibraryIoFailure.None)
+            {
+                var failure = LibraryIoFailures.Classify(ex);
+                snapshot.ListingFailure = failure == LibraryIoFailure.None ? LibraryIoFailure.Other : failure;
+            }
+
+            listed = false;
             return [];
         }
 
+        listed = true;
         var names = new List<string>();
         foreach (var name in paths.Select(Path.GetFileName).OfType<string>().Where(name => name.Length > 0))
         {
@@ -310,9 +361,9 @@ internal sealed class CustomLibraryStore
             {
                 names.Add(name);
             }
-            else if (counted is not null)
+            else if (countSkipped)
             {
-                counted.SkippedNames++;
+                snapshot.SkippedNames++;
             }
         }
 

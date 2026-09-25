@@ -56,6 +56,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
     // Under _libraryLock.
     private LivePreparation? _live;
+
+    // Under _libraryLock. A preparation whose completion could not read the stored generation (round 2, A8): whether it
+    // committed is not known, so its manifest stays pending, new Saves and the wrappers are fenced, and the scope while
+    // saving stays in force until a read of the generation lets recovery settle it by the journal's own rules.
+    private LivePreparation? _unsettled;
     private LibraryRecoveryOutcome? _recovery;
     private readonly List<LibraryKeptVersion> _keptVersions = [];
     private readonly Dictionary<string, CustomRead> _lastCustom = new(StringComparer.OrdinalIgnoreCase);
@@ -113,10 +118,11 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             return [];
         }
 
-        // A listed id selects every library loaded under it, as 0.4.3 applies it, and a library by its logical id too.
+        // Release 0.4.4's selection, exactly: a listed id selects every library loaded under it, the id 0.4.3 loads it as
+        // (a custom file's stem), never a logical id; selection by logical id belongs to the catalog and the vocabulary.
         var ids = new HashSet<string>(enabledIds, StringComparer.OrdinalIgnoreCase);
         var libraries = LoadCatalog().Libraries
-            .Where(library => ids.Contains(library.Content.Id) || ids.Contains(Identity(library).LegacyId))
+            .Where(library => ids.Contains(Identity(library).LegacyId))
             .Select(ToLegacyLibrary);
         return DictionaryLibraryComposer.ComposeLibraries(libraries);
     }
@@ -394,18 +400,17 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
     private sealed record BuiltInRead(IReadOnlyList<LibraryRow> Rows, LibraryContentHash Hash, BuiltInLibraryEdits? Edits);
 
+    // Everything of one committed generation (round 2, A6): the document's list beside the state row it was written with.
     private SettingsSnapshot ReadSettings()
     {
-        var document = _settings.Load();
-        var unusable = _settings.LastLoadFailed;
-        var generationRow = _settings.Get(LibrarySettingKeys.Generation);
+        var read = _settings.ReadLibrarySettings();
         return new SettingsSnapshot(
-            unusable ? null : [.. document.EnabledDictionaryLibraryIds],
-            unusable,
-            SettingsRepository.ParseLibraryGeneration(generationRow),
-            generationRow is not null,
-            _settings.Get(LibrarySettingKeys.State),
-            _settings.Get(LibrarySettingKeys.FileIds));
+            read.DocumentUnusable ? null : read.DocumentEnabledIds,
+            read.DocumentUnusable,
+            SettingsRepository.ParseLibraryGeneration(read.GenerationRow),
+            read.GenerationRow is not null,
+            read.StateRow,
+            read.FileIdsRow);
     }
 
     private LibraryStateContext ContextFor(SettingsSnapshot settings)
@@ -470,6 +475,24 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     {
         var outcome = _journal.Recover(
             settings.Generation, settings.GenerationLost, _live?.Manifest.Id, context.RunningOnDefaults, _parts.Time.GetUtcNow(), kept);
+
+        // An attempt that could not list the journal cannot see the pending manifest an earlier attempt of this process
+        // found, but that manifest is still there: readers keep applying it whole until an inventory succeeds.
+        if (outcome is { InventoryIncomplete: true, Unresolved: null } &&
+            _recovery?.Unresolved is { } known && !settings.GenerationLost && known.Generation == settings.Generation)
+        {
+            outcome.Unresolved = known;
+            outcome.FilesAwaitingRelease = Math.Max(outcome.FilesAwaitingRelease, _recovery.FilesAwaitingRelease);
+        }
+
+        // A Save whose outcome was unknown is settled once recovery, with the generation read, has finished it, discarded
+        // it or left it unresolved; a manifest recovery could not reach yet keeps it unsettled.
+        if (_unsettled is { } unsettled && !outcome.InventoryIncomplete &&
+            (outcome.Unresolved?.Id == unsettled.Manifest.Id || !ManifestPending(unsettled.Manifest)))
+        {
+            _unsettled = null;
+        }
+
         _recovery = outcome;
         NoteKept(kept);
         if (outcome.DidAnything)
@@ -659,6 +682,15 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         var previous = folder.PreviousEdits.Contains(shipped.Id);
         if (!folder.Edits.TryGetValue(shipped.Id, out var file))
         {
+            if (folder.EditsUnlisted)
+            {
+                // edits\ could not be listed, so this built-in may have a document: it is read as a lock is (G10), never as
+                // having none, which would bring back every row the user turned off (contract 3.1.4).
+                return _lastBuiltIn.TryGetValue(shipped.Id, out var known)
+                    ? new CatalogLibrary(BuiltInContent(shipped, known.Rows), LibraryFileState.AwaitingRelease, null, known.Hash, known.Edits, previous)
+                    : new CatalogLibrary(BuiltInContent(shipped, []), LibraryFileState.AwaitingRelease, null, null, PreviousEditsAvailable: previous);
+            }
+
             return new CatalogLibrary(
                 BuiltInContent(shipped, _parts.Overlay.Apply(shipped, null)), LibraryFileState.Available, null, null,
                 PreviousEditsAvailable: previous);
@@ -712,12 +744,17 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             return (read, read.Catalog);
         }
 
-        var committable = _live is null && read.Recovery is not { Unresolved: not null } && (read.Recovery?.Held ?? 0) == 0 &&
-                          !read.Context.RunningOnDefaults && plan.State.Health != LocalStateHealth.Newer;
+        var committable = _live is null && _unsettled is null && read.Recovery is not { Unresolved: not null } &&
+                          (read.Recovery?.Held ?? 0) == 0 && !read.Context.RunningOnDefaults &&
+                          plan.State.Health != LocalStateHealth.Newer && read.Folder.ListingFailure == LibraryIoFailure.None;
 
         // The witness comes first (contract 6.9); when it cannot be written, nothing is committed at this point.
         if (committable && _journal.EnsureWitness() == LibraryIoFailure.None)
         {
+            // Contract 2.10: a narrowing is in force at the latest at its commit. The adopted state's scope becomes the
+            // scope every hand-off also needs before the transaction starts (round 2, A5); whatever the adoption widens
+            // waits for the publication after the commit, which clears it, as a failed commit's in-memory use does.
+            NarrowBeforeCommit(WithState(read.Catalog, plan.State));
             try
             {
                 _settings.CommitLibraryState(AdoptionPayload(read, plan));
@@ -736,6 +773,28 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         }
 
         return (read with { Catalog = WithState(read.Catalog, plan.State) }, read.Catalog);
+    }
+
+    // The scope a commit about to happen leaves, in force under the permission gate before it happens; it only ever
+    // narrows (a hand-off needs the published scope too). A composition that fails hands nothing over until the next
+    // publication, which is the direction permission fails in.
+    private void NarrowBeforeCommit(LibraryCatalog after)
+    {
+        AiVocabularyScope scope;
+        try
+        {
+            scope = _parts.Composer.ComposeVocabulary(after).AiScope;
+        }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Warning, "The scope of a library state commit could not be computed ({Failure}); nothing is handed over.", FailureShape.Describe(ex));
+            scope = AiVocabularyScope.None;
+        }
+
+        lock (_gate)
+        {
+            _savingScope = scope;
+        }
     }
 
     private LibrarySavePayload AdoptionPayload(CatalogRead read, LibraryAdoption plan)
@@ -771,7 +830,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         var current = _vocabulary;
         lock (_gate)
         {
-            if (_live is null)
+            // The scope while saving holds while a preparation is live or its outcome unknown (round 2, A8).
+            if (_live is null && _unsettled is null)
             {
                 _savingScope = null;
             }
@@ -829,6 +889,20 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         }
     }
 
+    // Whether a manifest is still on disk under its pending name; a check that fails answers yes, which keeps it unsettled.
+    private bool ManifestPending(LibraryManifest manifest)
+    {
+        try
+        {
+            return _parts.Files.Exists(_journal.ManifestPath(manifest));
+        }
+        catch (Exception ex)
+        {
+            LogFileFailure(LibraryFileOperation.Read, ex);
+            return true;
+        }
+    }
+
     private void RaisePendingChanged()
     {
         long[] generations;
@@ -874,10 +948,22 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                     recovery.Failure == LibraryIoFailure.None ? LibraryIoFailure.Other : recovery.Failure);
             }
 
+            if (_unsettled is not null)
+            {
+                return Refused(LibraryPrepareStatus.PreviousSaveUnfinished);
+            }
+
             read = ReadCatalog(settings, context, recovery);
         }
         catch (Exception ex)
         {
+            if (_unsettled is not null)
+            {
+                // An earlier Save's outcome is still unknown: it is settled before anything else commits.
+                TryLog(LogLevel.Warning, "Library save not prepared ({Status}; {Failure}).", LibraryPrepareStatus.PreviousSaveUnfinished, FailureShape.Describe(ex));
+                return Refused(LibraryPrepareStatus.PreviousSaveUnfinished);
+            }
+
             TryLog(LogLevel.Warning, "Library save not prepared ({Status}; {Failure}).", LibraryPrepareStatus.Failed, FailureShape.Describe(ex));
             return Refused(LibraryPrepareStatus.Failed, LibraryIoFailure.Other);
         }
@@ -903,6 +989,12 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     private LibraryPrepareResult PrepareFrom(CatalogRead read, LibraryChangeSet changes, bool wrapper)
     {
         var started = _parts.Time.GetTimestamp();
+
+        // A folder that could not be listed may hold files this read never saw, so no pre-image check could be trusted.
+        if (read.Folder.ListingFailure != LibraryIoFailure.None)
+        {
+            return Refused(LibraryPrepareStatus.Failed, read.Folder.ListingFailure);
+        }
 
         // The witness comes first (contract 6.9): no commit of this version may precede it.
         var witness = _journal.EnsureWitness();
@@ -1001,7 +1093,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             }
             catch (Exception)
             {
-                return new LibrarySaveOutcome(LibrarySaveStatus.NotCommitted, prepared.BaseGeneration, 0, [], LibraryIoFailure.Other);
+                // The stored generation could not be read, so where the Save stands is not known either.
+                return new LibrarySaveOutcome(LibrarySaveStatus.CommitUnknown, prepared.BaseGeneration, 0, [], LibraryIoFailure.None);
             }
         }
 
@@ -1012,11 +1105,16 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         }
         catch (Exception ex)
         {
-            // Whether the commit happened cannot be told now. The manifest stays for recovery to decide by the stored
-            // generation, the narrowed scope stays until a later load publishes, and the Save is not reported as saved.
+            // Whether the commit happened cannot be told now (round 2, A8): never NotCommitted without evidence. The
+            // manifest stays pending for recovery to settle by the stored generation once it can be read, the narrowed
+            // scope stays, and new Saves and the wrappers are fenced until then.
             _live = null;
-            TryLog(LogLevel.Warning, "Library save completion could not read the generation ({Failure}).", FailureShape.Describe(ex));
-            return new LibrarySaveOutcome(LibrarySaveStatus.NotCommitted, prepared.BaseGeneration, 0, [], LibraryIoFailure.Other);
+            _unsettled = live;
+            TryLog(
+                LogLevel.Warning,
+                "Library save outcome unknown at generation {Generation}: the stored generation could not be read ({Failure}); the manifest stays pending.",
+                prepared.Generation, FailureShape.Describe(ex));
+            return new LibrarySaveOutcome(LibrarySaveStatus.CommitUnknown, prepared.BaseGeneration, 0, [], LibraryIoFailure.None);
         }
 
         var kept = new List<LibraryKeptVersion>();
@@ -1093,7 +1191,17 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             throw new InvalidOperationException(Unfinished);
         }
 
-        var settings = ReadSettings();
+        SettingsSnapshot settings;
+        try
+        {
+            settings = ReadSettings();
+        }
+        catch (Exception) when (_unsettled is not null)
+        {
+            // An earlier Save's outcome is still unknown (round 2, A8).
+            throw new InvalidOperationException(Unfinished);
+        }
+
         var context = KeepWitnessInvariant(settings, ContextFor(settings));
         if (context.RunningOnDefaults)
         {
@@ -1101,7 +1209,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         }
 
         var recovery = RecoverCore(settings, context, []);
-        if (recovery.Unresolved is not null || recovery.Held > 0)
+        if (recovery.Unresolved is not null || recovery.Held > 0 || _unsettled is not null)
         {
             throw new InvalidOperationException(Unfinished);
         }

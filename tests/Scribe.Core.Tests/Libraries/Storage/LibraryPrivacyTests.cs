@@ -85,6 +85,77 @@ public sealed class LibraryPrivacyTests : IDisposable
     }
 
     [Fact]
+    public void Canaries_in_an_edits_document_and_a_quarantined_manifest_never_reach_the_log()
+    {
+        // Round 2, A11: the edits paths and the quarantine run with content-bearing files, and the test proves they ran.
+        const string EditsCanary = "Quokkaedits Canary";
+        const string OutsideCanary = "Numbatoutside Canary";
+        var csv = $"# name: {Name}\n# category: {Category}\n# description: {Description}\npattern,replacement\n{Spoken},{Written}\n";
+        _fixture.WriteBytes("edits/github.json", JsonEditsOverlay.Document("github", ("get hub", EditsCanary)));
+        _fixture.Write(Slug + ".csv", csv);
+        _fixture.SaveEnabled("github", Slug);
+        var files = new FaultingFileSystem();
+        var service = _fixture.Service(files);
+        var start = service.LoadCatalog();
+        var edited = new LibraryContent(Slug, false, Name, Category, Description, [LibraryRow.Custom(new TermValues(Spoken, Written + " saved"))]);
+        var prepared = service.PrepareSave(Changes.Of(start, writes:
+        [
+            new LibraryWrite("github", true, LibraryOrigin.Existing, start.Find("github")!.ContentHash,
+                Edits: JsonEditsOverlay.Edits("github", ("get hub", EditsCanary + " saved"))),
+            Changes.Edit(start, Slug, edited),
+        ]));
+        Assert.Equal(LibraryPrepareStatus.Prepared, prepared.Status);
+
+        // Another app's version reaches the edits document after prepare; the native replace moves it into the backup and
+        // the process ends there; then the generation row is lost.
+        _fixture.WriteBytes("edits/github.json", JsonEditsOverlay.Document("github", ("get hub", OutsideCanary)));
+        _fixture.Settings.SaveBundle(_fixture.Settings.Load(), null, null, default, prepared.Save!.Payload);
+        files.AfterMutation = (kind, _, _) =>
+        {
+            if (kind == "replace")
+            {
+                files.CrashNow();
+            }
+        };
+        try
+        {
+            service.CompleteSave(prepared.Save);
+        }
+        catch (Exception)
+        {
+            // The process ended.
+        }
+
+        using (var connection = _fixture.Database.Open())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "DELETE FROM settings WHERE key = 'libraries.generation';";
+            command.ExecuteNonQuery();
+        }
+
+        _fixture.Restart();
+        var recovering = _fixture.Service();
+        var recovered = recovering.Recover();
+        recovering.LoadCatalog();
+        recovering.Janitor.Run(LibraryStorageFixture.Start.AddDays(20));
+
+        // Both branches ran: the manifest was quarantined, and the outside version preserved at a set-aside name.
+        Assert.Equal(1, recovered.SetAside);
+        Assert.Contains(recovered.KeptVersions, kept => kept.Kind == LibraryKeptVersionKind.EditsSetAside);
+        Assert.Contains(
+            Directory.GetFiles(_fixture.Paths.LibraryEditsDir, "*.backup.json"),
+            path => File.ReadAllText(path).Contains(OutsideCanary, StringComparison.Ordinal));
+        var log = _fixture.Log.AllText;
+        foreach (var canary in (string[])[EditsCanary, OutsideCanary, "quokka", "numbat", Name, Spoken, Written, Slug, _fixture.Root])
+        {
+            Assert.DoesNotContain(canary, log, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains(_fixture.Log.Entries, entry => entry.Message.StartsWith("Library recovery:", StringComparison.Ordinal));
+        Assert.All(_fixture.Log.Entries, entry => Assert.Null(entry.Exception));
+    }
+
+    [Fact]
     public void The_diagnostics_bundle_holds_nothing_from_the_libraries_folder()
     {
         var today = new DateOnly(2026, 9, 24);

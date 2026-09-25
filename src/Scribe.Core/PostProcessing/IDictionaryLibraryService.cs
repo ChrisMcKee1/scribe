@@ -33,7 +33,10 @@ public interface IDictionaryLibraryService
 
     /// <summary>
     /// The de-duplicated entries of the libraries <paramref name="enabledIds"/> names, for layering on top of the base
-    /// dictionary; empty when it names none. The one place a library selection becomes entries: the post-processor, the
+    /// dictionary; empty when it names none. Each id selects every library loaded under it, as release 0.4.4 selects:
+    /// a built-in's id, or a custom file's name without <c>.csv</c>, never the logical id of a file remapped away from a
+    /// built-in id, which only the catalog and the vocabulary source select by. The one place a library selection becomes
+    /// entries: the post-processor, the
     /// AI cleanup glossary, the usage report and quick add each pass the enabled ids of the settings dictation runs on,
     /// never a fresh read of the stored document, so a document that turns unreadable mid-session cannot swap in the
     /// default selection. The dictionary library program replaces this seam with a vocabulary source.

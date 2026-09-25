@@ -123,4 +123,29 @@ public sealed class LibrarySaveRoundTripTests : IDisposable
         Assert.Null(reloaded.ContentHash);
         Assert.DoesNotContain("github", reloaded.Content.Rows.Select(row => row.Values.Written));
     }
+
+    [Theory]
+    [InlineData(BuiltInEditsRecovery.None)]
+    [InlineData(BuiltInEditsRecovery.BackUpAndReset)]
+    public void The_journal_drops_the_accepted_entry_of_every_edits_document_it_removes(BuiltInEditsRecovery recovery)
+    {
+        // The amended contract (eb79dcc): an accepted entry left for a built-in with no document means the document
+        // disappeared outside Scribe, so a removal of Scribe's own drops the entry in the same commit.
+        var service = _fixture.Service();
+        var catalog = service.LoadCatalog();
+        Changes.Save(service, _fixture.Settings, Changes.Of(
+            catalog, writes: [new LibraryWrite("github", true, LibraryOrigin.Existing, null, Edits: JsonEditsOverlay.Edits("github", ("get hub", "GitHub Enterprise")))]));
+        catalog = service.LoadCatalog();
+        Assert.True(catalog.LocalState.AcceptedContent.ContainsKey("github"));
+
+        var removed = Changes.Save(service, _fixture.Settings, Changes.Of(
+            catalog, writes: [new LibraryWrite("github", true, LibraryOrigin.Existing, catalog.Find("github")!.ContentHash, Edits: null, Recovery: recovery)]));
+
+        Assert.Equal(LibrarySaveStatus.Applied, removed.Outcome!.Status);
+        Assert.False(_fixture.Exists("edits/github.json"));
+        _fixture.Restart();
+        var reloaded = _fixture.Service().LoadCatalog();
+        Assert.False(reloaded.LocalState.AcceptedContent.ContainsKey("github"));
+        Assert.Equal(LibraryFileState.Available, reloaded.Find("github")!.State);
+    }
 }
