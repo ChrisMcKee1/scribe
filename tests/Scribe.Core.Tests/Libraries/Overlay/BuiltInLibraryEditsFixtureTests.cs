@@ -424,6 +424,20 @@ public sealed class BuiltInLibraryEditsFixtureTests
             "The same entry while the version ships it off: off, and nothing asks, since the user and the version agree.",
             V5,
             [offEdited]);
+
+        // Round 2, part 2, G1: Turn on term on an off row while the version in use ships the row off records the user's
+        // own value of the check box (on) and inherits the rest; the entry is what the overlay's SetEnabled gives there.
+        BuiltInTermEdit turnedOn = Edited("octo cat", T("octo cat", "Octocat", enabled: false), OctoCat);
+        yield return new(
+            "turned-on-while-shipped-off",
+            "Turned back on while the version ships it off: on, as the user chose, and nothing asks.",
+            V5,
+            [turnedOn]);
+        yield return new(
+            "turned-on-while-shipped-off-then-shipped-on",
+            "The same entry in a version that ships it on: on, and reads as pinned, since the user and the version agree.",
+            V1,
+            [turnedOn]);
     }
 
     private static IEnumerable<ReadCase> ReadCases()

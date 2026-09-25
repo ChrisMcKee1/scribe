@@ -86,10 +86,11 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
 
     /// <inheritdoc />
     /// <remarks>
-    /// Throws <see cref="ArgumentException"/> for a document that would not read back as written (a blank library id, an
-    /// empty or repeated key, an entry without the values its intent needs, a null value string, or an id, key or value
-    /// that is not text, holding an unpaired surrogate): that is a bug upstream, and writing it would pause the library at
-    /// the next start.
+    /// Refuses, with <see cref="ArgumentException"/>, any document that would not read back as written, so everything it
+    /// writes, <see cref="ReadEdits"/> reads back unchanged: a blank library id, an empty or repeated key, an entry without
+    /// the values its intent needs, a null value string, or an id, key or value that is not well-formed UTF-16 (an unpaired
+    /// surrogate, which the writer would otherwise have to replace). Each is a bug upstream, and writing it would pause the
+    /// library at the next start.
     /// </remarks>
     public byte[] WriteEdits(BuiltInLibraryEdits edits)
     {
@@ -173,9 +174,12 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
 
     /// <inheritdoc />
     /// <remarks>
-    /// Turning a shipped row off records an off intent with the shipped values as its base; turning an off row on
-    /// removes the intent, so the row is shipped again. On any other row the flag is the user's value like the other
-    /// three, changed as by <see cref="Edit"/>.
+    /// Turning a shipped row off records an off intent with the shipped values as its base. Turning an off row on removes
+    /// the intent, so the row is shipped again, while the version in use ships the row on. While it ships the row off,
+    /// removing the intent would leave the row off and the click would do nothing, so the turn-on is recorded as the
+    /// user's own value of the check box instead: an edited entry that authors Enabled (on, against the shipped off) and
+    /// inherits every other field (the integrator's reading in round 2, part 2, G1). On any other row the flag is the
+    /// user's value like the other three, changed as by <see cref="Edit"/>.
     /// </remarks>
     public LibraryRow SetEnabled(LibraryRow row, bool enabled)
     {
@@ -265,8 +269,11 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     /// entries whose shipped row is not in this version, in their committed order.
     /// </para>
     /// <para>
-    /// <paramref name="rows"/> must be rows of this built-in as this overlay gives them, with unique keys, in the order
-    /// <see cref="Apply"/> gives them with new rows appended; an <see cref="ArgumentException"/> otherwise.
+    /// Where the shipped rows sit in <paramref name="rows"/> does not matter, and a document whose entries were in another
+    /// order (one written by hand, or before an upgrade reordered the shipped rows) is written back in this order at the
+    /// next Save; only the relative order of the rows this version does not ship is taken from <paramref name="rows"/>,
+    /// and the editor appends new ones. Every row must be one this overlay gives for this built-in, and no two rows may
+    /// share a key; an <see cref="ArgumentException"/> otherwise.
     /// </para>
     /// </remarks>
     public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows)

@@ -168,6 +168,47 @@ public sealed class BuiltInLibraryOverlayUpgradeSequenceTests
     }
 
     [Fact]
+    public void Turning_a_term_back_on_while_the_version_in_use_ships_it_off_keeps_it_on_as_the_users_choice()
+    {
+        // Round 2, part 2, G1 (the integrator's decision): the user turned an enabled shipped term off; a later version
+        // ships it off too; the user clicks Turn on term. Removing the off intent would leave the row as that version ships
+        // it, off, so the click would do nothing. The turn-on is recorded instead, as the user's own value of the check box
+        // (authored on) while the other fields keep inheriting: it stays on in later versions whatever they ship for the
+        // check box, and a correction to Written still reaches the row.
+        var v1 = Shipped(GetHub, OctoCat);
+        var rows = BuiltInOverlay.Apply(v1, null);
+        rows = Replace(rows, Row(rows, "octo cat"), BuiltInOverlay.SetEnabled(Row(rows, "octo cat"), enabled: false));
+        var (committed, _) = SaveAndReload(v1, null, rows);
+
+        var shippedOff = T("octo cat", "Octocat", enabled: false);
+        var v2 = Shipped(GetHub, shippedOff);
+        var inV2 = BuiltInOverlay.Apply(v2, committed);
+        Assert.Equal(TermOrigin.Off, Row(inV2, "octo cat").Origin);
+
+        var turnedOn = BuiltInOverlay.SetEnabled(Row(inV2, "octo cat"), enabled: true);
+
+        Assert.Equal(T("octo cat", "Octocat"), turnedOn.Values);
+        Assert.Equal(TermOrigin.Edited, turnedOn.Origin);
+        Assert.Null(turnedOn.Review);
+        Assert.Equal(new BuiltInTermEdit(K("octo cat"), BuiltInTermIntent.Edited, shippedOff, shippedOff with { Enabled = true }), turnedOn.Edit);
+        var (saved, reloadedInV2) = SaveAndReload(v2, committed, Replace(inV2, Row(inV2, "octo cat"), turnedOn));
+        Assert.Equal(T("octo cat", "Octocat"), Row(reloadedInV2, "octo cat").Values);
+
+        // A later version ships it on with a corrected Written: on, and the correction applies; one that ships it off
+        // again leaves it on.
+        var shippedOnCorrected = Row(BuiltInOverlay.Apply(Shipped(GetHub, T("octo cat", "The Octocat")), saved), "octo cat");
+        Assert.Equal(T("octo cat", "The Octocat"), shippedOnCorrected.Values);
+        Assert.Null(shippedOnCorrected.Review);
+        var shippedOffAgain = Row(BuiltInOverlay.Apply(Shipped(GetHub, T("octo cat", "The Octocat", enabled: false)), saved), "octo cat");
+        Assert.Equal(T("octo cat", "The Octocat"), shippedOffAgain.Values);
+        Assert.Null(shippedOffAgain.Review);
+
+        // In a version that ships the term on, Turn on term simply ends the off intent: the row is shipped again.
+        var offInV1 = Row(BuiltInOverlay.Apply(v1, committed), "octo cat");
+        Assert.Equal(Row(BuiltInOverlay.Apply(v1, null), "octo cat"), BuiltInOverlay.SetEnabled(offInV1, enabled: true));
+    }
+
+    [Fact]
     public void An_edit_that_leaves_a_field_alone_lets_later_versions_keep_correcting_that_field()
     {
         // The user changed only Spoken; each later version's Written reaches the row, across saves, and the user is

@@ -137,6 +137,33 @@ public sealed class BuiltInLibraryOverlayCollectTests
     }
 
     [Fact]
+    public void Collect_writes_one_order_whatever_the_order_of_the_shipped_rows_or_of_a_document_written_by_hand()
+    {
+        // Round 2, part 2 (Grok's note): Collect does not require the rows in the order Apply gives them. The entries of
+        // shipped rows come in shipped order wherever those rows sit, the rows this version does not ship keep their
+        // relative order, and a document whose entries were ordered by hand is written back in that one order.
+        var shipped = Shipped(GetHub, Copilot, OctoCat);
+        var handOrdered = Document(
+            Added("zulu", T("zulu", "Zulu")),
+            Off("octo cat", OctoCat),
+            Added("alpha", T("alpha", "Alpha")),
+            Edited("get hub", GetHub, T("get hub", "GitHub Enterprise")));
+        var rows = BuiltInOverlay.Apply(shipped, handOrdered);
+        var canonical = Document(
+            Edited("get hub", GetHub, T("get hub", "GitHub Enterprise")),
+            Off("octo cat", OctoCat),
+            Added("zulu", T("zulu", "Zulu")),
+            Added("alpha", T("alpha", "Alpha")));
+
+        AssertSameDocument(canonical, BuiltInOverlay.Collect(shipped, handOrdered, rows));
+
+        // The shipped rows moved about, even after the rows this version does not ship: the same document.
+        var shuffled = new[] { rows[2], rows[3], rows[0], rows[4], rows[1] };
+        Assert.Equal(["octo cat", "zulu", "get hub", "alpha", "copilot"], shuffled.Select(row => row.Key.Value));
+        AssertSameDocument(canonical, BuiltInOverlay.Collect(shipped, handOrdered, shuffled));
+    }
+
+    [Fact]
     public void Collect_refuses_rows_it_did_not_give_and_rows_that_repeat_a_key()
     {
         var shipped = Shipped(GetHub, OctoCat);

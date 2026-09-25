@@ -1352,6 +1352,88 @@
           "review": null
         }
       ]
+    },
+    {
+      "name": "turned-on-while-shipped-off",
+      "note": "Turned back on while the version ships it off: on, as the user chose, and nothing asks.",
+      "library": "github",
+      "shippedVersion": "v5",
+      "document": "documents/apply-turned-on-while-shipped-off.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "edited",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":false},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "turned-on-while-shipped-off-then-shipped-on",
+      "note": "The same entry in a version that ships it on: on, and reads as pinned, since the user and the version agree.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-turned-on-while-shipped-off-then-shipped-on.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "pinned",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
     }
   ],
   "read": [
