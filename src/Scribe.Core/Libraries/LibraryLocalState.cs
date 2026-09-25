@@ -199,9 +199,9 @@ public readonly record struct LegacyMarker(string LibraryId, LibraryTermKey Key)
 public enum LocalStateHealth
 {
     /// <summary>
-    /// No row, and nothing says one was lost: no stored generation, no repair record, no session on defaults, and no
-    /// witness file of an earlier commit in the libraries folder. The first start of this version. Libraries without an
-    /// explicit choice take the policy default for their kind.
+    /// No row, and nothing says one was lost: no stored generation, no repair at this start, no session on defaults, and
+    /// no witness file of an earlier commit in the libraries folder. The first start of this version. Libraries without
+    /// an explicit choice take the policy default for their kind.
     /// </summary>
     Absent,
 
@@ -242,14 +242,15 @@ public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryId
 /// <param name="RunningOnDefaults">
 /// The session runs on defaults because the saved settings could not be read or were lost
 /// (<see cref="Persistence.SettingsRepository.StartsWithoutSavedSettings"/>). Nothing library-related is written
-/// automatically then: no adoption, no marker, no denial, no Recently deleted or journal clean-up. The user's own Save,
+/// automatically then: no adoption, no marker, no denial, no Recently deleted or journal clean-up (the one exception is the
+/// witness restored beside a stored library row, which can only make a missing row read as lost). The user's own Save,
 /// which ends that state, commits the library changes with the settings.
 /// </param>
 /// <param name="DatabaseRepaired">
-/// A repair's record that settings rows may have been lost is present (round 4, review finding A3): the repair writes it
-/// inside database initialization, before it recovers a row, whether or not the settings document survived; it outlives
-/// restarts; and only the library service clears it, once its witness, or its denial, is durable. So an absent row may
-/// be a lost one even at a later start that saw no repair itself.
+/// A repair rebuilt the database at this start (<see cref="Persistence.ScribeDatabase.RepairedAtStartup"/>), so an
+/// absent row may be a lost one. A later start needs no such flag: no library row can exist without a commit the witness
+/// preceded (<paramref name="CommitWitnessed"/>), so a repair that lost the rows leaves the witness to say so (round 4,
+/// review finding A3).
 /// </param>
 /// <param name="GenerationStored">
 /// <see cref="LibrarySettingKeys.Generation"/> is stored. Every commit writes the state row with it, so a stored
@@ -257,12 +258,14 @@ public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryId
 /// </param>
 /// <param name="CommitWitnessed">
 /// The libraries folder holds the witness file (review finding A3). The journal writes it, flushed to disk, before any
-/// library commit of this version can happen (the first adoption, the user's first Save, a wrapper), at a start that
-/// detects a loss, before anything else, and before it acknowledges a repair record; it is monotonic: Scribe creates it
-/// and never deletes, truncates or replaces it. It lives outside the database, so it still says a state may have existed
-/// after a repair that lost both library rows, including one made by an older build, which writes no repair record.
-/// Written before the commit, it also turns an interrupted first adoption into a lost state the user confirms next time,
-/// which is the fail-closed direction.
+/// library commit of this version can happen (the first adoption, the user's first Save, a wrapper) and at a start that
+/// detects a loss, before anything else; it is monotonic: Scribe creates it and never deletes, truncates or replaces it.
+/// Hence the invariant the reading rests on (round 4): no library row exists without a witness made durable first, so a
+/// witness beside a missing row always means a loss, and no witness means no commit of this version ever happened here, a
+/// genuine first start with nothing of this version to lose. Only an action outside Scribe (removing the witness, or
+/// moving the database without the libraries folder) can break it. It lives outside the database, so it survives a repair
+/// that loses both library rows, including one an older build makes. Written before the commit, it also turns an
+/// interrupted first adoption into a lost state the user confirms next time, which is the fail-closed direction.
 /// </param>
 public readonly record struct LibraryStateContext(
     bool RunningOnDefaults, bool DatabaseRepaired, bool GenerationStored, bool CommitWitnessed = false);
