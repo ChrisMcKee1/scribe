@@ -8,7 +8,8 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 /// D-11: any sequence of workspace operations, captured and applied by a fake store to a new catalog, gives a workspace
 /// showing the same content; and the workspace marked saved against that catalog shows it too, with nothing unsaved. Saves
 /// happen in the middle of sequences, half of them with arbitrary operations while they run and some with the store doing
-/// more than the plan (a library kept under an id it invents, an outside version kept), and after every MarkSaved nothing
+/// more than the plan (a library kept under an id it invents, an outside version kept, another app's new file with its own
+/// based-on line), and after every MarkSaved nothing
 /// the page showed is lost or overwritten, every operation of the next change set names what the committed catalog holds,
 /// and something is unsaved exactly when the next Save would change something. A Save that leaves a reference repair
 /// pending is followed by W2's follow-up Save of the repairs alone, which writes exactly them and leaves every other change
@@ -49,6 +50,8 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.ExactFollowUps > 8, $"follow-up saves compared with the change set before them {totals.ExactFollowUps}");
         Assert.True(totals.FollowUpsLeavingChangesUnsaved > 3, $"follow-up saves that left other changes unsaved {totals.FollowUpsLeavingChangesUnsaved}");
         Assert.True(totals.RepairedCopiesRenamed > 8, $"repaired copies renamed before their follow-up {totals.RepairedCopiesRenamed}");
+        Assert.True(totals.ForeignCopies > 50, $"copies another app made, discovered by a returned catalog {totals.ForeignCopies}");
+        Assert.True(totals.ForeignCopiesOfAKeptPlannedId > 15, $"copies another app made of its library at a planned id the store kept Scribe's away from {totals.ForeignCopiesOfAKeptPlannedId}");
     }
 
     private sealed class Coverage
@@ -77,6 +80,8 @@ public sealed class LibraryWorkspacePropertyTests
         public int ExactFollowUps;
         public int FollowUpsLeavingChangesUnsaved;
         public int RepairedCopiesRenamed;
+        public int ForeignCopies;
+        public int ForeignCopiesOfAKeptPlannedId;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -301,24 +306,45 @@ public sealed class LibraryWorkspacePropertyTests
     }
 
     // What holds after every MarkSaved: nothing the page showed is lost or overwritten and the store's additions are all
-    // that is new, every operation of the next change set names what the committed catalog holds, something is unsaved
-    // exactly when that change set is not empty, and every reference Use this copy instead would follow is one it can
-    // trust. Returns that change set, or null when a problem blocks it.
+    // that is new, another app's library keeps the reference its file holds, every operation of the next change set names
+    // what the committed catalog holds, something is unsaved exactly when that change set is not empty, and every reference
+    // Use this copy instead would follow is one it can trust. Returns that change set, or null when a problem blocks it.
     private static LibraryChangeSet? AfterMarkSaved(
         LibraryWorkspace workspace, List<string> shown, List<StoreOutcome> outcomes, LibraryCatalog saved, string context, Coverage totals)
     {
         var fromStore = Workspace(saved).Draft;
+        var draft = workspace.Draft;
         var added = outcomes
             .Select(outcome => outcome switch
             {
                 StoreOutcome.SavedUnderNewId kept => kept.PlannedId,
                 StoreOutcome.OutsideVersion kept => kept.KeptAsId,
+                StoreOutcome.ForeignLibrary foreign => foreign.Id,
                 _ => throw new InvalidOperationException(),
             })
-            .Select(id => Signature(fromStore, fromStore.Find(id)!));
+            .Select(id => Signature(fromStore, fromStore.Find(id)!, referents: draft));
         Assert.True(
-            shown.Concat(added).Order(StringComparer.Ordinal).SequenceEqual(Kept(workspace.Draft)),
-            $"{context}marking saved lost, overwrote or invented a library\n{string.Join("\n", shown)}\n---\n{string.Join("\n", Kept(workspace.Draft))}");
+            shown.Concat(added).Order(StringComparer.Ordinal).SequenceEqual(Kept(draft)),
+            $"{context}marking saved lost, overwrote or invented a library\n{string.Join("\n", shown)}\n---\n{string.Join("\n", Kept(draft))}");
+
+        // Another app's library is nothing this workspace saves or repairs, and a copy it made of its library at a planned id
+        // the store kept Scribe's library away from is one Use this copy instead refuses (review finding A11).
+        var keptPlanned = outcomes.OfType<StoreOutcome.SavedUnderNewId>().Select(kept => kept.PlannedId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var foreign in outcomes.OfType<StoreOutcome.ForeignLibrary>())
+        {
+            var library = draft.Find(foreign.Id);
+            Assert.True(
+                library is { Unsaved: false, WritesContent: false }
+                    && string.Equals(library.Content.BasedOn, foreign.BasedOn, StringComparison.Ordinal)
+                    && !workspace.PendingReferenceRepairs.Contains(foreign.Id, StringComparer.OrdinalIgnoreCase),
+                $"{context}another app's {foreign.Id}, based on {foreign.BasedOn}, reads based on {library?.Content.BasedOn} (unsaved {library?.Unsaved})");
+            if (foreign.BasedOn is { } basedOn && keptPlanned.Contains(basedOn))
+            {
+                Assert.True(
+                    workspace.CopyOriginal(foreign.Id) is null,
+                    $"{context}Use this copy instead would act on {workspace.CopyOriginal(foreign.Id)} for another app's copy of its library at {basedOn}");
+            }
+        }
 
         var next = workspace.CaptureChangeSet();
         if (next.ChangeSet is { } probe)
@@ -390,9 +416,14 @@ public sealed class LibraryWorkspacePropertyTests
         var after = AfterMarkSaved(workspace, shown, outcomes, saved, context, totals);
         Assert.False(workspace.HasPendingReferenceRepairs, $"{context}a reference repair is still pending after it");
 
-        // The exact comparison needs the ids to stay put: an outside version the store kept under an id no library of the
-        // draft held moves nothing.
-        var nothingMoved = outcomes.All(outcome => outcome is StoreOutcome.OutsideVersion kept && shownDraft.Find(kept.KeptAsId) is null);
+        // The exact comparison needs the ids to stay put: an outside version the store kept, or another app's file, under an
+        // id no library of the draft held moves nothing.
+        var nothingMoved = outcomes.All(outcome => outcome switch
+        {
+            StoreOutcome.OutsideVersion kept => shownDraft.Find(kept.KeptAsId) is null,
+            StoreOutcome.ForeignLibrary foreign => shownDraft.Find(foreign.Id) is null,
+            _ => false,
+        });
         if (!interleaved && nothingMoved && before is not null)
         {
             Assert.True(after is not null, $"{context}the next change set is refused");
@@ -695,6 +726,32 @@ public sealed class LibraryWorkspacePropertyTests
             totals.OutsideVersions++;
         }
 
+        // Another app's new file, discovered by the returned catalog: often a copy of that app's own library at a planned
+        // id the store kept Scribe's library away from (review finding A11), otherwise a copy of an outside version the
+        // store kept, of a library Scribe just created, of a library of the catalog, or of an id no library has. None is
+        // this workspace's, so none of their references may follow an identity.
+        StoreOutcome Foreign(string basedOn)
+        {
+            totals.ForeignCopies++;
+            return new StoreOutcome.ForeignLibrary(Invent("custom-foreign"), "Their copy", [new TermValues("their copy", "Their copy")], basedOn);
+        }
+
+        var theirs = outcomes.OfType<StoreOutcome.SavedUnderNewId>().Select(kept => kept.PlannedId).ToList();
+        if (theirs.Count > 0 && random.Next(2) == 0)
+        {
+            outcomes.Add(Foreign(theirs[random.Next(theirs.Count)]));
+            totals.ForeignCopiesOfAKeptPlannedId++;
+        }
+        else if (random.Next(4) == 0)
+        {
+            var candidates = outcomes.OfType<StoreOutcome.OutsideVersion>().Select(kept => kept.KeptAsId)
+                .Concat(planned)
+                .Concat(catalog.Libraries.Where(library => !library.Content.BuiltIn).Select(library => library.Content.Id))
+                .Append("custom-nowhere")
+                .ToList();
+            outcomes.Add(Foreign(candidates[random.Next(candidates.Count)]));
+        }
+
         return outcomes;
     }
 
@@ -710,11 +767,12 @@ public sealed class LibraryWorkspacePropertyTests
 
     // A library as the page shows it, without its id: its content, its switches, and the library its based-on reference
     // names, compared by that library's content, so a reference left on an id another library now holds shows as a change.
-    private static string Signature(LibraryDraft draft, DraftLibrary library)
+    // The referent is looked up in `referents` when given (a library the store added, as the page shows the others).
+    private static string Signature(LibraryDraft draft, DraftLibrary library, LibraryDraft? referents = null)
     {
         var content = library.Content;
         var ai = draft.LocalState.AiPermissions.TryGetValue(content.Id, out var permitted) ? permitted.ToString() : "none";
-        return $"{Identity(content)}|on={draft.LocalState.EnabledIds.Contains(content.Id)}|ai={ai}|basedOn={Referent(draft, content.BasedOn)}";
+        return $"{Identity(content)}|on={draft.LocalState.EnabledIds.Contains(content.Id)}|ai={ai}|basedOn={Referent(referents ?? draft, content.BasedOn)}";
     }
 
     private static string Identity(LibraryContent content) =>

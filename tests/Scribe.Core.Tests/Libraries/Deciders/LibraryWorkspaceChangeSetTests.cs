@@ -1095,6 +1095,100 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Equal(movedTo, workspace.CopyOriginal("orig-copy"));
     }
 
+    // GPT-6 Astra's A11: when the store keeps Scribe's new library under another id because another app took its file, the
+    // returned catalog may also discover a copy that app made of its own library there. That copy's reference is the other
+    // app's, not this workspace's: it follows no identity, is never repaired or written, and Use this copy instead refuses
+    // it while this session cannot tell which library a reference to that id means.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void D4_a_copy_another_app_made_of_its_library_at_the_planned_id_keeps_its_reference_and_is_never_repaired(bool withOwnCopy)
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var planned = workspace.CreateLibrary();
+        Assert.True(workspace.Rename(planned, "My source").Applied);
+        workspace.AddTerm(planned, new TermValues("ga", "general availability"));
+        var own = withOwnCopy ? workspace.Duplicate(planned) : null;
+        var changes = Capture(workspace);
+        var keptAs = planned + "-7";
+        var saved = Apply(catalog, changes, outcomes:
+        [
+            new StoreOutcome.SavedUnderNewId(planned, keptAs, [new TermValues("theirs", "Theirs")]),
+            new StoreOutcome.ForeignLibrary("their-copy", "Their copy", [new TermValues("theirs", "Theirs")], BasedOn: planned),
+        ]);
+        Assert.Equal(planned, saved.Find("their-copy")!.Content.BasedOn);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        // Their copy names their library, as its file does; Scribe's library is at the kept id, and Scribe's copy follows it.
+        var theirs = workspace.Draft.Find("their-copy")!;
+        Assert.Equal(planned, theirs.Content.BasedOn);
+        Assert.Equal("Their notes", workspace.Draft.Find(planned)!.Content.Name);
+        Assert.Equal("My source", workspace.Draft.Find(keptAs)!.Content.Name);
+        Assert.False(theirs.Unsaved);
+        Assert.False(theirs.WritesContent);
+        var repairs = withOwnCopy ? new[] { own! } : Array.Empty<string>();
+        Assert.Equal(repairs, workspace.PendingReferenceRepairs);
+        if (own is not null)
+        {
+            Assert.Equal(keptAs, workspace.Draft.Find(own)!.Content.BasedOn);
+            Assert.Equal(keptAs, workspace.CopyOriginal(own));
+        }
+
+        // This session cannot tell which library a reference to the planned id means, so Use this copy instead refuses it.
+        Assert.Null(workspace.CopyOriginal("their-copy"));
+        Assert.Throws<InvalidOperationException>(() => workspace.UseCopyInstead("their-copy"));
+
+        // Neither the follow-up nor the user's Save writes it.
+        var followUp = RepairsOf(workspace);
+        Assert.Equal(repairs, followUp.Writes.Select(write => write.LibraryId));
+        Assert.DoesNotContain(Capture(workspace).Writes, write => write.LibraryId == "their-copy");
+        var repaired = Apply(saved, followUp);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+        Assert.Equal(planned, workspace.Draft.Find("their-copy")!.Content.BasedOn);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.True(Capture(workspace).IsEmpty);
+    }
+
+    [Fact]
+    public void D4_a_based_on_line_another_app_wrote_into_a_known_library_while_the_save_ran_follows_no_identity()
+    {
+        // The rule is per reference, not per library: team-terms is this workspace's library, but the based-on line naming
+        // the planned id came from another app, which wrote it into team-terms' file while the Save ran, so it names that
+        // app's library there and follows no identity.
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var planned = workspace.CreateLibrary();
+        workspace.AddTerm(planned, new TermValues("ga", "general availability"));
+        var changes = Capture(workspace);
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(planned, planned + "-7", [new TermValues("theirs", "Theirs")])]);
+        var rewritten = WithContent(saved, "team-terms", content => content with { BasedOn = planned });
+        workspace.MarkSaved(changes.DraftRevision, rewritten);
+
+        Assert.Equal(planned, workspace.Draft.Find("team-terms")!.Content.BasedOn);
+        Assert.Empty(workspace.PendingReferenceRepairs);
+        Assert.DoesNotContain("team-terms", workspace.UnsavedLibraryIds);
+        Assert.Null(workspace.CopyOriginal("team-terms"));
+        Assert.True(RepairsOf(workspace).IsEmpty);
+        Assert.True(Capture(workspace).IsEmpty);
+    }
+
+    // The catalog with one library's file holding other content (written outside Scribe), at the same generation.
+    private static LibraryCatalog WithContent(LibraryCatalog catalog, string id, Func<LibraryContent, LibraryContent> change) =>
+        new(
+            catalog.Generation,
+            catalog.Libraries
+                .Select(library => library.Content.Id == id
+                    ? new CatalogLibrary(change(library.Content), library.State, library.FileName, HashOf(change(library.Content)))
+                    : library)
+                .ToList(),
+            catalog.LocalState,
+            catalog.RecentlyDeleted.ToList(),
+            catalog.RetiredBuiltInEdits.ToList(),
+            filesAwaitingRelease: 0,
+            catalog.KeptVersions.ToList());
+
     // The catalog with one library's file in another state, one generation on.
     private static LibraryCatalog WithFileState(LibraryCatalog catalog, string id, LibraryFileState state) =>
         new(

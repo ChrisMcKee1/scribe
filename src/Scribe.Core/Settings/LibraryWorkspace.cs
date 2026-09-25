@@ -1388,7 +1388,7 @@ public sealed class LibraryWorkspace
         }
 
         var merged = Settled(Merge(current, from, to), from, current, to, committed);
-        merged = WithReferencesFollowing(merged, baseRenames, draftRenames);
+        merged = WithReferencesFollowing(merged, current, baseRenames, draftRenames);
 
         _committed = committed;
         _base = to;
@@ -1402,8 +1402,15 @@ public sealed class LibraryWorkspace
     // which the other app's library now holds, so its reference is repaired in the draft and the copy shows as unsaved
     // until the next Save writes the corrected header; until then, CopyOriginal will not act on the reference its file
     // holds.
+    //
+    // Only a reference this workspace holds follows (review finding A11): the one the live draft, renamed, has for that
+    // library. The identities are this workspace's, so they say nothing about a reference the catalog brought, which names
+    // the catalog's library at that id: a copy another app made that this catalog discovers (none of the drafts has it),
+    // or a based-on line another app wrote into a library while the Save ran (the merge took the catalog's value). Such a
+    // reference stays as its file has it. The captured draft adds nothing to the live one here: a library it has that the
+    // live draft does not is a pending deletion, which keeps its committed reference.
     private static State WithReferencesFollowing(
-        State merged, IReadOnlyDictionary<string, string> baseRenames, IReadOnlyDictionary<string, string> draftRenames)
+        State merged, State current, IReadOnlyDictionary<string, string> baseRenames, IReadOnlyDictionary<string, string> draftRenames)
     {
         if (baseRenames.Count == 0 && draftRenames.Count == 0)
         {
@@ -1421,7 +1428,9 @@ public sealed class LibraryWorkspace
             if (!lib.Header.BuiltIn
                 && !lib.Header.PendingDelete
                 && lib.Header.BasedOn is { } basedOn
-                && moved.TryGetValue(basedOn, out var movedTo))
+                && moved.TryGetValue(basedOn, out var movedTo)
+                && LibOf(current, lib.Header.Id) is { } mine
+                && string.Equals(mine.Header.BasedOn, basedOn, StringComparison.Ordinal))
             {
                 var repaired = lib.Header.Committed is { } committed
                     && !string.Equals(movedTo, committed.Content.BasedOn, StringComparison.Ordinal);

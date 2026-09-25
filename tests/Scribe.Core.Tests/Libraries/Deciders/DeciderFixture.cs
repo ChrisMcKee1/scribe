@@ -204,6 +204,14 @@ internal static class DeciderFixture
         /// <paramref name="KeptAsId"/>.
         /// </summary>
         public sealed record OutsideVersion(string LibraryId, string KeptAsId, IReadOnlyList<TermValues> OutsideRows) : StoreOutcome;
+
+        /// <summary>
+        /// Another app created the file of a new library <paramref name="Id"/> while the Save ran, named
+        /// <paramref name="Name"/>, a copy of whatever library its <paramref name="BasedOn"/> line names in that app's view
+        /// (none when null): the store discovers it, off, with no AI choice and no accepted content. It is no library of
+        /// this workspace's (review finding A11).
+        /// </summary>
+        public sealed record ForeignLibrary(string Id, string Name, IReadOnlyList<TermValues> Rows, string? BasedOn) : StoreOutcome;
     }
 
     /// <summary>
@@ -296,6 +304,11 @@ internal static class DeciderFixture
                     libraries[outside.KeptAsId] = version;
                     accepted[outside.KeptAsId] = version.ContentHash!.Value;
                     kept.Add(new LibraryKeptVersion(outside.LibraryId, LibraryKeptVersionKind.OutsideVersion, outside.KeptAsId));
+                    break;
+
+                case StoreOutcome.ForeignLibrary foreign:
+                    Assert.False(libraries.ContainsKey(foreign.Id), $"another app's new file {foreign.Id} is at an id in use");
+                    libraries[foreign.Id] = Custom(foreign.Id, foreign.Name, foreign.Rows, basedOn: foreign.BasedOn);
                     break;
             }
         }
