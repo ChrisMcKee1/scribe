@@ -145,16 +145,21 @@ public class TypingPaceTests
     }
 
     [Fact]
-    public void A_paste_that_falls_back_to_typing_is_paced_for_a_remote_client_too()
+    public void A_paste_asked_for_a_remote_client_is_typed_at_the_remote_pace_and_never_touches_the_clipboard()
     {
+        // Review round 2, item 6: a remote session reads a pasted clipboard when it pastes, possibly after Scribe restored
+        // the previous one, so a remote client is always typed into. The clipboard here would refuse to open: it is never
+        // asked.
         var clipboard = new TextInjectionFakes.Clipboard { OpenAttemptSucceeds = _ => false };
         var platform = new TextInjectionFakes.Platform { Foreground = Target };
         var injector = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard);
 
         var result = injector.Inject(Text184, InjectionMethod.ClipboardPaste, Target, targetProcessName: "msrdc");
 
-        Assert.Equal(PasteDelivery.ClipboardBusy, result.Paste);
+        Assert.Equal(PasteDelivery.NotUsed, result.Paste);
+        Assert.Equal(0, clipboard.OpenAttempts);
         Assert.True(result.Succeeded);
+        Assert.Equal("unicode", result.Method);
         Assert.Equal(12, platform.Batches.Count);
         Assert.Contains(20, platform.Sleeps);
         Assert.DoesNotContain(5, platform.Sleeps);

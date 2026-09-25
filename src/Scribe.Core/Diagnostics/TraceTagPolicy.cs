@@ -75,6 +75,7 @@ public static class TraceTagPolicy
         [ScribeTelemetry.TagInjectComplete] = ValueShape.Flag,
         [ScribeTelemetry.TagInjectFallback] = ValueShape.Flag,
         [ScribeTelemetry.TagInjectRemote] = ValueShape.Flag,
+        [ScribeTelemetry.TagInjectPasteBypassed] = ValueShape.Flag,
         [ScribeTelemetry.TagInjectBatchUnits] = ValueShape.Number,
         [ScribeTelemetry.TagInjectBatches] = ValueShape.Number,
         [ScribeTelemetry.TagInjectLineBreaks] = ValueShape.Number,

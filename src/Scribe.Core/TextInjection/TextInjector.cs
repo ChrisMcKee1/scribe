@@ -11,7 +11,8 @@ namespace Scribe.Core.TextInjection;
 /// Default <see cref="ITextInjector"/>. Clipboard-paste runs the whole borrow, Ctrl+V, restore sequence
 /// on a dedicated STA thread, with small delays so the target app reads the clipboard before it is
 /// restored. Falls back to Unicode keystroke typing whenever no paste can have fired, and exposes typing
-/// directly via <see cref="InjectionMethod.UnicodeType"/>.
+/// directly via <see cref="InjectionMethod.UnicodeType"/>. A Remote Desktop or virtual machine client is always
+/// typed into, never pasted into, whatever the method asked for (see <see cref="TypingPace"/>).
 /// </summary>
 public sealed class TextInjector : ITextInjector
 {
@@ -74,7 +75,7 @@ public sealed class TextInjector : ITextInjector
         return RunOnStaThread(() =>
         {
             var activity = TryStartActivity(parent, text.Length);
-            ReportTarget(activity, text, pace);
+            ReportTarget(activity, text, pace, method);
             try
             {
                 return InjectOnStaThread(activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, pace);
@@ -105,7 +106,14 @@ public sealed class TextInjector : ITextInjector
 
         // Read once, from the layout of the window about to receive the keys (see InjectionKeys).
         var keys = InjectionKeys.From(_platform);
-        if (method == InjectionMethod.UnicodeType)
+
+        // A Remote Desktop or virtual machine client is typed into, whatever the insertion setting (review round 2, item 6):
+        // its clipboard redirection uses delayed rendering ([MS-RDPECLIP]: "The data associated with the Clipboard Format is
+        // sent only if a paste operation is executed"), so the remote app reads the clipboard when it pastes, which can be
+        // after the restore below has put the user's previous clipboard back, and the session would paste that, possibly
+        // something private, instead of the dictation. With real scan codes a Ctrl+V reaches the session, so the race is
+        // real. Typing touches no clipboard. The trace says the paste was bypassed (ReportTarget).
+        if (method == InjectionMethod.UnicodeType || pace.PacedForRemoteSession)
         {
             return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace);
         }
@@ -168,9 +176,10 @@ public sealed class TextInjector : ITextInjector
         }
     }
 
-    // Whether the target is a Remote Desktop or virtual machine client, and the shape of the text: counts only, never the
-    // text, so a report about input a remote session could not take can be answered. Optional, like every span tag.
-    private static void ReportTarget(Activity? activity, string text, TypingPace pace)
+    // Whether the target is a Remote Desktop or virtual machine client, whether a paste asked for was typed instead because
+    // it is one, and the shape of the text: counts only, never the text, so a report about input a remote session could not
+    // take can be answered. Optional, like every span tag.
+    private static void ReportTarget(Activity? activity, string text, TypingPace pace, InjectionMethod method)
     {
         if (activity is null)
         {
@@ -181,6 +190,9 @@ public sealed class TextInjector : ITextInjector
         {
             var shape = InjectedTextShape.Of(text);
             activity.SetTag(ScribeTelemetry.TagInjectRemote, pace.PacedForRemoteSession);
+            activity.SetTag(
+                ScribeTelemetry.TagInjectPasteBypassed,
+                method == InjectionMethod.ClipboardPaste && pace.PacedForRemoteSession);
             activity.SetTag(ScribeTelemetry.TagInjectLineBreaks, shape.LineBreaks);
             activity.SetTag(ScribeTelemetry.TagInjectSurrogatePairs, shape.SurrogatePairs);
             activity.SetTag(ScribeTelemetry.TagInjectControlCharacters, shape.ControlCharacters);

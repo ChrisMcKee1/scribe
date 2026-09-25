@@ -55,32 +55,64 @@ public class RemoteInsertionDiagnosticsTests
     }
 
     [Fact]
-    public void A_paste_says_whether_its_target_was_remote_and_carries_no_typing_pace()
+    public void A_paste_asked_for_a_remote_client_is_typed_instead_and_says_the_paste_was_bypassed()
     {
-        var text = "Paste probe 91c4 into a remote session, delivered by Ctrl+V.";
+        // Review round 2, item 6 (Grok's G3). With real scan codes a Ctrl+V reaches the remote session, and the Remote Desktop
+        // clipboard uses delayed rendering: the remote app reads the clipboard when it pastes, which can be after Scribe put
+        // the user's previous clipboard back, so the session could paste something private. A remote client is typed into.
+        var text = "Paste probe 91c4 into a remote session, typed instead of pasted.";
+        var clipboard = new TextInjectionFakes.Clipboard();
+        clipboard.SeedText("before");
+        var platform = new TextInjectionFakes.Platform { Foreground = Target };
+        InjectionResult? result = null;
+        var tags = Capture(text, () =>
+        {
+            result = new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard)
+                .Inject(text, InjectionMethod.ClipboardPaste, Target, targetProcessName: "mstsc");
+        });
+
+        Assert.True(result!.Succeeded);
+        Assert.Equal("unicode", result.Method);
+        Assert.Equal(PasteDelivery.NotUsed, result.Paste);
+        Assert.Equal(0, clipboard.OpenAttempts);
+        Assert.Equal("before", clipboard.Text);
+        Assert.DoesNotContain(platform.Batches.SelectMany(batch => batch), input => input.U.ki.wVk == 0x56); // no V: no Ctrl+V
+        Assert.True(tags[ScribeTelemetry.TagInjectRemote] is true);
+        Assert.True(tags[ScribeTelemetry.TagInjectPasteBypassed] is true);
+        Assert.Equal("unicode", tags[ScribeTelemetry.TagInjectMethod]);
+        Assert.Equal(16, tags[ScribeTelemetry.TagInjectBatchUnits]);
+        Assert.False(tags.ContainsKey(ScribeTelemetry.TagPasteDelivery));
+    }
+
+    [Fact]
+    public void A_paste_into_any_other_target_is_still_a_paste_and_bypasses_nothing()
+    {
+        var text = "Local paste probe 3c77, delivered by Ctrl+V as the setting asks.";
         var clipboard = new TextInjectionFakes.Clipboard();
         clipboard.SeedText("before");
         var tags = Capture(text, () =>
         {
             var platform = new TextInjectionFakes.Platform { Foreground = Target };
             new TextInjector(NullLogger<TextInjector>.Instance, platform, clipboard)
-                .Inject(text, InjectionMethod.ClipboardPaste, Target, targetProcessName: "mstsc");
+                .Inject(text, InjectionMethod.ClipboardPaste, Target, targetProcessName: "notepad");
         });
 
-        Assert.True(tags[ScribeTelemetry.TagInjectRemote] is true);
-        Assert.False(tags.ContainsKey(ScribeTelemetry.TagInjectBatchUnits));
-        Assert.False(tags.ContainsKey(ScribeTelemetry.TagInjectBatches));
+        Assert.True(tags[ScribeTelemetry.TagInjectRemote] is false);
+        Assert.True(tags[ScribeTelemetry.TagInjectPasteBypassed] is false);
+        Assert.Equal("clipboard", tags[ScribeTelemetry.TagInjectMethod]);
+        Assert.True(tags.ContainsKey(ScribeTelemetry.TagPasteDelivery));
     }
 
     [Fact]
     public void The_trace_line_shows_every_new_tag_and_nothing_of_the_text()
     {
         var text = "Trace probe 5d11 with secret words\nand a second line.";
-        var tags = Capture(text, () => Type(text, "vmconnect"));
+        var tags = Capture(text, () => Paste(text, "vmconnect"));
 
         var line = TraceTagPolicy.FormatSpan(ScribeTelemetry.InjectActivity, tags, TimeSpan.FromMilliseconds(3));
 
         Assert.Contains("inject.remote=True", line, StringComparison.Ordinal);
+        Assert.Contains("inject.paste_bypassed=True", line, StringComparison.Ordinal);
         Assert.Contains("inject.batch_units=16", line, StringComparison.Ordinal);
         Assert.Contains("inject.batches=", line, StringComparison.Ordinal);
         Assert.Contains("inject.line_breaks=1", line, StringComparison.Ordinal);
@@ -117,6 +149,13 @@ public class RemoteInsertionDiagnosticsTests
                 new TextInjectionFakes.Platform { Foreground = Target },
                 new TextInjectionFakes.Clipboard())
             .Inject(text, InjectionMethod.UnicodeType, Target, shiftEnterLineBreaks: true, targetProcessName: target);
+
+    private static void Paste(string text, string target) =>
+        new TextInjector(
+                NullLogger<TextInjector>.Instance,
+                new TextInjectionFakes.Platform { Foreground = Target },
+                new TextInjectionFakes.Clipboard())
+            .Inject(text, InjectionMethod.ClipboardPaste, Target, shiftEnterLineBreaks: true, targetProcessName: target);
 
     // The tags of the one text.inject span whose character count is this text's.
     private static Dictionary<string, object?> Capture(string text, Action inject)

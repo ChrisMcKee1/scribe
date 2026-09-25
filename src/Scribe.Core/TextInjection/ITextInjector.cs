@@ -16,8 +16,9 @@ public interface ITextInjector
     /// thread; callers should invoke this off the UI thread because it includes short delays.
     /// When <paramref name="shiftEnterLineBreaks"/> is true (the default), typed line breaks are
     /// sent as Shift+Enter so they do not submit a chat message. <paramref name="targetProcessName"/> is the process that
-    /// owned the focused window when the dictation started: typing into a Remote Desktop or virtual machine client is paced
-    /// for the remote session (see <see cref="RemoteClientProcesses"/>).
+    /// owned the focused window when the dictation started: a Remote Desktop or virtual machine client is always typed into,
+    /// never pasted into, whatever <paramref name="method"/> asks, and the typing is paced for the remote session (see
+    /// <see cref="RemoteClientProcesses"/>).
     /// </summary>
     InjectionResult Inject(
         string text,

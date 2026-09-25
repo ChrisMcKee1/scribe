@@ -52,6 +52,12 @@ public static class ScribeTelemetry
     /// <summary>Whether the target was a Remote Desktop or virtual machine client (<c>RemoteClientProcesses</c>).</summary>
     public const string TagInjectRemote = "scribe.inject.remote";
 
+    /// <summary>
+    /// Whether a clipboard paste was asked for and the text typed instead, because the target was a Remote Desktop or
+    /// virtual machine client (<c>TextInjector</c>): a remote session reads a pasted clipboard only when it pastes.
+    /// </summary>
+    public const string TagInjectPasteBypassed = "scribe.inject.paste_bypassed";
+
     /// <summary>Typing: the most code units one SendInput call carried, which the target's pace sets (<c>TypingPace</c>).</summary>
     public const string TagInjectBatchUnits = "scribe.inject.batch_units";
 
