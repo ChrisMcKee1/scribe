@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
@@ -23,7 +24,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var alpha = Library("alpha", builtIn: false, ("acme", "Acme"));
         var beta = Library("beta", builtIn: false, ("acme", "ACME"));
 
-        var plan = LibrarySwitchOffCopy.Plan([], [beta, alpha], [Usage(beta, unused: 7)]);
+        var plan = PlanWithTicked([], [beta, alpha], [Usage(beta, unused: 7)]);
 
         Assert.Empty(plan.Copies);
         Assert.Equal(0, plan.Collided);
@@ -36,7 +37,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var alpha = Library("alpha", builtIn: false, ("acme", "Acme"));
         var beta = Library("beta", builtIn: false, ("kube", "Kubernetes"));
 
-        var plan = LibrarySwitchOffCopy.Plan([], [beta, alpha], [Usage(alpha, unused: 3)]);
+        var plan = PlanWithTicked([], [beta, alpha], [Usage(alpha, unused: 3)]);
 
         Assert.Equal(["acme=Acme"], Describe(plan.Copies));
         Assert.Equal("Acme", WrittenAfter(plan, [beta], "acme"));
@@ -48,7 +49,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var alpha = Library("alpha", builtIn: false, ("acme", "Acme"));
         var beta = Library("beta", builtIn: false, ("acme", "Acme"));
 
-        var plan = LibrarySwitchOffCopy.Plan([], [alpha, beta], [Usage(alpha, unused: 3)]);
+        var plan = PlanWithTicked([], [alpha, beta], [Usage(alpha, unused: 3)]);
 
         Assert.Empty(plan.Copies);
         Assert.Equal("Acme", WrittenAfter(plan, [beta], "acme"));
@@ -62,7 +63,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false,
             [DictionaryEntry.New("acme", "Acme", wholeWord: false)]);
 
-        var plan = LibrarySwitchOffCopy.Plan([], [alpha, beta], [Usage(alpha, unused: 3)]);
+        var plan = PlanWithTicked([], [alpha, beta], [Usage(alpha, unused: 3)]);
 
         Assert.Equal(["acme=Acme"], Describe(plan.Copies));
         Assert.True(Assert.Single(plan.Copies).WholeWord);
@@ -76,7 +77,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var beta = Library("beta", builtIn: false, ("acme", "ACME"));
         var github = Library("github", builtIn: true, ("get hub", "GitHub"));
 
-        var plan = LibrarySwitchOffCopy.Plan(
+        var plan = PlanWithTicked(
             [], [beta, github, alpha], [Usage(beta, unused: 40), Usage(alpha, unused: 12), Usage(github, unused: 3)]);
 
         Assert.Equal(["get hub=GitHub", "acme=Acme"], Describe(plan.Copies));
@@ -91,7 +92,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var beta = Library("beta", builtIn: false, ("acme", "ACME"));
         var alphaKeepsKubeOnly = new LibraryUsage(alpha.Id, alpha.Name, [alpha.Entries[1]], UnusedCount: 1, BuiltIn: false);
 
-        var plan = LibrarySwitchOffCopy.Plan([], [alpha, beta], [alphaKeepsKubeOnly, Usage(beta, unused: 1)]);
+        var plan = PlanWithTicked([], [alpha, beta], [alphaKeepsKubeOnly, Usage(beta, unused: 1)]);
 
         Assert.Equal(["kube=Kubernetes"], Describe(plan.Copies));
     }
@@ -106,7 +107,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             new(string.Empty, "Nothing", WholeWord: true, Enabled: true), new(null, null, WholeWord: true, Enabled: true),
         ];
 
-        var plan = LibrarySwitchOffCopy.Plan(rows, [team], [Usage(team, unused: 9)]);
+        var plan = PlanWithTicked(rows, [team], [Usage(team, unused: 9)]);
 
         Assert.Equal(["retro=Retro"], Describe(plan.Copies));
         Assert.Equal(1, plan.Collided);
@@ -118,7 +119,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var alpha = Library("alpha", builtIn: false, ("llm", "LLM"));
         var beta = Library("beta", builtIn: false, ("llm", "LLM"));
 
-        var plan = LibrarySwitchOffCopy.Plan([new("llm", "LLM", WholeWord: true, Enabled: false)], [alpha, beta], [Usage(alpha, unused: 2)]);
+        var plan = PlanWithTicked([new("llm", "LLM", WholeWord: true, Enabled: false)], [alpha, beta], [Usage(alpha, unused: 2)]);
 
         Assert.Empty(plan.Copies);
         Assert.Equal(0, plan.Collided);
@@ -130,7 +131,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var team = new DictionaryLibrary("team-terms", "Team terms", "Custom", Description: null, BuiltIn: false,
             [new DictionaryEntry(0, "dot net", ".NET", WholeWord: false, Enabled: true)]);
 
-        var copy = Assert.Single(LibrarySwitchOffCopy.Plan([], [team], [Usage(team, unused: 1)]).Copies);
+        var copy = Assert.Single(PlanWithTicked([], [team], [Usage(team, unused: 1)]).Copies);
 
         Assert.Equal(new DictionaryEntry(0, "dot net", ".NET", WholeWord: false, Enabled: true), copy);
     }
@@ -144,7 +145,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var team = new DictionaryLibrary("team-terms", "Team terms", "Custom", Description: null, BuiltIn: false,
             [new DictionaryEntry(0, "  dot net  ", ".NET", WholeWord: false, Enabled: true)]);
 
-        var plan = LibrarySwitchOffCopy.Plan([], [team], [Usage(team, unused: 1)]);
+        var plan = PlanWithTicked([], [team], [Usage(team, unused: 1)]);
 
         Assert.Empty(plan.Copies);
         Assert.Equal(Dictated([], [team], ["use dot net", "dot net"]), Dictated(plan.Copies, [], ["use dot net", "dot net"]));
@@ -156,25 +157,26 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var team = Library("team-terms", builtIn: false, ("kube", "Kubernetes"), ("retro", "Retro"));
         var usage = new LibraryUsage(team.Id, team.Name, [team.Entries[1]], UnusedCount: 1, BuiltIn: false);
 
-        Assert.Equal(["retro=Retro"], Describe(LibrarySwitchOffCopy.Plan([], [team], [usage]).Copies));
+        Assert.Equal(["retro=Retro"], Describe(PlanWithTicked([], [team], [usage]).Copies));
     }
 
     [Fact]
-    public void A_built_in_and_a_hand_placed_file_that_share_an_id_are_told_apart()
+    public void Twins_that_share_an_id_are_told_apart_as_rows_and_go_off_together()
     {
-        // Only the hand-placed file is switched off. The built-in stays on and comes first, so it keeps "get hub".
+        // Only the hand-placed file's row is unticked. The built-in's row stays ticked, so the shared id stays saved and
+        // dictation keeps applying both: nothing goes off and nothing is copied.
         var builtIn = Library("github", builtIn: true, ("get hub", "GitHub"));
         var file = Library("github", builtIn: false, ("get hub", "GitHub"));
 
-        var plan = LibrarySwitchOffCopy.Plan([], [file, builtIn], [Usage(file, unused: 4)]);
+        var plan = PlanWithTicked([], [file, builtIn], [Usage(file, unused: 4)]);
 
         Assert.Empty(plan.Copies);
-        Assert.Equal("GitHub", WrittenAfter(plan, [builtIn], "get hub"));
+        Assert.Equal("GitHub", WrittenAfter(plan, [builtIn, file], "get hub"));
 
-        // Both switched off, the built-in's row unused: the built-in's rule is today's and is dropped. The file's identical
-        // row is kept but never applied, so it is not copied in its place.
+        // Both rows unticked, the built-in's row unused: the built-in's rule is today's and is dropped. The file's identical
+        // row is kept but never applied (the built-in's comes first), so it is not copied in its place.
         var builtInKeepsNothing = new LibraryUsage(builtIn.Id, builtIn.Name, [], UnusedCount: 1, BuiltIn: true);
-        Assert.Empty(LibrarySwitchOffCopy.Plan([], [file, builtIn], [Usage(file, unused: 4), builtInKeepsNothing]).Copies);
+        Assert.Empty(PlanWithTicked([], [file, builtIn], [Usage(file, unused: 4), builtInKeepsNothing]).Copies);
     }
 
     [Fact]
@@ -185,8 +187,8 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             [DictionaryEntry.New("acme", "Acme"), DictionaryEntry.New("acme", "ACME")]);
         var keepsTheSecondRow = new LibraryUsage(team.Id, team.Name, [team.Entries[1]], UnusedCount: 1, BuiltIn: false);
 
-        Assert.Empty(LibrarySwitchOffCopy.Plan([], [team], [keepsTheSecondRow]).Copies);
-        Assert.Equal(["acme=Acme"], Describe(LibrarySwitchOffCopy.Plan([], [team], [Usage(team, unused: 1)]).Copies));
+        Assert.Empty(PlanWithTicked([], [team], [keepsTheSecondRow]).Copies);
+        Assert.Equal(["acme=Acme"], Describe(PlanWithTicked([], [team], [Usage(team, unused: 1)]).Copies));
     }
 
     [Fact]
@@ -196,8 +198,105 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var on = Library("zeta", builtIn: false, ("kube", "K8s"));
         var notOn = Library("alpha", builtIn: false, ("kube", "Kubernetes"), ("retro", "Retro"));
 
-        var plan = LibrarySwitchOffCopy.Plan([], [on], [Usage(notOn, unused: 1)]);
+        var plan = PlanWithTicked([], [on], [Usage(notOn, unused: 1)]);
 
+        Assert.Empty(plan.Copies);
+    }
+
+    // The next four cases go through the real library service, which applies libraries by saved id, and Save's rule that an
+    // id is saved while any row with it is ticked. A built-in and a hand-placed file with the same id are two rows of the
+    // Libraries list but one id to dictation: both apply while either row is ticked, and both go off with the last one.
+
+    private const string TwinFile =
+        "# name: Team GitHub\npattern,replacement\nget hub,GitHub Enterprise\nkube,Kubernetes\nteam sync,Team Sync\n";
+
+    // The same file without its unused row, for a history that mentions both of its rows.
+    private const string FullyUsedTwinFile = "# name: Team GitHub\npattern,replacement\nget hub,GitHub Enterprise\nkube,Kubernetes\n";
+
+    private static readonly string[] TwinInputs = ["get hub", "kube", "push get hub and kube", "git hub", "github"];
+
+    [Fact]
+    public void Unticking_a_hand_placed_twin_whose_built_in_row_is_off_takes_both_off_so_both_rules_are_copied()
+    {
+        // Grok's case. The built-in's row is unticked but the shared id is saved, so dictation applies it and it wins
+        // "get hub"; the file's row is the one the cleanup switches off. After Save no row with the id is ticked, so both go.
+        var (before, after, plan) = SwitchOffThroughTheService(
+            [("github.csv", TwinFile)],
+            [("github", BuiltIn: true, Ticked: false), ("github", BuiltIn: false, Ticked: true)],
+            switchOff: ("github", BuiltIn: false),
+            transcript: "GitHub has the Kubernetes charts");
+
+        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub"], before);
+        Assert.Equal(before, after);
+        AssertCopiesTheRulesDictationApplied(plan);
+    }
+
+    [Fact]
+    public void Unticking_a_built_in_whose_hand_placed_twin_row_is_off_takes_both_off_so_both_rules_are_copied()
+    {
+        // The reverse, with a file the review found fully used: it has no verdict, so every row of it counts as kept.
+        var (before, after, plan) = SwitchOffThroughTheService(
+            [("github.csv", FullyUsedTwinFile)],
+            [("github", BuiltIn: true, Ticked: true), ("github", BuiltIn: false, Ticked: false)],
+            switchOff: ("github", BuiltIn: true),
+            transcript: "GitHub Enterprise has the Kubernetes charts");
+
+        Assert.Equal(["GitHub", "Kubernetes", "push GitHub and Kubernetes", "GitHub", "GitHub"], before);
+        Assert.Equal(before, after);
+        AssertCopiesTheRulesDictationApplied(plan);
+    }
+
+    // The built-in's "get hub" (it comes first) and the file's "kube" (only it has one) are what dictation applied; the
+    // file's losing "get hub" never applied and is not copied, and neither is a built-in row the review found unused. The
+    // built-in's other rows the dictation mentions ("git hub" and "github" also write GitHub) are copied too, so no exact
+    // list is pinned here.
+    private static void AssertCopiesTheRulesDictationApplied(LibrarySwitchOffCopy.Result plan)
+    {
+        var copies = Describe(plan.Copies);
+        Assert.Contains("get hub=GitHub", copies);
+        Assert.Contains("kube=Kubernetes", copies);
+        Assert.DoesNotContain("get hub=GitHub Enterprise", copies);
+        Assert.DoesNotContain("github copilot=GitHub Copilot", copies);
+    }
+
+    [Fact]
+    public void A_library_whose_row_is_off_and_whose_id_no_ticked_row_carries_is_never_copied()
+    {
+        // zeta applies nowhere today, so switching alpha off takes nothing of zeta away.
+        var alpha = Library("alpha", builtIn: false, ("acme", "Acme"));
+        var zeta = Library("zeta", builtIn: false, ("kube", "Kubernetes"));
+
+        var plan = LibrarySwitchOffCopy.Plan(
+            [], [alpha, zeta],
+            [new LibrarySwitchOffCopy.LibraryRow("alpha", BuiltIn: false, Enabled: true), new LibrarySwitchOffCopy.LibraryRow("zeta", BuiltIn: false, Enabled: false)],
+            [Usage(alpha, unused: 3)]);
+
+        Assert.Equal(["acme=Acme"], Describe(plan.Copies));
+    }
+
+    [Fact]
+    public void Unticking_a_hand_placed_twin_while_the_built_in_row_stays_ticked_leaves_both_on_and_copies_nothing()
+    {
+        var (before, after, plan) = SwitchOffThroughTheService(
+            [("github.csv", TwinFile)],
+            [("github", BuiltIn: true, Ticked: true), ("github", BuiltIn: false, Ticked: true)],
+            switchOff: ("github", BuiltIn: false),
+            transcript: "GitHub has the Kubernetes charts");
+
+        Assert.Equal(before, after);
+        Assert.Empty(plan.Copies);
+    }
+
+    [Fact]
+    public void Unticking_a_built_in_while_its_hand_placed_twin_row_stays_ticked_leaves_both_on_and_copies_nothing()
+    {
+        var (before, after, plan) = SwitchOffThroughTheService(
+            [("github.csv", TwinFile)],
+            [("github", BuiltIn: true, Ticked: true), ("github", BuiltIn: false, Ticked: true)],
+            switchOff: ("github", BuiltIn: true),
+            transcript: "GitHub has the Kubernetes charts");
+
+        Assert.Equal(before, after);
         Assert.Empty(plan.Copies);
     }
 
@@ -217,7 +316,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var beta = Library("beta", builtIn: false, ("ος", "Expansion"));
         var usage = UsageFromHistory([alpha, beta], "Expansion was the word we needed", "alpha");
 
-        var plan = LibrarySwitchOffCopy.Plan([], [alpha, beta], [usage]);
+        var plan = PlanWithTicked([], [alpha, beta], [usage]);
 
         string[] inputs = ["ΟΣ", "ος", "οσ", "το ΟΣ μας", "το ος μας"];
         var before = Dictated([], [alpha, beta], inputs);
@@ -237,7 +336,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var gamma = Library("gamma", builtIn: false, ("k", "First"));
         var usage = UsageFromHistory([alpha, beta, gamma], "First things first", "alpha");
 
-        var plan = LibrarySwitchOffCopy.Plan([], [alpha, beta, gamma], [usage]);
+        var plan = PlanWithTicked([], [alpha, beta, gamma], [usage]);
 
         string[] inputs = ["k", "K", Kelvin, "plan k now"];
         var before = Dictated([], [alpha, beta, gamma], inputs);
@@ -255,7 +354,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var zebra = Library("zebra", builtIn: false, ("k", "First"), ("unused term", "Unused Term"));
         var usage = UsageFromHistory([aardvark, zebra], "First things first", "zebra");
 
-        var plan = LibrarySwitchOffCopy.Plan([], [aardvark, zebra], [usage]);
+        var plan = PlanWithTicked([], [aardvark, zebra], [usage]);
 
         string[] inputs = ["k", "K", Kelvin, "plan k now"];
         var before = Dictated([], [aardvark, zebra], inputs);
@@ -273,7 +372,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var zebra = Library("zebra", builtIn: false, ("k", "First"), ("unused term", "Unused Term"));
         var usage = UsageFromHistory([zebra], "First things first", "zebra");
 
-        var plan = LibrarySwitchOffCopy.Plan(Rows(dictionary), [zebra], [usage]);
+        var plan = PlanWithTicked(Rows(dictionary), [zebra], [usage]);
 
         string[] inputs = ["k", "K", Kelvin];
         var before = Dictated(dictionary, [zebra], inputs);
@@ -291,7 +390,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var team = Library("team", builtIn: false, (Kelvin, "Second"), ("k", "First"), ("unused term", "Unused Term"));
         var usage = UsageFromHistory([team], "First and Second", "team");
 
-        var plan = LibrarySwitchOffCopy.Plan([], [team], [usage]);
+        var plan = PlanWithTicked([], [team], [usage]);
 
         string[] inputs = ["k", "K", Kelvin];
         var before = Dictated([], [team], inputs);
@@ -310,7 +409,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var team = Library("team", builtIn: false, (first, "One"), (second, "Two"), (third, "Three"), ("unused term", "Unused Term"));
         var usage = UsageFromHistory([team], "One Two Three", "team");
 
-        var plan = LibrarySwitchOffCopy.Plan([], [team], [usage]);
+        var plan = PlanWithTicked([], [team], [usage]);
 
         string[] inputs = [first, second, third, "kß", "Kß"];
         var before = Dictated([], [team], inputs);
@@ -352,12 +451,21 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 
         for (var round = 0; round < 800; round++)
         {
+            // Every library in the round is loaded and most rows are ticked. A library whose row is not ticked still applies
+            // while a row with its id is, as the saved id says.
             var libraries = ids.Where(_ => random.Next(10) < 6).Select(id => RandomLibrary(id.Id, id.BuiltIn)).ToList();
-            var switching = libraries
-                .Where(_ => random.Next(10) < 4)
+            var ticked = libraries.Where(_ => random.Next(10) < 8).ToList();
+            var listRows = libraries.Select(l => new LibrarySwitchOffCopy.LibraryRow(l.Id, l.BuiltIn, ticked.Contains(l))).ToList();
+
+            // The review's verdicts, what it kept of each library it found unused terms in, for some of the libraries; and
+            // the ones picked to switch off, now and then one whose row is not ticked (the plan must ignore it) or one for a
+            // library that is not loaded.
+            var verdicts = libraries
+                .Where(_ => random.Next(10) < 7)
                 .Select(l => new LibraryUsage(
                     l.Id, l.Name, [.. l.EnabledEntries.Where(_ => random.Next(10) < 6)], random.Next(1, 50), l.BuiltIn))
                 .ToList();
+            var switching = verdicts.Where(_ => random.Next(10) < 5).ToList();
             if (random.Next(10) == 0)
             {
                 var notOn = RandomLibrary("not-on", builtIn: false);
@@ -376,12 +484,24 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             }
 
             var plan = LibrarySwitchOffCopy.Plan(
-                Rows(dictionary).OrderBy(_ => random.Next()), libraries.OrderBy(_ => random.Next()), switching.OrderBy(_ => random.Next()));
+                Rows(dictionary).OrderBy(_ => random.Next()),
+                libraries.OrderBy(_ => random.Next()),
+                listRows.OrderBy(_ => random.Next()),
+                switching.OrderBy(_ => random.Next()),
+                verdicts.OrderBy(_ => random.Next()));
 
-            var off = libraries.Where(l => switching.Any(u => IsFor(u, l))).ToList();
-            var staying = libraries.Where(l => !off.Contains(l)).ToList();
+            // What dictation applies, the way the library service reads the saved ids (every loaded library whose id a
+            // ticked row carries), before the switch and after it, when the picked rows that were ticked are not.
+            var unticked = ticked.Where(l => switching.Any(u => IsFor(u, l))).ToList();
+            var today = Applied(libraries, ticked);
+            var staying = Applied(libraries, [.. ticked.Except(unticked)]);
+            var off = today.Where(l => !staying.Contains(l)).ToList();
+            Count("went off through a shared id", off.Count(l => !unticked.Contains(l)));
+            Count("stayed on through a shared id", unticked.Count(staying.Contains));
+
+            // What the review kept of a library that goes off: its verdict, or every enabled row when it has none.
             bool Kept(DictionaryLibrary library, DictionaryEntry row) =>
-                switching.Any(u => IsFor(u, library) && u.KeepTerms.Contains(row));
+                (verdicts.FirstOrDefault(u => IsFor(u, library))?.KeepTerms ?? [.. library.EnabledEntries]).Contains(row);
             bool Blocked(DictionaryEntry row) =>
                 Saves([.. dictionary, DictionaryEntry.New(row.Pattern, row.Replacement, row.WholeWord)]).HasDuplicate;
 
@@ -389,20 +509,20 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             // repository reads it back.
             var compiled = DictionaryLibraryComposer.Merge(
                     Saves(dictionary).Entries.Where(e => e.Enabled).OrderBy(e => e.Pattern, DictionaryRepository.PatternOrder),
-                    DictionaryLibraryComposer.ComposeLibraries(libraries))
+                    DictionaryLibraryComposer.ComposeLibraries(today))
                 .ToHashSet<DictionaryEntry>(ReferenceEqualityComparer.Instance);
 
-            // What the cleanup promises: every kept row of a switched-off library that dictation applies today stays exactly
+            // What the cleanup promises: every kept row of a library that goes off that dictation applies today stays exactly
             // where it is, and every other row of it goes, including a kept row that never applies (another row beats it)
             // and a kept row the dictionary cannot take because a row there already has its spoken form (Save's own
             // duplicate rule decides that), which the plan has to report instead.
-            var promised = libraries
+            var promised = today
                 .Select(l => off.Contains(l)
                     ? l with { Entries = [.. l.Entries.Where(e => Kept(l, e) && compiled.Contains(e) && !Blocked(e))] }
                     : l)
                 .ToList();
 
-            var before = Dictation(dictionary, libraries);
+            var before = Dictation(dictionary, today);
             var intended = Dictation(dictionary, promised);
             var after = Dictation([.. dictionary, .. plan.Copies], staying);
             foreach (var probe in probes)
@@ -417,7 +537,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
 
                 var now = after(probe);
                 Assert.True(now == was, $"round {round}: '{probe}' was '{was}' and became '{now}'.\n" +
-                    Scenario(dictionary, libraries, switching, plan));
+                    Scenario(dictionary, libraries, listRows, switching, verdicts, plan));
                 Count("checked: unchanged");
             }
 
@@ -485,6 +605,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             "copied: leaving it out changes the text", "copied: round 2 called the rule behind it the same",
             "copied: leaving it out keeps these forms, but no identical rule stays on",
             "left out: an identical rule stays on", "left out: a copy would change the text", "reported",
+            "went off through a shared id", "stayed on through a shared id",
         ];
         Assert.All(required, outcome => Assert.True(
             counts.GetValueOrDefault(outcome) >= 20, $"'{outcome}' was reached {counts.GetValueOrDefault(outcome)} times"));
@@ -512,11 +633,18 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     private static bool IsFor(LibraryUsage usage, DictionaryLibrary library) =>
         usage.Id == library.Id && usage.BuiltIn == library.BuiltIn;
 
+    // The libraries dictation applies for these ticked rows, the way the library service reads the saved ids: every loaded
+    // library whose id a ticked row carries, whatever its own row says.
+    private static List<DictionaryLibrary> Applied(IEnumerable<DictionaryLibrary> loaded, IReadOnlyList<DictionaryLibrary> tickedRows) =>
+        [.. loaded.Where(l => tickedRows.Any(t => string.Equals(t.Id, l.Id, StringComparison.OrdinalIgnoreCase)))];
+
     // A failing round, in full, so it can be turned into a test of its own.
     private static string Scenario(
         IEnumerable<DictionaryEntry> dictionary,
         IEnumerable<DictionaryLibrary> libraries,
+        IEnumerable<LibrarySwitchOffCopy.LibraryRow> listRows,
         IEnumerable<LibraryUsage> switching,
+        IEnumerable<LibraryUsage> verdicts,
         LibrarySwitchOffCopy.Result plan)
     {
         static string Row(DictionaryEntry e) =>
@@ -527,9 +655,11 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         text.AppendLine("dictionary: " + string.Join(", ", dictionary.Select(Row)));
         foreach (var library in LibraryPrecedence.Order(libraries))
         {
-            var usage = switching.FirstOrDefault(u => IsFor(u, library));
-            text.AppendLine($"{library.Id} ({(library.BuiltIn ? "built-in" : "custom")}){(usage is null ? string.Empty : ", switched off")}: " +
-                string.Join(", ", library.Entries.Select(e => Row(e) + (usage is not null && usage.KeepTerms.Contains(e) ? " (kept)" : string.Empty))));
+            var tick = listRows.Any(r => r.Id == library.Id && r.BuiltIn == library.BuiltIn && r.Enabled) ? "ticked" : "not ticked";
+            var picked = switching.Any(u => IsFor(u, library)) ? ", switched off" : string.Empty;
+            var verdict = verdicts.FirstOrDefault(u => IsFor(u, library));
+            text.AppendLine($"{library.Id} ({(library.BuiltIn ? "built-in" : "custom")}, {tick}{picked}{(verdict is null ? ", no verdict" : string.Empty)}): " +
+                string.Join(", ", library.Entries.Select(e => Row(e) + (verdict is not null && verdict.KeepTerms.Contains(e) ? " (kept)" : string.Empty))));
         }
 
         text.AppendLine($"copies: {string.Join(", ", plan.Copies.Select(Row))}; collided {plan.Collided}");
@@ -625,8 +755,89 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         DictionaryUsageAnalyzer.Analyze([transcript], [], enabled, minimumTranscripts: 1, minimumWords: 1)
             .Libraries.Single(library => library.Id == id);
 
+    /// <summary>
+    /// The cleanup switching one row of the Libraries list off, end to end: custom files the real loader reads beside the
+    /// shipped libraries, the list's rows saved as Save saves them (the ids of the ticked rows, which the real service
+    /// applies to every loaded library with that id), the real review over what dictation applies, the plan, and Save
+    /// storing the row unticked and the copies in a real dictionary. Returns finished text before and after.
+    /// </summary>
+    private static (string[] Before, string[] After, LibrarySwitchOffCopy.Result Plan) SwitchOffThroughTheService(
+        IReadOnlyList<(string FileName, string Csv)> customFiles,
+        IReadOnlyList<(string Id, bool BuiltIn, bool Ticked)> rows,
+        (string Id, bool BuiltIn) switchOff,
+        string transcript)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "scribe-switch-off-" + Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(root);
+        Directory.CreateDirectory(paths.LibrariesDir);
+        foreach (var (fileName, csv) in customFiles)
+        {
+            File.WriteAllText(Path.Combine(paths.LibrariesDir, fileName), csv);
+        }
+
+        try
+        {
+            using var database = ScribeDatabase.CreateInMemory();
+            var settings = new SettingsRepository(database);
+            var dictionary = new DictionaryRepository(database);
+            var service = new DictionaryLibraryService(paths, settings, NullLogger<DictionaryLibraryService>.Instance);
+
+            void Save(IEnumerable<(string Id, bool BuiltIn, bool Ticked)> listRows)
+            {
+                var saved = AppSettings.CreateDefault();
+                saved.EnabledDictionaryLibraryIds.Clear();
+                saved.EnabledDictionaryLibraryIds.AddRange(listRows.Where(r => r.Ticked).Select(r => r.Id).Distinct(StringComparer.OrdinalIgnoreCase));
+                settings.Save(saved);
+            }
+
+            string[] Dictate() =>
+                [.. TwinInputs.Select(new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: service).Process)];
+
+            Save(rows);
+            var before = Dictate();
+
+            var loaded = service.GetLibraries();
+            var tickedIds = rows.Where(r => r.Ticked).Select(r => r.Id).ToList();
+            var report = DictionaryUsageAnalyzer.Analyze(
+                [transcript], [], LibraryPrecedence.Enabled(loaded, tickedIds), minimumTranscripts: 1, minimumWords: 1);
+            var selected = report.Libraries.Where(u => u.BuiltIn == switchOff.BuiltIn && u.Id == switchOff.Id).ToList();
+            Assert.Single(selected);
+
+            var plan = LibrarySwitchOffCopy.Plan(
+                [], loaded, [.. rows.Select(r => new LibrarySwitchOffCopy.LibraryRow(r.Id, r.BuiltIn, r.Ticked))], selected, report.Libraries);
+
+            Save(rows.Select(r => r.BuiltIn == switchOff.BuiltIn && r.Id == switchOff.Id ? r with { Ticked = false } : r));
+            if (plan.Copies.Count > 0)
+            {
+                dictionary.AddRange(Saves(plan.Copies).Entries);
+            }
+
+            return (before, Dictate(), plan);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best effort: a leftover temp folder is harmless.
+            }
+        }
+    }
+
     private static IReadOnlyList<LibrarySwitchOffCopy.Row> Rows(IEnumerable<DictionaryEntry> dictionary) =>
         [.. dictionary.Select(e => new LibrarySwitchOffCopy.Row(e.Pattern, e.Replacement, e.WholeWord, e.Enabled))];
+
+    // The plan when every library passed is on through a ticked row of its own and nothing else is loaded.
+    private static LibrarySwitchOffCopy.Result PlanWithTicked(
+        IEnumerable<LibrarySwitchOffCopy.Row> rows, IEnumerable<DictionaryLibrary> ticked, IEnumerable<LibraryUsage> switchingOff)
+    {
+        var libraries = ticked.ToList();
+        return LibrarySwitchOffCopy.Plan(
+            rows, libraries, [.. libraries.Select(l => new LibrarySwitchOffCopy.LibraryRow(l.Id, l.BuiltIn, Enabled: true))], switchingOff);
+    }
 
     /// <summary>The enabled libraries as the real service hands them to dictation: through the composer.</summary>
     private sealed class ComposedLibraries(IReadOnlyList<DictionaryLibrary> enabled) : IDictionaryLibraryService

@@ -5827,10 +5827,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
-        await ApplyCleanupAsync(choice);
+        await ApplyCleanupAsync(choice, report.Libraries);
     }
 
-    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice)
+    private async Task ApplyCleanupAsync(DictionaryCleanupChoice choice, IReadOnlyList<LibraryUsage> verdicts)
     {
         // Match back by spoken form rather than id: the grid can hold a row that has never been
         // saved (id 0), and two of those would be indistinguishable by id.
@@ -5880,13 +5880,18 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // A library is all or nothing, so switching one off to shed its dead weight would take its
         // working terms with it. Copying those into the user's own dictionary first is what makes a
-        // partly used library actionable at all, which is the common case for a shipped pack. Core copies a rule
-        // dictation applies today unless leaving it out provably keeps what dictation writes, judged by running the
-        // real matcher, so it needs each row's written form and word-boundary rule as well as its spoken form.
+        // partly used library actionable at all, which is the common case for a shipped pack. Core works out which
+        // libraries dictation applies before and after the switch from the list's rows, the way Save stores them (by id, so
+        // a hand-placed file that reuses a built-in's id goes on and off with it), and copies a rule dictation applies
+        // today unless leaving it out provably keeps what dictation writes, judged by running the real matcher. So it gets
+        // every loaded library, every row of the list, the review's verdicts, and each dictionary row's written form and
+        // word-boundary rule as well as its spoken form.
         var copy = LibrarySwitchOffCopy.Plan(
             _rows.Select(r => new LibrarySwitchOffCopy.Row(r.Pattern, r.Replacement, r.WholeWord, r.Enabled)).ToList(),
-            LibraryPrecedence.Enabled(_loadedLibraries, EnabledLibraryRowIds()),
-            libraryTargets.Select(t => t.Usage).ToList());
+            _loadedLibraries,
+            _libraryRows.Select(r => new LibrarySwitchOffCopy.LibraryRow(r.Id, r.BuiltIn, r.Enabled)).ToList(),
+            libraryTargets.Select(t => t.Usage).ToList(),
+            verdicts);
 
         foreach (var (_, row) in libraryTargets)
         {

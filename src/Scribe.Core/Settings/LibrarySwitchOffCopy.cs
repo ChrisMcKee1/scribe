@@ -19,6 +19,13 @@ namespace Scribe.Core.Settings;
 /// libraries in (most unused terms first).
 /// </para>
 /// <para>
+/// Which libraries are on before and after the switch comes from the Libraries list's rows the way Save stores them, as
+/// ids, and the library service applies every loaded library with a saved id. So a built-in and a hand-placed file that
+/// share an id go on and off together: unticking one while the other's row stays ticked switches nothing off in
+/// dictation, and unticking the last row with the id switches both off, the one whose row was already unticked included.
+/// Every library that goes off keeps what the review kept of it.
+/// </para>
+/// <para>
 /// Whether such a term is copied is decided by what dictation writes, never by comparing entries. The composer keeps one
 /// row per spoken form compared trimmed and OrdinalIgnoreCase, but the matcher is an invariant case-insensitive regular
 /// expression that folds letters differently (it does not treat the Greek final sigma as sigma, and it treats the Kelvin
@@ -54,6 +61,9 @@ public static class LibrarySwitchOffCopy
     /// <summary>One row of the dictionary grid as the cleanup leaves it, with the fields dictation reads.</summary>
     public readonly record struct Row(string? Pattern, string? Replacement, bool WholeWord, bool Enabled);
 
+    /// <summary>One row of the Libraries list: the library it stands for, and whether its box is ticked.</summary>
+    public readonly record struct LibraryRow(string Id, bool BuiltIn, bool Enabled);
+
     /// <param name="Copies">Entries to add to the dictionary, switched on, in precedence order of their libraries.</param>
     /// <param name="Collided">
     /// Rules dictation applies today that could not be copied because a dictionary row that is switched off already has
@@ -63,15 +73,24 @@ public static class LibrarySwitchOffCopy
     public sealed record Result(IReadOnlyList<DictionaryEntry> Copies, int Collided);
 
     /// <param name="rows">The dictionary rows after the cleanup has deleted or switched off its own entries.</param>
-    /// <param name="enabledLibraries">Every library that is on before the switch, in any order.</param>
-    /// <param name="switchingOff">The libraries being switched off, with the terms to keep, in any order.</param>
+    /// <param name="libraries">Every loaded library, in any order.</param>
+    /// <param name="libraryRows">The Libraries list's rows as they are before the switch, ticked or not.</param>
+    /// <param name="switchingOff">The libraries whose rows the cleanup unticks, with the terms the review kept, in any order.</param>
+    /// <param name="verdicts">
+    /// What the review kept of each library it found unused terms in. A library that goes off only because it shares an id
+    /// with one whose row is unticked keeps what its verdict kept, or, with no verdict, every enabled row, since the review
+    /// then found nothing of it unused.
+    /// </param>
     public static Result Plan(
         IEnumerable<Row> rows,
-        IEnumerable<DictionaryLibrary> enabledLibraries,
-        IEnumerable<LibraryUsage> switchingOff)
+        IEnumerable<DictionaryLibrary> libraries,
+        IEnumerable<LibraryRow> libraryRows,
+        IEnumerable<LibraryUsage> switchingOff,
+        IEnumerable<LibraryUsage>? verdicts = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
-        ArgumentNullException.ThrowIfNull(enabledLibraries);
+        ArgumentNullException.ThrowIfNull(libraries);
+        ArgumentNullException.ThrowIfNull(libraryRows);
         ArgumentNullException.ThrowIfNull(switchingOff);
 
         // The dictionary as Save stores it: both forms trimmed, blank rows skipped.
@@ -82,9 +101,7 @@ public static class LibrarySwitchOffCopy
         var dictionaryOn = dictionary.Where(entry => entry.Enabled).ToList();
         var writtenByDictionary = new HashSet<string>(dictionaryOn.Select(entry => entry.Pattern), StringComparer.OrdinalIgnoreCase);
 
-        var usages = switchingOff.Where(usage => usage is not null).ToList();
-        var enabled = LibraryPrecedence.Order(enabledLibraries);
-        var staying = enabled.Where(library => !usages.Any(usage => IsFor(usage, library))).ToList();
+        var (enabled, staying, usages) = Switch(libraries, libraryRows, switchingOff, verdicts);
 
         // Which row the composer keeps for each spoken form, today and with only the libraries that stay on.
         var current = DictionaryLibraryOverlapAnalyzer.Coverage(enabled, enabled.Select(library => library.Id));
@@ -166,6 +183,39 @@ public static class LibrarySwitchOffCopy
 
     private static bool IsFor(LibraryUsage usage, DictionaryLibrary library) =>
         usage.BuiltIn == library.BuiltIn && string.Equals(usage.Id, library.Id, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsFor(LibraryUsage usage, LibraryRow row) =>
+        usage.BuiltIn == row.BuiltIn && string.Equals(usage.Id, row.Id, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The libraries dictation applies before and after the switch, and every library that goes off with what the review
+    /// kept of it. Dictation applies libraries by saved id, and Save saves the id of every ticked row, so a built-in and a
+    /// hand-placed file that share an id go on and off together whatever their own boxes say: both apply while either row
+    /// is ticked, and both go off with the last one. Unticking one while the other stays ticked changes nothing.
+    /// </summary>
+    private static (IReadOnlyList<DictionaryLibrary> Enabled, IReadOnlyList<DictionaryLibrary> Staying, List<LibraryUsage> GoingOff) Switch(
+        IEnumerable<DictionaryLibrary> libraries,
+        IEnumerable<LibraryRow> libraryRows,
+        IEnumerable<LibraryUsage> switchingOff,
+        IEnumerable<LibraryUsage>? verdicts)
+    {
+        var loaded = libraries.Where(library => library is not null).ToList();
+        var selected = switchingOff.Where(usage => usage is not null).ToList();
+        var ticked = libraryRows.Where(row => row.Enabled).ToList();
+        var stillTicked = ticked.Where(row => !selected.Any(usage => IsFor(usage, row))).ToList();
+
+        // LibraryPrecedence.Enabled matches ids as the saved set is read, which is what the library service applies.
+        var enabled = LibraryPrecedence.Enabled(loaded, ticked.Select(row => row.Id));
+        var staying = LibraryPrecedence.Enabled(loaded, stillTicked.Select(row => row.Id));
+
+        var known = selected.Concat(verdicts?.Where(usage => usage is not null) ?? []).ToList();
+        var goingOff = enabled
+            .Where(library => !staying.Contains(library))
+            .Select(library => known.FirstOrDefault(usage => IsFor(usage, library))
+                ?? new LibraryUsage(library.Id, library.Name, [.. library.EnabledEntries], UnusedCount: 0, library.BuiltIn))
+            .ToList();
+        return (enabled, staying, goingOff);
+    }
 
     private static bool IsFor(LibraryUsage usage, LibraryCoverage coverage) =>
         usage.BuiltIn == coverage.BuiltIn && string.Equals(usage.Id, coverage.LibraryId, StringComparison.OrdinalIgnoreCase);
