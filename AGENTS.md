@@ -34,7 +34,9 @@ over a recent dictation that saves the fix and repairs that transcript in place)
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
 disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause), a tray Microphone
 submenu (the Windows default or a specific device, plus Sound settings) and a
-first-run **welcome**; an **About** page links privacy, support, source, and the GitHub star path.
+first-run **welcome**; push-to-talk on any key, two-key chord, or a spare **mouse button** (middle, back or
+forward, alone or in a chord with a key; see the hook section); an **About** page links privacy, support, source, and
+the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
 benchmark‑validated optimum (see `docs/model-leaderboard.md`; a stricter A/B regressed it).
@@ -266,6 +268,9 @@ dotnet run --project src/Scribe.App -- --settings
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
 # or src/Scribe.App/models found from the test output); without models they pass vacuously. CI sets
 # SCRIBE_MODELS_DIR, so they run there.
+# The Start_ tests that inject mouse clicks into the real mouse hook (HotkeyServiceMouseTests.cs) run only on CI
+# (GITHUB_ACTIONS) or with SCRIBE_INPUT_INJECTION_TESTS=1, and then require the input desktop: injected input lands
+# under the pointer, so never opt in on a desktop someone is using. Elsewhere they return at once.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 
 # Build the overlay alone. WinUI has no AnyCPU story, so Platform is REQUIRED and must match
@@ -712,19 +717,45 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
   documentation is not consistent about whether `SetWindowsHookEx` creates one.
+- **The mouse hook exists only while a binding presses a mouse button.** A middle, Back or Forward
+  button (`MouseButtons`, stored as VK_MBUTTON, VK_XBUTTON1 or VK_XBUTTON2 in the existing binding) is
+  read by a `WH_MOUSE_LL` hook on the same hook thread, feeding the same engine
+  (`HotkeyEngine.OnMouseButtonEvent`), so chords of a key and a button, suppression, pause, capture,
+  the modifier rule, a desktop switch and a reinstall treat a button as one more key. The thread
+  installs it, or removes it, between messages and never inside a callback, whenever it has applied a
+  change (`HookInstallation.SyncMouseHook`, after `HotkeyEngine.UsesMouseButtons`), so nobody who binds
+  keys alone gets a system-wide mouse hook: every pointer move on the desktop waits for this thread
+  while one is installed. Its callback's first act is the one comparison
+  (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
+  hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
+  `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
+  carrying a mouse button's code (only injected input can) is not the button. The left and right
+  buttons are never bindable.
+- **The mouse hook is renewed, not probed.** Windows removes a low-level hook that misses the callback
+  deadline, and the mouse hook is the one called for every pointer move, so it needs recovery, but the
+  keyboard probe has no safe mouse counterpart: the only input that clicks nothing is a move, and a
+  move that reaches the desktop brings back a pointer hidden while typing. So every watchdog period
+  (`MaintainMouseHookLocked`) the thread registers the mouse hook afresh, the new registration before
+  the old one is released and both before it takes another message, so the engine keeps its state and
+  no event falls between them; a hook Windows removed is back within one period, and a renewal that
+  finds the old registration already gone is logged. Nothing is injected and nothing is added to any
+  event. The leaked-input check releases a bound button Windows still holds with a marked button-up
+  (`NativeMethods.MarkedMouseButtonUp`), as it releases a key.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
   epoch. The controller calls the numbered `SetPaused(paused, sequence)`, with the sequence taken inside
   the lifecycle gate, and the router ignores a request older than the last one applied.
-- **Only a bare Page Up or Page Down lets modified presses through.** For a binding whose only key is
-  Page Up or Page Down, with no modifier (the shipped defaults, or either key bound in Settings),
-  `ChordStateMachine` refuses the press that would complete it while any Ctrl, Alt, Shift or Win key
-  is held, or a Narrator key (Caps Lock, Insert, or NonConvert on a Japanese 106 keyboard): that whole
-  keystroke reaches the app and starts nothing, so Ctrl+Page Down still switches tabs and
-  Narrator+Page Down still changes views. Only that press is judged, so a modifier pressed during a
-  dictation neither ends it nor lets the key through. No binding but a bare Page Up or Page Down
-  changes: every other one (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as
+- **Only a bare Page Up, Page Down or mouse button lets modified presses through.** For a binding whose
+  only input is Page Up, Page Down or a middle, Back or Forward mouse button, with no modifier (the
+  shipped defaults, or any of those bound in Settings), `ChordStateMachine` refuses the press that
+  would complete it while any Ctrl, Alt, Shift or Win key is held, or a Narrator key (Caps Lock,
+  Insert, or NonConvert on a Japanese 106 keyboard): that whole keystroke or click reaches the app and
+  starts nothing, so Ctrl+Page Down still switches tabs, Narrator+Page Down still changes views, and a
+  Ctrl or Shift click of a bound button still means what it means to the app. One rule for both
+  (`IsBarePassThroughBinding`). Only that press is judged, so a modifier pressed during a dictation
+  neither ends it nor lets the input through. No other binding changes: every other one (F9,
+  Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord, a key and a button together) matches exactly as
   before whatever else is held, and widening the rule would change them. An install that had already
   bound Page Up or Page Down on its own gets the pass-through too, because 0.4.3's capture stored that
   key exactly so: after the upgrade its Ctrl, Shift, Alt, Win or Narrator key plus the Page key reaches
@@ -952,6 +983,20 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   keypad's Page Up and Page Down (9 and 3 with Num Lock off) are the same keys to it, and the hint says so. Letting a
   short tap through would be a change to `ChordStateMachine` with tests of its own, not a tweak, and it waits on the
   maintainer.
+- **Mouse buttons are bound like keys, and captured in Core.** Set records keys and the middle, Back and Forward
+  buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the order they go down, set once all are up,
+  the left and right buttons refused with a reason and left their meaning (the window only shows the reason for a
+  click on the capture box itself), and a chord recorded with a button first warns that the button still reaches the
+  app under the pointer (a chord is swallowed from the input that completes it). The Settings window maps its own
+  Preview mouse events, and the title bar's `WM_NCMBUTTON*` and `WM_NCXBUTTON*` messages, into it, so a button
+  pressed with the pointer anywhere on the window counts, and it marks a recorded button's events handled, so a side
+  button's release never becomes a Back or Forward command there. `KeyNames` names them "Middle mouse button",
+  "Mouse Back (button 4)" and "Mouse Forward (button 5)", and the capture stores that name, which is what 0.4.3 and
+  0.4.2 show for the binding (they show the stored name). Those builds have no mouse hook, so a button binding never
+  fires in them; nothing in them throws on it or rejects it. Windows reports no button beyond the fifth; a mouse's own
+  software maps extra buttons to keys (F13 to F24 are the usual choice), which bind as keys. The Settings hint
+  (`HotkeyCaptureSession.MouseButtonsHint`) says all of this, and that a bound button stops doing its job in other
+  apps (Back stops going back) unless pressed with a modifier.
 
 ## Startup (read before touching OnStartup)
 
