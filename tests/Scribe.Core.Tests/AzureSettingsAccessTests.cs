@@ -70,7 +70,7 @@ public sealed class AzureSettingsAccessTests
     [Theory]
     [InlineData(false, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]
     [InlineData(true, false, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]
-    [InlineData(true, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.EndpointRequired)]
+    [InlineData(true, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.AuthenticationRequired)]
     [InlineData(true, true, false, "key", null, "deployment", AzureSettingsAccess.ValidationIssue.EndpointRequired)]
     [InlineData(true, true, true, null, "https://example.test", null, AzureSettingsAccess.ValidationIssue.DeploymentRequired)]
     [InlineData(true, true, true, null, "https://example.test", "deployment", AzureSettingsAccess.ValidationIssue.None)]
@@ -279,7 +279,7 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
-    public void A_complete_service_principal_can_save_without_a_live_verification()
+    public void Legacy_cleanup_validation_keeps_requiring_live_authentication_for_the_window()
     {
         // A dropped connection must not block editing unrelated settings.
         var issue = AzureSettingsAccess.ValidateCleanup(
@@ -298,10 +298,8 @@ public sealed class AzureSettingsAccessTests
     }
 
     [Fact]
-    public void The_cli_path_can_save_complete_setup_without_live_sign_in()
+    public void Legacy_cleanup_validation_still_blocks_cli_when_not_signed_in()
     {
-        // A dropped connection must not block unrelated settings. The running cleanup service will
-        // report sign-in trouble later and fall back to what Scribe heard.
         var issue = AzureSettingsAccess.ValidateCleanup(
             enabled: true,
             usesAzureProvider: true,
@@ -311,7 +309,39 @@ public sealed class AzureSettingsAccessTests
             deployment: "cleanup",
             authMode: AzureAuthMode.AzureCli);
 
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.AuthenticationRequired, issue);
+    }
+
+    [Fact]
+    public void Save_validation_allows_cli_setup_without_live_sign_in()
+    {
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: null,
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            apiKeySelected: false,
+            authMode: AzureAuthMode.AzureCli);
+
         Assert.Equal(AzureSettingsAccess.ValidationIssue.None, issue);
+    }
+
+    [Fact]
+    public void Save_validation_rejects_empty_api_key_mode()
+    {
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
+            enabled: true,
+            usesAzureProvider: true,
+            signedIn: false,
+            apiKey: "",
+            endpoint: "https://example.test",
+            deployment: "cleanup",
+            apiKeySelected: true,
+            authMode: AzureAuthMode.AzureCli);
+
+        Assert.Equal(AzureSettingsAccess.ValidationIssue.ApiKeyRequired, issue);
     }
 
     [Fact]
@@ -390,13 +420,14 @@ public sealed class AzureSettingsAccessTests
     [Fact]
     public void An_incomplete_service_principal_blocks_saving()
     {
-        var issue = AzureSettingsAccess.ValidateCleanup(
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
             enabled: true,
             usesAzureProvider: true,
             signedIn: false,
             apiKey: null,
             endpoint: "https://example.test",
             deployment: "cleanup",
+            apiKeySelected: false,
             authMode: AzureAuthMode.ServicePrincipal,
             tenantId: Tenant,
             clientId: Client,
@@ -410,13 +441,14 @@ public sealed class AzureSettingsAccessTests
     {
         Assert.Equal(
             AzureSettingsAccess.ValidationIssue.EndpointRequired,
-            AzureSettingsAccess.ValidateCleanup(
+            AzureSettingsAccess.ValidateCleanupForSave(
                 enabled: true,
                 usesAzureProvider: true,
                 signedIn: true,
                 apiKey: null,
                 endpoint: null,
                 deployment: "cleanup",
+                apiKeySelected: false,
                 authMode: AzureAuthMode.ServicePrincipal,
                 tenantId: Tenant,
                 clientId: Client,
@@ -424,13 +456,14 @@ public sealed class AzureSettingsAccessTests
 
         Assert.Equal(
             AzureSettingsAccess.ValidationIssue.None,
-            AzureSettingsAccess.ValidateCleanup(
+            AzureSettingsAccess.ValidateCleanupForSave(
                 enabled: true,
                 usesAzureProvider: true,
                 signedIn: true,
                 apiKey: null,
                 endpoint: "https://example.test",
                 deployment: "cleanup",
+                apiKeySelected: false,
                 authMode: AzureAuthMode.ServicePrincipal,
                 tenantId: Tenant,
                 clientId: Client,
@@ -442,13 +475,14 @@ public sealed class AzureSettingsAccessTests
     {
         // The key path never touches Entra, so half-entered app registration details are not a
         // blocker; failing here would strand a user who deliberately chose key auth.
-        var issue = AzureSettingsAccess.ValidateCleanup(
+        var issue = AzureSettingsAccess.ValidateCleanupForSave(
             enabled: true,
             usesAzureProvider: true,
             signedIn: false,
             apiKey: "a-key",
             endpoint: "https://example.test",
             deployment: "cleanup",
+            apiKeySelected: true,
             authMode: AzureAuthMode.ServicePrincipal,
             tenantId: null,
             clientId: null,

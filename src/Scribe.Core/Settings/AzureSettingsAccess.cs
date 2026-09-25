@@ -24,6 +24,7 @@ public static class AzureSettingsAccess
         EndpointRequired,
         DeploymentRequired,
         ServicePrincipalIncomplete,
+        ApiKeyRequired,
     }
 
     /// <summary>Decides which parts of the Microsoft Foundry settings show for the current sign-in state.</summary>
@@ -114,6 +115,56 @@ public static class AzureSettingsAccess
         // An API key bypasses Entra entirely, so half-entered app registration details are only a
         // blocker when the token path is actually the one being used.
         if (authMode == AzureAuthMode.ServicePrincipal && !hasApiKey && !servicePrincipalComplete)
+        {
+            return ValidationIssue.ServicePrincipalIncomplete;
+        }
+
+        // This method is still called by the shipping Settings window, which represents API-key
+        // selection as AzureCli plus the typed key. Keep the pre-redesign live-auth gate here until
+        // the window switches to ValidateCleanupForSave and can pass apiKeySelected explicitly.
+        if (!signedIn && !hasApiKey && !servicePrincipalComplete)
+        {
+            return ValidationIssue.AuthenticationRequired;
+        }
+
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return ValidationIssue.EndpointRequired;
+        }
+
+        return string.IsNullOrWhiteSpace(deployment)
+            ? ValidationIssue.DeploymentRequired
+            : ValidationIssue.None;
+    }
+
+    public static ValidationIssue ValidateCleanupForSave(
+        bool enabled,
+        bool usesAzureProvider,
+        bool signedIn,
+        string? apiKey,
+        string? endpoint,
+        string? deployment,
+        bool apiKeySelected,
+        AzureAuthMode authMode = AzureAuthMode.AzureCli,
+        string? tenantId = null,
+        string? clientId = null,
+        string? clientSecret = null)
+    {
+        if (!enabled || !usesAzureProvider)
+        {
+            return ValidationIssue.None;
+        }
+
+        var hasApiKey = !string.IsNullOrWhiteSpace(apiKey);
+        if (apiKeySelected && !hasApiKey)
+        {
+            return ValidationIssue.ApiKeyRequired;
+        }
+
+        var servicePrincipalComplete = authMode == AzureAuthMode.ServicePrincipal
+            && AzureServicePrincipalValidator.IsComplete(tenantId, clientId, clientSecret);
+
+        if (authMode == AzureAuthMode.ServicePrincipal && !apiKeySelected && !servicePrincipalComplete)
         {
             return ValidationIssue.ServicePrincipalIncomplete;
         }

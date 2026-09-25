@@ -21,6 +21,7 @@ public enum ValidationCode
     ShortcutsIdentical,
     FoundryEndpointInvalid,
     CustomEndpointInvalid,
+    CustomModelEmpty,
     DeploymentEmpty,
     TenantEmpty,
     ClientIdEmpty,
@@ -28,12 +29,19 @@ public enum ValidationCode
     DurationOutOfRange,
 }
 
+public enum ValidationSeverity
+{
+    Blocking,
+    Warning,
+}
+
 public sealed record ValidationIssue(
     ValidationCode Code,
     SettingsPage Page,
     string ControlName,
     string? RowKey,
-    string Message);
+    string Message,
+    ValidationSeverity Severity = ValidationSeverity.Blocking);
 
 public sealed record DictionaryDraftRow(
     string RowKey,
@@ -44,7 +52,9 @@ public sealed record DictionaryDraftRow(
     string? LoadedPattern = null,
     string? LoadedReplacement = null,
     bool WholeWord = true,
-    bool Enabled = true);
+    bool Enabled = true,
+    bool LoadedWholeWord = true,
+    bool LoadedEnabled = true);
 
 public sealed record SnippetDraftRow(
     string RowKey,
@@ -54,7 +64,8 @@ public sealed record SnippetDraftRow(
     string? Template,
     string? LoadedPhrase = null,
     string? LoadedTemplate = null,
-    bool Enabled = true);
+    bool Enabled = true,
+    bool LoadedEnabled = true);
 
 public sealed record ProfileDraftRow(
     string RowKey,
@@ -63,7 +74,11 @@ public sealed record ProfileDraftRow(
     string? Name,
     string? Apps,
     string? LoadedName = null,
-    string? LoadedApps = null);
+    string? LoadedApps = null,
+    string? WritingStyle = null,
+    string? LoadedWritingStyle = null,
+    NewlineInjectionMode? NewlineHandling = null,
+    NewlineInjectionMode? LoadedNewlineHandling = null);
 
 public sealed record DurationDraftField(
     SettingsPage Page,
@@ -89,6 +104,7 @@ public static class SettingsDraftValidator
     public const string ShortcutsIdenticalMessage = "Both shortcuts use the same key. Choose a different key for one of them.";
     public const string FoundryEndpointInvalidMessage = "Enter the address of your Microsoft Foundry resource. It starts with https://.";
     public const string CustomEndpointInvalidMessage = "Enter the service's address, such as http://localhost:11434/v1.";
+    public const string CustomModelEmptyMessage = "Enter the name of the model.";
     public const string DeploymentEmptyMessage = "Enter the name of the model deployment.";
     public const string TenantEmptyMessage = "Enter the tenant ID.";
     public const string ClientIdEmptyMessage = "Enter the client ID.";
@@ -108,15 +124,21 @@ public static class SettingsDraftValidator
         ValidateDurations(draft.DurationFields ?? []);
         return issues;
 
-        void Add(ValidationCode code, SettingsPage page, string control, string? rowKey, string message) =>
-            issues.Add(new ValidationIssue(code, page, control, rowKey, message));
+        void Add(
+            ValidationCode code,
+            SettingsPage page,
+            string control,
+            string? rowKey,
+            string message,
+            ValidationSeverity severity = ValidationSeverity.Blocking) =>
+            issues.Add(new ValidationIssue(code, page, control, rowKey, message, severity));
 
         void ValidateDictionary(IReadOnlyList<DictionaryDraftRow> rows)
         {
             var seen = new Dictionary<string, DictionaryDraftRow>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Pattern, row.Replacement))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
@@ -124,25 +146,26 @@ public static class SettingsDraftValidator
                 var pattern = Trim(row.Pattern);
                 if (pattern.Length == 0)
                 {
-                    if (row.Touched || row.Origin == DraftRowOrigin.New)
-                    {
-                        Add(ValidationCode.DictionarySpokenEmpty, SettingsPage.Dictionary, "DictionaryPattern", row.RowKey, DictionarySpokenEmptyMessage);
-                    }
+                    Add(
+                        ValidationCode.DictionarySpokenEmpty,
+                        SettingsPage.Dictionary,
+                        "DictionaryPattern",
+                        row.RowKey,
+                        DictionarySpokenEmptyMessage,
+                        SeverityFor(Unchanged(row)));
 
                     continue;
                 }
 
                 if (seen.TryGetValue(pattern, out var first))
                 {
-                    if (row.Touched || first.Touched || row.Origin == DraftRowOrigin.New || first.Origin == DraftRowOrigin.New)
-                    {
-                        Add(
-                            ValidationCode.DictionaryDuplicate,
-                            SettingsPage.Dictionary,
-                            "DictionaryPattern",
-                            row.RowKey,
-                            $"\"{pattern}\" is already in your dictionary. Keep one of the two rows.");
-                    }
+                    Add(
+                        ValidationCode.DictionaryDuplicate,
+                        SettingsPage.Dictionary,
+                        "DictionaryPattern",
+                        row.RowKey,
+                        $"\"{pattern}\" is already in your dictionary. Keep one of the two rows.",
+                        SeverityFor(Unchanged(first) && Unchanged(row)));
                 }
                 else
                 {
@@ -156,42 +179,47 @@ public static class SettingsDraftValidator
             var seen = new Dictionary<string, SnippetDraftRow>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Phrase, row.Template))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
 
                 var phrase = Trim(row.Phrase);
                 var template = Trim(row.Template);
+                var severity = SeverityFor(Unchanged(row));
                 if (phrase.Length == 0)
                 {
-                    if (row.Touched || template.Length > 0)
-                    {
-                        Add(ValidationCode.SnippetTriggerEmpty, SettingsPage.VoiceSnippets, "SnippetPhrase", row.RowKey, SnippetTriggerEmptyMessage);
-                    }
+                    Add(
+                        ValidationCode.SnippetTriggerEmpty,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetPhrase",
+                        row.RowKey,
+                        SnippetTriggerEmptyMessage,
+                        severity);
 
                     continue;
                 }
 
                 if (template.Length == 0)
                 {
-                    if (row.Touched || phrase.Length > 0)
-                    {
-                        Add(ValidationCode.SnippetTextEmpty, SettingsPage.VoiceSnippets, "SnippetTemplate", row.RowKey, SnippetTextEmptyMessage);
-                    }
+                    Add(
+                        ValidationCode.SnippetTextEmpty,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetTemplate",
+                        row.RowKey,
+                        SnippetTextEmptyMessage,
+                        severity);
                 }
 
                 if (seen.TryGetValue(phrase, out var first))
                 {
-                    if (row.Touched || first.Touched || row.Origin == DraftRowOrigin.New || first.Origin == DraftRowOrigin.New)
-                    {
-                        Add(
-                            ValidationCode.SnippetDuplicate,
-                            SettingsPage.VoiceSnippets,
-                            "SnippetPhrase",
-                            row.RowKey,
-                            $"Another snippet already uses \"{phrase}\". Use different words for one of them.");
-                    }
+                    Add(
+                        ValidationCode.SnippetDuplicate,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetPhrase",
+                        row.RowKey,
+                        $"Another snippet already uses \"{phrase}\". Use different words for one of them.",
+                        SeverityFor(Unchanged(first) && Unchanged(row)));
                 }
                 else
                 {
@@ -204,28 +232,39 @@ public static class SettingsDraftValidator
         {
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Name, row.Apps))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
 
-                var name = Trim(row.Name);
-                var apps = Trim(row.Apps);
-                if (name.Length == 0 && (row.Touched || apps.Length > 0))
+                var severity = SeverityFor(Unchanged(row));
+                if (Trim(row.Name).Length == 0)
                 {
-                    Add(ValidationCode.ProfileNameEmpty, SettingsPage.AppProfiles, "ProfileName", row.RowKey, ProfileNameEmptyMessage);
+                    Add(
+                        ValidationCode.ProfileNameEmpty,
+                        SettingsPage.AppProfiles,
+                        "ProfileName",
+                        row.RowKey,
+                        ProfileNameEmptyMessage,
+                        severity);
                 }
 
-                if (apps.Length == 0 && (row.Touched || name.Length > 0))
+                if (Trim(row.Apps).Length == 0)
                 {
-                    Add(ValidationCode.ProfileAppsEmpty, SettingsPage.AppProfiles, "ProfileApps", row.RowKey, ProfileAppsEmptyMessage);
+                    Add(
+                        ValidationCode.ProfileAppsEmpty,
+                        SettingsPage.AppProfiles,
+                        "ProfileApps",
+                        row.RowKey,
+                        ProfileAppsEmptyMessage,
+                        severity);
                 }
             }
         }
 
         void ValidateShortcuts(AppSettings settings)
         {
-            if (settings.DictationOnlyHotkey is { } second && settings.Hotkey.SameKeysAndBehavior(second))
+            if (settings.DictationOnlyHotkey is { } second && HotkeyPhysicalBinding.Same(settings.Hotkey, second))
             {
                 Add(ValidationCode.ShortcutsIdentical, SettingsPage.Dictation, "DictationOnlyHotkeyBox", null, ShortcutsIdenticalMessage);
             }
@@ -251,7 +290,7 @@ public static class SettingsDraftValidator
 
                     if (string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel))
                     {
-                        Add(ValidationCode.DeploymentEmpty, SettingsPage.AiCleanup, "CustomModelBox", null, DeploymentEmptyMessage);
+                        Add(ValidationCode.CustomModelEmpty, SettingsPage.AiCleanup, "CustomModelBox", null, CustomModelEmptyMessage);
                     }
 
                     break;
@@ -313,25 +352,64 @@ public static class SettingsDraftValidator
         $"Enter a number from {minimum} to {maximum}.";
 
     public static bool NeedsDictionaryRemovalConfirmation(DictionaryDraftRow row) =>
-        row.Origin == DraftRowOrigin.Saved &&
-        row.Touched &&
-        !string.IsNullOrWhiteSpace(row.LoadedReplacement) &&
-        string.IsNullOrWhiteSpace(row.Replacement);
+        !string.IsNullOrWhiteSpace(row.Pattern) &&
+        string.IsNullOrWhiteSpace(row.Replacement) &&
+        (row.Origin == DraftRowOrigin.New || !string.IsNullOrWhiteSpace(row.LoadedReplacement));
 
     public static string DictionaryRemovalTitle(string spoken) =>
         $"Leave \"{spoken}\" out of what you dictate?";
 
-    private static bool ShouldIgnoreUntouchedNewRow(
-        DraftRowOrigin origin,
-        bool touched,
-        string? first,
-        string? second) =>
-        origin == DraftRowOrigin.New &&
-        !touched &&
-        string.IsNullOrWhiteSpace(first) &&
-        string.IsNullOrWhiteSpace(second);
+    /// <summary>
+    /// Whether a row is an empty placeholder that Save drops without asking: a New row with every field blank, whether or
+    /// not the user touched it. A row with any content, typed by the user or added by the app (Learn from history
+    /// suggestions, imports, Add to dictionary), is never a placeholder: it is validated and saved or reported.
+    /// </summary>
+    public static bool IsPlaceholder(DictionaryDraftRow row) =>
+        row.Origin == DraftRowOrigin.New && IsBlank(row.Pattern) && IsBlank(row.Replacement);
+
+    /// <inheritdoc cref="IsPlaceholder(DictionaryDraftRow)"/>
+    public static bool IsPlaceholder(SnippetDraftRow row) =>
+        row.Origin == DraftRowOrigin.New && IsBlank(row.Phrase) && IsBlank(row.Template);
+
+    /// <inheritdoc cref="IsPlaceholder(DictionaryDraftRow)"/>
+    public static bool IsPlaceholder(ProfileDraftRow row) =>
+        row.Origin == DraftRowOrigin.New &&
+        IsBlank(row.Name) &&
+        IsBlank(row.Apps) &&
+        IsBlank(row.WritingStyle) &&
+        row.NewlineHandling is null;
+
+    private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
 
     private static string Trim(string? value) => value?.Trim() ?? string.Empty;
+
+    // An invalid row an older build could save is only a warning while it is exactly as it was loaded; a new row, or a
+    // saved row edited in any stored field, blocks.
+    private static ValidationSeverity SeverityFor(bool unchanged) =>
+        unchanged ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
+
+    private static bool Unchanged(DictionaryDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Pattern), Trim(row.LoadedPattern)) &&
+        IsSame(Trim(row.Replacement), Trim(row.LoadedReplacement)) &&
+        row.WholeWord == row.LoadedWholeWord &&
+        row.Enabled == row.LoadedEnabled;
+
+    private static bool Unchanged(SnippetDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Phrase), Trim(row.LoadedPhrase)) &&
+        IsSame(Trim(row.Template), Trim(row.LoadedTemplate)) &&
+        row.Enabled == row.LoadedEnabled;
+
+    private static bool Unchanged(ProfileDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Name), Trim(row.LoadedName)) &&
+        IsSame(Trim(row.Apps), Trim(row.LoadedApps)) &&
+        IsSame(Trim(row.WritingStyle), Trim(row.LoadedWritingStyle)) &&
+        row.NewlineHandling == row.LoadedNewlineHandling;
+
+    private static bool IsSame(string left, string right) =>
+        string.Equals(left, right, StringComparison.Ordinal);
 
     private static bool IsHttpOrHttps(string? value, bool requireHttps)
     {
