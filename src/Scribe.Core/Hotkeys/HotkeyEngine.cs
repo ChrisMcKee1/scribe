@@ -209,8 +209,10 @@ internal sealed class HotkeyEngine
     }
 
     // Owner thread: a release, or a new press, of this button pays or forgives its debt. Returns whether one was owed.
-    // Sealed, the debts are the replacement's and stay as they are, but one owed is still reported, so a release that
-    // reaches this retired engine's hook first is swallowed rather than passed on alone.
+    // Sealed, the debts are the replacement's and stay as they are, but one owed is still reported. That matters only in
+    // the in-flight window: a callback this engine admitted before the retirement and is still running, whose release is
+    // then swallowed rather than passed on alone. A callback that starts after the retirement returns at the top of
+    // OnMouseButtonEvent and swallows nothing.
     private bool SettleRelease(uint button)
     {
         var bit = 1 << (int)button;
@@ -236,9 +238,11 @@ internal sealed class HotkeyEngine
     public bool IsRetired => Volatile.Read(ref _retired);
 
     /// <summary>
-    /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>), so
-    /// its hook thread needs a mouse hook; it installs one only while this is true, so nobody who binds keys alone gets
-    /// a system-wide mouse hook. Updated by the owner when it applies new bindings.
+    /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>). It is
+    /// one of the two reasons the hook thread keeps a mouse hook, not the only one: the hook is installed while
+    /// <c>HotkeyService.HookInstallation.MouseHookWanted</c> holds, which is this or a release still owed
+    /// (<see cref="OwesButtonRelease"/>), so nobody who binds keys alone gets a system-wide mouse hook except to drain
+    /// such a release. Updated by the owner when it applies new bindings.
     /// </summary>
     public bool UsesMouseButtons => Volatile.Read(ref _usesMouseButtons);
 
