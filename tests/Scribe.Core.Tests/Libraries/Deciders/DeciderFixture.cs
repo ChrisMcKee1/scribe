@@ -179,6 +179,28 @@ internal static class DeciderFixture
         return Assert.IsType<LibraryChangeSet>(result.ChangeSet);
     }
 
+    /// <summary>
+    /// A library and its copy saved together, the store keeping the library under another id, so the copy's reference is
+    /// repaired in the draft and pending; <paramref name="whileSaving"/> is what the user does, to the copy or elsewhere,
+    /// while that Save runs.
+    /// </summary>
+    public static LibraryWorkspace PendingRepair(
+        LibraryCatalog catalog, out string copy, out string keptAs, out LibraryCatalog saved,
+        Action<LibraryWorkspace, string>? whileSaving = null)
+    {
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        copy = workspace.Duplicate(original);
+        var changes = Capture(workspace);
+        whileSaving?.Invoke(workspace, copy);
+        keptAs = original + "-7";
+        saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.Equal([copy], workspace.PendingReferenceRepairs);
+        return workspace;
+    }
+
     /// <summary>A library's content as one string, every header field and every row's values, for comparing contents.</summary>
     public static string Describe(LibraryContent content) =>
         $"{content.Id}|{content.BuiltIn}|{content.Name}|{content.Category}|{content.Description}|{content.BasedOn}|"

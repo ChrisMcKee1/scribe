@@ -13,7 +13,8 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 /// the page showed is lost or overwritten, every operation of the next change set names what the committed catalog holds,
 /// and something is unsaved exactly when the next Save would change something. A Save that leaves a reference repair
 /// pending is followed by W2's follow-up Save of the repairs alone, which writes exactly them and leaves every other change
-/// unsaved. Seeded, so a failure names the sequence.
+/// unsaved. Some Saves stay unresolved while the user goes on saving, each attempt fenced, before they are marked saved.
+/// Seeded, so a failure names the sequence.
 /// </summary>
 public sealed class LibraryWorkspacePropertyTests
 {
@@ -52,6 +53,8 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.RepairedCopiesRenamed > 8, $"repaired copies renamed before their follow-up {totals.RepairedCopiesRenamed}");
         Assert.True(totals.ForeignCopies > 50, $"copies another app made, discovered by a returned catalog {totals.ForeignCopies}");
         Assert.True(totals.ForeignCopiesOfAKeptPlannedId > 15, $"copies another app made of its library at a planned id the store kept Scribe's away from {totals.ForeignCopiesOfAKeptPlannedId}");
+        Assert.True(totals.UnresolvedSaves > 15, $"saves left unresolved while the user went on saving {totals.UnresolvedSaves}");
+        Assert.True(totals.UnresolvedBeyondRecent > 15, $"unresolved saves whose capture was no longer among the recent ones {totals.UnresolvedBeyondRecent}");
     }
 
     private sealed class Coverage
@@ -82,6 +85,8 @@ public sealed class LibraryWorkspacePropertyTests
         public int RepairedCopiesRenamed;
         public int ForeignCopies;
         public int ForeignCopiesOfAKeptPlannedId;
+        public int UnresolvedSaves;
+        public int UnresolvedBeyondRecent;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -283,10 +288,46 @@ public sealed class LibraryWorkspacePropertyTests
             WorkWhileSaving(workspace, changes, store, random, totals, fresh);
         }
 
+        // Sometimes the Save comes back CommitUnknown (contract 9.7): the page stays usable, and every Save the user presses
+        // while it is unresolved is captured and fenced by the store, often more of them than the workspace keeps recent
+        // captures, before a later load settles it as committed (review finding A12). Its change set is held here until
+        // then, as W2 holds it, and a collection runs so that only what is held is found. Drawn from the stream of its own.
+        var unresolved = aim.Next(8) == 0;
+        if (unresolved)
+        {
+            totals.UnresolvedSaves++;
+            var fenced = 0;
+            for (var attempt = LibraryWorkspace.RecentCaptures + aim.Next(4); attempt > 0; attempt--)
+            {
+                Operate(workspace, aim.Next(19), aim, store, fresh);
+                if (workspace.CaptureChangeSet().ChangeSet is not null)
+                {
+                    fenced++;
+                }
+            }
+
+            if (fenced >= LibraryWorkspace.RecentCaptures)
+            {
+                totals.UnresolvedBeyondRecent++;
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
         var outcomes = Outcomes(workspace, catalog, changes, random, totals);
         var saved = Apply(catalog, changes, store, outcomes);
         var shown = Kept(workspace.Draft);
-        workspace.MarkSaved(changes.DraftRevision, saved);
+        if (unresolved && aim.Next(2) == 0)
+        {
+            workspace.MarkSaved(changes, saved);
+        }
+        else
+        {
+            workspace.MarkSaved(changes.DraftRevision, saved);
+        }
+
+        GC.KeepAlive(changes);
         var probe = AfterMarkSaved(workspace, shown, outcomes, saved, context, totals);
 
         // W2's rule after round 4: a Save that left reference repairs pending is completed by a follow-up Save of the

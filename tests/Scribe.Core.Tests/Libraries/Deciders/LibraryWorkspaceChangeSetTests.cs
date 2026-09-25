@@ -848,25 +848,6 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Equal(keptAs, workspace.CopyOriginal(copy));
     }
 
-    // A library and its copy saved together, the store keeping the library under another id, so the copy's reference is
-    // repaired in the draft and pending; `whileSaving` is what the user does, to the copy or elsewhere, while that Save runs.
-    private static LibraryWorkspace PendingRepair(
-        LibraryCatalog catalog, out string copy, out string keptAs, out LibraryCatalog saved,
-        Action<LibraryWorkspace, string>? whileSaving = null)
-    {
-        var workspace = Workspace(catalog);
-        var original = workspace.CreateLibrary();
-        workspace.AddTerm(original, new TermValues("ga", "general availability"));
-        copy = workspace.Duplicate(original);
-        var changes = Capture(workspace);
-        whileSaving?.Invoke(workspace, copy);
-        keptAs = original + "-7";
-        saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
-        workspace.MarkSaved(changes.DraftRevision, saved);
-        Assert.Equal([copy], workspace.PendingReferenceRepairs);
-        return workspace;
-    }
-
     private static bool? AiOf(LibraryLocalState state, string id) =>
         state.AiPermissions.TryGetValue(id, out var permitted) ? permitted : null;
 

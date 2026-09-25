@@ -150,7 +150,16 @@ public sealed class LibraryWorkspace
     private readonly Func<string, DictionaryLibrary?> _shippedLibrary;
     private readonly List<UndoEntry> _undo = [];
     private readonly List<UndoEntry> _redo = [];
+
+    // Captures, for MarkSaved. The latest few are kept whoever holds their change sets (MaxCaptures), so the ordinary Save
+    // never depends on when a collection runs. Beyond them a capture lives exactly as long as its change set does: W2
+    // holds the change set of a Save until the Save settles, a CommitUnknown included however many Save attempts the
+    // store fences meanwhile (review finding A12), while a capture whose change set nobody holds is collected with it, so
+    // what is kept for captures nobody can settle stays bounded. MarkSaved by revision finds a held one through
+    // _heldSets, weak references to the held change sets, pruned at every capture.
     private readonly Dictionary<long, Capture> _captures = [];
+    private readonly ConditionalWeakTable<LibraryChangeSet, Capture> _held = new();
+    private readonly List<WeakReference<LibraryChangeSet>> _heldSets = [];
 
     private LibraryCatalog _committed;
     private State _base;
@@ -1248,7 +1257,7 @@ public sealed class LibraryWorkspace
         var local = CapturedLocal(_state, diff.UntouchedIds);
         var changes = new LibraryChangeSet(
             _committed.Generation, _revision, writes, deletions, actions, LocalStateOf(local), diff.LocalChanged);
-        Register(new Capture(_state, local, diff.UntouchedIds));
+        Register(new Capture(_state, local, diff.UntouchedIds), changes);
         return new LibraryCaptureResult(changes, []);
     }
 
@@ -1309,7 +1318,7 @@ public sealed class LibraryWorkspace
         var local = CapturedLocal(saving, ImmutableHashSet<string>.Empty);
         var changes = new LibraryChangeSet(
             _committed.Generation, _revision, writes, [], [], LocalStateOf(local), localStateChanged: false);
-        Register(new Capture(saving, local, ImmutableHashSet<string>.Empty, RepairsOnly: true));
+        Register(new Capture(saving, local, ImmutableHashSet<string>.Empty, RepairsOnly: true), changes);
         return new LibraryCaptureResult(changes, []);
     }
 
@@ -1324,16 +1333,35 @@ public sealed class LibraryWorkspace
     /// under another id (another app took its file name) is the kept library from now on, edits after the capture
     /// included, and a library the user made meanwhile at that id moves to a fresh one (G1). The undo history ends here.
     /// Call it only when the Save stands (<see cref="LibrarySaveStatus.Applied"/> or
-    /// <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>): after any other outcome the draft is still unsaved, and a
-    /// newer catalog is taken with <see cref="Rebase"/>.
+    /// <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>, or a <see cref="LibrarySaveStatus.CommitUnknown"/> a later
+    /// load settles as committed): after any other outcome the draft is still unsaved, and a newer catalog is taken with
+    /// <see cref="Rebase"/>. The capture is found while it is one of the recent ones or its change set is still held
+    /// (review finding A12): W2 holds the change set of a Save until the Save settles, and keeps it reachable until this
+    /// call returns, which <see cref="MarkSaved(LibraryChangeSet, LibraryCatalog)"/> does by itself.
     /// </summary>
     /// <exception cref="InvalidOperationException">No change set was captured at <paramref name="revision"/>.</exception>
     public void MarkSaved(long revision, LibraryCatalog committed)
     {
         ArgumentNullException.ThrowIfNull(committed);
-        if (!_captures.TryGetValue(revision, out var capture))
+        var capture = CaptureAt(revision)
+            ?? throw new InvalidOperationException("No change set was captured at that revision.");
+        RebaseOnto(Effective(capture), _state, committed);
+    }
+
+    /// <summary>
+    /// <see cref="MarkSaved(long, LibraryCatalog)"/> for the change set the Save wrote, as W2 holds it for the life of the
+    /// Save: passing it keeps it reachable while its capture is found, however many captures came after it.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// This workspace did not capture the change set, or its history ended since (a Save marked saved, a Rebase, a Reload).
+    /// </exception>
+    public void MarkSaved(LibraryChangeSet changes, LibraryCatalog committed)
+    {
+        ArgumentNullException.ThrowIfNull(changes);
+        ArgumentNullException.ThrowIfNull(committed);
+        if (!_held.TryGetValue(changes, out var capture))
         {
-            throw new InvalidOperationException("No change set was captured at that revision.");
+            throw new InvalidOperationException("This workspace has no capture of that change set.");
         }
 
         RebaseOnto(Effective(capture), _state, committed);
@@ -1796,6 +1824,20 @@ public sealed class LibraryWorkspace
 
     private const int MaxCaptures = 8;
 
+    // For tests: how many captures MarkSaved can still find, the recent ones and the held ones beyond them.
+    internal int CapturesKept =>
+        _captures.Count
+        + _heldSets
+            .Select(weak => weak.TryGetTarget(out var changes) && _held.TryGetValue(changes, out _) ? changes.DraftRevision : -1)
+            .Where(revision => revision >= 0 && !_captures.ContainsKey(revision))
+            .Distinct()
+            .Count();
+
+    // For tests: the weak references kept to change sets, which every capture prunes of the ones collected.
+    internal int HeldReferences => _heldSets.Count;
+
+    internal static int RecentCaptures => MaxCaptures;
+
     private (long Revision, int Count, int Index) _undoProbe = (-1, -1, -1);
     private (long Revision, int Count, int Index) _redoProbe = (-1, -1, -1);
 
@@ -1939,6 +1981,8 @@ public sealed class LibraryWorkspace
         _undo.Clear();
         _redo.Clear();
         _captures.Clear();
+        _held.Clear();
+        _heldSets.Clear();
     }
 
     // The top-most entry that would still change something, cached per revision and stack size because the shell asks
@@ -2039,7 +2083,10 @@ public sealed class LibraryWorkspace
     // Every id a new library must not take (3.5.4): built-in ids, shipped and retired; the catalog's and the draft's
     // libraries; the stems of the files in the libraries folder (every CSV there is a catalog library); the libraries of a
     // Save in flight, which its commit may bring back even after the user removed them from the draft; and, unless a
-    // restore is asking for its own old id, the original ids of Recently deleted entries.
+    // restore is asking for its own old id, the original ids of Recently deleted entries. A Save in flight is one of the
+    // recent captures: a capture kept beyond them because its change set is still held reserves nothing, so the id a new
+    // library takes never depends on when a collection runs, and a library made meanwhile at an id such a Save then
+    // creates moves off it when the Save is marked saved (review finding G1).
     private IEnumerable<string> TakenIds(bool includeRecentlyDeleted)
     {
         var ids = LibraryPrecedence.BuiltInOrder
@@ -2414,13 +2461,37 @@ public sealed class LibraryWorkspace
         }
     }
 
-    private void Register(Capture capture)
+    private void Register(Capture capture, LibraryChangeSet changes)
     {
         _captures[_revision] = capture;
         foreach (var old in _captures.Keys.Where(revision => revision < _revision).OrderBy(r => r).SkipLast(MaxCaptures - 1).ToList())
         {
             _captures.Remove(old);
         }
+
+        _held.AddOrUpdate(changes, capture);
+        _heldSets.RemoveAll(weak => !weak.TryGetTarget(out _));
+        _heldSets.Add(new WeakReference<LibraryChangeSet>(changes));
+    }
+
+    // The capture a Save of this revision is marked saved with: a recent one, or one whose change set someone still holds.
+    // Two change sets of one revision are of one kind (TakeRevisionFor), so they hold the same capture.
+    private Capture? CaptureAt(long revision)
+    {
+        if (_captures.TryGetValue(revision, out var recent))
+        {
+            return recent;
+        }
+
+        foreach (var weak in _heldSets)
+        {
+            if (weak.TryGetTarget(out var changes) && changes.DraftRevision == revision && _held.TryGetValue(changes, out var held))
+            {
+                return held;
+            }
+        }
+
+        return null;
     }
 
     // The draft as the Save captured at a revision committed it: without the libraries it left out and the blank rows it
