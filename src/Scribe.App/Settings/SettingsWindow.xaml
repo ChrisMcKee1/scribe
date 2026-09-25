@@ -950,6 +950,22 @@
                                                          AutomationProperties.LabeledBy="{Binding ElementName=ShiftEnterTitle}"/>
                                     </Grid>
                                 </ui:Card>
+                                <ui:Card Style="{StaticResource SettingCard}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
+                                            <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock x:Name="SpaceAfterDictationHint" Style="{StaticResource SettingHint}"
+                                                       Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
+                                        </StackPanel>
+                                        <ui:ToggleSwitch x:Name="SpaceAfterDictationCheck" Grid.Column="1" VerticalAlignment="Center"
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
+                                                         AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}"/>
+                                    </Grid>
+                                </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>

@@ -349,6 +349,9 @@ internal static class TextInjectionFakes
 
         public bool StandardEdit { get; set; }
 
+        /// <summary>The text of every insertion the standard-edit path took, in order.</summary>
+        public List<string> StandardEditTexts { get; } = [];
+
         public List<INPUT[]> Batches { get; } = [];
 
         public List<int> Sleeps { get; } = [];
@@ -370,7 +373,15 @@ internal static class TextInjectionFakes
             return Deliver?.Invoke(Batches.Count - 1, inputs) ?? (uint)inputs.Length;
         }
 
-        public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow) => StandardEdit;
+        public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
+        {
+            if (StandardEdit)
+            {
+                StandardEditTexts.Add(text);
+            }
+
+            return StandardEdit;
+        }
 
         public void Sleep(int milliseconds)
         {
