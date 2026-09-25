@@ -10,7 +10,7 @@ namespace Scribe.Core.Libraries;
 /// </summary>
 /// <remarks>
 /// Culture-free and blind to names, so renaming a library, sorting the list on screen (<see cref="LibraryOrdering"/>),
-/// or running on another machine or platform never changes a winner. <see cref="IDictionaryLibraryService.GetLibraries"/>
+/// or running on another machine never changes a winner. <see cref="IDictionaryLibraryService.GetLibraries"/>
 /// returns libraries in this order and <see cref="DictionaryLibraryComposer.ComposeLibraries"/> applies it to whatever
 /// it is given, so a caller holding libraries in display order still gets the winners dictation uses.
 /// </remarks>
@@ -21,8 +21,10 @@ public static class LibraryPrecedence
     /// case-insensitive), frozen as ids so that renaming or recategorizing a built-in never moves it. Append a new
     /// built-in at the end, and never reorder or remove an id: the order decides which built-in supplies a spoken form
     /// two of them share, and which terms a default install's on-device model receives. When a built-in stops shipping,
-    /// keep its id here and add it to <see cref="RetiredBuiltInIds"/>. The macOS port reads the same lists from
-    /// tests/fixtures/libraries/built-in-precedence.json, which a test keeps equal to these.
+    /// keep its id here and add it to <see cref="RetiredBuiltInIds"/>. The same lists are in
+    /// tests/fixtures/libraries/built-in-precedence.json, which a test keeps equal to these. The macOS port does not
+    /// read that file yet: it will in stream M1, and until then its Dictionary Libraries row in macos/PORTING-PLAN.md
+    /// is stale, with nothing that keeps the Swift order equal to this one.
     /// </summary>
     public static IReadOnlyList<string> BuiltInOrder { get; } =
     [

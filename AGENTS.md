@@ -357,8 +357,9 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
     Ipc/ Logging/ Interop/          named-pipe server, OverlayLog (same log file), Win32 interop
   tests/Scribe.Core.Tests/          xUnit tests for Core (Concurrency/ holds the lifecycle race harness)
   tests/fixtures/speech/            TTS fixtures + scenario phrases (fixtures.json, scenario-fixtures.json)
-  tests/fixtures/libraries/         built-in-precedence.json (shared with the macOS port) and
-                                    composition-golden.txt (what the libraries decide, captured from 0.4.3)
+  tests/fixtures/libraries/         built-in-precedence.json (the frozen built-in order, which the macOS port
+                                    will read in stream M1) and composition-golden.txt (what the libraries
+                                    decide, captured from 0.4.3)
   tools/Scribe.Evals/               offline cleanup eval harness + the golden benchmark
     Benchmark/                      6-case golden suite -> docs/model-leaderboard.md (52 models)
   tools/Scribe.AsrCheck/            decodes real speech through the NATIVE engine (see below); ThreadSweep
@@ -789,10 +790,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **The frozen list.** `BuiltInOrder` is the order 0.4.3 composed the built-ins in (category, then name), frozen as
   ids so that a rename or a new category moves nothing. It decides which built-in supplies a spoken form two of them
   share and which terms fill a default install's 80 on-device glossary slots, so never reorder it or remove an id.
-  Append a new built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`, which the macOS
-  port reads. A built-in that stops shipping keeps its id in the order and is added to `RetiredBuiltInIds` (and the
-  fixture's "retired"), the only way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests`
-  fails until every shipped id appears exactly once, every other listed id is retired, and the lists agree.
+  Append a new built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`. A built-in that
+  stops shipping keeps its id in the order and is added to `RetiredBuiltInIds` (and the fixture's "retired"), the only
+  way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
+  appears exactly once, every other listed id is retired, and the C# lists agree with the fixture.
 - **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
   file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
   comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
@@ -809,6 +810,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
   turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
+- **The macOS port does not follow this yet.** It reads no fixture and keeps its own library order. Stream M1, which
+  ports these library changes to macOS, will read `built-in-precedence.json` and sort the list with
+  `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
+  cleanup rows of `macos/PORTING-PLAN.md` are stale, and, as the mono-repo note says, nothing keeps the C# and Swift
+  orders in step.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
