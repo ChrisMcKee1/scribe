@@ -455,8 +455,13 @@ public sealed class LibraryWorkspace
         return id;
     }
 
-    /// <summary>Use this copy instead: the copy on and its original off, as one undoable step.</summary>
-    /// <exception cref="InvalidOperationException">The library is not a copy of one the draft has.</exception>
+    /// <summary>
+    /// Use this copy instead: the copy on and its original off (<see cref="CopyOriginal"/>), as one undoable step.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The library has no original this draft can act on: it is not a copy, its original is deleted or gone, or its
+    /// reference cannot be trusted (see <see cref="CopyOriginal"/>). Nothing is changed.
+    /// </exception>
     public void UseCopyInstead(string copyId)
     {
         var copy = GetLive(copyId);
@@ -465,15 +470,36 @@ public sealed class LibraryWorkspace
             return;
         }
 
-        var original = copy.Header.BuiltIn || copy.Header.BasedOn is null ? null : Find(copy.Header.BasedOn);
-        if (original is null || original.Header.PendingDelete)
-        {
-            throw new InvalidOperationException("Only a copy of a library in this draft can be used instead of it.");
-        }
-
+        var original = CopyOriginal(copy.Header.Id)
+            ?? throw new InvalidOperationException("This copy's original can't be told for certain, so nothing was changed.");
         Structural(
             "Use this copy instead",
-            _state.WithEnabled(copy.Header.Id, true).WithEnabled(original.Header.Id, false));
+            _state.WithEnabled(copy.Header.Id, true).WithEnabled(original, false));
+    }
+
+    /// <summary>
+    /// The library Use this copy instead would turn off for <paramref name="copyId"/>: the live library its based-on
+    /// reference names. Null when there is none to act on: the library is not a copy, its original is deleted or gone,
+    /// or the reference is one this session cannot trust. That is a saved copy whose file still names the id of a library
+    /// the store kept under another id this session (another app took its file): the id now holds the other app's
+    /// library, and the repair of the reference (made when the Save was marked saved) was discarded before it was saved.
+    /// The page offers the command, and names the library it turns off, from this, so it never turns off a library that
+    /// is not the copy's original (review finding A10).
+    /// </summary>
+    public string? CopyOriginal(string copyId)
+    {
+        var copy = Get(copyId);
+        if (copy.Header.BuiltIn || copy.Header.PendingDelete || copy.Header.BasedOn is not { } basedOn)
+        {
+            return null;
+        }
+
+        var stale = copy.Header.Committed is { } committed
+            && string.Equals(committed.Content.BasedOn, basedOn, StringComparison.OrdinalIgnoreCase)
+            && _committed.KeptVersions.Any(kept =>
+                kept.Kind == LibraryKeptVersionKind.SavedUnderNewId
+                && string.Equals(kept.LibraryId, basedOn, StringComparison.OrdinalIgnoreCase));
+        return !stale && Find(basedOn) is { } original && !original.Header.PendingDelete ? original.Header.Id : null;
     }
 
     /// <summary>
@@ -1278,26 +1304,48 @@ public sealed class LibraryWorkspace
         from = from.Renamed(baseRenames);
         current = current.Renamed(draftRenames);
 
-        // A copy the user made meanwhile of a library that moved follows it, so Use this copy instead turns off the one it
-        // was made from. A copy the Save wrote keeps the reference its file holds.
-        foreach (var lib in current.Libraries.Values.ToList())
-        {
-            if (lib.Header.Committed is null
-                && !from.Libraries.ContainsKey(lib.Header.Id)
-                && lib.Header.BasedOn is { } basedOn
-                && draftRenames.TryGetValue(basedOn, out var movedTo))
-            {
-                current = current.WithLib(lib with { Header = lib.Header with { BasedOn = movedTo } });
-            }
-        }
-
         var to = FromCatalog(committed, mapFrom: from);
         var merged = Settled(Merge(current, from, to), from, current, to, committed);
+        merged = WithReferencesFollowing(merged, baseRenames, draftRenames);
 
         _committed = committed;
         _base = to;
         ResetHistory();
         Commit(merged);
+    }
+
+    // A copy's based-on reference follows its original wherever the identities moved it, by the original's identity
+    // (review finding A10): to the id the store kept it under even when the original left the live draft meanwhile, and
+    // off an id a library made meanwhile had to give up. A copy the Save itself wrote names the planned id in its file,
+    // which the other app's library now holds, so its reference is repaired in the draft and the copy shows as unsaved
+    // until the next Save writes the corrected header; until then, CopyOriginal will not act on the reference its file
+    // holds.
+    private static State WithReferencesFollowing(
+        State merged, IReadOnlyDictionary<string, string> baseRenames, IReadOnlyDictionary<string, string> draftRenames)
+    {
+        if (baseRenames.Count == 0 && draftRenames.Count == 0)
+        {
+            return merged;
+        }
+
+        var moved = new Dictionary<string, string>(baseRenames, StringComparer.OrdinalIgnoreCase);
+        foreach (var (oldId, newId) in draftRenames)
+        {
+            moved[oldId] = newId;
+        }
+
+        foreach (var lib in merged.Libraries.Values.ToList())
+        {
+            if (!lib.Header.BuiltIn
+                && !lib.Header.PendingDelete
+                && lib.Header.BasedOn is { } basedOn
+                && moved.TryGetValue(basedOn, out var movedTo))
+            {
+                merged = merged.WithLib(lib with { Header = lib.Header with { BasedOn = movedTo } });
+            }
+        }
+
+        return merged;
     }
 
     // Step 1. A library keeps its identity: a library of the live draft is the base library with its id, and a base
@@ -2069,8 +2117,16 @@ public sealed class LibraryWorkspace
 
         if (header.BuiltIn)
         {
-            // A recovery counts as changed content (Analyze); which of the two the write carries is the capture's detail.
-            return change.ContentChanged ? SaveSteps.Write : SaveSteps.None;
+            // A recovery the user chose is written on purpose, for a document this version cannot edit. An ordinary change
+            // is written only while the content is editable: over a document now paused (newer, unreadable) or held by
+            // another app it would replace that document without the recovery, and the pre-image check could not stop it,
+            // since the write names that document's current hash (review finding A9).
+            if (header.Recovery != BuiltInEditsRecovery.None)
+            {
+                return SaveSteps.Write;
+            }
+
+            return !change.ContentChanged ? SaveSteps.None : ContentEditable(lib) ? SaveSteps.Write : SaveSteps.NotSaveable;
         }
 
         if (header.PendingDelete)

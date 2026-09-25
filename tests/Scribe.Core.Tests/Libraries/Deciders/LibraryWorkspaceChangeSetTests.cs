@@ -480,6 +480,133 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Contains(copy, workspace.Draft.LocalState.EnabledIds);
     }
 
+    [Fact]
+    public void D4_a_copy_the_save_wrote_of_a_library_kept_under_another_id_is_repaired_and_never_turns_off_the_other_apps_library()
+    {
+        // GPT-6 Astra's A10, first sequence: a library and its duplicate saved together; the store keeps the library under
+        // another id because another app took its file, so the copy's file names the other app's library.
+        var catalog = Standard();
+        LibraryWorkspace SavedTogether(out string original, out string copy, out string keptAs, out LibraryCatalog saved)
+        {
+            var workspace = Workspace(catalog);
+            original = workspace.CreateLibrary();
+            workspace.AddTerm(original, new TermValues("ga", "general availability"));
+            copy = workspace.Duplicate(original);
+            var changes = Capture(workspace);
+            keptAs = original + "-7";
+            saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+            workspace.MarkSaved(changes.DraftRevision, saved);
+            return workspace;
+        }
+
+        var workspace = SavedTogether(out var original, out var copy, out var keptAs, out var saved);
+        Assert.Equal(original, saved.Find(copy)!.Content.BasedOn);
+
+        // The draft repairs the reference, which is unsaved until the next Save writes it.
+        Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.True(WritesContent(workspace, copy));
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+
+        // A copy made now of the other app's library names it, and that reference is its own.
+        var theirsCopy = workspace.Duplicate(original);
+        Assert.Equal(original, workspace.CopyOriginal(theirsCopy));
+
+        // Use this copy instead turns off the library the copy was made from, never the other app's, even while on.
+        workspace.SetEnabled(original, true);
+        workspace.UseCopyInstead(copy);
+        var enabled = workspace.Draft.LocalState.EnabledIds;
+        Assert.Contains(copy, enabled);
+        Assert.DoesNotContain(keptAs, enabled);
+        Assert.Contains(original, enabled);
+
+        // Saved, the file names the kept id, and after a reload the command still acts on the right library.
+        var next = Capture(workspace);
+        Assert.Equal(keptAs, next.Writes.Single(write => write.LibraryId == copy).Content!.BasedOn);
+        var repaired = Apply(saved, next);
+        workspace.MarkSaved(next.DraftRevision, repaired);
+        workspace.Reload(repaired);
+        workspace.SetEnabled(keptAs, true);
+        workspace.SetEnabled(copy, false);
+        workspace.UseCopyInstead(copy);
+        Assert.Equal((true, false, true), Enabled(workspace, copy, keptAs, original));
+
+        // Reloaded before the repair was saved, the file still names the other app's library: the command refuses rather
+        // than turn that one off.
+        var reloaded = SavedTogether(out original, out copy, out keptAs, out saved);
+        reloaded.Reload(saved);
+        Assert.Equal(original, reloaded.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Null(reloaded.CopyOriginal(copy));
+        reloaded.SetEnabled(original, true);
+        Assert.Throws<InvalidOperationException>(() => reloaded.UseCopyInstead(copy));
+        Assert.Equal((false, true, true), Enabled(reloaded, copy, keptAs, original));
+    }
+
+    [Fact]
+    public void D4_a_copy_made_while_the_save_ran_of_an_original_removed_meanwhile_names_where_the_store_kept_it()
+    {
+        // A10, second sequence: the copy is made while the Save runs and its original then leaves the draft, so only the
+        // base knows where the store kept the original.
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        var changes = Capture(workspace);
+        var copy = workspace.Duplicate(original);
+        workspace.DeleteLibrary(original);
+        var keptAs = original + "-7";
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        Assert.True(workspace.Draft.Find(keptAs)!.PendingDelete);
+        Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Null(workspace.CopyOriginal(copy));
+        workspace.SetEnabled(original, true);
+        Assert.Throws<InvalidOperationException>(() => workspace.UseCopyInstead(copy));
+        Assert.Equal((false, true), Enabled(workspace, copy, original));
+
+        // Saved and reloaded, the copy names its deleted original, and the command still changes no other library.
+        var next = Capture(workspace);
+        var after = Apply(saved, next);
+        workspace.MarkSaved(next.DraftRevision, after);
+        workspace.Reload(after);
+        Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Throws<InvalidOperationException>(() => workspace.UseCopyInstead(copy));
+        Assert.Equal((false, true), Enabled(workspace, copy, original));
+    }
+
+    private static (bool, bool) Enabled(LibraryWorkspace workspace, string first, string second) =>
+        (workspace.Draft.LocalState.EnabledIds.Contains(first), workspace.Draft.LocalState.EnabledIds.Contains(second));
+
+    private static (bool, bool, bool) Enabled(LibraryWorkspace workspace, string first, string second, string third) =>
+        (workspace.Draft.LocalState.EnabledIds.Contains(first),
+         workspace.Draft.LocalState.EnabledIds.Contains(second),
+         workspace.Draft.LocalState.EnabledIds.Contains(third));
+
+    [Fact]
+    public void Rebase_settles_a_restore_and_a_permanent_deletion_of_an_entry_whose_bytes_changed_outside()
+    {
+        var entry = Deleted("20260901T100000Z.old.csv", "old", "Old", new TermValues("old term", "Old term"));
+        var other = Deleted("20260902T100000Z.other.csv", "other", "Other", new TermValues("other term", "Other term"));
+        var catalog = Catalog([BuiltIn(GitHubId)], [GitHubId], recentlyDeleted: [entry.Entry, other.Entry]);
+        var workspace = Workspace(catalog);
+        var restored = workspace.RestoreDeleted(entry);
+        workspace.DeletePermanently(other.Entry);
+
+        // Both entries were rewritten outside Scribe meanwhile: the same names, other bytes.
+        var newer = Catalog([BuiltIn(GitHubId)], [GitHubId], generation: catalog.Generation + 1,
+            recentlyDeleted: [entry.Entry with { ContentHash = Hash("rewritten old") }, other.Entry with { ContentHash = Hash("rewritten other") }]);
+        workspace.Rebase(newer);
+
+        // The draft restores and deletes for good only the bytes it read: the restore becomes a new library with the
+        // content the draft holds, and the permanent deletion is dropped.
+        Assert.Equal(LibraryOrigin.Created, workspace.Draft.Find(restored)!.Origin);
+        Assert.Equal([new TermValues("old term", "Old term")], ValuesOf(workspace, restored));
+        var next = Capture(workspace);
+        AssertPreImages(newer, next);
+        Assert.Empty(next.RecentlyDeletedActions);
+        Assert.Equal(2, workspace.Draft.RecentlyDeleted.Count);
+    }
+
     private static string ImportNew(LibraryWorkspace workspace, LibraryCsvDocument document)
     {
         var before = workspace.Draft.Libraries.Select(library => library.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);

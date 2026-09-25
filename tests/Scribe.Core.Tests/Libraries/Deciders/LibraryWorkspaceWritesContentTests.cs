@@ -156,6 +156,55 @@ public sealed class LibraryWorkspaceWritesContentTests
         Assert.Null(workspace.Draft.Find(restored));
     }
 
+    [Theory]
+    [InlineData(LibraryFileState.Newer)]
+    [InlineData(LibraryFileState.Unreadable)]
+    [InlineData(LibraryFileState.AwaitingRelease)]
+    public void D19_An_edit_of_a_built_in_whose_document_a_newer_catalog_paused_is_not_written_and_blocks_the_save(LibraryFileState state)
+    {
+        // GPT-6 Astra's A9: the draft edited GitHub while its document was available; the newer catalog finds that document
+        // from a newer version, unreadable, or held by another app. Writing the edit would replace it without the recovery
+        // the user never chose, and the pre-image check cannot stop that, since the write would name its current hash.
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        workspace.EditTerm(GitHubId, RowIdOf(workspace, GitHubId, "copilot"), new TermValues("copilot", "GitHub Copilot"));
+        Assert.True(WritesContent(workspace, GitHubId));
+
+        workspace.Rebase(Paused(catalog, state));
+
+        Assert.False(workspace.CanEditContent(GitHubId));
+        Assert.False(WritesContent(workspace, GitHubId));
+        var capture = workspace.CaptureChangeSet();
+        Assert.Null(capture.ChangeSet);
+        var issue = Assert.Single(capture.Issues);
+        Assert.Equal((GitHubId, LibraryValidationKind.ContentNotSaveable), (issue.LibraryId, issue.Kind));
+    }
+
+    [Theory]
+    [InlineData(LibraryFileState.Newer, BuiltInEditsRecovery.BackUpAndReset)]
+    [InlineData(LibraryFileState.Unreadable, BuiltInEditsRecovery.RestorePrevious)]
+    public void D19_A_recovery_the_user_chooses_for_that_built_in_still_writes_it(LibraryFileState state, BuiltInEditsRecovery recovery)
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        workspace.EditTerm(GitHubId, RowIdOf(workspace, GitHubId, "copilot"), new TermValues("copilot", "GitHub Copilot"));
+        workspace.Rebase(Paused(catalog, state));
+
+        workspace.RecoverBuiltIn(GitHubId, recovery);
+
+        Assert.True(WritesContent(workspace, GitHubId));
+        var write = Assert.Single(Capture(workspace).Writes);
+        Assert.Equal((GitHubId, recovery, (BuiltInLibraryEdits?)null), (write.LibraryId, write.Recovery, write.Edits));
+    }
+
+    // The catalog after another commit: GitHub's edits document in `state`, everything else as it was.
+    private static LibraryCatalog Paused(LibraryCatalog catalog, LibraryFileState state) =>
+        Catalog(
+            catalog.Libraries.Where(library => library.Content.Id != GitHubId).Append(BuiltIn(GitHubId, state: state, previousEdits: true)),
+            [GitHubId, "team-terms"],
+            ai: [new("team-terms", true)],
+            generation: catalog.Generation + 1);
+
     [Fact]
     public void D19_A_read_only_state_writes_nothing()
     {

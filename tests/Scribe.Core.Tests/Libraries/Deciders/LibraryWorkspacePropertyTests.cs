@@ -40,6 +40,7 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.KeptAtAnOccupiedId > 5, $"kept under an id a library made meanwhile held {totals.KeptAtAnOccupiedId}");
         Assert.True(totals.OutsideVersions > 10, $"outside versions kept {totals.OutsideVersions}");
         Assert.True(totals.Probes > 100, $"change sets checked after marking saved {totals.Probes}");
+        Assert.True(totals.KeptWithACopy > 5, $"libraries kept under another id with a copy {totals.KeptWithACopy}");
     }
 
     private sealed class Coverage
@@ -59,6 +60,7 @@ public sealed class LibraryWorkspacePropertyTests
         public int KeptAtAnOccupiedId;
         public int OutsideVersions;
         public int Probes;
+        public int KeptWithACopy;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -301,7 +303,7 @@ public sealed class LibraryWorkspacePropertyTests
         for (var operations = random.Next(1, 4); operations > 0; operations--)
         {
             // Half the Saves that restore an entry see it restored again or deleted for good first (A8).
-            var choice = first && restores.Count > 0 && random.Next(2) == 0 ? 2 : random.Next(6);
+            var choice = first && restores.Count > 0 && random.Next(2) == 0 ? 2 : random.Next(7);
             first = false;
             switch (choice)
             {
@@ -358,6 +360,16 @@ public sealed class LibraryWorkspacePropertyTests
                     workspace.Redo();
                     break;
 
+                case 5 when added.Count > 0:
+                    // A copy of a library the Save is creating, made while it runs, whose reference must follow it (A10).
+                    var source = added[random.Next(added.Count)];
+                    if (workspace.Draft.Find(source) is { PendingDelete: false })
+                    {
+                        workspace.Duplicate(source);
+                    }
+
+                    break;
+
                 default:
                     Operate(workspace, random.Next(19), random, store, fresh);
                     break;
@@ -407,9 +419,21 @@ public sealed class LibraryWorkspacePropertyTests
             .Where(write => !write.BuiltIn && write.ExpectedPreImage is null && !restoredAs.Contains(write.LibraryId))
             .Select(write => write.LibraryId)
             .ToList();
-        if (planned.Count > 0 && random.Next(3) == 0)
+
+        // A new library that has a copy, saved with it or made meanwhile, is kept under another id more often, since its
+        // copy's reference must follow it (A10).
+        bool HasCopy(string id) =>
+            changes.Writes.Any(write => string.Equals(write.Content?.BasedOn, id, StringComparison.OrdinalIgnoreCase))
+            || workspace.Draft.Libraries.Any(library => string.Equals(library.Content.BasedOn, id, StringComparison.OrdinalIgnoreCase));
+        var copied = planned.Where(HasCopy).ToList();
+        if (planned.Count > 0 && random.Next(copied.Count > 0 ? 2 : 3) == 0)
         {
-            var id = planned[random.Next(planned.Count)];
+            var id = copied.Count > 0 && random.Next(4) != 0 ? copied[random.Next(copied.Count)] : planned[random.Next(planned.Count)];
+            if (HasCopy(id))
+            {
+                totals.KeptWithACopy++;
+            }
+
             outcomes.Add(new StoreOutcome.SavedUnderNewId(id, Invent(id), [new TermValues("theirs " + id, "Theirs")]));
             totals.SavedUnderNewIds++;
         }
@@ -438,14 +462,25 @@ public sealed class LibraryWorkspacePropertyTests
             .Order(StringComparer.Ordinal)
             .ToList();
 
+    // A library as the page shows it, without its id: its content, its switches, and the library its based-on reference
+    // names, compared by that library's content, so a reference left on an id another library now holds shows as a change.
     private static string Signature(LibraryDraft draft, DraftLibrary library)
     {
         var content = library.Content;
         var ai = draft.LocalState.AiPermissions.TryGetValue(content.Id, out var permitted) ? permitted.ToString() : "none";
-        return $"{content.BuiltIn}|{content.Name}|{content.Category}|{content.Description}|"
-            + $"on={draft.LocalState.EnabledIds.Contains(content.Id)}|ai={ai}|"
-            + string.Join(";", content.Rows.Select(row => row.Values.ToString()));
+        return $"{Identity(content)}|on={draft.LocalState.EnabledIds.Contains(content.Id)}|ai={ai}|basedOn={Referent(draft, content.BasedOn)}";
     }
+
+    private static string Identity(LibraryContent content) =>
+        $"{content.BuiltIn}|{content.Name}|{content.Category}|{content.Description}|"
+        + string.Join(";", content.Rows.Select(row => row.Values.ToString()));
+
+    // The library a based-on reference names: the live library's content, or that it names no live library.
+    private static string Referent(LibraryDraft draft, string? basedOn) =>
+        basedOn is null ? "none"
+        : draft.Find(basedOn) is { PendingDelete: false } original ? Identity(original.Content)
+        : "gone";
+
     // One operation of the sequence, chosen by 0 to 18.
     private static void Operate(
         LibraryWorkspace workspace,
