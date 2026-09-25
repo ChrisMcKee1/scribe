@@ -162,9 +162,10 @@ public sealed class LibrarySwitchOffCopyW1bTests
         ];
         var plan = LibrarySwitchOffCopy.Plan([], composition, asked);
 
-        // Both still use their shared spoken form, so both stay on, named in physical order; nothing changes what dictation
-        // writes.
+        // Both still use their shared spoken form, so both stay on, named in physical order; nothing is copied, and nothing
+        // changes what dictation writes.
         Assert.Equal(["epsilon", "custom-github"], plan.KeptOn.Select(k => k.Id));
+        Assert.Empty(plan.Copies);
         AssertDictationUnchanged(draft, [], asked, plan, ["project token alpha term zeta term"], expectedBefore: ["Epsilon Alpha Zeta"]);
 
         // Without the shared form, both go, and their copies follow the physical names: epsilon.csv before github.csv.
