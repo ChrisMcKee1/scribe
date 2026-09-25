@@ -678,21 +678,16 @@
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="StoreAudioTitle" Text="Keep audio with history" Style="{StaticResource CardTitle}"/>
-                                            <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
-                                                 names the limits maintenance actually enforces. -->
-                                            <TextBlock x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}"/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="StoreAudioCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="StoreAudioCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=StoreAudioTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=StoreAudioHintText}">
+                                                <TextBlock x:Name="StoreAudioTitle" Text="Keep audio with history" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <!-- Text comes from StorageRetentionPolicy.StoredAudioHint so it always
+                                                                                         names the limits maintenance actually enforces. -->
+                                        <TextBlock Margin="28,2,0,0" x:Name="StoreAudioHintText" Style="{StaticResource CardDescription}"/>
+                                    </StackPanel>
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
@@ -834,36 +829,24 @@
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <TextBlock Text="Capture" Style="{StaticResource SectionHeader}" Margin="2,4,0,10"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="VadTitle" Text="Voice activity detection" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="VadDescription" Style="{StaticResource CardDescription}"
-                                                       Text="Trim leading/trailing silence and ignore captures with no speech."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="VadCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=VadTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=VadDescription}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="VadCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=VadTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=VadDescription}">
+                                                <TextBlock x:Name="VadTitle" Text="Voice activity detection" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="VadDescription" Style="{StaticResource CardDescription}" Text="Trim leading/trailing silence and ignore captures with no speech."/>
+                                    </StackPanel>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="AutoStopTitle" Text="End dictation on silence (toggle mode)" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="AutoStopDescription" Style="{StaticResource CardDescription}"
-                                                       Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early, so leave it off if that happens."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="AutoStopCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="AutoStopCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AutoStopTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AutoStopDescription}">
+                                                <TextBlock x:Name="AutoStopTitle" Text="End dictation on silence (toggle mode)" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="AutoStopDescription" Style="{StaticResource CardDescription}" Text="In toggle mode, stop automatically after a few seconds of silence instead of waiting for the second key press. Noisy rooms can trigger this early, so leave it off if that happens."/>
+                                    </StackPanel>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid>
@@ -910,21 +893,15 @@
                                     </Grid>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="PostTitle" Text="Post-processing" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="PostDescription" Style="{StaticResource CardDescription}"
-                                                       Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text. AI cleanup still receives your vocabulary when this is off."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="PostCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=PostDescription}"
-                                                         Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="PostCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=PostDescription}"
+                                                  Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled">
+                                                <TextBlock x:Name="PostTitle" Text="Post-processing" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="PostDescription" Style="{StaticResource CardDescription}" Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text. AI cleanup still receives your vocabulary when this is off."/>
+                                    </StackPanel>
                                 </ui:Card>
 
                                 <TextBlock Text="Text insertion" Style="{StaticResource SectionHeader}"/>
@@ -947,36 +924,24 @@
                                     </StackPanel>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="ShiftEnterTitle" Text="Don't send chat messages early" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="ShiftEnterDescription" Style="{StaticResource CardDescription}"
-                                                       Text="Chat apps like Teams, Slack, and Discord send a message when you press Enter, so a dictation with paragraphs used to send itself on the first break. This types line breaks as Shift+Enter instead, which starts a new line without sending. Turn it off only if an app you use does something else with Shift+Enter."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="ShiftEnterCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=ShiftEnterTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=ShiftEnterDescription}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="ShiftEnterCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=ShiftEnterTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=ShiftEnterDescription}">
+                                                <TextBlock x:Name="ShiftEnterTitle" Text="Don't send chat messages early" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="ShiftEnterDescription" Style="{StaticResource CardDescription}" Text="Chat apps like Teams, Slack, and Discord send a message when you press Enter, so a dictation with paragraphs used to send itself on the first break. This types line breaks as Shift+Enter instead, which starts a new line without sending. Turn it off only if an app you use does something else with Shift+Enter."/>
+                                    </StackPanel>
                                 </ui:Card>
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}"
-                                                       Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="SpaceAfterDictationCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="SpaceAfterDictationCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=SpaceAfterDictationTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=SpaceAfterDictationHint}">
+                                                <TextBlock x:Name="SpaceAfterDictationTitle" Text="Add a space after each dictation" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="SpaceAfterDictationHint" Style="{StaticResource CardDescription}" Text="Makes back-to-back dictations flow. Turn it off if an app needs text without a trailing space."/>
+                                    </StackPanel>
                                 </ui:Card>
                             </StackPanel>
                         </ScrollViewer>
@@ -996,20 +961,14 @@
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="OverlayTitle" Text="Show the recording overlay" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="OverlayDescription" Style="{StaticResource CardDescription}"
-                                                       Text="A small always-on-top indicator with a live level meter while capturing."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="OverlayCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=OverlayTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=OverlayDescription}"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="OverlayCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=OverlayTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=OverlayDescription}">
+                                                <TextBlock x:Name="OverlayTitle" Text="Show the recording overlay" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="OverlayDescription" Style="{StaticResource CardDescription}" Text="A small always-on-top indicator with a live level meter while capturing."/>
+                                    </StackPanel>
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
@@ -1095,21 +1054,16 @@
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
                                 <ui:Card Style="{StaticResource SettingsCard}">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" Margin="0,0,12,0">
-                                            <TextBlock x:Name="AiCleanupTitle" Text="Polish text with AI" Style="{StaticResource CardTitle}"/>
-                                            <TextBlock x:Name="AiCleanupDescription" Style="{StaticResource CardDescription}"
-                                                       Text="Fix punctuation, capitalization and grammar with an AI model before text is inserted. If the model isn't ready, dictation continues with the raw text."/>
-                                        </StackPanel>
-                                        <CheckBox x:Name="AiCleanupCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=AiCleanupTitle}"
-                                                         AutomationProperties.HelpText="{Binding Text, ElementName=AiCleanupDescription}"
-                                                         Checked="AiCleanupCheck_Toggled" Unchecked="AiCleanupCheck_Toggled"/>
-                                    </Grid>
+                                    <StackPanel>
+                                        <CheckBox x:Name="AiCleanupCheck"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AiCleanupTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AiCleanupDescription}"
+                                                  Checked="AiCleanupCheck_Toggled"
+                                                  Unchecked="AiCleanupCheck_Toggled">
+                                                <TextBlock x:Name="AiCleanupTitle" Text="Polish text with AI" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock Margin="28,2,0,0" x:Name="AiCleanupDescription" Style="{StaticResource CardDescription}" Text="Fix punctuation, capitalization and grammar with an AI model before text is inserted. If the model isn't ready, dictation continues with the raw text."/>
+                                    </StackPanel>
                                 </ui:Card>
 
                                 <ui:Card Style="{StaticResource SettingsCard}">
@@ -1756,21 +1710,17 @@
                                                     PlaceholderText="insert my standup update"
                                                     AutomationProperties.LabeledBy="{Binding ElementName=SnippetPhraseTitle}"
                                                     TextChanged="SnippetPhraseBox_TextChanged"/>
-                                        <Grid Margin="0,16,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock x:Name="SnippetTemplateTitle" Grid.Column="0" Text="Expands to" Style="{StaticResource CardTitle}"
-                                                       VerticalAlignment="Center"/>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                                <TextBlock x:Name="SnippetEnabledLabel" Text="Enabled" Style="{StaticResource CardDescription}" Margin="0,0,8,0"
-                                                           VerticalAlignment="Center"/>
-                                                <CheckBox x:Name="SnippetEnabledCheck" VerticalAlignment="Center"
-                                                                 AutomationProperties.LabeledBy="{Binding ElementName=SnippetEnabledLabel}"
-                                                                 Click="SnippetEnabledCheck_Click"/>
-                                            </StackPanel>
-                                        </Grid>
+                                        <StackPanel Margin="0,16,0,0">
+                                            <CheckBox x:Name="SnippetEnabledCheck"
+                                                      AutomationProperties.LabeledBy="{Binding ElementName=SnippetEnabledLabel}"
+                                                      AutomationProperties.HelpText="{Binding Text, ElementName=SnippetEnabledDescription}"
+                                                      Click="SnippetEnabledCheck_Click">
+                                                <TextBlock x:Name="SnippetEnabledLabel" Text="Enabled" Style="{StaticResource CardTitle}"/>
+                                            </CheckBox>
+                                            <TextBlock x:Name="SnippetEnabledDescription" Style="{StaticResource CardDescription}" Margin="28,2,0,0"
+                                                       Text="Applies this voice snippet after you save."/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="SnippetTemplateTitle" Text="Expands to" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <ui:TextBox x:Name="SnippetTemplateBox" Margin="0,8,0,0"
                                                     HorizontalAlignment="Stretch" AcceptsReturn="True"
                                                     TextWrapping="Wrap" MinHeight="220" MaxHeight="380"
