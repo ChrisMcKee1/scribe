@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Models;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.Core.Hotkeys;
 
@@ -20,19 +21,15 @@ namespace Scribe.Core.Hotkeys;
 /// </summary>
 public sealed class HotkeyService : IHotkeyService
 {
-    // Computed once: the two KBDLLHOOKSTRUCT fields the callback reads. Direct field reads keep
-    // the callback under the OS deadline; PtrToStructure would marshal the whole struct per event.
-    private static readonly int VkCodeOffset =
-        (int)Marshal.OffsetOf<NativeMethods.KBDLLHOOKSTRUCT>(nameof(NativeMethods.KBDLLHOOKSTRUCT.vkCode));
-    private static readonly int ExtraInfoOffset =
-        (int)Marshal.OffsetOf<NativeMethods.KBDLLHOOKSTRUCT>(nameof(NativeMethods.KBDLLHOOKSTRUCT.dwExtraInfo));
-
     private static readonly TimeSpan WatchdogPeriod = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan InstallTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan JoinTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILogger<HotkeyService> _logger;
     private readonly Func<bool?> _desktopReceivesInput;
+    private readonly Func<nint> _foregroundWindow;
+    private readonly Func<nint, string?> _processNameOfWindow;
+    private readonly TimeProvider _time;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -87,6 +84,12 @@ public sealed class HotkeyService : IHotkeyService
     private int _mouseReportedError;
     private long _mouseReportedLosses;
 
+    // What the log last said about an installation's keyboard hook moves (MaintainKeyboardHookLocked). Guarded by _sync.
+    private HookInstallation? _keyboardReportFor;
+    private long _keyboardMoveFailuresReported;
+    private long _keyboardFoundGoneReported;
+    private long _keyboardMovesDeferredReported;
+
     public HotkeyService(ILogger<HotkeyService> logger)
         : this(logger, HotkeyBinding.DefaultDictation)
     {
@@ -116,15 +119,27 @@ public sealed class HotkeyService : IHotkeyService
     /// Windows' view of a key for the leaked-key repair (GetAsyncKeyState in production); a test scripts it.
     /// </param>
     /// <param name="releaseLeakedKey">The leaked-key repair's key-up (a marked SendInput in production); a test records it.</param>
+    /// <param name="foregroundWindow">
+    /// The window in front (GetForegroundWindow in production), which the moves ahead of a remote client's keyboard hook
+    /// and the watchdog's warning ask about; a test scripts it.
+    /// </param>
+    /// <param name="processNameOfWindow">The name of a window's process (<see cref="WindowOwners.ProcessNameOf"/>); a test scripts it.</param>
+    /// <param name="time">The clock the moves ahead are timed on; a test owns it.</param>
     internal HotkeyService(
         ILogger<HotkeyService> logger,
         HotkeyCommandRouter router,
         Func<bool?> desktopReceivesInput,
         Func<uint, bool>? keyDownInWindows = null,
-        Func<uint, bool>? releaseLeakedKey = null)
+        Func<uint, bool>? releaseLeakedKey = null,
+        Func<nint>? foregroundWindow = null,
+        Func<nint, string?>? processNameOfWindow = null,
+        TimeProvider? time = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
+        _foregroundWindow = foregroundWindow ?? WindowOwners.Foreground;
+        _processNameOfWindow = processNameOfWindow ?? WindowOwners.ProcessNameOf;
+        _time = time ?? TimeProvider.System;
         _router = router;
         _reconciler = CreateReconciler(
             _router,
@@ -310,6 +325,55 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
+    /// <summary>What the watchdog does for the keyboard hook's moves ahead each period, done now; for tests.</summary>
+    internal void MaintainKeyboardHookNow()
+    {
+        lock (_sync)
+        {
+            if (IsRunning)
+            {
+                MaintainKeyboardHookLocked();
+            }
+        }
+    }
+
+    /// <summary>Asks the hook thread to move the keyboard hook ahead now, as a remote client coming to the front does; for tests.</summary>
+    internal void MoveKeyboardHookAheadNow() => CurrentInstallation?.RequestMoveAhead();
+
+    /// <summary>Asks the hook thread to release what its moves replaced now, whatever its age with <paramref name="force"/>; for tests.</summary>
+    internal void ReleaseRetiredKeyboardHooksNow(bool force) => CurrentInstallation?.RequestReleaseRetired(force);
+
+    /// <summary>The current installation's keyboard hook registration, or zero; for tests.</summary>
+    internal nint KeyboardHookHandle => CurrentInstallation?.KeyboardHookHandle ?? 0;
+
+    /// <summary>How many registrations the current installation's moves replaced and still keeps; for tests.</summary>
+    internal int RetiredKeyboardHooks => CurrentInstallation?.RetiredKeyboardHooks ?? 0;
+
+    /// <summary>How many times the current installation moved its keyboard hook ahead; for tests.</summary>
+    internal long KeyboardHookMoves => CurrentInstallation?.KeyboardHookMoves ?? 0;
+
+    /// <summary>How many of the current installation's moves ahead waited for a swallowed key's release; for tests.</summary>
+    internal long KeyboardHookMovesDeferred => CurrentInstallation?.KeyboardHookMovesDeferred ?? 0;
+
+    /// <summary>How many replaced registrations the current installation found already gone at release; for tests.</summary>
+    internal long RetiredKeyboardHooksFoundGone => CurrentInstallation?.RetiredKeyboardHooksFoundGone ?? 0;
+
+    /// <summary>How many key events came back through a replaced registration and passed untouched; for tests.</summary>
+    internal long KeyEventEchoes => CurrentInstallation?.KeyEventEchoes ?? 0;
+
+    /// <summary>How many release requests the current installation's thread has handled, a barrier for tests.</summary>
+    internal long RetiredReleaseRequestsHandled => CurrentInstallation?.RetiredReleaseRequestsHandled ?? 0;
+
+    /// <summary>
+    /// The current installation's keyboard registration delegates, current and one replaced (or null), for a test that plays
+    /// the hook thread between its messages on a desktop with no input.
+    /// </summary>
+    internal (NativeMethods.LowLevelKeyboardProc Current, NativeMethods.LowLevelKeyboardProc? Replaced)? KeyboardProcsForTests =>
+        CurrentInstallation?.KeyboardProcsForTests;
+
+    /// <summary>Whether the current installation is being told of foreground changes; for tests.</summary>
+    internal bool ForegroundNoticesInstalled => CurrentInstallation is { ForegroundHookError: null };
+
     /// <summary>
     /// What the watchdog does when it finds the keyboard hook dead, done now: the hook thread is replaced by a new one
     /// with a new engine; for tests. Returns once the new installation has installed its hooks, or failed to.
@@ -386,6 +450,7 @@ public sealed class HotkeyService : IHotkeyService
                 "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
             LogMissingDesktopSwitchHook(installation);
             ReportMouseHookLocked(installation);
+            installation.NoticeForegroundNow();
         }
     }
 
@@ -399,6 +464,16 @@ public sealed class HotkeyService : IHotkeyService
                 "the PC locks keeps recording until the key is pressed again, and a Narrator key released on the lock " +
                 "screen keeps blocking a bare Page Up or Page Down.",
                 error);
+        }
+
+        // Also a warning only: without foreground notices the watchdog still reinstalls a hook that a Remote Desktop
+        // client's took the keys from, within a period or two.
+        if (installation.ForegroundHookError is { } foregroundError)
+        {
+            _logger.LogWarning(
+                "Foreground change notifications are unavailable (Win32 error {Error}); the keyboard hook is not moved " +
+                "ahead of a Remote Desktop client's when its window comes to the front.",
+                foregroundError);
         }
     }
 
@@ -680,23 +755,31 @@ public sealed class HotkeyService : IHotkeyService
 
     // One pass. First the mouse hook's sync, which every pass does: an event that settled a debt, swallowed, let through
     // or forgiven by a new press, is the moment a drain-only mouse hook kept only for that debt stops being needed, and
-    // the hook thread removes it at the sync this asks for now. Then the leaked-key repair, only when a signal asked for
-    // it (a key or button release the bindings swallowed, or a dictation's release), each key judged and released under
-    // _repairGate and only while the engine's view may be trusted (KeyViewIsWhole, checked there before the key's reads
-    // and again immediately before its key-up): never while capture is being admitted or owns input, from Set's request
-    // until both machines have applied capture's end, because capture tracks no key and every key the user holds for the
-    // chord would look leaked (review rounds 8 and 9, A9 and A11), and never once the engine's view is not the one the
-    // request was made in (its epoch changed: a clear, or a new engine; round 10, A12). Whatever stops a pass stops the
-    // rest of it, and nothing runs it again: after a clear, and after capture ends, the keys held across it are missing
-    // from the engine's view, so a replay would release keys the user still holds; a real leak is repaired at the next
-    // trigger. Nothing is logged under the gate.
+    // the hook thread removes it at the sync this asks for now. Likewise a move ahead of another program's keyboard hook
+    // that waited for a swallowed key's release is asked for again, once (stream RD). Then the leaked-key repair, only
+    // when a signal asked for it (a key or button release the bindings swallowed, or a dictation's release), each key
+    // judged and released under _repairGate and only while the engine's view may be trusted (KeyViewIsWhole, checked
+    // there before the key's reads and again immediately before its key-up): never while capture is being admitted or
+    // owns input, from Set's request until both machines have applied capture's end, because capture tracks no key and
+    // every key the user holds for the chord would look leaked (review rounds 8 and 9, A9 and A11), and never once the
+    // engine's view is not the one the request was made in (its epoch changed: a clear, or a new engine; round 10, A12).
+    // Whatever stops a pass stops the rest of it, and nothing runs it again: after a clear, and after capture ends, the
+    // keys held across it are missing from the engine's view, so a replay would release keys the user still holds; a
+    // real leak is repaired at the next trigger. Nothing is logged under the gate.
     private void RunReconcilePass(long repairAt)
     {
         try
         {
-            if (CurrentInstallation is { MouseHookInstalled: true, MouseHookWanted: false } drained)
+            if (CurrentInstallation is { } current)
             {
-                drained.RequestMouseHookRefresh();
+                if (current is { MouseHookInstalled: true, MouseHookWanted: false })
+                {
+                    current.RequestMouseHookRefresh();
+                }
+
+                // A pass follows the release of a key the bindings swallowed: the moment a move ahead that waited for it
+                // may be made (HookInstallation.MoveAhead).
+                current.RetryDeferredMoveAhead();
             }
 
             if (repairAt == 0)
@@ -747,7 +830,8 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    // Probe-based liveness for the keyboard hook, and upkeep for the mouse hook (see MaintainMouseHookLocked).
+    // Probe-based liveness for the keyboard hook and upkeep for its moves ahead, and upkeep for the mouse hook (see
+    // MaintainMouseHookLocked).
     private void WatchdogTick()
     {
         try
@@ -760,6 +844,7 @@ public sealed class HotkeyService : IHotkeyService
                 }
 
                 ProbeKeyboardHookLocked();
+                MaintainKeyboardHookLocked();
                 MaintainMouseHookLocked();
             }
         }
@@ -769,11 +854,72 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
+    // Upkeep for the keyboard hook's moves ahead of a remote client's (HookInstallation.MoveAhead), each period, from the
+    // watchdog and never from the hook thread, which must not log. A move Windows refused is reported, by its Win32
+    // error, and so is a move that waited for a key Scribe swallowed to be released, by count. A replaced registration
+    // found already gone when it was released means Windows removed it, so for a while no registration may have seen the
+    // keys, and the key state is no longer to be trusted: the hook is reinstalled with a fresh engine, as for one that
+    // stopped receiving events. Replaced registrations whose grace is over are released (the moves' own sequence
+    // normally does it first). Callers hold _sync.
+    private void MaintainKeyboardHookLocked()
+    {
+        if (_installation is not { } installation)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_keyboardReportFor, installation))
+        {
+            _keyboardReportFor = installation;
+            _keyboardMoveFailuresReported = 0;
+            _keyboardFoundGoneReported = 0;
+            _keyboardMovesDeferredReported = 0;
+        }
+
+        var (failures, error) = installation.KeyboardHookMoveFailures;
+        if (failures != _keyboardMoveFailuresReported)
+        {
+            _keyboardMoveFailuresReported = failures;
+            _logger.LogWarning(
+                "Moving the keyboard hook ahead of a remote desktop client's failed (Win32 error {Error}, {Count} time(s) " +
+                "for this hook thread); the current registration stays in place.",
+                error,
+                failures);
+        }
+
+        var deferred = installation.KeyboardHookMovesDeferred;
+        if (deferred != _keyboardMovesDeferredReported)
+        {
+            _keyboardMovesDeferredReported = deferred;
+            _logger.LogDebug(
+                "A move of the keyboard hook ahead of a remote desktop client's waited for a key Scribe swallowed to be " +
+                "released ({Count} time(s) for this hook thread), so the release reaches every hook that saw the press.",
+                deferred);
+        }
+
+        var gone = installation.RetiredKeyboardHooksFoundGone;
+        if (gone != _keyboardFoundGoneReported)
+        {
+            _keyboardFoundGoneReported = gone;
+            _logger.LogWarning(
+                "A keyboard hook registration replaced by a move ahead was already gone when it was released: Windows " +
+                "removed it (a callback that missed the deadline), so keys may have gone unseen. Reinstalling.");
+            ReinstallHookLocked();
+            return;
+        }
+
+        if (installation.RetiredKeyboardHooks > 0)
+        {
+            installation.RequestReleaseRetired(force: false);
+        }
+    }
+
     // A marker-tagged key-up for the unassigned VK 0xFF is inert for every app but still traverses
-    // the hook. If nothing at all reached the callback since the PREVIOUS probe was armed, Windows
-    // silently removed the hook (documented behavior after a deadline miss) and push-to-talk is dead
-    // until it is reinstalled. Mouse-only activity cannot false-positive this check because the probe
-    // itself is keyboard input.
+    // the hook, which counts it and then swallows it (KeyboardHookFilter.IsProbe), so it goes no further
+    // than Scribe's hook. If nothing at all reached the callback since the PREVIOUS probe was armed, the
+    // hook is gone (Windows removes one that missed the deadline, without notification) or a hook ahead
+    // of it keeps the keys, and push-to-talk is dead until it is reinstalled. Mouse-only activity cannot
+    // false-positive this check because the probe itself is keyboard input.
     //
     // The probe is withheld while the system is idle: injected input resets the power manager's
     // idle timer, so an unconditional probe every period stopped the machine from ever sleeping.
@@ -792,9 +938,15 @@ public sealed class HotkeyService : IHotkeyService
 
         if (_livenessProbe.IsHookDead(Interlocked.Read(ref _hookCallbackCount)))
         {
+            // Two reasons, and the log cannot tell them apart: Windows removed the hook, or a hook registered after it keeps
+            // the keys, as a Remote Desktop client's does once it registers on its window's activation and is called first.
+            var inFront = _processNameOfWindow(_foregroundWindow());
             _logger.LogWarning(
-                "The keyboard hook stopped receiving events (Windows removes low-level " +
-                "hooks that miss the callback deadline, without notification). Reinstalling.");
+                "The keyboard hook stopped receiving events: either Windows removed it (a callback that missed the " +
+                "deadline), or another program's keyboard hook, such as a Remote Desktop client's, now receives keys " +
+                "first and keeps them. In front: {App} (remote desktop client: {Remote}). Reinstalling.",
+                inFront ?? "unknown",
+                RemoteClientProcesses.IsRemoteClient(inFront));
             ReinstallHookLocked();
         }
 
@@ -959,6 +1111,7 @@ public sealed class HotkeyService : IHotkeyService
             _logger.LogInformation("Keyboard hook reinstalled.");
             LogMissingDesktopSwitchHook(installation);
             ReportMouseHookLocked(installation);
+            installation.NoticeForegroundNow();
         }
     }
 
@@ -994,15 +1147,32 @@ public sealed class HotkeyService : IHotkeyService
         // their key view is not the current engine's. The hook thread disposes it once its hooks are gone.
         private readonly HotkeyReconcileSignal _reconcileSignal;
 
-        // Rooted here for as long as the hook can call it: a collected delegate behind a live
-        // hook crashes the process on the next key event.
-        private readonly NativeMethods.LowLevelKeyboardProc _proc;
+        // The keyboard hook's registrations, each with the delegate Windows calls for it, rooted here for as long as the
+        // hook can call it (a collected delegate behind a live hook crashes the process on the next key event). Slot 0 is
+        // the first registration; a move ahead takes a free slot for the new one. At most the current registration and
+        // RetiredHookRegistrations.Capacity replaced ones are registered, plus the new one a move adds before it evicts,
+        // so there is always a free slot. _current is the registration made last: written and read on the hook thread only.
+        private readonly KeyboardRegistration[] _registrations;
+        private KeyboardRegistration _current;
 
         // Rooted for the same reason, for the mouse hook this thread installs while a binding uses a mouse button.
         private readonly NativeMethods.LowLevelMouseProc _mouseProc;
 
         // Rooted for the same reason, for the desktop-switch notifications set up beside the hook.
         private readonly NativeMethods.WinEventProc _desktopSwitchProc;
+
+        // Rooted for the same reason, for the foreground notifications that tell a remote client came to the front.
+        private readonly NativeMethods.WinEventProc _foregroundProc;
+
+        // The keyboard events this installation's callback is passing on right now, and the registrations its moves
+        // ahead replaced and still keeps (see MoveAhead). Hook thread only; made here, never on the callback path.
+        private readonly KeyEventPassOn _passOn = new();
+        private readonly RetiredHookRegistrations _retired = new();
+
+        // The pool side of the moves ahead, and the hop that takes a foreground notice there. Disposed by the hook thread
+        // once its hooks are gone.
+        private readonly ForegroundNotice _foregroundNotice;
+        private readonly KeyboardHookPrecedence _precedence;
 
         // The check a desktop-switch notice needs (see HotkeyEngine.OnDesktopSwitchNotice), one delegate for the whole
         // installation, so a notice allocates nothing.
@@ -1017,6 +1187,18 @@ public sealed class HotkeyService : IHotkeyService
         // Written by the hook thread before it sets _installed, read after Install saw it set.
         private bool _desktopSwitchHooked;
         private int _desktopSwitchError;
+        private bool _foregroundHooked;
+        private int _foregroundError;
+
+        // What the moves ahead did, written by this installation's thread and read by the watchdog and tests.
+        private long _moveAheads;
+        private long _moveAheadFailures;
+        private int _moveAheadError;
+        private long _moveAheadsDeferred;
+        private int _moveAheadDeferred;
+        private long _retiredFoundGone;
+        private long _echoes;
+        private long _releaseRequestsHandled;
 
         // The mouse hook's registration and what became of the last attempts, written only by this installation's thread
         // between messages and read by the watchdog and tests.
@@ -1031,9 +1213,24 @@ public sealed class HotkeyService : IHotkeyService
             _engine = engine;
             _reconcileSignal = new HotkeyReconcileSignal(service.ScheduleReconcile);
             _desktopReceivesInput = service._desktopReceivesInput;
-            _proc = HookCallback;
+            _registrations = new KeyboardRegistration[RetiredHookRegistrations.Capacity + 2];
+            for (var slot = 0; slot < _registrations.Length; slot++)
+            {
+                _registrations[slot] = new KeyboardRegistration(this);
+            }
+
+            _current = _registrations[0];
             _mouseProc = MouseHookCallback;
             _desktopSwitchProc = DesktopSwitchCallback;
+            _foregroundProc = ForegroundCallback;
+            _precedence = new KeyboardHookPrecedence(
+                service._foregroundWindow,
+                service._processNameOfWindow,
+                RequestMoveAhead,
+                () => RequestReleaseRetired(force: false),
+                service._logger,
+                service._time);
+            _foregroundNotice = new ForegroundNotice(_precedence.OnForegroundChanged);
             _thread = new Thread(Run)
             {
                 Name = "Scribe.HotkeyHook",
@@ -1055,6 +1252,63 @@ public sealed class HotkeyService : IHotkeyService
         /// SetWinEventHook left (0 when it left none).
         /// </summary>
         public int? DesktopSwitchHookError => _desktopSwitchHooked ? null : _desktopSwitchError;
+
+        /// <summary>
+        /// After <see cref="Install"/> succeeded: null when foreground changes are being reported, otherwise the Win32 error
+        /// SetWinEventHook left (0 when it left none).
+        /// </summary>
+        public int? ForegroundHookError => _foregroundHooked ? null : _foregroundError;
+
+        /// <summary>Any thread: the keyboard hook's current registration.</summary>
+        public nint KeyboardHookHandle => Volatile.Read(ref _hookId);
+
+        /// <summary>Any thread: how many registrations a move ahead replaced are still kept.</summary>
+        public int RetiredKeyboardHooks => _retired.Count;
+
+        /// <summary>Any thread: how many moves ahead registered the keyboard hook afresh.</summary>
+        public long KeyboardHookMoves => Interlocked.Read(ref _moveAheads);
+
+        /// <summary>Any thread: how many moves ahead Windows refused, and the Win32 error of the last one.</summary>
+        public (long Failures, int LastError) KeyboardHookMoveFailures =>
+            (Interlocked.Read(ref _moveAheadFailures), Volatile.Read(ref _moveAheadError));
+
+        /// <summary>
+        /// Any thread: how many moves ahead waited because a key whose press the engine swallowed was still held (see
+        /// <see cref="MoveAhead"/>).
+        /// </summary>
+        public long KeyboardHookMovesDeferred => Interlocked.Read(ref _moveAheadsDeferred);
+
+        /// <summary>Any thread: whether a move ahead is waiting for such a key's release.</summary>
+        public bool KeyboardHookMoveDeferred => Volatile.Read(ref _moveAheadDeferred) != 0;
+
+        /// <summary>
+        /// Any thread: how many replaced registrations were already gone when they were released, which is how a
+        /// registration Windows removed for a missed deadline shows.
+        /// </summary>
+        public long RetiredKeyboardHooksFoundGone => Interlocked.Read(ref _retiredFoundGone);
+
+        /// <summary>Any thread, for tests: how many key events came back through a replaced registration and passed.</summary>
+        public long KeyEventEchoes => Interlocked.Read(ref _echoes);
+
+        /// <summary>
+        /// Any thread, for tests: how many release requests this thread has handled, which a test uses as a barrier (the
+        /// thread handles its messages in the order they were posted).
+        /// </summary>
+        public long RetiredReleaseRequestsHandled => Interlocked.Read(ref _releaseRequestsHandled);
+
+        /// <summary>
+        /// For a test that plays the hook thread between its messages on a desktop with no input: the delegate of the
+        /// current keyboard registration, and of one a move replaced and still keeps, or null. Read after a barrier.
+        /// </summary>
+        public (NativeMethods.LowLevelKeyboardProc Current, NativeMethods.LowLevelKeyboardProc? Replaced) KeyboardProcsForTests
+        {
+            get
+            {
+                var current = _current;
+                var replaced = _registrations.FirstOrDefault(r => r.Handle != 0 && !ReferenceEquals(r, current));
+                return (current.Proc, replaced?.Proc);
+            }
+        }
 
         /// <summary>Any thread: whether the mouse hook is registered right now.</summary>
         public bool MouseHookInstalled => Volatile.Read(ref _mouseHookId) != 0;
@@ -1126,6 +1380,51 @@ public sealed class HotkeyService : IHotkeyService
             }
         }
 
+        /// <summary>
+        /// Any thread (the pool side of the moves ahead, tests): asks this installation's thread to register its keyboard
+        /// hook afresh, ahead of every hook registered before, keeping its engine (see <see cref="MoveAhead"/>). Never waits.
+        /// </summary>
+        public void RequestMoveAhead()
+        {
+            var threadId = _engine.OwnerThreadId;
+            if (threadId != 0 && !_engine.IsRetired)
+            {
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_AHEAD, nint.Zero, nint.Zero);
+            }
+        }
+
+        /// <summary>
+        /// Any thread: asks this installation's thread to release the registrations its moves replaced, once their grace
+        /// is over, or, with <paramref name="force"/> (tests), whatever their age. Never waits.
+        /// </summary>
+        public void RequestReleaseRetired(bool force)
+        {
+            var threadId = _engine.OwnerThreadId;
+            if (threadId != 0)
+            {
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_RELEASE_RETIRED, force ? 1 : 0, nint.Zero);
+            }
+        }
+
+        /// <summary>
+        /// Any thread (a reconcile pass, which follows the release of a key the bindings swallowed): asks again for a move
+        /// ahead that waited for such a key, once; the hook thread judges again whether it may be made. Never waits.
+        /// </summary>
+        public void RetryDeferredMoveAhead()
+        {
+            if (Interlocked.Exchange(ref _moveAheadDeferred, 0) != 0)
+            {
+                RequestMoveAhead();
+            }
+        }
+
+        /// <summary>
+        /// The service, once the hooks are installed: hands the window in front now to the pool side of the moves ahead,
+        /// as a foreground notice would, so a remote client already in front when the hook is installed is kept behind it
+        /// too. Never waits.
+        /// </summary>
+        public void NoticeForegroundNow() => _foregroundNotice.Notify(_service._foregroundWindow());
+
         public bool Join(TimeSpan timeout) => _thread.Join(timeout);
 
         private void Run()
@@ -1135,6 +1434,7 @@ public sealed class HotkeyService : IHotkeyService
             // replacement's.
             nint hookId = 0;
             nint desktopSwitchHook = 0;
+            nint foregroundHook = 0;
             try
             {
                 // Before the hook exists, so no hook callback can run inside the peek (a peek also
@@ -1143,13 +1443,16 @@ public sealed class HotkeyService : IHotkeyService
 
                 nint module = NativeMethods.GetModuleHandle(null);
                 _module = module;
-                hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _proc, module, 0);
+                var first = _registrations[0];
+                _current = first;
+                hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, first.Proc, module, 0);
                 if (hookId == 0)
                 {
                     _installError = new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
                 }
                 else
                 {
+                    first.Handle = hookId;
                     Volatile.Write(ref _hookId, hookId);
 
                     // The queue already exists, so publishing the id makes every later wake and
@@ -1170,6 +1473,20 @@ public sealed class HotkeyService : IHotkeyService
                         NativeMethods.WINEVENT_OUTOFCONTEXT);
                     _desktopSwitchHooked = desktopSwitchHook != 0;
                     _desktopSwitchError = desktopSwitchHook == 0 ? Marshal.GetLastWin32Error() : 0;
+
+                    // Foreground notices, delivered on this thread the same way. The callback only hands the window to the
+                    // pool side of the moves ahead (KeyboardHookPrecedence), which looks its process up off this thread.
+                    // Optional too: without it the watchdog still reinstalls a hook that stopped receiving keys.
+                    foregroundHook = NativeMethods.SetWinEventHook(
+                        NativeMethods.EVENT_SYSTEM_FOREGROUND,
+                        NativeMethods.EVENT_SYSTEM_FOREGROUND,
+                        0,
+                        _foregroundProc,
+                        0,
+                        0,
+                        NativeMethods.WINEVENT_OUTOFCONTEXT);
+                    _foregroundHooked = foregroundHook != 0;
+                    _foregroundError = foregroundHook == 0 ? Marshal.GetLastWin32Error() : 0;
 
                     // The mouse hook, only if a binding already presses a mouse button. Its failure leaves the keyboard
                     // hook working; the service reports it, and the watchdog's renewals retry it.
@@ -1194,7 +1511,7 @@ public sealed class HotkeyService : IHotkeyService
 
             if (hookId == 0)
             {
-                _reconcileSignal.Dispose();
+                DisposeSignals();
                 return;
             }
 
@@ -1220,6 +1537,20 @@ public sealed class HotkeyService : IHotkeyService
                         continue;
                     }
 
+                    // The keyboard hook's moves ahead and their clean-up, between messages like the mouse hook's changes.
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_MOVE_AHEAD)
+                    {
+                        MoveAhead();
+                        continue;
+                    }
+
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_RELEASE_RETIRED)
+                    {
+                        ReleaseRetired(force: msg.wParam != 0);
+                        Interlocked.Increment(ref _releaseRequestsHandled);
+                        continue;
+                    }
+
                     NativeMethods.TranslateMessage(ref msg);
                     NativeMethods.DispatchMessage(ref msg);
                 }
@@ -1227,16 +1558,150 @@ public sealed class HotkeyService : IHotkeyService
 
             _engine.DetachOwner();
             RemoveMouseHook();
+            if (foregroundHook != 0)
+            {
+                NativeMethods.UnhookWinEvent(foregroundHook);
+            }
+
             if (desktopSwitchHook != 0)
             {
                 NativeMethods.UnhookWinEvent(desktopSwitchHook);
             }
 
-            NativeMethods.UnhookWindowsHookEx(hookId);
+            // Every registration of this installation's keyboard hook, the ones its moves replaced and the current one:
+            // its own handles, never a replacement's (the handles are per installation, see above).
+            foreach (var registration in _registrations)
+            {
+                if (registration.Handle != 0)
+                {
+                    NativeMethods.UnhookWindowsHookEx(registration.Handle);
+                    registration.Handle = 0;
+                }
+            }
+
+            Volatile.Write(ref _hookId, 0);
 
             // No callback of this installation can run from here: its hooks are gone, and callbacks run only on this
             // thread, which ends now. A pass this signal already started still runs, and refuses its request.
+            DisposeSignals();
+        }
+
+        // Hook thread only, at its end: the reconcile signal, and the foreground notice and the pool side of the moves
+        // ahead, whose timer may still tick and then asks nothing of a thread that is gone.
+        private void DisposeSignals()
+        {
             _reconcileSignal.Dispose();
+            _foregroundNotice.Dispose();
+            _precedence.Dispose();
+        }
+
+        // Hook thread only, between messages (WM_HOTKEY_MOVE_AHEAD), never inside a hook callback. Registers the keyboard
+        // hook afresh, which Windows puts "at the beginning of a hook chain" (Hooks Overview), so this installation's
+        // callback is called before every hook registered before it, a Remote Desktop client's included (see
+        // KeyboardHookPrecedence). The same engine: no key state, epoch or latch changes, and a key held through the move
+        // is still the key the engine holds.
+        //
+        // Not while a key whose press the engine swallowed is held (HotkeyEngine.HoldsSwallowedKey): its release would
+        // then reach Scribe's hook first and be swallowed there, and a hook that was ahead of Scribe's when the key went
+        // down, and may have forwarded that press into a remote session, would never see the release. The remote session
+        // would keep the key down, and pressing it again would not help, because Scribe swallows that key. The move waits,
+        // counted, and the reconcile pass that follows the key's release asks for it again (RetryDeferredMoveAhead), as
+        // does the next step of KeyboardHookPrecedence's sequence.
+        //
+        // The registration it replaces is kept for a grace (RetiredHookRegistrations), not released: an event already on
+        // its way to it when the new one landed (inside a hook ahead of it) must still find a registration of this
+        // installation, or the engine would never see it. Each registration has its own delegate, so the callback knows
+        // which one an event came through: through a replaced one, an event the new registration already passed on comes
+        // back as an echo and passes untouched (KeyEventPassOn), and an event that entered the chain before the move is
+        // judged but never swallowed (KeyboardHookFilter.Route), since the hooks ahead of that registration have already
+        // seen it. So no event is missed or decided twice, and none is swallowed behind a hook that saw it. A replaced
+        // registration is released once its grace is over, at the next move or when the release is asked for. A
+        // registration Windows refuses keeps the current one, counted for the watchdog to report. A retired engine moves
+        // nothing: its thread may outlive a reinstall's join, and its hook must not go ahead of the replacement's.
+        private void MoveAhead()
+        {
+            if (_engine.IsRetired)
+            {
+                return;
+            }
+
+            if (_engine.HoldsSwallowedKey)
+            {
+                Interlocked.Increment(ref _moveAheadsDeferred);
+                Volatile.Write(ref _moveAheadDeferred, 1);
+                return;
+            }
+
+            Volatile.Write(ref _moveAheadDeferred, 0);
+            ReleaseRetired(force: false);
+            var registration = FreeRegistration();
+            var replacement = registration is null
+                ? 0
+                : NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, registration.Proc, _module, 0);
+            if (registration is null || replacement == 0)
+            {
+                Volatile.Write(ref _moveAheadError, registration is null ? 0 : Marshal.GetLastWin32Error());
+                Interlocked.Increment(ref _moveAheadFailures);
+                return;
+            }
+
+            registration.Handle = replacement;
+            var replaced = _current;
+            _current = registration;
+            Volatile.Write(ref _hookId, replacement);
+            var evicted = _retired.Retire(replaced.Handle, Environment.TickCount64);
+            if (evicted != 0)
+            {
+                Release(evicted);
+            }
+
+            Interlocked.Increment(ref _moveAheads);
+        }
+
+        // Hook thread only: a slot no registration holds, or null. There is always one (see _registrations); a move that
+        // found none would be refused as a failed registration rather than throw on the hook thread.
+        private KeyboardRegistration? FreeRegistration()
+        {
+            foreach (var registration in _registrations)
+            {
+                if (registration.Handle == 0 && !ReferenceEquals(registration, _current))
+                {
+                    return registration;
+                }
+            }
+
+            return null;
+        }
+
+        // Hook thread only, between messages. Releases the replaced registrations whose grace is over, or all of them.
+        private void ReleaseRetired(bool force)
+        {
+            var now = Environment.TickCount64;
+            for (var retired = force ? _retired.TakeAny() : _retired.TakeExpired(now, RetiredHookRegistrations.GraceMs);
+                 retired != 0;
+                 retired = force ? _retired.TakeAny() : _retired.TakeExpired(now, RetiredHookRegistrations.GraceMs))
+            {
+                Release(retired);
+            }
+        }
+
+        // A replaced registration that can no longer be released was already gone: Windows removed it, which it does to a
+        // hook that missed its deadline, so for a while no registration may have seen the keys. Counted for the watchdog,
+        // which reinstalls the hook for it as for one that stopped receiving events. Its slot is free again either way.
+        private void Release(nint handle)
+        {
+            foreach (var registration in _registrations)
+            {
+                if (registration.Handle == handle)
+                {
+                    registration.Handle = 0;
+                }
+            }
+
+            if (!NativeMethods.UnhookWindowsHookEx(handle))
+            {
+                Interlocked.Increment(ref _retiredFoundGone);
+            }
         }
 
         // Hook thread only, between messages, never inside a hook callback. Installs the mouse hook while a binding presses
@@ -1322,22 +1787,40 @@ public sealed class HotkeyService : IHotkeyService
             }
         }
 
+        // Runs on this installation's thread, from GetMessage, for every foreground change on the desktop. Like the other
+        // callbacks it never waits, logs or allocates: one volatile write and a SetEvent hand the window to a pool thread,
+        // which looks up whose it is (KeyboardHookPrecedence). A retired installation hands nothing on.
+        private void ForegroundCallback(
+            nint hook, uint eventType, nint hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
+        {
+            if (eventType == NativeMethods.EVENT_SYSTEM_FOREGROUND && !_engine.IsRetired)
+            {
+                _foregroundNotice.Notify(hwnd);
+            }
+        }
+
         // Runs on this installation's thread, inside GetMessage, for every keyboard event on the
-        // desktop. It takes no lock and never logs: the only shared state it touches is interlocked
-        // counters, lock-free queues and kernel events. Its one native query besides CallNextHookEx is
-        // GetAsyncKeyState, made only as ChordStateMachine describes, and both are prelinked before the
-        // hook exists (NativeMethods.PrelinkHookCalls). CallNextHookEx is not a quick return: it "calls
-        // the next hook in the chain" and returns that hook's result (Learn), so how long it takes is up
-        // to that hook.
-        private nint HookCallback(int nCode, nint wParam, nint lParam)
+        // desktop, through the registration it came through (each has its own delegate, see
+        // KeyboardRegistration). It takes no lock and never logs: the only shared state it touches is
+        // interlocked counters, lock-free queues and kernel events. Its one native query besides
+        // CallNextHookEx is GetAsyncKeyState, made only as ChordStateMachine describes, and both are
+        // prelinked before the hook exists (NativeMethods.PrelinkHookCalls). CallNextHookEx is not a
+        // quick return: it "calls the next hook in the chain" and returns that hook's result (Learn), so
+        // how long it takes is up to that hook; its hook handle is ignored, so none is read here. The
+        // decision is KeyboardHookFilter.Route's: Scribe's own input passes, except the watchdog's probe,
+        // which stops here once counted; while a move ahead keeps a replaced registration, this callback
+        // can be called for one event through two registrations, the replaced one inside the new one's
+        // CallNextHookEx, and that echo passes untouched, so each event is judged once; and an event
+        // that reaches only a replaced registration is judged but never swallowed.
+        private nint HookCallback(KeyboardRegistration registration, int nCode, nint wParam, nint lParam)
         {
             // The watchdog's liveness signal. Incremented before any filtering so the synthetic
-            // probe (which is marker-tagged and skipped below) still proves the hook is installed.
+            // probe (which is marker-tagged and handled below) still proves the hook is installed.
             Interlocked.Increment(ref _service._hookCallbackCount);
 
             if (nCode < 0)
             {
-                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                return NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
             }
 
             int message = (int)wParam;
@@ -1345,27 +1828,46 @@ public sealed class HotkeyService : IHotkeyService
             bool isUp = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
             if (!isDown && !isUp)
             {
-                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+                return NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
             }
 
-            // Two direct field reads instead of PtrToStructure: the callback races a hard OS
-            // deadline (LowLevelHooksTimeout) and a miss gets the hook silently removed, so every
-            // event must stay as cheap as possible.
-            var extraInfo = (nuint)Marshal.ReadIntPtr(lParam, ExtraInfoOffset);
-            if (extraInfo == SyntheticInputMarker.Value)
-            {
-                return NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
-            }
-
-            var vkCode = (uint)Marshal.ReadInt32(lParam, VkCodeOffset);
-            var decision = _engine.OnKeyEvent(vkCode, isDown);
-            if (decision.RequestReconcile)
+            // Direct field reads instead of PtrToStructure: the callback races a hard OS deadline
+            // (LowLevelHooksTimeout) and a miss gets the hook silently removed, so every event must stay
+            // as cheap as possible.
+            var identity = KeyboardHookFilter.Identity(lParam);
+            var extraInfo = (nuint)Marshal.ReadIntPtr(lParam, KeyboardHookFilter.ExtraInfoOffset);
+            var route = KeyboardHookFilter.Route(
+                _engine, _passOn, ReferenceEquals(registration, _current), identity, isDown, extraInfo);
+            if (route.RepairAt != 0)
             {
                 // The view this release was judged in: the repair judges that one or none (review round 10, A12).
-                _reconcileSignal.Signal(_engine.KeyViewEpoch);
+                _reconcileSignal.Signal(route.RepairAt);
             }
 
-            return decision.Suppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+            if (route.Swallow)
+            {
+                return 1;
+            }
+
+            if (!route.TrackPass)
+            {
+                if (route.Echo)
+                {
+                    Interlocked.Increment(ref _echoes);
+                }
+
+                return NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
+            }
+
+            _passOn.Enter(identity);
+            try
+            {
+                return NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
+            }
+            finally
+            {
+                _passOn.Leave();
+            }
         }
 
         // Runs on this installation's thread, inside GetMessage, for every mouse event on the desktop while a binding
@@ -1387,6 +1889,32 @@ public sealed class HotkeyService : IHotkeyService
             return MouseHookFilter.Swallows(nCode, message, lParam, _engine, _reconcileSignal)
                 ? 1
                 : NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
+        }
+
+        /// <summary>
+        /// One registration of the installation's keyboard hook, with the delegate Windows calls for it. Windows calls
+        /// the procedure a registration was made with, so a delegate of its own per registration is how the callback
+        /// knows whether an event came through the current registration or one a move ahead replaced
+        /// (<see cref="HookCallback"/>). Made with the installation, never on the callback path; the delegate is rooted
+        /// here for as long as a hook can call it.
+        /// </summary>
+        private sealed class KeyboardRegistration
+        {
+            private readonly HookInstallation _installation;
+
+            public KeyboardRegistration(HookInstallation installation)
+            {
+                _installation = installation;
+                Proc = Callback;
+            }
+
+            public NativeMethods.LowLevelKeyboardProc Proc { get; }
+
+            // The registration's handle while it is registered, otherwise zero. Hook thread only.
+            public nint Handle { get; set; }
+
+            private nint Callback(int nCode, nint wParam, nint lParam) =>
+                _installation.HookCallback(this, nCode, wParam, lParam);
         }
     }
 }

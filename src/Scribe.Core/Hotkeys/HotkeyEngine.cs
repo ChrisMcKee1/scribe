@@ -367,6 +367,13 @@ internal sealed class HotkeyEngine
         _arbiter.HasOwner || _standard.IsLatched || Volatile.Read(ref _dictationOnly)?.IsLatched == true;
 
     /// <summary>
+    /// Owner thread, between messages: whether a key whose press a machine swallowed is still held, so its release will be
+    /// swallowed too. A move ahead of another program's keyboard hook waits while one is (<c>HotkeyService.HookInstallation</c>):
+    /// that hook may have seen the press, and would then never see the release.
+    /// </summary>
+    public bool HoldsSwallowedKey => _standard.HoldsSwallowedKey || Volatile.Read(ref _dictationOnly)?.HoldsSwallowedKey == true;
+
+    /// <summary>
     /// Owner thread: an <c>EVENT_SYSTEM_DESKTOPSWITCH</c> notice arrived. It is only a reason to check again: it also
     /// arrives for the switch back, and any process can raise it with <c>NotifyWinEvent</c> (this repository's own wiring
     /// test does). So the switch is applied (<see cref="OnDesktopSwitch"/>) only when this thread's desktop has stopped
@@ -491,7 +498,12 @@ internal sealed class HotkeyEngine
     }
 
     /// <summary>Owner thread: one key event from the keyboard hook callback.</summary>
-    public HookDecision OnKeyEvent(uint virtualKey, bool isDown)
+    /// <param name="mayBeSwallowed">
+    /// False for an event that reached a keyboard hook registration a move ahead replaced without passing the current one
+    /// (<c>KeyboardHookFilter.Route</c>): it is judged, so the key view stays whole and a dictation can start or end, but
+    /// nothing is swallowed, now or for the rest of the keystroke.
+    /// </param>
+    public HookDecision OnKeyEvent(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
     {
         // Retired: the replacement engine decides now, or nobody does after Stop. A hook thread
         // that outlived its join still reaches here, and swallowing on its stale bindings or pause
@@ -509,7 +521,7 @@ internal sealed class HotkeyEngine
             return default;
         }
 
-        return OnInput(virtualKey, isDown);
+        return OnInput(virtualKey, isDown, mayBeSwallowed);
     }
 
     /// <summary>
@@ -573,14 +585,14 @@ internal sealed class HotkeyEngine
             RequestMouseHookSync: owed);
     }
 
-    private HookDecision OnInput(uint virtualKey, bool isDown)
+    private HookDecision OnInput(uint virtualKey, bool isDown, bool mayBeSwallowed = true)
     {
         // Commands requested before this event took effect before it, exactly as if they had
         // been applied synchronously on the requesting thread.
         ApplyPendingCommands();
 
-        var primary = _standard.Process(virtualKey, isDown);
-        var secondary = _dictationOnly?.Process(virtualKey, isDown);
+        var primary = _standard.Process(virtualKey, isDown, mayBeSwallowed);
+        var secondary = _dictationOnly?.Process(virtualKey, isDown, mayBeSwallowed);
         EmitKeyTransition(primary.Transition, HotkeyTrigger.Standard);
         if (secondary is { } update)
         {

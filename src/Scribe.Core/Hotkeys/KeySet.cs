@@ -59,6 +59,17 @@ internal sealed class KeySet
         return true;
     }
 
+    /// <summary>
+    /// Any thread: whether a key other than <paramref name="a"/>, <paramref name="b"/> and <paramref name="c"/> is a member.
+    /// The three must be below 64 (the mouse button codes are). No enumerator, no allocation.
+    /// </summary>
+    public bool ContainsAnyExcept(uint a, uint b, uint c)
+    {
+        var first = Volatile.Read(ref _words[0]) & ~(Bit(a) | Bit(b) | Bit(c));
+        return first != 0 || Volatile.Read(ref _words[1]) != 0 || Volatile.Read(ref _words[2]) != 0 ||
+            Volatile.Read(ref _words[3]) != 0;
+    }
+
     /// <summary>Owner thread only.</summary>
     public void Clear()
     {
