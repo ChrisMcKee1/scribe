@@ -716,6 +716,100 @@ public sealed class MouseButtonHotkeyTests
         Assert.Equal(new[] { Back }, released);
     }
 
+    // A mouse's buttons beyond the fifth reach Scribe only as the keys its software or firmware sends for them (Windows
+    // delivers five mouse buttons to apps): those bind, match and are swallowed like any key, whatever modifier codes the
+    // software uses, and need no mouse hook.
+    [Theory]
+    [InlineData(0x7Cu)] // F13
+    [InlineData(0x87u)] // F24
+    [InlineData(0xA6u)] // Browser Back
+    [InlineData(0xAFu)] // Volume Up
+    [InlineData(0xB3u)] // Play/Pause
+    public void A_key_a_mouse_s_software_sends_dictates_and_never_reaches_the_app(uint key)
+    {
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([key], HotkeyMode.Hold));
+
+        Assert.True(h.Down(key).Suppress);
+        Assert.True(h.Down(key).Suppress); // a repeat, which some software sends while the button is held
+        Assert.True(h.Up(key).Suppress);
+
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+        Assert.False(h.Engine.UsesMouseButtons);
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+    }
+
+    [Theory]
+    [InlineData(0x11u, 0x10u)] // the generic codes injected input can carry
+    [InlineData(LeftCtrl, LeftShift)]
+    [InlineData(RightCtrl, RightShift)]
+    public void A_shortcut_a_mouse_s_software_sends_dictates_and_only_its_key_is_swallowed(uint ctrl, uint shift)
+    {
+        // Captured as Ctrl+Shift+F13 (a key held with two modifiers becomes the key with modifier flags), it matches
+        // whichever side's, or the generic, modifier codes the software injects.
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([LeftCtrl, LeftShift, 0x7C], HotkeyMode.Hold));
+
+        Assert.False(h.Down(ctrl).Suppress);
+        Assert.False(h.Down(shift).Suppress);
+        Assert.True(h.Down(0x7C).Suppress);
+        Assert.True(h.Up(0x7C).Suppress);
+        Assert.False(h.Up(shift).Suppress);
+        Assert.False(h.Up(ctrl).Suppress);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+
+        // F13 alone, or with only one of the modifiers, is not the shortcut.
+        Assert.False(h.Down(0x7C).Suppress);
+        Assert.False(h.Up(0x7C).Suppress);
+        h.Down(ctrl);
+        Assert.False(h.Down(0x7C).Suppress);
+        Assert.False(h.Up(0x7C).Suppress);
+        h.Up(ctrl);
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void A_bare_key_a_mouse_s_software_sends_keeps_dictating_with_a_modifier_held()
+    {
+        // The modifier pass-through is for a bare Page key or native mouse button only, so a bare F13 binding matches
+        // with Ctrl held, as it always has: the key the software sends, not the modifier, says which button it is.
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([0x7C], HotkeyMode.Hold));
+
+        h.Down(LeftCtrl);
+        Assert.True(h.Down(0x7C).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Fact]
+    public void A_native_button_held_with_two_modifiers_dictates_only_with_them_and_only_the_button_is_swallowed()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([LeftCtrl, LeftShift, Middle], HotkeyMode.Hold));
+        Assert.True(h.Engine.UsesMouseButtons);
+
+        Assert.False(h.Down(RightCtrl).Suppress);
+        Assert.False(h.Down(LeftShift).Suppress);
+        Assert.True(h.ButtonDown(Middle).Suppress);
+        Assert.True(h.ButtonUp(Middle).Suppress);
+        Assert.False(h.Up(LeftShift).Suppress);
+        Assert.False(h.Up(RightCtrl).Suppress);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+
+        // The button alone, or with one of the two, is a click for the app under the pointer.
+        var (down, up) = h.Click(Middle);
+        Assert.False(down.Suppress);
+        Assert.False(up.Suppress);
+        h.Down(LeftShift);
+        (down, up) = h.Click(Middle);
+        Assert.False(down.Suppress);
+        Assert.False(up.Suppress);
+        h.Up(LeftShift);
+        Assert.Empty(h.TakeTransitions());
+    }
+
     [Fact]
     public void The_hook_message_struct_matches_the_windows_layout()
     {

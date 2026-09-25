@@ -15,7 +15,10 @@ public enum HotkeyCaptureOutcome
     /// <summary>The left or right mouse button, which a hotkey cannot use. The click keeps its usual meaning.</summary>
     Refused,
 
-    /// <summary>A third input: a hotkey has at most two.</summary>
+    /// <summary>
+    /// An input the hotkey cannot hold: a third, unless every input but one is a Ctrl, Alt or Shift key (see
+    /// <see cref="HotkeyCaptureSession"/>).
+    /// </summary>
     TooMany,
 
     /// <summary>A new input was recorded, and the capture box shows the inputs so far.</summary>
@@ -51,13 +54,22 @@ public readonly record struct HotkeyCaptureStep(
 /// <remarks>
 /// The rules the key capture always had hold for mouse buttons too: up to two inputs, recorded in the order they go
 /// down, and the hotkey is set when every one of them is up again, so a key and a button (Left Ctrl, then Mouse Back)
-/// make a two-input chord like two keys do. Only the middle, Back and Forward buttons can be recorded
+/// make a two-input chord like two keys do. Beyond two, only a key or button held with modifiers is recorded: Ctrl,
+/// Alt and Shift keys and at most one other input, which is what a mouse's own software sends for an extra button set
+/// to a shortcut such as Ctrl+Shift+F13; that becomes the one input with the modifiers as flags, either side of each
+/// (<see cref="Build"/>). A Windows key is never one of more than two inputs: only the key of a shortcut is kept from
+/// Windows, and a Windows key it saw pressed and released with nothing between opens Start. Two inputs with a Windows
+/// key stay the chord they always were, whose Windows key is kept from Windows from its first press (see
+/// <c>ChordStateMachine</c>). Only the middle, Back and Forward buttons can be recorded
 /// (<see cref="MouseButtons.IsBindable"/>); the left and right buttons are refused and keep their meaning. A release
 /// the capture never saw go down (the key that pressed Set, a button held before it) changes nothing.
 /// </remarks>
 public sealed class HotkeyCaptureSession
 {
     private const uint VkEscape = 0x1B;
+
+    // Three modifier kinds and one other input, with room for both sides of one kind: more than any real shortcut holds.
+    private const int MaxInputs = 5;
 
     private readonly List<uint> _recorded = new(2);
     private readonly HashSet<uint> _held = new();
@@ -71,8 +83,17 @@ public sealed class HotkeyCaptureSession
     /// <summary>What the capture box shows while it waits for the first input.</summary>
     public const string Prompt = "Press one or two keys or mouse buttons\u2026 (dictation is paused)";
 
-    /// <summary>Why a hotkey cannot hold a third input.</summary>
-    public const string TooManyMessage = "A dictation hotkey can contain up to two keys or mouse buttons.";
+    /// <summary>Why a hotkey cannot hold another input.</summary>
+    public const string TooManyMessage =
+        "A dictation hotkey is one or two keys or mouse buttons, or one key or button with Ctrl, Alt or Shift.";
+
+    /// <summary>
+    /// The warning for a shortcut of Shift with Ctrl or Alt: only its key is kept from Windows, which so sees those
+    /// modifiers pressed and released with nothing between, the gesture that switches the keyboard language or layout.
+    /// </summary>
+    public const string LayoutSwitchWarning =
+        "Windows still sees this hotkey's modifier keys, so they can switch your keyboard language or layout " +
+        "(Alt+Shift or Ctrl+Shift) if you use more than one. A key such as F13 on its own avoids that.";
 
     /// <summary>Why the left and right mouse buttons are refused.</summary>
     public const string RefusedMessage =
@@ -80,16 +101,18 @@ public sealed class HotkeyCaptureSession
         "mouse button.";
 
     /// <summary>
-    /// The Settings help text about mouse buttons: how to bind one, which ones, where other buttons fit, and what binding
-    /// one costs in other apps (see <c>ChordStateMachine</c> for the modifier rule it states).
+    /// The Settings help text about mouse buttons: which ones bind directly, how to bind any other, and what binding one
+    /// costs in other apps (see <c>ChordStateMachine</c> for the modifier rule it states). Windows itself delivers only
+    /// five mouse buttons to apps, the left, right, middle, Back and Forward, so a mouse's other buttons reach Scribe
+    /// only as the keys its software or firmware sends for them.
     /// </summary>
     public const string MouseButtonsHint =
-        "Mouse buttons work too: choose Set, then press the middle, back or forward button with the pointer on this " +
-        "window, on its own or after a key (for a chord such as Ctrl and Back, press the key first). Left and right " +
-        "clicks can't be used. For any other button, have your mouse software send a key such as F13 to F24, then " +
-        "bind that key. While Scribe runs, a bound button no longer does its usual job in other apps, so Back stops " +
-        "going back in your browser; a button bound on its own still does, pressed with Ctrl, Shift, Alt, Win or the " +
-        "Narrator key.";
+        "Middle, Back and Forward mouse buttons bind directly: choose Set, then press the button with the pointer on this " +
+        "window, on its own or after a key (for a chord such as Ctrl and Back, press the key first). For other mouse " +
+        "buttons, set the button to a key such as F13 in your mouse's software, then choose Set and press it here. Left " +
+        "and right clicks can't be used. While Scribe runs, a bound button no longer does its usual job in other apps, so " +
+        "Back stops going back in your browser; a button bound on its own still does, pressed with Ctrl, Shift, Alt, Win " +
+        "or the Narrator key.";
 
     /// <summary>The inputs recorded so far, in the order they went down.</summary>
     public IReadOnlyList<uint> Recorded => _recorded;
@@ -113,14 +136,18 @@ public sealed class HotkeyCaptureSession
             return new HotkeyCaptureStep(HotkeyCaptureOutcome.Unchanged, Handled: true);
         }
 
-        if (_recorded.Count == 2)
+        if (!CanRecord(virtualKey))
         {
             return new HotkeyCaptureStep(HotkeyCaptureOutcome.TooMany, Handled: true, Message: TooManyMessage);
         }
 
         _recorded.Add(virtualKey);
         var names = string.Join("+", _recorded.Select(Name));
-        var hint = _recorded.Count == 1 ? "  (add another key or mouse button, or release)" : "  (release to set)";
+        var hint = _recorded.Count == 1
+            ? "  (add another key or mouse button, or release)"
+            : _recorded.All(IsModifier)
+                ? "  (add a key or mouse button, or release)"
+                : "  (release to set)";
         return new HotkeyCaptureStep(HotkeyCaptureOutcome.Recorded, Handled: true, Text: names + hint);
     }
 
@@ -140,39 +167,136 @@ public sealed class HotkeyCaptureSession
 
         var binding = Build(_recorded, mode, _layoutName);
         return new HotkeyCaptureStep(
-            HotkeyCaptureOutcome.Completed, Handled: true, Message: ChordOrderWarning(_recorded), Binding: binding);
+            HotkeyCaptureOutcome.Completed,
+            Handled: true,
+            Message: ChordOrderWarning(_recorded) ?? LayoutSwitchRisk(binding),
+            Binding: binding);
     }
 
     /// <summary>
-    /// The binding for one or two recorded inputs, in the order they went down: an exact physical binding with no
-    /// modifier flags, swallowed while it drives a dictation, its name stored for older builds to show (0.4.3 and 0.4.2
-    /// show the stored name; this build names every input afresh from its code).
+    /// The binding for the recorded inputs, in the order they went down, swallowed while it drives a dictation, its name
+    /// stored for older builds to show (0.4.3 and 0.4.2 show the stored name; this build names every input afresh from
+    /// its code). One or two inputs make an exact physical binding with no modifier flags, as every build has captured
+    /// them. Three or more are Ctrl, Alt and Shift keys and at most one other input, never a Windows key (the capture
+    /// allows nothing else): that input, or the last modifier pressed if there is none, held with the others as modifier
+    /// flags, which the hook matches on either side of each (<c>ChordStateMachine</c>), as it matches a shortcut a mouse's
+    /// software sends whichever side's modifier code it uses.
     /// </summary>
     public static HotkeyBinding Build(IReadOnlyList<uint> inputs, HotkeyMode mode, Func<uint, string?>? layoutName = null)
     {
         ArgumentNullException.ThrowIfNull(inputs);
-        if (inputs.Count is < 1 or > 2)
+        if (inputs.Count is < 1 or > MaxInputs)
         {
-            throw new ArgumentException("A hotkey must contain one or two inputs.", nameof(inputs));
+            throw new ArgumentException($"A hotkey must contain one to {MaxInputs} inputs.", nameof(inputs));
         }
 
-        uint? secondary = inputs.Count == 2 ? inputs[1] : null;
-        var display = string.Join("+", inputs.Select(input => HotkeyText.KeyNameOrCode(input, layoutName)));
-        return new HotkeyBinding(
-            inputs[0],
-            KeyModifiers.None,
-            mode,
-            Suppress: true,
-            display,
-            SecondaryVirtualKey: secondary,
-            SuppressChordMembers: secondary is not null);
+        if (inputs.Count <= 2)
+        {
+            uint? secondary = inputs.Count == 2 ? inputs[1] : null;
+            var display = string.Join("+", inputs.Select(input => HotkeyText.KeyNameOrCode(input, layoutName)));
+            return new HotkeyBinding(
+                inputs[0],
+                KeyModifiers.None,
+                mode,
+                Suppress: true,
+                display,
+                SecondaryVirtualKey: secondary,
+                SuppressChordMembers: secondary is not null);
+        }
+
+        if (inputs.Any(IsWindowsKey) || inputs.Count(input => !IsModifier(input)) > 1)
+        {
+            throw new ArgumentException(
+                "More than two inputs must be Ctrl, Alt or Shift keys and at most one other input, never a Windows key.",
+                nameof(inputs));
+        }
+
+        var key = inputs.Where(input => !IsModifier(input)).DefaultIfEmpty(inputs[^1]).First();
+        var modifiers = KeyModifiers.None;
+        foreach (var input in inputs)
+        {
+            if (input != key)
+            {
+                modifiers |= ModifierOf(input);
+            }
+        }
+
+        var binding = new HotkeyBinding(key, modifiers, mode, Suppress: true);
+        return binding with { DisplayName = HotkeyText.Describe(binding, layoutName) };
     }
 
-    // A chord is swallowed from the input that completes it, so the first one pressed still reaches the app under the
-    // pointer. For a key that costs nothing, but a mouse button pressed first still does its job there (Back goes back),
-    // so the warning says which to press first, or, for two buttons, which reaches the app.
+    // Two inputs of any kind, as the capture always allowed; beyond that Ctrl, Alt and Shift keys and at most one other
+    // key or mouse button, never a Windows key, up to MaxInputs.
+    private bool CanRecord(uint virtualKey)
+    {
+        if (_recorded.Count < 2)
+        {
+            return true;
+        }
+
+        if (_recorded.Count >= MaxInputs || IsWindowsKey(virtualKey))
+        {
+            return false;
+        }
+
+        var others = IsModifier(virtualKey) ? 0 : 1;
+        foreach (var input in _recorded)
+        {
+            if (IsWindowsKey(input))
+            {
+                return false;
+            }
+
+            if (!IsModifier(input))
+            {
+                others++;
+            }
+        }
+
+        return others <= 1;
+    }
+
+    private static bool IsModifier(uint virtualKey) => ModifierOf(virtualKey) != KeyModifiers.None;
+
+    private static bool IsWindowsKey(uint virtualKey) => virtualKey is 0x5B or 0x5C;
+
+    // The modifier flag a Ctrl, Alt or Shift key stands for, either side or generic, or None for any other input. A
+    // Windows key is not one here: it is never part of a shortcut of more than two inputs (see the class remarks).
+    private static KeyModifiers ModifierOf(uint virtualKey) => virtualKey switch
+    {
+        0x10 or 0xA0 or 0xA1 => KeyModifiers.Shift,
+        0x11 or 0xA2 or 0xA3 => KeyModifiers.Control,
+        0x12 or 0xA4 or 0xA5 => KeyModifiers.Alt,
+        _ => KeyModifiers.None,
+    };
+
+    // Only the key of a shortcut with modifier flags is kept from Windows, which so sees the modifiers held with it
+    // pressed and released with nothing between: for Shift with Ctrl or Alt, the gesture that switches the keyboard
+    // language or layout. The key counts when it is a modifier itself, since the modifiers can be pressed in any order.
+    private static string? LayoutSwitchRisk(HotkeyBinding binding)
+    {
+        var held = binding.Modifiers | ModifierOf(binding.VirtualKey);
+        return binding.Modifiers != KeyModifiers.None &&
+               (held & KeyModifiers.Shift) != 0 &&
+               (held & (KeyModifiers.Control | KeyModifiers.Alt)) != 0
+            ? LayoutSwitchWarning
+            : null;
+    }
+
+    // A chord is swallowed from the input that completes it, so an input pressed before that still reaches the app under
+    // the pointer. For a key that costs nothing, but a mouse button pressed early still does its job there (Back goes
+    // back), so the warning says which to press first, or, for two buttons, which reaches the app.
     private string? ChordOrderWarning(IReadOnlyList<uint> inputs)
     {
+        if (inputs.Count > 2)
+        {
+            var early = inputs.Take(inputs.Count - 1).Where(MouseButtons.IsBindable).ToList();
+            return early.Count == 0
+                ? null
+                : $"Press {Name(early[0])} last when you use this hotkey: a mouse button pressed before the keys held " +
+                  "with it still reaches the app under the pointer.";
+        }
+
         if (inputs.Count != 2 || !MouseButtons.IsBindable(inputs[0]))
         {
             return null;

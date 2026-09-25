@@ -262,6 +262,93 @@ public partial class HotkeyServiceTests
         Assert.Equal(0, service.MouseButtonEventsSeen);
     }
 
+    [Theory]
+    [InlineData(0x7Cu)] // F13, which most keyboards cannot type and a mouse's software commonly sends
+    [InlineData(0xB3u)] // Play/Pause, a media key some mice send from firmware
+    [InlineData(0xA6u)] // Browser Back
+    public void Start_swallows_a_key_a_mouse_s_software_sends_while_it_dictates(uint key)
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        using var service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance, HotkeyCaptureSession.Build([key], HotkeyMode.Hold), () => true);
+        var events = new ConcurrentQueue<string>();
+        service.Activated += (_, _) => events.Enqueue("start");
+        service.Deactivated += (_, _) => events.Enqueue("stop");
+        service.Start();
+        Assert.False(service.MouseHookInstalled); // a key needs no mouse hook
+
+        Inject(Key(key, up: false));
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The bound key started nothing.");
+            AssertSwallowedWhileHeld(key);
+        }
+        finally
+        {
+            Inject(Key(key, up: true));
+        }
+
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The bound key's release ended nothing.");
+        Assert.Equal(new[] { "start", "stop" }, events.ToArray());
+    }
+
+    [Fact]
+    public void Start_matches_a_shortcut_a_mouse_s_software_sends_with_generic_modifier_codes()
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        // Ctrl+Shift+F13 as a remapper that injects the generic VK_CONTROL and VK_SHIFT sends it.
+        using var service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance,
+            HotkeyCaptureSession.Build([0xA2, 0xA0, 0x7C], HotkeyMode.Hold),
+            () => true);
+        var events = new ConcurrentQueue<string>();
+        service.Activated += (_, _) => events.Enqueue("start");
+        service.Deactivated += (_, _) => events.Enqueue("stop");
+        service.Start();
+
+        Inject(Key(0x11, up: false), Key(0x10, up: false), Key(0x7C, up: false));
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The shortcut started nothing.");
+            AssertSwallowedWhileHeld(0x7C);
+            Assert.True(NativeMethods.IsKeyLogicallyDown(NativeMethods.VK_CONTROL), "The modifiers were not left to Windows.");
+        }
+        finally
+        {
+            Inject(Key(0x7C, up: true), Key(0x10, up: true), Key(0x11, up: true));
+        }
+
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The shortcut's release ended nothing.");
+    }
+
+    // A key the hook swallowed never reaches Windows, so Windows' own key state leaves it up. An unbound key sent after it
+    // does reach Windows: once Windows reports that one down, the bound key, sent first, would be down too had the hook
+    // let it through.
+    private static void AssertSwallowedWhileHeld(uint key)
+    {
+        const uint F20 = 0x83;
+        Inject(Key(F20, up: false));
+        try
+        {
+            Assert.True(
+                SpinWait.SpinUntil(() => NativeMethods.IsKeyLogicallyDown(F20), HookTimeout),
+                "The unbound key never reached Windows.");
+            Assert.False(NativeMethods.IsKeyLogicallyDown(key), $"Key 0x{key:X2} reached Windows although it is bound.");
+        }
+        finally
+        {
+            Inject(Key(F20, up: true));
+        }
+    }
+
     // Injected input lands on the input desktop, under whatever the pointer is over, so only a throwaway machine's:
     // CI, or a run that asks for it. CI must have an input desktop, or these would pass without testing anything.
     private static bool InputInjectionAllowed()

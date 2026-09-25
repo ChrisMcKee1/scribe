@@ -17,6 +17,13 @@ public sealed class HotkeyCaptureSessionTests
     private const uint Back = MouseButtons.Back;
     private const uint Forward = MouseButtons.Forward;
     private const uint LeftCtrl = 0xA2;
+    private const uint RightCtrl = 0xA3;
+    private const uint LeftShift = 0xA0;
+    private const uint RightShift = 0xA1;
+    private const uint LeftAlt = 0xA4;
+    private const uint RightAlt = 0xA5;
+    private const uint LeftWin = 0x5B;
+    private const uint RightWin = 0x5C;
     private const uint Escape = 0x1B;
     private const uint F9 = 0x78;
     private const uint PageDown = 0x22;
@@ -244,7 +251,8 @@ public sealed class HotkeyCaptureSessionTests
         var texts = new[]
         {
             HotkeyCaptureSession.Prompt, HotkeyCaptureSession.TooManyMessage, HotkeyCaptureSession.RefusedMessage,
-            HotkeyCaptureSession.MouseButtonsHint, KeyNames.Of(Middle)!, KeyNames.Of(Back)!, KeyNames.Of(Forward)!,
+            HotkeyCaptureSession.MouseButtonsHint, HotkeyCaptureSession.LayoutSwitchWarning,
+            KeyNames.Of(Middle)!, KeyNames.Of(Back)!, KeyNames.Of(Forward)!,
         };
         Assert.All(texts, text =>
         {
@@ -252,10 +260,220 @@ public sealed class HotkeyCaptureSessionTests
             Assert.DoesNotContain('\u2013', text);
         });
 
-        Assert.Contains("F13 to F24", HotkeyCaptureSession.MouseButtonsHint);
+        Assert.StartsWith("Middle, Back and Forward mouse buttons bind directly", HotkeyCaptureSession.MouseButtonsHint);
+        Assert.Contains(
+            "For other mouse buttons, set the button to a key such as F13 in your mouse's software, then choose Set and " +
+            "press it here.",
+            HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("Left and right clicks can't be used", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("press the key first", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("Ctrl, Shift, Alt, Win or the Narrator key", HotkeyCaptureSession.MouseButtonsHint);
+    }
+
+    // What a mouse's own software or firmware sends for a button beyond the fifth, which Windows does not deliver as a
+    // mouse button: a key most keyboards cannot type, or a media or browser key.
+    [Theory]
+    [InlineData(0x7Cu, "F13")]
+    [InlineData(0x80u, "F17")]
+    [InlineData(0x87u, "F24")]
+    [InlineData(0xA6u, "Browser Back")]
+    [InlineData(0xA7u, "Browser Forward")]
+    [InlineData(0xADu, "Volume Mute")]
+    [InlineData(0xAFu, "Volume Up")]
+    [InlineData(0xB0u, "Next Track")]
+    [InlineData(0xB3u, "Play/Pause")]
+    [InlineData(0xB7u, "Launch App 2")]
+    public void A_key_a_mouse_s_software_sends_binds_by_its_code_and_name(uint key, string name)
+    {
+        var capture = new HotkeyCaptureSession(_ => "from the layout");
+
+        Assert.Equal(name + "  (add another key or mouse button, or release)", capture.Press(key).Text);
+        var done = capture.Release(key, HotkeyMode.Hold);
+
+        Assert.Equal(
+            new HotkeyBinding(key, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, name), done.Binding);
+        Assert.Equal(name, HotkeyText.Describe(done.Binding!));
+        Assert.Null(done.Message);
+        Assert.False(MouseButtons.Uses(done.Binding));
+    }
+
+    [Fact]
+    public void A_key_with_one_modifier_is_still_the_two_key_chord_every_build_captured()
+    {
+        var capture = new HotkeyCaptureSession();
+        capture.Press(LeftCtrl);
+        capture.Press(0x7C);
+        capture.Release(0x7C, HotkeyMode.Hold);
+
+        Assert.Equal(
+            new HotkeyBinding(
+                LeftCtrl, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Left Ctrl+F13",
+                SecondaryVirtualKey: 0x7C, SuppressChordMembers: true),
+            capture.Release(LeftCtrl, HotkeyMode.Hold).Binding);
+    }
+
+    public static TheoryData<uint[], uint, KeyModifiers, string> ShortcutsWithModifiers => new()
+    {
+        // As a mouse's software sends Ctrl+Shift+F13: the modifiers first, the key last.
+        { [LeftCtrl, LeftShift, 0x7C], 0x7C, KeyModifiers.Control | KeyModifiers.Shift, "Ctrl+Shift+F13" },
+        // Any order, either side, or the generic codes injected input can carry: the same shortcut.
+        { [0x7C, RightShift, RightCtrl], 0x7C, KeyModifiers.Control | KeyModifiers.Shift, "Ctrl+Shift+F13" },
+        { [0x11, 0x10, 0x7C], 0x7C, KeyModifiers.Control | KeyModifiers.Shift, "Ctrl+Shift+F13" },
+        { [LeftCtrl, LeftAlt, LeftShift, 0x87], 0x87, KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Shift, "Ctrl+Alt+Shift+F24" },
+        { [LeftCtrl, LeftAlt, 0xB3], 0xB3, KeyModifiers.Control | KeyModifiers.Alt, "Ctrl+Alt+Play/Pause" },
+        // A native button held with two modifiers.
+        { [LeftCtrl, LeftShift, Middle], Middle, KeyModifiers.Control | KeyModifiers.Shift, "Ctrl+Shift+Middle mouse button" },
+        // Modifiers alone: the last one pressed is held with the others.
+        { [LeftCtrl, LeftShift, 0xA5], 0xA5, KeyModifiers.Control | KeyModifiers.Shift, "Ctrl+Shift+Right Alt" },
+    };
+
+    [Theory]
+    [MemberData(nameof(ShortcutsWithModifiers))]
+    public void A_key_held_with_two_or_more_modifiers_becomes_that_key_with_modifier_flags(
+        uint[] pressed, uint key, KeyModifiers modifiers, string name)
+    {
+        var capture = new HotkeyCaptureSession();
+        foreach (var input in pressed)
+        {
+            Assert.Equal(HotkeyCaptureOutcome.Recorded, capture.Press(input).Outcome);
+        }
+
+        HotkeyCaptureStep done = default;
+        foreach (var input in pressed.Reverse())
+        {
+            done = capture.Release(input, HotkeyMode.Toggle);
+        }
+
+        Assert.Equal(HotkeyCaptureOutcome.Completed, done.Outcome);
+        Assert.Equal(
+            new HotkeyBinding(key, modifiers, HotkeyMode.Toggle, Suppress: true, name, SecondaryVirtualKey: null),
+            done.Binding);
+        Assert.Equal(name, HotkeyText.Describe(done.Binding!));
+        Assert.Equal(MouseButtons.IsBindable(key), MouseButtons.Uses(done.Binding));
+    }
+
+    [Fact]
+    public void Beyond_two_inputs_only_modifiers_and_one_other_input_are_recorded()
+    {
+        var chord = new HotkeyCaptureSession();
+        chord.Press(0x77);
+        chord.Press(0x78);
+        Assert.Equal(HotkeyCaptureOutcome.TooMany, chord.Press(LeftCtrl).Outcome); // two keys and a modifier
+        Assert.Equal(HotkeyCaptureOutcome.TooMany, chord.Press(0x79).Outcome);
+
+        var shortcut = new HotkeyCaptureSession();
+        Assert.EndsWith("(add another key or mouse button, or release)", shortcut.Press(LeftCtrl).Text);
+        Assert.EndsWith("(add a key or mouse button, or release)", shortcut.Press(LeftShift).Text);
+        Assert.EndsWith("(add a key or mouse button, or release)", shortcut.Press(LeftAlt).Text);
+        Assert.Equal("Left Ctrl+Left Shift+Left Alt+F13  (release to set)", shortcut.Press(0x7C).Text);
+        Assert.Equal(HotkeyCaptureOutcome.TooMany, shortcut.Press(0x7D).Outcome); // a second key
+        Assert.Equal(HotkeyCaptureOutcome.Recorded, shortcut.Press(RightShift).Outcome); // a fifth input, a modifier
+        Assert.Equal(HotkeyCaptureOutcome.TooMany, shortcut.Press(RightCtrl).Outcome); // a sixth
+        Assert.Equal(HotkeyCaptureSession.TooManyMessage, shortcut.Press(RightAlt).Message);
+
+        Assert.Throws<ArgumentException>(() => HotkeyCaptureSession.Build([LeftCtrl, 0x7C, 0x7D], HotkeyMode.Hold));
+        Assert.Throws<ArgumentException>(
+            () => HotkeyCaptureSession.Build([LeftCtrl, LeftShift, LeftAlt, RightAlt, RightCtrl, 0x7C], HotkeyMode.Hold));
+    }
+
+    // Only the key of a shortcut is kept from Windows, so a Windows key held with it would reach Windows pressed and
+    // released with nothing between, which opens Start: beyond two inputs a Windows key is refused, wherever it comes.
+    // Two inputs with one stay the chord every build captured, whose Windows key is kept from Windows.
+    [Theory]
+    [InlineData(LeftWin, LeftShift, 0x7Cu)]
+    [InlineData(LeftCtrl, LeftShift, LeftWin)]
+    [InlineData(LeftCtrl, RightWin, 0x7Cu)]
+    public void A_windows_key_is_never_one_of_more_than_two_inputs(uint first, uint second, uint third)
+    {
+        var capture = new HotkeyCaptureSession();
+        capture.Press(first);
+        capture.Press(second);
+
+        var refused = capture.Press(third);
+
+        Assert.Equal(HotkeyCaptureOutcome.TooMany, refused.Outcome);
+        Assert.Equal(HotkeyCaptureSession.TooManyMessage, refused.Message);
+        Assert.Throws<ArgumentException>(() => HotkeyCaptureSession.Build([first, second, third], HotkeyMode.Hold));
+        capture.Release(third, HotkeyMode.Hold);
+        capture.Release(second, HotkeyMode.Hold);
+        Assert.Equal(
+            HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold),
+            capture.Release(first, HotkeyMode.Hold).Binding);
+    }
+
+    [Fact]
+    public void A_windows_key_and_one_other_input_stay_the_chord_every_build_captured()
+    {
+        var capture = new HotkeyCaptureSession();
+        capture.Press(LeftWin);
+        Assert.EndsWith("+F13  (release to set)", capture.Press(0x7C).Text);
+        capture.Release(0x7C, HotkeyMode.Hold);
+
+        var done = capture.Release(LeftWin, HotkeyMode.Hold);
+
+        Assert.Equal(LeftWin, done.Binding!.VirtualKey);
+        Assert.Equal(0x7Cu, done.Binding.SecondaryVirtualKey);
+        Assert.Equal(KeyModifiers.None, done.Binding.Modifiers);
+        Assert.True(done.Binding.SuppressChordMembers);
+    }
+
+    // Windows still sees the modifiers of a shortcut pressed and released on their own, and Shift with Ctrl or Alt is the
+    // gesture that switches the keyboard language or layout, so those shortcuts say so. Two-input chords, a shortcut with
+    // neither combination, and a warning about a button pressed early are unchanged.
+    [Theory]
+    [InlineData(new uint[] { LeftCtrl, LeftShift, 0x7C }, true)]
+    [InlineData(new uint[] { LeftAlt, LeftShift, 0x7C }, true)]
+    [InlineData(new uint[] { LeftCtrl, LeftAlt, LeftShift, 0x87 }, true)]
+    [InlineData(new uint[] { LeftCtrl, LeftAlt, LeftShift }, true)] // modifiers alone, whichever completes it
+    [InlineData(new uint[] { LeftCtrl, LeftAlt, 0x7C }, false)]
+    [InlineData(new uint[] { LeftCtrl, RightCtrl, 0x7C }, false)]
+    [InlineData(new uint[] { LeftShift, RightShift, 0x7C }, false)]
+    [InlineData(new uint[] { LeftShift, 0x7C }, false)]
+    [InlineData(new uint[] { LeftCtrl, LeftShift }, false)]
+    public void A_shortcut_whose_modifiers_switch_the_keyboard_layout_is_warned_about(uint[] pressed, bool warned)
+    {
+        var capture = new HotkeyCaptureSession();
+        foreach (var input in pressed)
+        {
+            capture.Press(input);
+        }
+
+        HotkeyCaptureStep done = default;
+        foreach (var input in pressed.Reverse())
+        {
+            done = capture.Release(input, HotkeyMode.Hold);
+        }
+
+        Assert.Equal(HotkeyCaptureOutcome.Completed, done.Outcome);
+        Assert.Equal(warned ? HotkeyCaptureSession.LayoutSwitchWarning : null, done.Message);
+    }
+
+    [Fact]
+    public void A_mouse_button_pressed_before_the_keys_held_with_it_is_warned_about()
+    {
+        var early = new HotkeyCaptureSession();
+        early.Press(LeftCtrl);
+        early.Press(Back);
+        early.Press(LeftShift);
+        early.Release(Back, HotkeyMode.Hold);
+        early.Release(LeftShift, HotkeyMode.Hold);
+        var warned = early.Release(LeftCtrl, HotkeyMode.Hold);
+
+        // The button's own warning comes first: it is the one the user meets every time.
+        Assert.Equal(
+            "Press Mouse Back (button 4) last when you use this hotkey: a mouse button pressed before the keys held " +
+            "with it still reaches the app under the pointer.",
+            warned.Message);
+        Assert.Equal(new HotkeyBinding(Back, KeyModifiers.Control | KeyModifiers.Shift, HotkeyMode.Hold, Suppress: true,
+            "Ctrl+Shift+Mouse Back (button 4)"), warned.Binding);
+
+        var last = new HotkeyCaptureSession();
+        last.Press(LeftCtrl);
+        last.Press(LeftAlt);
+        last.Press(Back);
+        last.Release(Back, HotkeyMode.Hold);
+        last.Release(LeftAlt, HotkeyMode.Hold);
+        Assert.Null(last.Release(LeftCtrl, HotkeyMode.Hold).Message);
     }
 
     [Fact]
