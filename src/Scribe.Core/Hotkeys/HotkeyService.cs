@@ -5,15 +5,16 @@ using Scribe.Core.Models;
 namespace Scribe.Core.Hotkeys;
 
 /// <summary>
-/// Global push-to-talk hotkey via a <c>WH_KEYBOARD_LL</c> hook. The hook runs on its own
-/// thread with a native message pump (required for low-level hooks). The hook callback performs
-/// only key-set tracking, optional suppression, and transition enqueueing so it returns promptly.
+/// Global push-to-talk hotkey via a <c>WH_KEYBOARD_LL</c> hook, and a <c>WH_MOUSE_LL</c> hook on the
+/// same thread while a binding presses a mouse button. The hooks run on their own thread with a native
+/// message pump (required for low-level hooks). The hook callbacks perform only input tracking,
+/// optional suppression, and transition enqueueing so they return promptly.
 ///
-/// The callback never waits for another thread. Windows calls it by sending a message to the hook
-/// thread and silently removes the hook if it answers after LowLevelHooksTimeout (at most 1000 ms),
-/// so the key state belongs to the hook thread alone (<see cref="HotkeyEngine"/>). Configuration
+/// The callbacks never wait for another thread. Windows calls them by sending a message to the hook
+/// thread and silently removes a hook if it answers after LowLevelHooksTimeout (at most 1000 ms),
+/// so the input state belongs to the hook thread alone (<see cref="HotkeyEngine"/>). Configuration
 /// and commands from other threads are queued through <see cref="HotkeyCommandRouter"/> and applied
-/// by the hook thread at its next key event, or sooner when a thread message wakes it; what other
+/// by the hook thread at its next input event, or sooner when a thread message wakes it; what other
 /// threads read is published without a lock; and transitions leave through a queue that never
 /// blocks its producer.
 /// </summary>
@@ -68,6 +69,12 @@ public sealed class HotkeyService : IHotkeyService
     private long _hookCallbackCount;
     private readonly HookLivenessProbe _livenessProbe = new();
 
+    // What the log last said about an installation's mouse hook (ReportMouseHookLocked). Guarded by _sync.
+    private HookInstallation? _mouseReportFor;
+    private bool _mouseReportedInstalled;
+    private int _mouseReportedError;
+    private long _mouseReportedLosses;
+
     public HotkeyService(ILogger<HotkeyService> logger)
         : this(logger, HotkeyBinding.DefaultDictation)
     {
@@ -101,8 +108,15 @@ public sealed class HotkeyService : IHotkeyService
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,
             _router.IsPressed,
-            key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
+            ReleaseLeakedInput);
     }
+
+    // A key left down gets a marked key-up and a mouse button left down a marked button-up: the same repair for either
+    // hook. GetAsyncKeyState, the reconciler's view of Windows, reports the mouse buttons as well as the keys.
+    private static bool ReleaseLeakedInput(uint key) =>
+        MouseButtons.IsBindable(key)
+            ? NativeMethods.SendMarkedMouseButtonUp(key)
+            : NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true);
 
     // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding while
     // the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
@@ -122,6 +136,44 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>How many desktop-switch notices reached the current hook's engine on its own thread; for the wiring test.</summary>
     internal long DesktopSwitchNoticesSeen => _router.CurrentEngine?.DesktopSwitchNotices ?? 0;
+
+    /// <summary>Whether the current installation's mouse hook is registered; for tests.</summary>
+    internal bool MouseHookInstalled => CurrentInstallation?.MouseHookInstalled == true;
+
+    /// <summary>How many times the current installation registered its mouse hook; for tests.</summary>
+    internal long MouseHookRegistrations => CurrentInstallation?.MouseHookRegistrations ?? 0;
+
+    /// <summary>How many of the current installation's renewals found the previous registration gone; for tests.</summary>
+    internal long MouseHookLosses => CurrentInstallation?.MouseHookLosses ?? 0;
+
+    /// <summary>The current installation's mouse hook registration, or zero; for tests.</summary>
+    internal nint MouseHookHandle => CurrentInstallation?.MouseHookHandle ?? 0;
+
+    /// <summary>How many middle and side button events reached the current engine from the mouse hook; for tests.</summary>
+    internal long MouseButtonEventsSeen => _router.CurrentEngine?.MouseButtonEvents ?? 0;
+
+    /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
+    internal void MaintainMouseHookNow()
+    {
+        lock (_sync)
+        {
+            if (IsRunning)
+            {
+                MaintainMouseHookLocked();
+            }
+        }
+    }
+
+    private HookInstallation? CurrentInstallation
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _installation;
+            }
+        }
+    }
 
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
@@ -175,6 +227,7 @@ public sealed class HotkeyService : IHotkeyService
             _logger.LogInformation(
                 "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
             LogMissingDesktopSwitchHook(installation);
+            ReportMouseHookLocked(installation);
         }
     }
 
@@ -279,9 +332,12 @@ public sealed class HotkeyService : IHotkeyService
 
         Wake(wake);
         _logger.LogInformation(
-            "Hotkey bindings updated: standard={Binding} ({Mode}), dictation-only={DictationOnly}.",
-            DescribeBinding(binding), binding.Mode,
-            dictationOnlyBinding is null ? "disabled" : DescribeBinding(dictationOnlyBinding));
+            "Hotkey bindings updated: standard={Binding} ({Mode}, {Input}), dictation-only={DictationOnly}; mouse hook {MouseHook}.",
+            DescribeBinding(binding), binding.Mode, MouseButtons.InputKind(binding),
+            dictationOnlyBinding is null
+                ? "disabled"
+                : $"{DescribeBinding(dictationOnlyBinding)} ({dictationOnlyBinding.Mode}, {MouseButtons.InputKind(dictationOnlyBinding)})",
+            MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding) ? "wanted" : "not needed");
     }
 
     // Makes the hook thread apply queued commands now rather than at its next key event, so the
@@ -426,15 +482,7 @@ public sealed class HotkeyService : IHotkeyService
         }
     });
 
-    // Probe-based liveness: a marker-tagged key-up for the unassigned VK 0xFF is inert for every
-    // app but still traverses the hook. If nothing at all reached the callback since the PREVIOUS
-    // probe was armed, Windows silently removed the hook (documented behavior after a deadline
-    // miss) and push-to-talk is dead until it is reinstalled. Mouse-only activity cannot
-    // false-positive this check because the probe itself is keyboard input.
-    //
-    // The probe is withheld while the system is idle: injected input resets the power manager's
-    // idle timer, so an unconditional probe every period stopped the machine from ever sleeping.
-    // See HookLivenessProbe.ShouldWithholdProbe.
+    // Probe-based liveness for the keyboard hook, and upkeep for the mouse hook (see MaintainMouseHookLocked).
     private void WatchdogTick()
     {
         try
@@ -446,49 +494,144 @@ public sealed class HotkeyService : IHotkeyService
                     return;
                 }
 
-                // On the lock screen / secure desktop the probe cannot reach this desktop's hook,
-                // so every tick would look like a dead hook and churn a reinstall all night.
-                // Skip the cycle entirely (and forget any probe already in flight) until the
-                // interactive desktop is back.
-                if (!NativeMethods.CanAccessInputDesktop())
-                {
-                    _livenessProbe.Disarm();
-                    return;
-                }
-
-                if (_livenessProbe.IsHookDead(Interlocked.Read(ref _hookCallbackCount)))
-                {
-                    _logger.LogWarning(
-                        "The keyboard hook stopped receiving events (Windows removes low-level " +
-                        "hooks that miss the callback deadline, without notification). Reinstalling.");
-                    ReinstallHookLocked();
-                }
-
-                // The probe is injected input, so Windows counts it as user activity and resets the
-                // idle timer the power manager sleeps against. Sending one every period regardless
-                // of presence kept machines awake for as long as Scribe ran. Judge the outstanding
-                // probe first (above), then go quiet once the system is genuinely idle.
-                if (HookLivenessProbe.ShouldWithholdProbe(
-                        NativeMethods.TryGetSystemIdleTime(), WatchdogPeriod))
-                {
-                    _livenessProbe.Disarm();
-                    return;
-                }
-
-                // Baseline BEFORE sending. Injected input is dispatched into the hook chain while
-                // SendInput is still running, so a baseline taken afterwards would already include
-                // the callback this probe caused and the probe could never be answered.
-                _livenessProbe.Baseline(Interlocked.Read(ref _hookCallbackCount));
-
-                // Arm the next check only when the probe actually left the building; a rejected
-                // SendInput (UIPI, desktop switch mid-tick) must not read as a dead hook.
-                _livenessProbe.Arm(
-                    NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true));
+                ProbeKeyboardHookLocked();
+                MaintainMouseHookLocked();
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Hotkey hook watchdog tick failed; will retry next period.");
+        }
+    }
+
+    // A marker-tagged key-up for the unassigned VK 0xFF is inert for every app but still traverses
+    // the hook. If nothing at all reached the callback since the PREVIOUS probe was armed, Windows
+    // silently removed the hook (documented behavior after a deadline miss) and push-to-talk is dead
+    // until it is reinstalled. Mouse-only activity cannot false-positive this check because the probe
+    // itself is keyboard input.
+    //
+    // The probe is withheld while the system is idle: injected input resets the power manager's
+    // idle timer, so an unconditional probe every period stopped the machine from ever sleeping.
+    // See HookLivenessProbe.ShouldWithholdProbe. Callers hold _sync.
+    private void ProbeKeyboardHookLocked()
+    {
+        // On the lock screen / secure desktop the probe cannot reach this desktop's hook,
+        // so every tick would look like a dead hook and churn a reinstall all night.
+        // Skip the cycle entirely (and forget any probe already in flight) until the
+        // interactive desktop is back.
+        if (!NativeMethods.CanAccessInputDesktop())
+        {
+            _livenessProbe.Disarm();
+            return;
+        }
+
+        if (_livenessProbe.IsHookDead(Interlocked.Read(ref _hookCallbackCount)))
+        {
+            _logger.LogWarning(
+                "The keyboard hook stopped receiving events (Windows removes low-level " +
+                "hooks that miss the callback deadline, without notification). Reinstalling.");
+            ReinstallHookLocked();
+        }
+
+        // The probe is injected input, so Windows counts it as user activity and resets the
+        // idle timer the power manager sleeps against. Sending one every period regardless
+        // of presence kept machines awake for as long as Scribe ran. Judge the outstanding
+        // probe first (above), then go quiet once the system is genuinely idle.
+        if (HookLivenessProbe.ShouldWithholdProbe(
+                NativeMethods.TryGetSystemIdleTime(), WatchdogPeriod))
+        {
+            _livenessProbe.Disarm();
+            return;
+        }
+
+        // Baseline BEFORE sending. Injected input is dispatched into the hook chain while
+        // SendInput is still running, so a baseline taken afterwards would already include
+        // the callback this probe caused and the probe could never be answered.
+        _livenessProbe.Baseline(Interlocked.Read(ref _hookCallbackCount));
+
+        // Arm the next check only when the probe actually left the building; a rejected
+        // SendInput (UIPI, desktop switch mid-tick) must not read as a dead hook.
+        _livenessProbe.Arm(
+            NativeMethods.SendMarkedKeyEvent(NativeMethods.VK_PROBE, keyUp: true));
+    }
+
+    // Upkeep for the mouse hook, each period: first report what the hook thread did with it since the last period, then
+    // ask that thread to register it afresh while a binding presses a mouse button, or to remove one no binding needs
+    // any more (a wake that could not be posted after a change is made good here). Windows removes a low-level hook
+    // whose callback misses the deadline, and the mouse hook is the one called for every pointer move, but it is not
+    // probed: any mouse input that clicks nothing is a move, and a move reaching the desktop brings back a pointer hidden
+    // while typing. Renewing injects nothing, adds nothing to any event and keeps the engine's state, and a hook Windows
+    // removed is back within one period. Callers hold _sync.
+    private void MaintainMouseHookLocked()
+    {
+        if (_installation is not { } installation)
+        {
+            return;
+        }
+
+        ReportMouseHookLocked(installation);
+        if (installation.MouseHookWanted || installation.MouseHookInstalled)
+        {
+            installation.RequestMouseHookRefresh();
+        }
+    }
+
+    // Logs each change in an installation's mouse hook once: from the threads that start and watch the hooks, never from
+    // the hook thread, which must not log. Shapes only: installed or removed, a Win32 error code, a count. Callers hold
+    // _sync.
+    private void ReportMouseHookLocked(HookInstallation installation)
+    {
+        if (!ReferenceEquals(_mouseReportFor, installation))
+        {
+            _mouseReportFor = installation;
+            _mouseReportedInstalled = false;
+            _mouseReportedError = 0;
+            _mouseReportedLosses = 0;
+        }
+
+        var installed = installation.MouseHookInstalled;
+        if (installed != _mouseReportedInstalled)
+        {
+            _mouseReportedInstalled = installed;
+            if (installed)
+            {
+                _logger.LogInformation("Mouse hook installed: a hotkey presses a mouse button.");
+            }
+            else
+            {
+                _logger.LogInformation("Mouse hook removed: no hotkey presses a mouse button.");
+            }
+        }
+
+        var error = installation.MouseHookError;
+        if (error != _mouseReportedError)
+        {
+            _mouseReportedError = error;
+            if (error != 0 && installed)
+            {
+                _logger.LogWarning(
+                    "Renewing the mouse hook failed (Win32 error {Error}); the current registration stays in place.",
+                    error);
+            }
+            else if (error != 0)
+            {
+                _logger.LogWarning(
+                    "Installing the mouse hook failed (Win32 error {Error}); a hotkey on a mouse button does nothing " +
+                    "until it installs, which is tried again every {Seconds} s.",
+                    error,
+                    (int)WatchdogPeriod.TotalSeconds);
+            }
+        }
+
+        var losses = installation.MouseHookLosses;
+        if (losses != _mouseReportedLosses)
+        {
+            _mouseReportedLosses = losses;
+            _logger.LogWarning(
+                "The mouse hook was already gone when it was renewed ({Count} time(s) for this hook thread; Windows " +
+                "removes a low-level hook whose callback misses the deadline). It is registered again; a mouse button " +
+                "released while it was gone may take one more press.",
+                losses);
         }
     }
 
@@ -539,6 +682,7 @@ public sealed class HotkeyService : IHotkeyService
         {
             _logger.LogInformation("Keyboard hook reinstalled.");
             LogMissingDesktopSwitchHook(installation);
+            ReportMouseHookLocked(installation);
         }
     }
 
@@ -548,9 +692,18 @@ public sealed class HotkeyService : IHotkeyService
     public void Dispose() => Stop();
 
     /// <summary>
-    /// One installation of the low-level hook: its thread, its native handle, its callback
-    /// delegate and the engine only that thread may drive. Keeping all of it per installation is
+    /// One installation of the low-level hooks: its thread, its native handles, its callback
+    /// delegates and the engine only that thread may drive. Keeping all of it per installation is
     /// what lets a reinstall proceed while a previous hook thread is still winding down.
+    ///
+    /// The mouse hook is part of the installation but exists only while a binding presses a mouse
+    /// button (<see cref="HotkeyEngine.UsesMouseButtons"/>): the thread installs or removes it between
+    /// messages, whenever it has applied a change, so nobody who binds keys alone gets a system-wide
+    /// mouse hook, and every mouse event on the desktop waits for this thread only while one is bound.
+    /// It is not probed like the keyboard hook: the only probe that clicks nothing is a move, and a
+    /// move reaching the desktop brings back a pointer hidden while typing. Instead the watchdog has
+    /// the thread register it afresh every period (<see cref="SyncMouseHook"/>), so a hook Windows
+    /// removed for missing the callback deadline is back within one period.
     /// </summary>
     private sealed class HookInstallation
     {
@@ -562,6 +715,9 @@ public sealed class HotkeyService : IHotkeyService
         // hook crashes the process on the next key event.
         private readonly NativeMethods.LowLevelKeyboardProc _proc;
 
+        // Rooted for the same reason, for the mouse hook this thread installs while a binding uses a mouse button.
+        private readonly NativeMethods.LowLevelMouseProc _mouseProc;
+
         // Rooted for the same reason, for the desktop-switch notifications set up beside the hook.
         private readonly NativeMethods.WinEventProc _desktopSwitchProc;
 
@@ -572,11 +728,19 @@ public sealed class HotkeyService : IHotkeyService
         private readonly Thread _thread;
         private Exception? _installError;
         private nint _hookId;
+        private nint _module;
         private int _abandoned;
 
         // Written by the hook thread before it sets _installed, read after Install saw it set.
         private bool _desktopSwitchHooked;
         private int _desktopSwitchError;
+
+        // The mouse hook's registration and what became of the last attempts, written only by this installation's thread
+        // between messages and read by the watchdog and tests.
+        private nint _mouseHookId;
+        private int _mouseHookError;
+        private long _mouseHookRegistrations;
+        private long _mouseHookLosses;
 
         public HookInstallation(HotkeyService service, HotkeyEngine engine, HotkeyReconcileSignal reconcileSignal)
         {
@@ -585,6 +749,7 @@ public sealed class HotkeyService : IHotkeyService
             _reconcileSignal = reconcileSignal;
             _desktopReceivesInput = service._desktopReceivesInput;
             _proc = HookCallback;
+            _mouseProc = MouseHookCallback;
             _desktopSwitchProc = DesktopSwitchCallback;
             _thread = new Thread(Run)
             {
@@ -596,11 +761,38 @@ public sealed class HotkeyService : IHotkeyService
 
         public Exception? InstallError => _installError;
 
+        /// <summary>The engine this installation's thread drives.</summary>
+        public HotkeyEngine Engine => _engine;
+
         /// <summary>
         /// After <see cref="Install"/> succeeded: null when desktop switches are being reported, otherwise the Win32 error
         /// SetWinEventHook left (0 when it left none).
         /// </summary>
         public int? DesktopSwitchHookError => _desktopSwitchHooked ? null : _desktopSwitchError;
+
+        /// <summary>Any thread: whether the mouse hook is registered right now.</summary>
+        public bool MouseHookInstalled => Volatile.Read(ref _mouseHookId) != 0;
+
+        /// <summary>Any thread: whether this installation's bindings want the mouse hook.</summary>
+        public bool MouseHookWanted => !_engine.IsRetired && _engine.UsesMouseButtons;
+
+        /// <summary>
+        /// Any thread: the Win32 error of the last failed attempt to register the mouse hook, or 0 once one succeeded or
+        /// none was needed.
+        /// </summary>
+        public int MouseHookError => Volatile.Read(ref _mouseHookError);
+
+        /// <summary>Any thread: how many times the mouse hook was registered, the first time and every renewal.</summary>
+        public long MouseHookRegistrations => Interlocked.Read(ref _mouseHookRegistrations);
+
+        /// <summary>
+        /// Any thread: how many renewals found the previous registration already gone (UnhookWindowsHookEx failed on it),
+        /// which is what a hook Windows removed looks like.
+        /// </summary>
+        public long MouseHookLosses => Interlocked.Read(ref _mouseHookLosses);
+
+        /// <summary>Any thread, for tests: the mouse hook's current registration, or zero.</summary>
+        public nint MouseHookHandle => Volatile.Read(ref _mouseHookId);
 
         /// <summary>Starts the hook thread and waits for the hook; false when it failed or timed out.</summary>
         public bool Install(TimeSpan timeout)
@@ -629,6 +821,19 @@ public sealed class HotkeyService : IHotkeyService
             }
         }
 
+        /// <summary>
+        /// Any thread (the watchdog, once a period): asks this installation's thread to apply what is queued and then
+        /// register its mouse hook afresh, or install or remove it to match the bindings. Never waits.
+        /// </summary>
+        public void RequestMouseHookRefresh()
+        {
+            var threadId = _engine.OwnerThreadId;
+            if (threadId != 0)
+            {
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_REFRESH, nint.Zero, nint.Zero);
+            }
+        }
+
         public bool Join(TimeSpan timeout) => _thread.Join(timeout);
 
         private void Run()
@@ -645,6 +850,7 @@ public sealed class HotkeyService : IHotkeyService
                 NativeMethods.EnsureMessageQueue();
 
                 nint module = NativeMethods.GetModuleHandle(null);
+                _module = module;
                 hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _proc, module, 0);
                 if (hookId == 0)
                 {
@@ -672,6 +878,10 @@ public sealed class HotkeyService : IHotkeyService
                         NativeMethods.WINEVENT_OUTOFCONTEXT);
                     _desktopSwitchHooked = desktopSwitchHook != 0;
                     _desktopSwitchError = desktopSwitchHook == 0 ? Marshal.GetLastWin32Error() : 0;
+
+                    // The mouse hook, only if a binding already presses a mouse button. Its failure leaves the keyboard
+                    // hook working; the service reports it, and the watchdog's renewals retry it.
+                    SyncMouseHook(refresh: false);
                 }
             }
             catch (Exception ex)
@@ -700,10 +910,20 @@ public sealed class HotkeyService : IHotkeyService
                 // GetMessage returns 0 for WM_QUIT and -1 on failure; both end the pump.
                 while (NativeMethods.GetMessage(out NativeMethods.MSG msg, nint.Zero, 0, 0) > 0)
                 {
-                    // Thread messages have no window, so DispatchMessage would drop this one.
+                    // Thread messages have no window, so DispatchMessage would drop these. Each applies the queued
+                    // commands and then gives the mouse hook the state the bindings now ask for: outside any hook
+                    // callback, so installing or removing it never runs inside one.
                     if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_COMMANDS)
                     {
                         _engine.OnWake();
+                        SyncMouseHook(refresh: false);
+                        continue;
+                    }
+
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_REFRESH)
+                    {
+                        _engine.OnWake();
+                        SyncMouseHook(refresh: true);
                         continue;
                     }
 
@@ -713,12 +933,65 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             _engine.DetachOwner();
+            RemoveMouseHook();
             if (desktopSwitchHook != 0)
             {
                 NativeMethods.UnhookWinEvent(desktopSwitchHook);
             }
 
             NativeMethods.UnhookWindowsHookEx(hookId);
+        }
+
+        // Hook thread only, between messages, never inside a hook callback. Installs the mouse hook while a binding presses
+        // a mouse button and removes it once none does, or once this engine is retired (a pass-through hook would still
+        // make every pointer move wait for this thread). With refresh, a hook that is wanted and installed is registered
+        // afresh: the new registration first and the old one released after it, both before this thread takes another
+        // message, so no button event can fall between them and the engine keeps its state through the change. A failed
+        // registration keeps the one in place. An old registration that can no longer be released was already gone,
+        // which is how a hook Windows removed after a missed deadline shows; it is counted for the watchdog to report.
+        private void SyncMouseHook(bool refresh)
+        {
+            var current = _mouseHookId;
+            if (_engine.IsRetired || !_engine.UsesMouseButtons)
+            {
+                Volatile.Write(ref _mouseHookError, 0);
+                RemoveMouseHook();
+                return;
+            }
+
+            if (current != 0 && !refresh)
+            {
+                return;
+            }
+
+            var replacement = NativeMethods.SetWindowsHookEx(NativeMethods.WH_MOUSE_LL, _mouseProc, _module, 0);
+            if (replacement == 0)
+            {
+                Volatile.Write(ref _mouseHookError, Marshal.GetLastWin32Error());
+                return;
+            }
+
+            // The old registration is released, or found already gone, before the count moves, so a reader that sees
+            // the count sees everything this renewal did.
+            Volatile.Write(ref _mouseHookId, replacement);
+            Volatile.Write(ref _mouseHookError, 0);
+            if (current != 0 && !NativeMethods.UnhookWindowsHookEx(current))
+            {
+                Interlocked.Increment(ref _mouseHookLosses);
+            }
+
+            Interlocked.Increment(ref _mouseHookRegistrations);
+        }
+
+        // Hook thread only.
+        private void RemoveMouseHook()
+        {
+            var current = _mouseHookId;
+            if (current != 0)
+            {
+                Volatile.Write(ref _mouseHookId, 0);
+                NativeMethods.UnhookWindowsHookEx(current);
+            }
         }
 
         // Runs on this installation's thread, from GetMessage, for every desktop-switch notice. Like the keyboard callback
@@ -774,6 +1047,25 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             return decision.Suppress ? 1 : NativeMethods.CallNextHookEx(_hookId, nCode, wParam, lParam);
+        }
+
+        // Runs on this installation's thread, inside GetMessage, for every mouse event on the desktop while a binding
+        // presses a mouse button, and the pointer waits for it. So the first thing it does, before reading any field or
+        // touching the engine, is the one comparison that passes on every message but the middle and side buttons going
+        // down or up: moves, the wheels and the left and right buttons cost exactly that. The rest is MouseHookFilter's,
+        // which like the keyboard callback never waits, locks or logs. CallNextHookEx ignores its hook handle, so none is
+        // read here.
+        private nint MouseHookCallback(int nCode, nint wParam, nint lParam)
+        {
+            var message = unchecked((int)wParam);
+            if (!MouseHookFilter.IsButtonMessage(message))
+            {
+                return NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
+            }
+
+            return MouseHookFilter.Swallows(nCode, message, lParam, _engine, _reconcileSignal)
+                ? 1
+                : NativeMethods.CallNextHookEx(0, nCode, wParam, lParam);
         }
     }
 }

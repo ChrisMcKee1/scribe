@@ -24,6 +24,7 @@ using Scribe.App.Infrastructure;
 using Scribe.Core.Audio;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
@@ -150,8 +151,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     // Save that failed, _settings names a provider that cleanup never switched to.
     private CleanupProvider _savedAiProvider;
     private bool _capturingDictationOnly;
-    private readonly List<Key> _capturedKeys = new(2);
-    private readonly HashSet<Key> _pressedCaptureKeys = new();
+
+    // The keys and mouse buttons recorded since Set was pressed; what they mean is decided in Core.
+    private HotkeyCaptureSession? _capture;
     private bool _capturing;
     private bool _finalized;
     private bool _loadingUi;
@@ -263,6 +265,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Closed += OnClosed;
         Loaded += RefreshStartupStatus;
         Activated += RefreshStartupStatus;
+
+        // The title bar's mouse buttons reach a hotkey capture only as window messages (CaptureNonClientMouseButtons).
+        SourceInitialized += (_, _) =>
+            (PresentationSource.FromVisual(this) as HwndSource)?.AddHook(CaptureNonClientMouseButtons);
         RefreshAiStatus();
         InitializeUpdateCard();
         AboutVersionText.Text = $"Version {UpdateService.RunningVersion}";
@@ -1026,6 +1032,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
             DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
             DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Hint;
+            MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -2288,65 +2295,139 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _capturingDictationOnly = dictationOnly;
         _capturing = true;
         _finalized = false;
-        _capturedKeys.Clear();
-        _pressedCaptureKeys.Clear();
+        _capture = HotkeyCapture.NewSession();
 
         // Put the global hook into pass-through first: the current push-to-talk key must reach
         // this capture box as an ordinary key instead of being suppressed or starting a recording.
         _setHotkeyCaptureMode(true);
-        ActiveHotkeyBox.Text = "Press one or two keys… (dictation is paused)";
+        ActiveHotkeyBox.Text = HotkeyCaptureSession.Prompt;
     }
 
+    // Keys reach the capture wherever focus is in the window, as they always have: these are the window's Preview events.
     private void HotkeyBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (!_capturing)
+        if (!_capturing || _capture is null)
         {
             return;
         }
 
         e.Handled = true;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-
-        if (key == Key.Escape)
-        {
-            CancelCapture();
-            return;
-        }
-
-        if (_pressedCaptureKeys.Add(key) && !_capturedKeys.Contains(key))
-        {
-            if (_capturedKeys.Count == 2)
-            {
-                ShowInfo("A dictation hotkey can contain up to two keys.", Wpf.Ui.Controls.InfoBarSeverity.Warning);
-            }
-            else
-            {
-                _capturedKeys.Add(key);
-                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(HotkeyCapture.KeyName)) +
-                    (_capturedKeys.Count == 1 ? "  (add another key or release)" : "  (release to set)");
-            }
-        }
+        ApplyCaptureStep(_capture.Press(HotkeyCapture.VirtualKeyOf(e)));
     }
 
     private void HotkeyBox_PreviewKeyUp(object sender, KeyEventArgs e)
     {
-        if (!_capturing || _finalized)
+        if (!_capturing || _finalized || _capture is null)
         {
             return;
         }
 
         e.Handled = true;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        _pressedCaptureKeys.Remove(key);
-        if (_capturedKeys.Count == 0 || _pressedCaptureKeys.Count > 0)
+        ApplyCaptureStep(_capture.Release(HotkeyCapture.VirtualKeyOf(e), ActiveSelectedMode));
+    }
+
+    // Mouse buttons reach the capture with the pointer anywhere on this window: these are the window's Preview events, so
+    // a press is seen before any control under the pointer, and the title bar's are taken from its window messages
+    // (CaptureNonClientMouseButtons). A recorded button's events are marked handled, so no control acts on them and a
+    // side button's release never becomes a Back or Forward command. The left and right buttons keep their meaning: a
+    // click on Cancel, or anywhere else, still works; one on the capture box itself says why it can't be a hotkey.
+    private void HotkeyCapture_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_capturing || _capture is null)
         {
             return;
         }
 
-        Finalize(HotkeyCapture.FromKeys(_capturedKeys, ActiveSelectedMode));
+        var step = _capture.Press(HotkeyCapture.VirtualKeyOf(e.ChangedButton));
+        if (step.Handled)
+        {
+            e.Handled = true;
+        }
+
+        if (step.Outcome == HotkeyCaptureOutcome.Refused && !IsWithin(ActiveHotkeyBox, e.OriginalSource))
+        {
+            return;
+        }
+
+        ApplyCaptureStep(step);
     }
 
-    private void Finalize(HotkeyBinding binding)
+    private void HotkeyCapture_PreviewMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_capturing || _finalized || _capture is null)
+        {
+            return;
+        }
+
+        var step = _capture.Release(HotkeyCapture.VirtualKeyOf(e.ChangedButton), ActiveSelectedMode);
+        if (step.Handled)
+        {
+            e.Handled = true;
+        }
+
+        ApplyCaptureStep(step);
+    }
+
+    private static bool IsWithin(DependencyObject container, object? source) =>
+        source is DependencyObject element &&
+        (ReferenceEquals(element, container) || (element is Visual visual && container is Visual root && root.IsAncestorOf(visual)));
+
+    private void ApplyCaptureStep(HotkeyCaptureStep step)
+    {
+        switch (step.Outcome)
+        {
+            case HotkeyCaptureOutcome.Cancelled:
+                CancelCapture();
+                break;
+            case HotkeyCaptureOutcome.Refused:
+            case HotkeyCaptureOutcome.TooMany:
+                ShowInfo(step.Message!, Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                break;
+            case HotkeyCaptureOutcome.Recorded:
+                ActiveHotkeyBox.Text = step.Text!;
+                break;
+            case HotkeyCaptureOutcome.Completed:
+                Finalize(step.Binding!, step.Message);
+                break;
+        }
+    }
+
+    // The title bar is the window's non-client area, where WPF raises no mouse events (WPF-UI answers WM_NCHITTEST with
+    // HTCAPTION there, and with the caption buttons' codes over them), so a middle or side button pressed with the
+    // pointer on it arrives only as these window messages. While capturing they go to the same capture, and are marked
+    // handled, so the side buttons' releases never become Back or Forward commands either.
+    private const int WmNcMButtonDown = 0x00A7;
+    private const int WmNcMButtonUp = 0x00A8;
+    private const int WmNcXButtonDown = 0x00AB;
+    private const int WmNcXButtonUp = 0x00AC;
+
+    private IntPtr CaptureNonClientMouseButtons(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (!_capturing || _capture is null || msg is not (WmNcMButtonDown or WmNcMButtonUp or WmNcXButtonDown or WmNcXButtonUp))
+        {
+            return IntPtr.Zero;
+        }
+
+        // For the X button messages the high word of wParam names the button (XBUTTON1 or XBUTTON2).
+        var button = msg is WmNcMButtonDown or WmNcMButtonUp
+            ? MouseButtons.Middle
+            : (((long)wParam >> 16) & 0xFFFF) switch { 1 => MouseButtons.Back, 2 => MouseButtons.Forward, _ => 0u };
+        if (button == 0)
+        {
+            return IntPtr.Zero;
+        }
+
+        var step = msg is WmNcMButtonDown or WmNcXButtonDown
+            ? _capture.Press(button)
+            : _capture.Release(button, ActiveSelectedMode);
+        handled = true;
+        ApplyCaptureStep(step);
+
+        // An application that processes WM_NCXBUTTONDOWN or WM_NCXBUTTONUP returns TRUE.
+        return msg is WmNcXButtonDown or WmNcXButtonUp ? new IntPtr(1) : IntPtr.Zero;
+    }
+
+    private void Finalize(HotkeyBinding binding, string? chordWarning)
     {
         if (_capturingDictationOnly)
         {
@@ -2358,8 +2439,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
         _finalized = true;
         _capturing = false;
-        _capturedKeys.Clear();
-        _pressedCaptureKeys.Clear();
+        _capture = null;
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = HotkeyCapture.Describe(binding);
@@ -2376,13 +2456,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 "This chord overrides a Windows shortcut while Scribe is running.",
                 Wpf.Ui.Controls.InfoBarSeverity.Warning);
         }
+        else if (chordWarning is not null)
+        {
+            ShowInfo(chordWarning, Wpf.Ui.Controls.InfoBarSeverity.Warning);
+        }
     }
 
     private void CancelCapture()
     {
         _capturing = false;
-        _capturedKeys.Clear();
-        _pressedCaptureKeys.Clear();
+        _capture = null;
         _setHotkeyCaptureMode(false);
         ShowWaitingExternalAiCleanup();
         ActiveHotkeyBox.Text = CurrentHotkeyDescription();
@@ -4530,6 +4613,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         if (_capturing)
         {
             _capturing = false;
+            _capture = null;
             _setHotkeyCaptureMode(false);
         }
 

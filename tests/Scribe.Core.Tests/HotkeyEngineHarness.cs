@@ -53,6 +53,14 @@ internal sealed class HotkeyEngineHarness : IDisposable
         Up(key);
     }
 
+    /// <summary>A middle or side mouse button going down, as the mouse hook reports it.</summary>
+    public HookDecision ButtonDown(uint button) => Engine.OnMouseButtonEvent(button, isDown: true);
+
+    /// <summary>A middle or side mouse button going up, as the mouse hook reports it.</summary>
+    public HookDecision ButtonUp(uint button) => Engine.OnMouseButtonEvent(button, isDown: false);
+
+    public (HookDecision Down, HookDecision Up) Click(uint button) => (ButtonDown(button), ButtonUp(button));
+
     public List<HotkeyService.QueuedTransition> TakeTransitions()
     {
         var taken = new List<HotkeyService.QueuedTransition>();

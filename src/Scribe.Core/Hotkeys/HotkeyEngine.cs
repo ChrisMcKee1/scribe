@@ -41,8 +41,9 @@ internal sealed record HotkeyCommand(
 internal readonly record struct HookDecision(bool Suppress, bool RequestReconcile);
 
 /// <summary>
-/// Everything the low-level hook callback touches, owned by one hook thread for the lifetime of one
-/// hook installation.
+/// Everything the low-level keyboard and mouse hook callbacks touch, owned by one hook thread for the lifetime of one
+/// hook installation. Both hooks run on that thread and feed this one engine, so a chord of a key and a mouse button,
+/// the modifier rule, pause, capture and a desktop switch see keys and buttons as one input state.
 ///
 /// Only the owner thread mutates this state. It applies queued commands at the start of every key
 /// event and whenever it is woken, so the callback never waits for another thread: a monitor shared
@@ -70,10 +71,12 @@ internal sealed class HotkeyEngine
     private bool _captureMode;
     private bool _paused;
     private bool _retired;
+    private bool _usesMouseButtons;
     private long _generation;
     private long _activationEpoch;
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
+    private long _mouseButtonEvents;
     private int _wakePending;
     private uint _ownerThreadId;
 
@@ -97,6 +100,7 @@ internal sealed class HotkeyEngine
         _generation = generation;
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
+        _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
     }
 
     /// <summary>The owner's thread id once it has attached, otherwise zero. Any thread.</summary>
@@ -104,6 +108,19 @@ internal sealed class HotkeyEngine
 
     /// <summary>Any thread. True once a replacement took over the hook or the service stopped.</summary>
     public bool IsRetired => Volatile.Read(ref _retired);
+
+    /// <summary>
+    /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>), so
+    /// its hook thread needs a mouse hook; it installs one only while this is true, so nobody who binds keys alone gets
+    /// a system-wide mouse hook. Updated by the owner when it applies new bindings.
+    /// </summary>
+    public bool UsesMouseButtons => Volatile.Read(ref _usesMouseButtons);
+
+    /// <summary>
+    /// Any thread, for tests: how many middle and side button events reached this engine from the mouse hook. Moves,
+    /// wheels and the left and right buttons never do.
+    /// </summary>
+    internal long MouseButtonEvents => Interlocked.Read(ref _mouseButtonEvents);
 
     /// <summary>
     /// Any thread. The hook's view of the physical keyboard, for the leaked-key reconciler: true
@@ -252,7 +269,7 @@ internal sealed class HotkeyEngine
         }
     }
 
-    /// <summary>Owner thread: one key event from the hook callback.</summary>
+    /// <summary>Owner thread: one key event from the keyboard hook callback.</summary>
     public HookDecision OnKeyEvent(uint virtualKey, bool isDown)
     {
         // Retired: the replacement engine decides now, or nobody does after Stop. A hook thread
@@ -263,6 +280,37 @@ internal sealed class HotkeyEngine
             return default;
         }
 
+        // A keyboard event carrying a mouse button's code is not that button, and only injected input can send one: the
+        // mouse hook alone reports buttons, so the two hooks never overwrite each other's view of one. No binding a
+        // capture could make was ever matched this way, because no keyboard key has these codes.
+        if (MouseButtons.IsMouseButton(virtualKey))
+        {
+            return default;
+        }
+
+        return OnInput(virtualKey, isDown);
+    }
+
+    /// <summary>
+    /// Owner thread: the middle or a side mouse button (<see cref="MouseButtons.Middle"/>, <see cref="MouseButtons.Back"/>
+    /// or <see cref="MouseButtons.Forward"/>) went down or up, from the mouse hook callback (<see cref="MouseHookFilter"/>).
+    /// A button is one more key to the machines: it completes a binding, is swallowed while it drives a dictation, is
+    /// let through while paused or capturing, and a bare binding of one lets a press made with a modifier through, as a
+    /// bare Page Up or Page Down does (see <see cref="ChordStateMachine"/>).
+    /// </summary>
+    public HookDecision OnMouseButtonEvent(uint button, bool isDown)
+    {
+        if (IsRetired || !MouseButtons.IsBindable(button))
+        {
+            return default;
+        }
+
+        Interlocked.Increment(ref _mouseButtonEvents);
+        return OnInput(button, isDown);
+    }
+
+    private HookDecision OnInput(uint virtualKey, bool isDown)
+    {
         // Commands requested before this event took effect before it, exactly as if they had
         // been applied synchronously on the requesting thread.
         ApplyPendingCommands();
@@ -376,6 +424,9 @@ internal sealed class HotkeyEngine
         {
             EmitStateClear(secondaryTransition, activeTrigger);
         }
+
+        // The hook thread reads this once the command is applied and installs or removes its mouse hook to match.
+        Volatile.Write(ref _usesMouseButtons, MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding));
     }
 
     private void ApplyCaptureMode(bool enabled)
