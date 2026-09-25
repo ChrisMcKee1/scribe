@@ -1305,6 +1305,15 @@ public sealed class LibraryWorkspace
         current = current.Renamed(draftRenames);
 
         var to = FromCatalog(committed, mapFrom: from);
+
+        // A library the store kept under another id has the draft's enabled state and AI choice only where the store
+        // committed them there, so its base choices are the committed ones: the live draft's choices stand, and one the
+        // store did not commit stays unsaved rather than silently changing (GPT-6 Astra's note on round 3).
+        foreach (var keptAs in baseRenames.Values)
+        {
+            from = from.WithLocalOf(keptAs, to.Local);
+        }
+
         var merged = Settled(Merge(current, from, to), from, current, to, committed);
         merged = WithReferencesFollowing(merged, baseRenames, draftRenames);
 

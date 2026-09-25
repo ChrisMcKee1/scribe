@@ -204,6 +204,78 @@ public sealed class LibraryWorkspaceChangeSetTests
     }
 
     [Fact]
+    public void D4_a_library_kept_under_another_id_keeps_the_choices_of_the_draft_whatever_the_store_committed_for_it()
+    {
+        // GPT-6 Astra's note on round 3: by the contract the store carries the draft's enabled state and AI choice to the
+        // kept id, but a store that committed the kept library without them (off, no AI choice, as a file it found) must
+        // not have MarkSaved adopt that silently. The choices of the live draft stand, unsaved where the store did not
+        // commit them, and the next Save writes them.
+        var catalog = Standard();
+        LibraryWorkspace Saving(out LibraryChangeSet changes, out LibraryCatalog saved, out string keptAs)
+        {
+            var workspace = Workspace(catalog);
+            var created = workspace.CreateLibrary();
+            workspace.AddTerm(created, new TermValues("ga", "GA"));
+            Assert.True(workspace.SetAiPermission(created, true).Applied);
+            changes = Capture(workspace);
+            keptAs = created + "-2";
+            saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(created, keptAs, [new TermValues("theirs", "Theirs")])]);
+            return workspace;
+        }
+
+        // The store as the contract has it: the choices went with the content, so nothing is left unsaved.
+        var workspace = Saving(out var changes, out var saved, out var keptAs);
+        Assert.Contains(keptAs, saved.LocalState.EnabledIds);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Contains(keptAs, workspace.Draft.LocalState.EnabledIds);
+        Assert.True(workspace.ShowsAiPermission(keptAs));
+
+        // A store that committed the kept library off and with no AI choice.
+        workspace = Saving(out changes, out saved, out keptAs);
+        var id = keptAs;
+        var local = saved.LocalState;
+        var withoutChoices = new LibraryCatalog(
+            saved.Generation,
+            saved.Libraries.ToList(),
+            LibraryLocalState.Create(
+                local.EnabledIds.Where(enabled => !string.Equals(enabled, id, StringComparison.OrdinalIgnoreCase)),
+                local.LegacyEnabledIds,
+                local.AiPermissions.Where(pair => !string.Equals(pair.Key, id, StringComparison.OrdinalIgnoreCase)),
+                local.LegacyMarkers,
+                local.AiUpgradeNotice,
+                LocalStateHealth.Ok,
+                local.AcceptedContent,
+                local.AiPermissionsLost),
+            saved.RecentlyDeleted.ToList(),
+            saved.RetiredBuiltInEdits.ToList(),
+            filesAwaitingRelease: 0,
+            saved.KeptVersions.ToList());
+        workspace.MarkSaved(changes.DraftRevision, withoutChoices);
+
+        Assert.Contains(keptAs, workspace.Draft.LocalState.EnabledIds);
+        Assert.True(workspace.Draft.LocalState.AiPermissions[keptAs]);
+        Assert.True(workspace.HasUnsavedChanges);
+        Assert.Equal([keptAs], workspace.UnsavedLibraryIds);
+        var next = Capture(workspace);
+        AssertPreImages(withoutChoices, next);
+        Assert.False(Writes(next, keptAs));
+        Assert.Contains(keptAs, next.LocalState.EnabledIds);
+        Assert.True(next.LocalState.AiPermissions[keptAs]);
+        workspace.MarkSaved(next.DraftRevision, Apply(withoutChoices, next));
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Contains(keptAs, workspace.Draft.LocalState.EnabledIds);
+
+        // A choice the user changed while the Save ran stands against the one the store committed too.
+        workspace = Saving(out changes, out saved, out keptAs);
+        var planned = keptAs[..^2];
+        workspace.SetEnabled(planned, false);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.DoesNotContain(keptAs, workspace.Draft.LocalState.EnabledIds);
+        Assert.Equal([keptAs], workspace.UnsavedLibraryIds);
+    }
+
+    [Fact]
     public void D4_reload_discards_the_draft_and_discard_reverts_one_library()
     {
         var catalog = Standard();
