@@ -52,6 +52,20 @@ public class SessionBannerTests : IDisposable
         Assert.Contains("cleanup: off", text);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Banner_says_whether_a_space_follows_each_dictation_as_a_flag_only(bool addSpace)
+    {
+        // "My text has an extra space" (or "my dictations run together") is answerable from the log alone.
+        var settings = AppSettings.CreateDefault();
+        settings.AddSpaceAfterDictation = addSpace;
+
+        var injection = Compose(settings).Split(Environment.NewLine).Single(line => line.Contains("injection: ", StringComparison.Ordinal));
+
+        Assert.EndsWith($"shiftEnter=True spaceAfter={addSpace}", injection, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Banner_names_each_hotkey_by_its_code_whatever_name_was_stored()
     {

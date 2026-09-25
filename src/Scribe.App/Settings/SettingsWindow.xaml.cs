@@ -714,9 +714,13 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         PlaygroundInjectionDuration.Text = report.Injection is not null
             ? FormatDuration(report.InjectionDuration)
             : "Not run";
+        // The final text above is the dictation as history keeps it; a space added after it for the target is invisible
+        // at the end of that box, so this row says it was typed (the playground's own text box received it).
         PlaygroundInjectionDetail.Text = report.Injection is { } injection
             ? injection.Succeeded
-                ? $"Inserted using {injection.Method}"
+                ? report.SpaceAddedAfterText
+                    ? $"Inserted using {injection.Method}, followed by a space"
+                    : $"Inserted using {injection.Method}"
                 : $"Failed: {injection.Error}"
             : DetailOrFailure(report, "Text insertion", "Not reached");
 
@@ -1026,6 +1030,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
             ShiftEnterCheck.IsChecked = _settings.ShiftEnterLineBreaks;
+            SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
             MaxDictationBox.Value = Math.Clamp(_settings.MaxDictationMinutes, 0, 1440);
             IdleReleaseBox.Value = Math.Clamp(_settings.ReleaseModelsAfterIdleMinutes, 0, 120);
             HistoryRetentionBox.Value = Math.Clamp(_settings.HistoryRetentionDays, 0, 3650);
@@ -5022,6 +5027,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.ApplyPostProcessing = PostCheck.IsChecked == true;
             _settings.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
             _settings.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
+            _settings.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
             // NumberBox.Value is a nullable double: a cleared box falls back to the saved value
             // rather than silently becoming 0, which here means "off/forever".
             _settings.MaxDictationMinutes =

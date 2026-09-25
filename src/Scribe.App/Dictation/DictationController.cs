@@ -140,7 +140,10 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public event Action<DictationWarning>? Warning;
 
-    /// <summary>Raised after a capture is dictated, with the final injected text.</summary>
+    /// <summary>
+    /// Raised after a capture is dictated and inserted, with the text as history keeps it: without the space the target
+    /// may have been given after it (<see cref="AppSettings.AddSpaceAfterDictation"/>).
+    /// </summary>
     public event Action<string>? Dictated;
 
     /// <summary>
@@ -1309,15 +1312,24 @@ internal sealed class DictationController : IDisposable
             }
             report.FinalText = text;
 
-            _lastTranscript.Set(text);
-            cancellationToken.ThrowIfCancellationRequested();
+            // Only the target is given the space after the dictation (AddSpaceAfterDictation), and only here, after the
+            // line breaks were handled, which trims the text for a single-line target. DictationInsertion keeps the text
+            // for recovery before it types anything, and hands back the text as dictated for history: only the injector
+            // callback below ever sees the typed form with the space, so nothing that keeps text can be given it.
             currentStage = "Text insertion";
             var injectionTimer = Stopwatch.StartNew();
-            var injection = _injector.Inject(
-                text, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks);
+            var insertion = DictationInsertion.Insert(
+                text,
+                settings.AddSpaceAfterDictation,
+                _lastTranscript,
+                typed => _injector.Inject(
+                    typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks),
+                cancellationToken);
             injectionTimer.Stop();
+            var injection = insertion.Injection;
             report.InjectionDuration = injectionTimer.Elapsed;
             report.Injection = injection;
+            report.SpaceAddedAfterText = insertion.SpaceAdded;
             if (!injection.Succeeded)
             {
                 activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Error);
@@ -1328,7 +1340,7 @@ internal sealed class DictationController : IDisposable
                     ? "focus changed, so the dictation was not inserted"
                     : "text could not be inserted completely");
 
-                // The transcript was stored just above, so close the loop: without a hint the
+                // The transcript was stored before typing began, so close the loop: without a hint the
                 // preserved text looks lost, because the overlay flash is the only other signal.
                 RaiseInjectionFailed();
                 report.Fail("Text insertion", injection.Error ?? "Text could not be inserted.");
@@ -1337,12 +1349,14 @@ internal sealed class DictationController : IDisposable
             }
 
             insertedTimestamp = Stopwatch.GetTimestamp();
-            _log.LogInformation("Text injected into {App} using {Method}.", targetApp ?? "the focused app", injection.Method);
+            _log.LogInformation(
+                "Text injected into {App} using {Method}; space added after it: {SpaceAdded}.",
+                targetApp ?? "the focused app", injection.Method, insertion.SpaceAdded);
 
             activity?.SetTag(ScribeTelemetry.TagOutcome, DictationOutcome.Injected);
-            EnqueueHistory(session.Id, settings, audio, result, text, targetApp, cleanup, report.CleanupDuration);
+            EnqueueHistory(session.Id, settings, audio, result, insertion.Recorded, targetApp, cleanup, report.CleanupDuration);
             RaisePipelineReport(report);
-            Dictated?.Invoke(text);
+            Dictated?.Invoke(insertion.Recorded);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1850,8 +1864,13 @@ internal sealed class DictationPipelineReport(
     public string? CleanedText { get; set; }
     public CleanupResult? Cleanup { get; set; }
     public TextPostProcessingResult? PostProcessing { get; set; }
+
+    // The text as dictated, which is also what history keeps: without the space the target may have been given after it.
     public string? FinalText { get; set; }
     public InjectionResult? Injection { get; set; }
+
+    // Whether the target was given a space after FinalText (AddSpaceAfterDictation).
+    public bool SpaceAddedAfterText { get; set; }
     public string? FailureStage { get; private set; }
     public string? FailureReason { get; private set; }
     internal long StartedTimestamp { get; } = startedTimestamp;
