@@ -114,6 +114,31 @@ public sealed class MouseButtonRound7Tests
         Assert.Equal(reader, service.WindowsButtonState!.Method);
     }
 
+    // G5 (Grok, round 6): an event that settles a debt asks for the leak check, passed or swallowed, because that check is
+    // when a drain-only mouse hook kept for the debt is removed; an event that settles nothing asks for none.
+    [Theory]
+    [InlineData("a release swallowed", true)]
+    [InlineData("a release let through, Windows holding the button", true)]
+    [InlineData("a new press that forgives the debt", true)]
+    [InlineData("a release nothing owed", false)]
+    public void Every_event_that_settles_a_debt_asks_for_the_check_that_drops_a_drain_only_hook(string what, bool asks)
+    {
+        var windowsHoldsBack = what.Contains("Windows holding", StringComparison.Ordinal);
+        using var h = new HotkeyEngineHarness(Bare(Back), buttonDownInWindows: _ => windowsHoldsBack);
+        if (what != "a release nothing owed")
+        {
+            Assert.True(h.ButtonDown(Back).Suppress);
+        }
+
+        h.Router.UpdateBindings(HotkeyBinding.DefaultDictation, null); // the last mouse binding goes: drain-only
+        h.Engine.OnWake();
+
+        var decision = what == "a new press that forgives the debt" ? h.ButtonDown(Back) : h.ButtonUp(Back);
+
+        Assert.Equal(asks, decision.RequestReconcile);
+        Assert.Equal(0, h.Engine.OwedButtonReleases);
+    }
+
     // No foreground, window, process or token query is left in NativeMethods for anything to call: round 6's reading went
     // with round 7.
     [Fact]
