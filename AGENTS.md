@@ -34,8 +34,9 @@ over a recent dictation that saves the fix and repairs that transcript in place)
 cleanup** (finds terms whose spoken and written forms have both never appeared in history, and
 disables them by default rather than deleting); tray quick toggles (AI cleanup on/off, pause), a tray Microphone
 submenu (the Windows default or a specific device, plus Sound settings) and a
-first-run **welcome**; push-to-talk on any key, two-key chord, or a spare **mouse button** (middle, back or
-forward, alone or in a chord with a key; see the hook section); an **About** page links privacy, support, source, and
+first-run **welcome**; push-to-talk on any key, two-key chord, key with Ctrl, Alt or Shift, or a spare **mouse
+button** (middle, back or forward, alone or in a chord with a key; any other button through the key its software
+sends, such as F13; see the hook section); an **About** page links privacy, support, source, and
 the GitHub star path.
 The default writing style ships
 editorial number/date/time/acronym + self‑correction + redundancy rules and is the
@@ -997,16 +998,34 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   buttons by `HotkeyCaptureSession` (Core, tested): up to two inputs in the order they go down, set once all are up,
   the left and right buttons refused with a reason and left their meaning (the window only shows the reason for a
   click on the capture box itself), and a chord recorded with a button first warns that the button still reaches the
-  app under the pointer (a chord is swallowed from the input that completes it). The Settings window maps its own
+  app under the pointer (a chord is swallowed from the input that completes it). Beyond two inputs it records only
+  Ctrl, Alt and Shift keys and at most one other input, and builds that as the one input with modifier flags
+  ("Ctrl+Shift+F13"), matched on either side of each modifier and for the generic codes injected input can carry; one
+  or two inputs stay the exact physical binding every build captured. A Windows key is never one of more than two
+  inputs: only a shortcut's key is kept from Windows, and a Windows key it sees pressed and released with nothing
+  between opens Start. For the same reason a shortcut of Shift with Ctrl or Alt warns
+  (`HotkeyCaptureSession.LayoutSwitchWarning`) that its modifiers can still switch the keyboard language or layout;
+  sending a masking key, as AutoHotkey does, would remove that and is not done. The Settings window maps its own
   Preview mouse events, and the title bar's `WM_NCMBUTTON*` and `WM_NCXBUTTON*` messages, into it, so a button
   pressed with the pointer anywhere on the window counts, and it marks a recorded button's events handled, so a side
   button's release never becomes a Back or Forward command there. `KeyNames` names them "Middle mouse button",
   "Mouse Back (button 4)" and "Mouse Forward (button 5)", and the capture stores that name, which is what 0.4.3 and
   0.4.2 show for the binding (they show the stored name). Those builds have no mouse hook, so a button binding never
-  fires in them; nothing in them throws on it or rejects it. Windows reports no button beyond the fifth; a mouse's own
-  software maps extra buttons to keys (F13 to F24 are the usual choice), which bind as keys. The Settings hint
-  (`HotkeyCaptureSession.MouseButtonsHint`) says all of this, and that a bound button stops doing its job in other
-  apps (Back stops going back) unless pressed with a modifier.
+  fires in them; nothing in them throws on it or rejects it.
+- **Windows delivers five mouse buttons, so every other button binds as the key it sends.** Microsoft says so:
+  "Windows supports mice with up to five buttons" (`WM_XBUTTONDOWN`), the mouse features it supports are "Buttons 1-5"
+  and the wheels (keyboard and mouse HID client drivers), the low-level hook and `RAWMOUSE` carry only those
+  (`ulRawButtons`: "The Win32 subsystem does not use this member"), and "The system opens all keyboard and mouse
+  collections for its exclusive use", so no app reads a mouse's own reports. Raw Input's `RIM_TYPEHID` is for input
+  from "some device that is not a keyboard or a mouse", which for a mouse means a vendor-specific collection only its
+  vendor's software understands. A button past the fifth therefore reaches Scribe as the keyboard input its software
+  or firmware sends: F13 to F24, a media or browser key, or a shortcut with modifiers, each bound, named and swallowed
+  like any key (`MouseButtonHotkeyTests`, `HotkeyCaptureSessionTests` and the CI injection tests pin it). Raw Input
+  was assessed and left out: it cannot suppress input, needs a window, and has nothing generic to read. The Settings
+  hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
+  directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
+  here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
+  modifier.
 
 ## Startup (read before touching OnStartup)
 
