@@ -21,10 +21,10 @@ namespace Scribe.Core.Settings;
 /// A library that would go off is switched off only when none of its enabled rows, used or not, overlaps a rule that stays
 /// in effect (an enabled dictionary row, or an enabled row of a library that stays on) or a rule copied from another
 /// library; when no two of its own copies fold alike; and when no row of it that goes (every enabled row that is not
-/// copied, a blocked copy included) meets a row copied from it or from another library going off, or a row of a library
-/// kept on, or reaches one of those through rules that stay in effect. Two spoken forms overlap when one, folded by
-/// <see cref="SpokenFormFold"/>, equals or contains the other; they meet when they overlap or a nonempty proper suffix of
-/// one is a proper prefix of the other, either way round, whole-word flags ignored.
+/// copied, a blocked copy included) meets a rule that stays in effect, a row copied from it or from another library going
+/// off, or a row of a library kept on. Two spoken forms overlap when one, folded by <see cref="SpokenFormFold"/>, equals
+/// or contains the other; they meet when they overlap or a nonempty proper suffix of one is a proper prefix of the other,
+/// either way round, whole-word flags ignored.
 /// </para>
 /// <para>
 /// The fold is broader than every comparison dictation makes, and every spoken form is an escaped literal that matches
@@ -36,18 +36,18 @@ namespace Scribe.Core.Settings;
 /// since where they start and how long they are decide between them before their order does.
 /// </para>
 /// <para>
-/// A row that goes, meanwhile, could decide texts a copy or a row kept on takes once it is gone, because the matcher takes
-/// the match that starts first, then the longer one: "kilo" beside "k" gives "kilogram" with both and "Kilo" with "k"
-/// alone, and "ab" beside "bc" gives "Yc" for "abc" with both and "aX" with "bc" alone. So it must not meet any of them.
-/// Nor may it reach one through rules that stay in effect: with "bc" staying on beside "ab" and "cd", "abcd" is "YZ",
-/// and without "ab" the freed "bc" pushes "cd" out and writes "aXd". Such a push can pass along any number of rules, so
-/// rules that stay in effect and meet one another form groups (see Linked), and no row that goes may meet a group that a
-/// copy or a row of a library kept on meets. A row that goes may still run into a dictionary row or a row of a library
-/// that stays on without being asked about, and that rule may then apply where the row that goes used to. The promise is
-/// that copies and libraries kept on write exactly what they wrote, and that a text a dropped row applied to loses it,
-/// which a rule that stays in effect may then take. With the default libraries on, the rules that stay in effect form one
-/// group that every shipped spoken form meets, so in practice a library with a row that goes is switched off only when
-/// nothing is copied and nothing is kept on.
+/// A row that goes, meanwhile, could decide texts another rule takes once it is gone, because the matcher takes the match
+/// that starts first, then the longer one: "kilo" beside "k" gives "kilogram" with both and "Kilo" with "k" alone, "ab"
+/// beside "bc" gives "Yc" for "abc" with both and "aX" with "bc" alone, and the push can pass along any number of rules
+/// ("ab" gone beside "bc" and "cd" turns "abcd" from "YZ" into "aXd"). A row the review calls unused can still take part:
+/// history holds text as dictation wrote it, and a row whose guard found its written form already in the text takes its
+/// span and leaves it as it was, so a rule that then changes the text around it can erase every trace of it ("c#", whose
+/// written form is "C#-code", beside a dictionary that removes "-" and writes "Sharp" for "#-code"). So a row that goes
+/// must meet nothing that stays. Then no match of it shares a character with a match of a rule that stays, no push can
+/// start from it, and every rule that stays in effect, every copy and every library kept on writes exactly where it wrote,
+/// in any text. The only change the switch makes is a dropped row's own: where it wrote, the text is left as dictated,
+/// since no rule that stays can match there. With the default libraries staying on, every row of every other shipped
+/// library meets one of theirs, so a shipped library with a row that goes is then always kept on.
 /// </para>
 /// <para>
 /// Otherwise the library is kept on, whole, with nothing copied from it, together with every library that shares its id;
@@ -66,7 +66,8 @@ namespace Scribe.Core.Settings;
 /// The window used to copy first-wins in the review's order against the dictionary alone, a flaw present since 0.4.3 that
 /// copied a losing rule over a winner that stayed on. Later versions here compared the composer's keys, then ran the
 /// matcher over each term's own spoken form; both missed rules that meet the same text in other ways (inside a word,
-/// or in text already in its written form).
+/// or in text already in its written form). The version before this one let a row that goes run into a rule that stays,
+/// trusting the review to have found every row that ever held text, which history written after dictation cannot show.
 /// </para>
 /// </remarks>
 public static class LibrarySwitchOffCopy
@@ -81,7 +82,7 @@ public static class LibrarySwitchOffCopy
     /// <param name="OverlappingTerms">
     /// How many enabled rows keep it on, across this library and every library that shares its id and would have gone off
     /// with it: rows that overlap a rule that stays in effect, a copy, or one another, and rows that would go and meet a
-    /// copy or a row kept on, directly or through rules that stay in effect.
+    /// rule that stays in effect, a copy or a row kept on.
     /// </param>
     public sealed record KeptOnLibrary(string Id, bool BuiltIn, string Name, int OverlappingTerms);
 
@@ -156,11 +157,11 @@ public static class LibrarySwitchOffCopy
             .Select(Folded)
             .ToHashSet(StringComparer.Ordinal);
 
-        // Where each row would reach through rules that stay in effect: see Linked.
-        var links = Linked([.. inEffect], sides);
-
         var count = sides.Count;
-        var againstInEffect = sides.Select(side => Overlapping(side.Folds, inEffect, runsInto: _ => false)).ToArray();
+        // A row that is not copied goes, so it must not meet what stays either way round: not even a proper overlap, since
+        // the review reads history after dictation wrote it, and a row it calls unused may still have held text there
+        // that a rule staying on would take once it is gone (A4). A copy keeps its span, so containment is enough for it.
+        var againstInEffect = sides.Select(side => Overlapping(side.Folds, inEffect, runsInto: row => !side.Copied.Contains(row))).ToArray();
         var againstRows = new HashSet<int>[count, count];
         var againstCopies = new HashSet<int>[count, count];
         for (var i = 0; i < count; i++)
@@ -188,28 +189,6 @@ public static class LibrarySwitchOffCopy
                 {
                     // A library kept on stays in effect with every row; one that goes off leaves only its copies.
                     found.UnionWith(keptOn[j] ? againstRows[i, j] : againstCopies[i, j]);
-                }
-            }
-
-            // Nor may a row that goes reach one of those rows, or a copy of its own library's, through rules that stay in
-            // effect.
-            var guarded = new HashSet<int>();
-            for (var j = 0; j < count; j++)
-            {
-                for (var row = 0; row < sides[j].Folds.Length; row++)
-                {
-                    if ((j != i && keptOn[j]) || sides[j].Copied.Contains(row))
-                    {
-                        guarded.UnionWith(links[j][row]);
-                    }
-                }
-            }
-
-            for (var row = 0; row < sides[i].Folds.Length; row++)
-            {
-                if (!sides[i].Copied.Contains(row) && links[i][row].Overlaps(guarded))
-                {
-                    found.Add(row);
                 }
             }
 
@@ -386,53 +365,6 @@ public static class LibrarySwitchOffCopy
         }
 
         return false;
-    }
-
-    // For each row of each library that would go off, the groups of rules that stay in effect it meets. Rules that stay in
-    // effect and meet fall into one group, and so do rules linked through others: the matcher takes the match that starts
-    // first, so a row that goes can free a rule it met to apply, which then pushes out the next rule it meets, and so on
-    // along the text ("ab" gone beside "bc" and "cd" turns "abcd" from "YZ" into "aXd"). A row that goes and a copy or a
-    // row kept on that meet one group can therefore reach each other. Whole-word flags are ignored, which only finds more.
-    private static HashSet<int>[][] Linked(string[] inEffect, IReadOnlyList<Side> sides)
-    {
-        var group = Enumerable.Range(0, inEffect.Length).ToArray();
-        int Root(int k)
-        {
-            while (group[k] != k)
-            {
-                group[k] = group[group[k]];
-                k = group[k];
-            }
-
-            return k;
-        }
-
-        for (var a = 0; a < inEffect.Length; a++)
-        {
-            for (var b = a + 1; b < inEffect.Length; b++)
-            {
-                if (Root(a) != Root(b) && Meet(inEffect[a], inEffect[b], runningInto: true))
-                {
-                    group[Root(a)] = Root(b);
-                }
-            }
-        }
-
-        // One group is enough to know a row meets it, so the rest of that group's rules are skipped.
-        return [.. sides.Select(side => side.Folds.Select(fold =>
-        {
-            var met = new HashSet<int>();
-            for (var k = 0; k < inEffect.Length; k++)
-            {
-                var root = Root(k);
-                if (!met.Contains(root) && Meet(fold, inEffect[k], runningInto: true))
-                {
-                    met.Add(root);
-                }
-            }
-
-            return met;
-        }).ToArray())];
     }
 
     // The same rule wherever the text is: the spoken form exactly as it is compiled, and the written form and word-boundary
