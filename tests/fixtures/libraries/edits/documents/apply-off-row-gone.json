@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "octo cat",
+      "intent": "off",
+      "base": {
+        "spoken": "octo cat",
+        "written": "Octocat",
+        "wholeWord": true,
+        "enabled": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,1564 @@
+{
+  "about": "Fixtures for built-in library edits documents (LibrariesDir\\edits\\<id>.json, version 1), frozen once the Windows overlay's tests passed; the macOS port must give the same answers. 'shippedVersions': the rows four versions of one built-in ship, in shipped order. 'apply': the rows a document gives against a version's rows, in saved order (shipped rows in shipped order with entries in place, then added and no-longer-shipped rows in document order). 'read': how bytes read. 'collect': the document collected from the rows a committed document gives, with the rows under 'omit' left out and those under 'restore' restored to their shipped values (or left out when they have none). Values compare ordinally; keys are term keys (trimmed, compared without case). Line endings in these files are not significant.",
+  "shippedVersions": {
+    "v1": [{"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},{"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},{"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},{"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true}],
+    "v2": [{"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},{"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},{"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},{"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},{"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true}],
+    "v3": [{"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},{"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},{"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":true},{"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},{"spoken":"gh cli","written":"GH CLI","wholeWord":true,"enabled":true}],
+    "v4": [{"spoken":"get hub","written":"GitHub Corp","wholeWord":true,"enabled":true},{"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},{"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},{"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},{"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true}]
+  },
+  "apply": [
+    {
+      "name": "no-document",
+      "note": "With no document every row is shipped, in shipped order.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": null,
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited",
+      "note": "An edit in the version it was made in: the user's values, edited.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-edited.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-renamed-follows-a-correction-and-meets-a-new-shipped-row",
+      "note": "The user changed only Spoken, to \"git hub\": the row is still found by its key \"get hub\", Written takes the shipped correction, nothing asks, and the new shipped row \"git hub\" stands beside it (which one wins that spoken form is composition's).",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-renamed-follows-a-correction-and-meets-a-new-shipped-row.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"git hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-both-changed-asks",
+      "note": "The user and the new version both changed Written, differently: the user's value stays and the row asks about Written.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-both-changed-asks.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": {
+            "yours": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+            "updatedBuiltIn": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+            "differing": [
+              "written"
+            ]
+          }
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-adopted-is-pinned",
+      "note": "The new version ships the user's value: the row is pinned, still authored.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-adopted-is-pinned.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "pinned",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-kept-asks-once",
+      "note": "Keep my changes recorded this version's value as acknowledged, so the same change asks no more.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-kept-asks-once.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-kept-asks-again-on-a-new-change",
+      "note": "A later version changes Written again, past the acknowledged value: the row asks again.",
+      "library": "github",
+      "shippedVersion": "v4",
+      "document": "documents/apply-edited-kept-asks-again-on-a-new-change.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub Corp","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": {
+            "yours": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+            "updatedBuiltIn": {"spoken":"get hub","written":"GitHub Corp","wholeWord":true,"enabled":true},
+            "differing": [
+              "written"
+            ]
+          }
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-several-fields",
+      "note": "Fields merge one by one: Spoken and WholeWord are the user's, Written takes the correction.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-several-fields.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "edited",
+          "values": {"spoken":"co pilot","written":"GitHub Copilot","wholeWord":false,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-turned-off-stays-off",
+      "note": "An edited row the user turned off stays off when the version corrects its Written.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-turned-off-stays-off.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":false},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "pinned",
+      "note": "A pinned row in the version whose values it holds.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-pinned.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "pinned",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": "pinned",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "pinned-asks-on-any-change",
+      "note": "A pinned row takes no shipped change without asking: the user's values stay, shown as edited, and it asks about Written.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-pinned-asks-on-any-change.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "pinned",
+          "review": {
+            "yours": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+            "updatedBuiltIn": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+            "differing": [
+              "written"
+            ]
+          }
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "pinned-kept",
+      "note": "Keep my changes on a pinned row: acknowledged, so this version's change asks no more.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-pinned-kept.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "pinned",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "off",
+      "note": "A shipped row the user turned off.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-off.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "off",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":false},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": "off",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "off-row-gone",
+      "note": "The version does not ship the row: the off entry shows nothing, and stays in the document.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-off-row-gone.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "off-row-back-changed",
+      "note": "The row returns, changed: off again, with the values this version ships.",
+      "library": "github",
+      "shippedVersion": "v3",
+      "document": "documents/apply-off-row-back-changed.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "off",
+          "values": {"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":false},
+          "shipped": {"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":true},
+          "intent": "off",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GH CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GH CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "added",
+      "note": "A row the user added comes after the shipped rows.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-added.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "added",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "added",
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "added-shipped-alike",
+      "note": "A later version ships the added key with the user's values: pinned, authored, in the shipped row's place.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-added-shipped-alike.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "pinned",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": "added",
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "added-shipped-differently",
+      "note": "A later version ships the added key with other values: still the user's row, added, with the shipped values beside it.",
+      "library": "github",
+      "shippedVersion": "v3",
+      "document": "documents/apply-added-shipped-differently.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "added",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GH CLI","wholeWord":true,"enabled":true},
+          "intent": "added",
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "edited-no-longer-shipped",
+      "note": "The version does not ship the edited row: it keeps the user's values as no longer shipped, after the shipped rows.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-edited-no-longer-shipped.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "noLongerShipped",
+          "values": {"spoken":"octo cat","written":"The Octocat","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "edited",
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "pinned-no-longer-shipped",
+      "note": "The same for a pinned row.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-pinned-no-longer-shipped.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "noLongerShipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "pinned",
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "order",
+      "note": "Shipped rows in shipped order with entries in place, then added and no-longer-shipped rows in document order; an off entry for a row not shipped shows nothing.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "document": "documents/apply-order.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": {
+            "yours": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+            "updatedBuiltIn": {"spoken":"get hub","written":"GitHub, Inc.","wholeWord":true,"enabled":true},
+            "differing": [
+              "written"
+            ]
+          }
+        },
+        {
+          "key": "copilot",
+          "origin": "off",
+          "values": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":false},
+          "shipped": {"spoken":"copilot","written":"GitHub Copilot","wholeWord":true,"enabled":true},
+          "intent": "off",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "gh cli",
+          "origin": "shipped",
+          "values": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"gh cli","written":"GitHub CLI","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub",
+          "origin": "shipped",
+          "values": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub","written":"Git Hub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "zulu",
+          "origin": "added",
+          "values": {"spoken":"zulu","written":"Zulu","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "added",
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "noLongerShipped",
+          "values": {"spoken":"octo cat","written":"Octo Cat","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "yankee",
+          "origin": "added",
+          "values": {"spoken":"yankee","written":"Yankee","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "added",
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "keys-compare-without-case",
+      "note": "An entry's key finds the shipped row whatever the case: \"Get Hub\" edits the shipped \"get hub\", and Spoken, left at its base, takes the shipped spelling.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-keys-compare-without-case.json",
+      "rows": [
+        {
+          "key": "Get Hub",
+          "origin": "edited",
+          "values": {"spoken":"get hub","written":"GitHub Enterprise","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "shipped",
+          "values": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        }
+      ]
+    },
+    {
+      "name": "text-kept-exactly",
+      "note": "Values are stored and applied exactly: inner white space, line breaks, quotes and letters beyond ASCII.",
+      "library": "github",
+      "shippedVersion": "v1",
+      "document": "documents/apply-text-kept-exactly.json",
+      "rows": [
+        {
+          "key": "get hub",
+          "origin": "shipped",
+          "values": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"get hub","written":"GitHub","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "copilot",
+          "origin": "shipped",
+          "values": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"copilot","written":"Copilot","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "octo cat",
+          "origin": "edited",
+          "values": {"spoken":"octo  cat","written":"Octo\tcat","wholeWord":false,"enabled":true},
+          "shipped": {"spoken":"octo cat","written":"Octocat","wholeWord":true,"enabled":true},
+          "intent": "edited",
+          "review": null
+        },
+        {
+          "key": "git hub actions",
+          "origin": "shipped",
+          "values": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "shipped": {"spoken":"git hub actions","written":"GitHub Actions","wholeWord":true,"enabled":true},
+          "intent": null,
+          "review": null
+        },
+        {
+          "key": "café",
+          "origin": "added",
+          "values": {"spoken":"café","written":"Café \"au lait\"\r\nline two \uD83D\uDE00","wholeWord":true,"enabled":true},
+          "shipped": null,
+          "intent": "added",
+          "review": null
+        }
+      ]
+    }
+  ],
+  "read": [
+    {
+      "name": "written-by-scribe",
+      "note": "What Scribe writes.",
+      "library": "github",
+      "document": "documents/read-written-by-scribe.json",
+      "state": "available",
+      "version": 1,
+      "keys": [
+        "get hub",
+        "octo cat",
+        "gh cli"
+      ]
+    },
+    {
+      "name": "unknown-members-ignored",
+      "note": "Members this version does not know are ignored, at every level.",
+      "library": "github",
+      "document": "documents/read-unknown-members-ignored.json",
+      "state": "available",
+      "version": 1,
+      "keys": [
+        "get hub"
+      ]
+    },
+    {
+      "name": "byte-order-mark",
+      "note": "A leading UTF-8 byte order mark is skipped.",
+      "library": "github",
+      "document": "documents/read-byte-order-mark.json",
+      "state": "available",
+      "version": 1,
+      "keys": [
+        "get hub"
+      ]
+    },
+    {
+      "name": "key-trimmed",
+      "note": "A key is read as the term key of its text: trimmed.",
+      "library": "github",
+      "document": "documents/read-key-trimmed.json",
+      "state": "available",
+      "version": 1,
+      "keys": [
+        "get hub"
+      ]
+    },
+    {
+      "name": "null-values-absent",
+      "note": "An explicit null for values is the same as leaving them out.",
+      "library": "github",
+      "document": "documents/read-null-values-absent.json",
+      "state": "available",
+      "version": 1,
+      "keys": [
+        "octo cat"
+      ]
+    },
+    {
+      "name": "library-id-case",
+      "note": "The library id is compared without case.",
+      "library": "github",
+      "document": "documents/read-library-id-case.json",
+      "state": "available",
+      "version": 1,
+      "keys": []
+    },
+    {
+      "name": "no-entries",
+      "note": "A document with no entries reads, empty.",
+      "library": "github",
+      "document": "documents/read-no-entries.json",
+      "state": "available",
+      "version": 1,
+      "keys": []
+    },
+    {
+      "name": "malformed-json",
+      "note": "Not JSON.",
+      "library": "github",
+      "document": "documents/read-malformed-json.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "not-an-object",
+      "note": "The document is not an object.",
+      "library": "github",
+      "document": "documents/read-not-an-object.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "version-missing",
+      "note": "No version.",
+      "library": "github",
+      "document": "documents/read-version-missing.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "version-text",
+      "note": "A version that is text.",
+      "library": "github",
+      "document": "documents/read-version-text.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "version-fraction",
+      "note": "A version that is not an integer literal.",
+      "library": "github",
+      "document": "documents/read-version-fraction.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "version-zero",
+      "note": "Version 0.",
+      "library": "github",
+      "document": "documents/read-version-zero.json",
+      "state": "unreadable",
+      "version": 0
+    },
+    {
+      "name": "version-two",
+      "note": "Version 2: newer, whatever it holds.",
+      "library": "github",
+      "document": "documents/read-version-two.json",
+      "state": "newer",
+      "version": 2
+    },
+    {
+      "name": "version-huge",
+      "note": "A version too large to count is still newer.",
+      "library": "github",
+      "document": "documents/read-version-huge.json",
+      "state": "newer",
+      "version": null
+    },
+    {
+      "name": "intent-unknown",
+      "note": "An intent this version does not know: newer.",
+      "library": "github",
+      "document": "documents/read-intent-unknown.json",
+      "state": "newer",
+      "version": 1
+    },
+    {
+      "name": "intent-other-case",
+      "note": "Intent names are exact: \"Edited\" is not \"edited\".",
+      "library": "github",
+      "document": "documents/read-intent-other-case.json",
+      "state": "newer",
+      "version": 1
+    },
+    {
+      "name": "intent-unknown-beside-broken-entry",
+      "note": "An unknown intent makes the document newer even beside a broken entry.",
+      "library": "github",
+      "document": "documents/read-intent-unknown-beside-broken-entry.json",
+      "state": "newer",
+      "version": 1
+    },
+    {
+      "name": "intent-not-text",
+      "note": "An intent that is not text.",
+      "library": "github",
+      "document": "documents/read-intent-not-text.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "intent-missing",
+      "note": "An entry without an intent.",
+      "library": "github",
+      "document": "documents/read-intent-missing.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "library-other",
+      "note": "Another library's document.",
+      "library": "github",
+      "document": "documents/read-library-other.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "library-missing",
+      "note": "No library id.",
+      "library": "github",
+      "document": "documents/read-library-missing.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "terms-missing",
+      "note": "No list of entries.",
+      "library": "github",
+      "document": "documents/read-terms-missing.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "terms-not-a-list",
+      "note": "Entries that are not a list.",
+      "library": "github",
+      "document": "documents/read-terms-not-a-list.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "entry-not-an-object",
+      "note": "An entry that is not an object.",
+      "library": "github",
+      "document": "documents/read-entry-not-an-object.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "key-missing",
+      "note": "An entry without a key.",
+      "library": "github",
+      "document": "documents/read-key-missing.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "key-blank",
+      "note": "A key that is only white space.",
+      "library": "github",
+      "document": "documents/read-key-blank.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "key-repeated",
+      "note": "Two entries with one key (keys compare trimmed and without case).",
+      "library": "github",
+      "document": "documents/read-key-repeated.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "edited-without-base",
+      "note": "An edited entry needs its base.",
+      "library": "github",
+      "document": "documents/read-edited-without-base.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "pinned-without-values",
+      "note": "A pinned entry needs its values.",
+      "library": "github",
+      "document": "documents/read-pinned-without-values.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "off-with-values",
+      "note": "An off entry holds no values.",
+      "library": "github",
+      "document": "documents/read-off-with-values.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "added-with-base",
+      "note": "An added entry has no base.",
+      "library": "github",
+      "document": "documents/read-added-with-base.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "values-missing-a-member",
+      "note": "Values need all four members.",
+      "library": "github",
+      "document": "documents/read-values-missing-a-member.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "values-member-mistyped",
+      "note": "A flag written as text.",
+      "library": "github",
+      "document": "documents/read-values-member-mistyped.json",
+      "state": "unreadable",
+      "version": 1
+    },
+    {
+      "name": "member-repeated",
+      "note": "A member given twice, which two readers could take differently.",
+      "library": "github",
+      "document": "documents/read-member-repeated.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "trailing-comma",
+      "note": "A trailing comma.",
+      "library": "github",
+      "document": "documents/read-trailing-comma.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "comment",
+      "note": "A comment.",
+      "library": "github",
+      "document": "documents/read-comment.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "second-value",
+      "note": "More after the document.",
+      "library": "github",
+      "document": "documents/read-second-value.json",
+      "state": "unreadable",
+      "version": null
+    },
+    {
+      "name": "unpaired-surrogate",
+      "note": "An escaped unpaired surrogate is not text.",
+      "library": "github",
+      "document": "documents/read-unpaired-surrogate.json",
+      "state": "unreadable",
+      "version": 1
+    }
+  ],
+  "collect": [
+    {
+      "name": "every-row-given",
+      "note": "Collecting the rows a document gives returns that document.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "committed": "documents/collect-every-row-given-committed.json",
+      "omit": [],
+      "restore": [],
+      "expected": "documents/collect-every-row-given-expected.json"
+    },
+    {
+      "name": "rows-left-out",
+      "note": "Shipped rows the caller leaves out keep their intents, and the inert off entry stays; the addition and the no-longer-shipped row, which the user can delete, go.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "committed": "documents/collect-rows-left-out-committed.json",
+      "omit": [
+        "get hub",
+        "copilot",
+        "zulu",
+        "octo cat"
+      ],
+      "restore": [],
+      "expected": "documents/collect-rows-left-out-expected.json"
+    },
+    {
+      "name": "rows-deleted",
+      "note": "The user deleted the addition and the no-longer-shipped row.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "committed": "documents/collect-rows-deleted-committed.json",
+      "omit": [
+        "zulu",
+        "octo cat"
+      ],
+      "restore": [],
+      "expected": "documents/collect-rows-deleted-expected.json"
+    },
+    {
+      "name": "rows-restored",
+      "note": "Restore built-in values ends the intents of the shipped rows; the rows not shipped cannot be restored and go; the inert off entry stays.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "committed": "documents/collect-rows-restored-committed.json",
+      "omit": [],
+      "restore": [
+        "get hub",
+        "copilot",
+        "zulu",
+        "octo cat"
+      ],
+      "expected": "documents/collect-rows-restored-expected.json"
+    },
+    {
+      "name": "nothing-left",
+      "note": "With every intent gone there is no document.",
+      "library": "github",
+      "shippedVersion": "v2",
+      "committed": "documents/collect-nothing-left-committed.json",
+      "omit": [
+        "zulu"
+      ],
+      "restore": [
+        "get hub"
+      ],
+      "expected": null
+    }
+  ]
+}

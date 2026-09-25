@@ -1,0 +1,1 @@
+{ "version": 1, "library": "github", "terms": [ { "intent": "added", "value": { "spoken": "get hub", "written": "GitHub", "wholeWord": true, "enabled": true } } ] }
