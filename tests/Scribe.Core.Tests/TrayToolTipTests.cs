@@ -61,14 +61,32 @@ public sealed class TrayToolTipTests
     }
 
     [Fact]
+    public void The_limit_is_the_shell_tooltip_limit()
+    {
+        // NOTIFYICONDATA.szTip holds 128 UTF-16 units including the terminating null.
+        Assert.Equal(127, TrayToolTip.MaxLength);
+    }
+
+    [Fact]
     public void Shortening_never_splits_a_surrogate_pair()
     {
-        var shortcut = new string('a', 102) + "\U0001F9D1" + new string('b', 20);
+        // "Scribe: ready. Hold " is 20 units, so the high surrogate lands at index 125, right where the cut falls.
+        var shortcut = new string('a', 105) + "\U0001F9D1" + new string('b', 20);
 
         var text = TrayToolTip.Compose(TrayState.Ready, shortcut, HotkeyMode.Hold);
 
-        Assert.True(text.Length <= TrayToolTip.MaxLength, text);
-        Assert.EndsWith("…", text, StringComparison.Ordinal);
-        Assert.False(char.IsHighSurrogate(text[^2]));
+        Assert.Equal("Scribe: ready. Hold " + new string('a', 105) + "\u2026", text);
+        for (var i = 0; i < text.Length; i++)
+        {
+            Assert.False(char.IsHighSurrogate(text[i]) && (i + 1 >= text.Length || !char.IsLowSurrogate(text[i + 1])));
+        }
+    }
+
+    [Fact]
+    public void A_condition_that_does_not_fit_is_dropped_and_the_state_stays_whole()
+    {
+        var text = TrayToolTip.Compose(TrayState.Paused, "Page Down", HotkeyMode.Hold, TrayCondition.SpeechModelFailed);
+
+        Assert.Equal("Scribe: paused. Your shortcuts work as usual in other apps until you resume.", text);
     }
 }

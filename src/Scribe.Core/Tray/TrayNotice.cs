@@ -18,6 +18,9 @@ public enum TrayNoticeAction
     CopyLastDictation,
     CopyFixedDictation,
     OpenSoundSettings,
+
+    // Repeats the copy that failed; the text stays with the caller, never in the notice.
+    RetryCopy,
 }
 
 public enum TrayNotificationIcon
@@ -46,12 +49,12 @@ public static class TrayNotices
     public static TrayNotice NothingToCopy() => new("Nothing to copy", "There's no dictation to copy yet.", TrayNoticeKind.Info);
     public static TrayNotice CopiedLastDictation() => new("Copied", "Your last dictation is on the clipboard. Press Ctrl+V to paste it.", TrayNoticeKind.Info);
     public static TrayNotice CopiedRecentDictation() => new("Copied", "That dictation is on the clipboard. Press Ctrl+V to paste it.", TrayNoticeKind.Info);
-    public static TrayNotice ClipboardBusy() => new("Couldn't copy", "Another app may be using the clipboard. Try again in a moment.", TrayNoticeKind.Error);
+    public static TrayNotice ClipboardBusy() => new("Couldn't copy", "Another app may be using the clipboard. Try again in a moment.", TrayNoticeKind.Error, TrayNoticeAction.RetryCopy);
     public static TrayNotice QuickAddOpenFailed() => new("Couldn't open Add to dictionary", "Try again, or add the word in Settings, Dictionary.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDictionary);
     public static TrayNotice QuickAddSavedAndClosed() => new("Saved to your dictionary", "Scribe uses it from your next dictation.", TrayNoticeKind.Info);
-    public static TrayNotice QuickAddSavedButNotReloaded() => new("Saved, but not in use yet", "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.", TrayNoticeKind.Error);
+    public static TrayNotice QuickAddSavedButNotReloaded() => new("Saved, but not in use yet", "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.", TrayNoticeKind.Warning);
     public static TrayNotice TypingFailed(bool incomplete) => new("Couldn't type your dictation", incomplete ? "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it." : "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation);
-    public static TrayNotice SoundSettingsFailed() => new("Couldn't open sound settings", "Open Windows Settings > System > Sound.", TrayNoticeKind.Error, TrayNoticeAction.OpenSoundSettings);
+    public static TrayNotice SoundSettingsFailed() => new("Couldn't open sound settings", "Open Windows Settings > System > Sound.", TrayNoticeKind.Error);
     public static TrayNotice AiCleanupChangeFailed() => new("Couldn't change AI cleanup", "Try again, or change it in Settings, AI cleanup.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsAiCleanup);
     public static TrayNotice MicrophoneChangeFailed() => new("Couldn't change the microphone", "Try again, or choose one in Settings, Dictation.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettings);
     public static TrayNotice NoSpeechModel() => new("No speech model", "Choose a speech model in Settings, Advanced, to start dictating.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings);
