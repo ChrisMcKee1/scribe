@@ -12,7 +12,8 @@ namespace Scribe.Core.Libraries;
 /// <param name="State">Whether its file could be used.</param>
 /// <param name="FileName">
 /// Custom: the CSV's file name in the libraries folder, <c>Id + ".csv"</c> except for a hand-placed file remapped
-/// because its stem is a built-in id. Built-in: null.
+/// because its stem is a built-in id, which keeps its own name (no physical rename). It is the library's precedence
+/// identity (review finding A16) and, without <c>.csv</c>, the id older builds load it as (A15). Built-in: null.
 /// </param>
 /// <param name="ContentHash">
 /// The pre-image the journal checks before replacing the file, and the content identity compared with

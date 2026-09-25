@@ -52,22 +52,38 @@ public static class LibraryPrecedence
         .Select((id, index) => (id, index))
         .ToDictionary(pair => pair.id, pair => pair.index, StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Compares libraries by precedence; see <see cref="Compare(string, bool, string, bool)"/>.</summary>
+    /// <summary>Compares libraries by precedence; see <see cref="Compare(string, bool, string, string, bool, string)"/>.</summary>
     public static IComparer<DictionaryLibrary> Comparer { get; } =
-        Comparer<DictionaryLibrary>.Create((a, b) => Compare(a.Id, a.BuiltIn, b.Id, b.BuiltIn));
+        Comparer<DictionaryLibrary>.Create((a, b) => Compare(a.Id, a.BuiltIn, a.FileName, b.Id, b.BuiltIn, b.FileName));
+
+    /// <summary>
+    /// Compares two libraries by precedence, each custom library by <c>id + ".csv"</c>; see
+    /// <see cref="Compare(string, bool, string, string, bool, string)"/>, which takes a remapped library's real file name.
+    /// </summary>
+    public static int Compare(string? id, bool builtIn, string? otherId, bool otherBuiltIn) =>
+        Compare(id, builtIn, fileName: null, otherId, otherBuiltIn, otherFileName: null);
 
     /// <summary>
     /// Compares two libraries by precedence: listed built-ins by their place in <see cref="BuiltInOrder"/>, then any
     /// built-in the list does not name, by id, then custom libraries by file name, each tie broken by ordinal id.
     /// </summary>
     /// <remarks>
-    /// Custom libraries compare as their file names (<c>id + ".csv"</c>), not as bare ids, because the loader has always
-    /// read them in file-name order and the two differ where one id extends another: '-' sorts before '.', so
-    /// "team-terms-2.csv", the file a second import of the same library gets, comes before "team-terms.csv", and
-    /// comparing bare ids would swap which of the two wins. The ordinal tie-break only matters in a folder with
-    /// case-sensitive names, where "Team.csv" and "team.csv" can both exist.
+    /// <para>
+    /// Custom libraries compare as their file names, not as bare ids, because the loader has always read them in
+    /// file-name order and the two differ where one id extends another: '-' sorts before '.', so "team-terms-2.csv", the
+    /// file a second import of the same library gets, comes before "team-terms.csv", and comparing bare ids would swap
+    /// which of the two wins. The ordinal tie-break only matters in a folder with case-sensitive names, where "Team.csv"
+    /// and "team.csv" can both exist.
+    /// </para>
+    /// <para>
+    /// The file name is the library's physical one (<paramref name="fileName"/>, or <c>id + ".csv"</c> when null). They
+    /// differ only for a hand-placed file whose logical id was remapped away from a built-in id: <c>github.csv</c> is
+    /// <c>custom-github</c> in the local state and still ranks as <c>github.csv</c>, where 0.4.3 ranked it, so an
+    /// <c>epsilon.csv</c> beside it keeps winning the spoken forms both supply (review finding A16).
+    /// </para>
     /// </remarks>
-    public static int Compare(string? id, bool builtIn, string? otherId, bool otherBuiltIn)
+    public static int Compare(
+        string? id, bool builtIn, string? fileName, string? otherId, bool otherBuiltIn, string? otherFileName)
     {
         var rank = RankOf(id, builtIn);
         var byRank = rank.CompareTo(RankOf(otherId, otherBuiltIn));
@@ -80,7 +96,7 @@ public static class LibraryPrecedence
         {
             Rank.Listed => BuiltInIndex[id!].CompareTo(BuiltInIndex[otherId!]),
             Rank.Unlisted => StringComparer.OrdinalIgnoreCase.Compare(id, otherId),
-            _ => StringComparer.OrdinalIgnoreCase.Compare(FileName(id), FileName(otherId)),
+            _ => StringComparer.OrdinalIgnoreCase.Compare(fileName ?? FileName(id), otherFileName ?? FileName(otherId)),
         };
         return byKey != 0 ? byKey : string.CompareOrdinal(id, otherId);
     }
@@ -103,6 +119,23 @@ public static class LibraryPrecedence
         ArgumentNullException.ThrowIfNull(builtIn);
         return items
             .OrderBy(item => item, Comparer<T>.Create((a, b) => Compare(id(a), builtIn(a), id(b), builtIn(b))))
+            .ToList();
+    }
+
+    /// <summary>
+    /// <see cref="Order{T}(IEnumerable{T}, Func{T, string}, Func{T, bool})"/> with each custom item's physical file name
+    /// (null for <c>id + ".csv"</c>), for a caller that can hold a remapped library (A16).
+    /// </summary>
+    public static IReadOnlyList<T> Order<T>(
+        IEnumerable<T> items, Func<T, string?> id, Func<T, bool> builtIn, Func<T, string?> fileName)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(id);
+        ArgumentNullException.ThrowIfNull(builtIn);
+        ArgumentNullException.ThrowIfNull(fileName);
+        return items
+            .OrderBy(item => item, Comparer<T>.Create((a, b) =>
+                Compare(id(a), builtIn(a), fileName(a), id(b), builtIn(b), fileName(b))))
             .ToList();
     }
 
