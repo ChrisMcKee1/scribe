@@ -17,10 +17,10 @@ namespace Scribe.Core.Hotkeys;
 /// existed, and a claim made on better evidence could still be overtaken by a new press before the injection, which then
 /// ended a drag the user was making. Nothing needs the repair either: a mouse button does not repeat, and on Windows 7 and
 /// later a hook that misses the deadline is removed rather than skipped, so a leaked press is one Windows received. Its
-/// release reaches the app too, unless the watchdog's renewal registers the hook again before it comes; then the
-/// lost-hook recovery (<see cref="HotkeyEngine.OnMouseHookLost"/>) drops the release it still owed, because Windows
-/// reports the button down (<see cref="HotkeyEngine.ReleasesWindowsDoesNotHold"/>), and the release goes through; the
-/// same recovery ends the recording that press started.
+/// release reaches the app too, unless the watchdog's renewal registers the hook again before it comes; then that
+/// release is judged when it is made, on Windows' own view, which shows the button down, so it goes through
+/// (<see cref="HotkeyEngine.OnMouseButtonEvent"/>), and the lost-hook recovery (<see cref="HotkeyEngine.OnMouseHookLost"/>)
+/// ends the recording that press started.
 /// </summary>
 internal sealed class SuppressedKeyReconciler
 {

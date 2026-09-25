@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Scribe.Core.Hotkeys;
@@ -137,7 +138,10 @@ internal static partial class NativeMethods
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
     /// <summary>
-    /// Windows' own view of a mouse button, or null when it cannot be trusted (see <see cref="ReadMouseButtonState"/>).
+    /// Windows' own view of a mouse button, or null when a zero cannot be trusted (see <see cref="ReadMouseButtonState"/>).
+    /// Called in the mouse hook callback, for the release of a press the hook swallowed before a time no hook saw the
+    /// mouse, so everything under it waits for nothing, takes no lock of Scribe's and allocates nothing: user32 queries,
+    /// and for a zero the foreground process's integrity level, read into a buffer on the stack.
     /// </summary>
     internal static bool? MouseButtonStateInWindows(uint button) =>
         ReadMouseButtonState(
@@ -149,11 +153,14 @@ internal static partial class NativeMethods
     /// up, and it fails when "The current desktop is not the active desktop" and when "UI Privilege Isolation (UIPI)
     /// prevents the calling thread from accessing the foreground thread" (a window of a higher integrity level in front,
     /// such as an elevated app's); its third failure, no DESKTOP_HOOKCONTROL or DESKTOP_JOURNALRECORD access to the
-    /// foreground thread's desktop, cannot happen once the first check holds: that desktop is then this thread's own, and
-    /// the hooks this thread installed there needed DESKTOP_HOOKCONTROL ("Required to establish any of the window
-    /// hooks"). So a reading of down is Windows' own, while a reading of up counts only on a desktop receiving input,
-    /// with the same foreground window before and after the reading, which <paramref name="windowAllowsReads"/> says the
-    /// call could reach; anything else is null, which the recovery treats as unknown and so drops the debt.
+    /// foreground thread's desktop, cannot happen while the desktop checks hold: that desktop is then this thread's own,
+    /// and the hooks this thread installed there needed DESKTOP_HOOKCONTROL ("Required to establish any of the window
+    /// hooks"). So a reading of down is Windows' own (a failure returns zero), while a reading of up counts only when this
+    /// desktop receives input before and after it, the same foreground window is in front before and after it, and
+    /// <paramref name="windowAllowsReads"/> says the call could reach that window; anything else is null. That bracket is
+    /// the most one call allows, not proof: Windows gives no reason with a zero, so a foreground that turns to a window
+    /// the call cannot reach and back between the two samples, or a desktop that goes and comes back, reads as a
+    /// trustworthy up. The owed-release decision therefore relies on it only for a release a gap has made uncertain.
     /// </summary>
     internal static bool? ReadMouseButtonState(
         uint button,
@@ -174,7 +181,9 @@ internal static partial class NativeMethods
         }
 
         var after = foregroundWindow();
-        return before != 0 && before == after && windowAllowsReads(before) == true ? false : null;
+        return before != 0 && before == after && desktopReceivesInput() == true && windowAllowsReads(before) == true
+            ? false
+            : null;
     }
 
     [LibraryImport("user32.dll")]
@@ -199,10 +208,26 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool OpenProcessToken(nint processHandle, uint desiredAccess, out nint tokenHandle);
 
+    // Room for a TOKEN_MANDATORY_LABEL (its SID_AND_ATTRIBUTES: the SID pointer, the attributes and padding, 16 bytes on
+    // 64-bit Windows) and the integrity SID GetTokenInformation writes after it (12 bytes for its one subauthority), kept
+    // on the stack so the read allocates nothing. Sid points into this buffer once the call has filled it.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MandatoryLabelBuffer
+    {
+        public nint Sid;
+        public int Attributes;
+        private int _padding;
+        private long _sid0, _sid1, _sid2, _sid3, _sid4, _sid5;
+    }
+
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetTokenInformation(
-        nint tokenHandle, int tokenInformationClass, nint tokenInformation, int tokenInformationLength, out int returnLength);
+        nint tokenHandle,
+        int tokenInformationClass,
+        ref MandatoryLabelBuffer tokenInformation,
+        int tokenInformationLength,
+        out int returnLength);
 
     [LibraryImport("advapi32.dll")]
     private static partial nint GetSidSubAuthorityCount(nint sid);
@@ -210,7 +235,24 @@ internal static partial class NativeMethods
     [LibraryImport("advapi32.dll")]
     private static partial nint GetSidSubAuthority(nint sid, uint subAuthority);
 
-    private static readonly Lazy<uint?> OwnIntegrityLevel = new(() => ProcessIntegrityLevel((uint)Environment.ProcessId));
+    // This process's integrity level, read once: HotkeyService primes it before any hook exists, so the hook callback only
+    // reads the field. Zero until then (the one level that is zero, Untrusted, is not one Scribe runs at).
+    private static uint s_ownIntegrityLevel;
+
+    /// <summary>Reads this process's integrity level now, so the hook callback never has to (see HotkeyService.Start).</summary>
+    internal static void PrimeOwnIntegrityLevel() => _ = OwnIntegrityLevel();
+
+    private static uint? OwnIntegrityLevel()
+    {
+        var level = Volatile.Read(ref s_ownIntegrityLevel);
+        if (level == 0 && ProcessIntegrityLevel((uint)Environment.ProcessId) is { } read)
+        {
+            level = read;
+            Volatile.Write(ref s_ownIntegrityLevel, level);
+        }
+
+        return level == 0 ? null : level;
+    }
 
     /// <summary>
     /// Whether GetAsyncKeyState can reach the thread that owns <paramref name="window"/>: true for this process's own
@@ -235,7 +277,7 @@ internal static partial class NativeMethods
             return true;
         }
 
-        return IntegrityAllowsReads(OwnIntegrityLevel.Value, ProcessIntegrityLevel(processId));
+        return IntegrityAllowsReads(OwnIntegrityLevel(), ProcessIntegrityLevel(processId));
     }
 
     /// <summary>
@@ -248,7 +290,9 @@ internal static partial class NativeMethods
 
     /// <summary>
     /// A process's mandatory integrity level (the RID of its token's integrity SID: 0x2000 medium, 0x3000 high), or null
-    /// when it cannot be read. OpenProcessToken needs only PROCESS_QUERY_LIMITED_INFORMATION.
+    /// when it cannot be read. OpenProcessToken needs only PROCESS_QUERY_LIMITED_INFORMATION. Safe in the hook callback:
+    /// three kernel calls that wait for no other thread, two handles closed before it returns, and the label read into a
+    /// buffer on the stack.
     /// </summary>
     internal static uint? ProcessIntegrityLevel(uint processId)
     {
@@ -267,30 +311,18 @@ internal static partial class NativeMethods
 
             try
             {
-                _ = GetTokenInformation(token, TokenIntegrityLevel, 0, 0, out var needed);
-                if (needed <= 0)
+                var label = default(MandatoryLabelBuffer);
+                if (!GetTokenInformation(
+                        token, TokenIntegrityLevel, ref label, Unsafe.SizeOf<MandatoryLabelBuffer>(), out _)
+                    || label.Sid == 0)
                 {
                     return null;
                 }
 
-                var label = Marshal.AllocHGlobal(needed);
-                try
-                {
-                    if (!GetTokenInformation(token, TokenIntegrityLevel, label, needed, out _))
-                    {
-                        return null;
-                    }
-
-                    // TOKEN_MANDATORY_LABEL starts with its SID_AND_ATTRIBUTES, which starts with the SID pointer; the
-                    // level is that SID's last subauthority.
-                    var sid = Marshal.ReadIntPtr(label);
-                    var count = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
-                    return count == 0 ? null : (uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
-                }
-                finally
-                {
-                    Marshal.FreeHGlobal(label);
-                }
+                // The level is the SID's last subauthority; the SID lies in the buffer, which stays where it is until this
+                // method returns.
+                var count = Marshal.ReadByte(GetSidSubAuthorityCount(label.Sid));
+                return count == 0 ? null : (uint)Marshal.ReadInt32(GetSidSubAuthority(label.Sid, (uint)(count - 1)));
             }
             finally
             {

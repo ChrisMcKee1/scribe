@@ -19,7 +19,7 @@ internal sealed class HotkeyCommandRouter
 {
     private readonly object _gate;
     private readonly Func<uint, bool>? _isLogicallyDown;
-    private readonly Func<uint, bool?>? _buttonHeldInWindows;
+    private readonly WindowsMouseView? _windowsView;
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
@@ -35,12 +35,12 @@ internal sealed class HotkeyCommandRouter
 
     /// <param name="binding">The initial standard binding.</param>
     /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
-    /// <param name="buttonHeldInWindows">
-    /// Windows' own view of a mouse button, null when it cannot be told, which a recovery asks about every release still
-    /// owed (see <see cref="HotkeyEngine.ReconcileOwedReleases"/>), handed to every engine.
+    /// <param name="windowsView">
+    /// Windows' own view of the mouse buttons, which every engine reads for a release it owes
+    /// (<see cref="WindowsMouseView"/>).
     /// </param>
-    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, Func<uint, bool?>? buttonHeldInWindows = null)
-        : this(binding, new object(), isLogicallyDown, buttonHeldInWindows)
+    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, WindowsMouseView? windowsView = null)
+        : this(binding, new object(), isLogicallyDown, windowsView)
     {
     }
 
@@ -50,17 +50,17 @@ internal sealed class HotkeyCommandRouter
     /// nothing on the hook path ever needs it.
     /// </param>
     /// <param name="isLogicallyDown">Windows' view of a key, or null to trust the hook's view alone.</param>
-    /// <param name="buttonHeldInWindows">
-    /// Windows' view of a mouse button, null when it cannot be told; null for the whole function keeps every owed release
-    /// through a recovery, as the tests that do not script Windows expect.
+    /// <param name="windowsView">
+    /// Windows' own view of the mouse buttons, or null, for the tests that do not script Windows, to decide an owed
+    /// release by the engine's own state alone.
     /// </param>
     internal HotkeyCommandRouter(
-        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, Func<uint, bool?>? buttonHeldInWindows = null)
+        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, WindowsMouseView? windowsView = null)
     {
         _binding = binding;
         _gate = gate;
         _isLogicallyDown = isLogicallyDown;
-        _buttonHeldInWindows = buttonHeldInWindows;
+        _windowsView = windowsView;
     }
 
     public HotkeyBinding Binding => _binding;
@@ -69,6 +69,9 @@ internal sealed class HotkeyCommandRouter
 
     /// <summary>Windows' view of a key that every engine is given, or null; for a test of the service's wiring.</summary>
     internal Func<uint, bool>? WindowsKeyState => _isLogicallyDown;
+
+    /// <summary>Windows' view of the mouse buttons that every engine is given, or null; for a test of the wiring.</summary>
+    internal WindowsMouseView? WindowsButtonView => _windowsView;
 
     /// <summary>The engine that owns the hook right now, or null while the service is stopped.</summary>
     public HotkeyEngine? CurrentEngine => Volatile.Read(ref _engine);
@@ -181,10 +184,11 @@ internal sealed class HotkeyCommandRouter
     /// after the retirement sealed them, so no callback of the old engine, one already running
     /// included, changes them any more (a press whose debt loses to the seal is not swallowed): DefWindowProc
     /// makes a side button's lone release a Back or Forward command, so a button held through a
-    /// reinstall must still reach no app. They are handed on as sealed, not judged here: until the new
-    /// engine's mouse hook exists a release and a new press can still reach Windows unseen, so the
-    /// replacement asks Windows about them once its first registration is in place
-    /// (<see cref="HotkeyEngine.ReconcileOwedReleases"/>).
+    /// reinstall must still reach no app. They are handed on as sealed, not judged here, and the new
+    /// engine takes them as uncertain: between the old thread's exit and the new registration no hook
+    /// sees the mouse, and a press can still be inside an older program's hook as the registration
+    /// lands, so each is judged by what Windows shows when its release is made
+    /// (<see cref="HotkeyEngine.OnMouseButtonEvent"/>).
     /// </summary>
     public (HotkeyEngine Engine, HotkeyTrigger? Interrupted) BeginEngine(HotkeyTransitionQueue transitions)
     {
@@ -196,7 +200,7 @@ internal sealed class HotkeyCommandRouter
             var engine = new HotkeyEngine(
                 _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
                 previous?.OwedButtonReleases ?? 0,
-                _buttonHeldInWindows);
+                _windowsView);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }
