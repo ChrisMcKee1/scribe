@@ -220,6 +220,88 @@ public partial class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_drops_a_move_that_waited_for_a_key_once_another_window_came_to_the_front()
+    {
+        // Review round 2, item 5 (A5). The move waits while the swallowed key is held; a local app comes to the front; the
+        // key's release asks for the move again. Made then, it would reorder the system-wide chain with a local app in front
+        // (possibly ahead of a local key remapper), for nothing. The window handles are the test's own, never real windows:
+        // the notice is published the way the hook thread's WinEvent callback publishes one.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        service.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+        var engine = service.CurrentEngineForTests!;
+        Assert.True(engine.OnKeyEvent(RightCtrl, isDown: true).Suppress);
+
+        clock.Timer.Fire();
+        Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMovesDeferred == 1, HookTimeout), "The move did not wait for the key.");
+
+        Volatile.Write(ref inFront, ScriptedLocalWindow);
+        service.NoticeForegroundForTests(ScriptedLocalWindow);
+        Assert.True(engine.OnKeyEvent(RightCtrl, isDown: false).Suppress);
+        service.RunReconcilePassForTests(repairKeys: false);
+        AwaitQuiet(service);
+
+        Assert.Equal(0, service.KeyboardHookMoves);
+        Assert.Equal(1, service.KeyboardHookMovesDropped);
+    }
+
+    [Fact]
+    public void Start_drops_a_move_another_window_coming_to_the_front_overtook_before_the_hook_thread_took_it()
+    {
+        // Review round 2, item 5 (A5): the move is posted with the remote client in front, and a local app comes to the front
+        // before the hook thread handles the message; the hook thread checks right before it registers.
+        var inFront = ScriptedRemoteWindow;
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var atMove = new ManualResetEventSlim(false);
+        using var proceed = new ManualResetEventSlim(false);
+        using var service = ScriptedForegroundService(clock, () => Volatile.Read(ref inFront));
+        service.BeforeKeyboardMoveForTests = () =>
+        {
+            atMove.Set();
+            proceed.Wait(HookTimeout);
+        };
+        service.Start();
+        Assert.True(
+            SpinWait.SpinUntil(() => clock.MadeTimer?.Due == KeyboardHookPrecedence.FirstMoveDelay, HookTimeout),
+            "The remote client in front when the hook installed scheduled no move.");
+
+        clock.Timer.Fire();
+        var took = atMove.Wait(HookTimeout);
+        Volatile.Write(ref inFront, ScriptedLocalWindow);
+        service.NoticeForegroundForTests(ScriptedLocalWindow);
+        proceed.Set();
+        Assert.True(took, "The hook thread never took the move.");
+        AwaitQuiet(service);
+
+        Assert.Equal(0, service.KeyboardHookMoves);
+        Assert.Equal(1, service.KeyboardHookMovesDropped);
+    }
+
+    // Window handles of the test's own, never real windows, named by the scripted process lookup below.
+    private const nint ScriptedRemoteWindow = 0x1111;
+    private const nint ScriptedLocalWindow = 0x2222;
+
+    // A service over the legacy binding whose window in front, and the process of each window, the test scripts, on a clock
+    // the test owns.
+    private static HotkeyService ScriptedForegroundService(KeyboardHookPrecedenceTests.OneTimerClock clock, Func<nint> inFront) =>
+        new(
+            NullLogger<HotkeyService>.Instance,
+            new HotkeyCommandRouter(HotkeyBinding.Legacy),
+            () => true,
+            foregroundWindow: inFront,
+            processNameOfWindow: window => window switch
+            {
+                ScriptedRemoteWindow => "msrdc",
+                ScriptedLocalWindow => "notepad",
+                _ => null,
+            },
+            time: clock);
+
+    [Fact]
     public void Start_judges_a_key_through_a_replaced_registration_without_swallowing_it()
     {
         // Each registration's own delegate, called as Windows calls it (this desktop has no input, so the test plays the

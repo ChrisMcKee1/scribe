@@ -144,13 +144,20 @@ public sealed class RemoteDesktopHookPathTests
         yield return typeof(ForegroundNotice).GetMethod(nameof(ForegroundNotice.Notify), Any)!;
     }
 
-    // What the hook thread runs between messages for a move ahead and its clean-up.
+    // What the hook thread runs between messages for a move ahead and its clean-up. Since review round 2 (item 5) the move
+    // also reads the window in front, through the service's delegate (one GetForegroundWindow in production, which waits
+    // for no other thread and which this scan cannot follow), to drop a move the user left the remote client before; no
+    // process is looked up there, which the forbidden list checks.
     private static IEnumerable<MethodBase> MoveAheadPath()
     {
         const BindingFlags Declared =
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
         var installation = typeof(HotkeyService).GetNestedType("HookInstallation", BindingFlags.NonPublic)!;
-        foreach (var name in new[] { "MoveAhead", "FreeRegistration", "ReleaseRetired", "Release" })
+        foreach (var name in new[]
+                 {
+                     "MoveAhead", "StillInFront", "DeferMove", "ForgetDeferredMove", "RetryDeferredMove", "FreeRegistration",
+                     "ReleaseRetired", "Release",
+                 })
         {
             yield return installation.GetMethod(name, Declared)!;
         }

@@ -90,6 +90,7 @@ public sealed class HotkeyService : IHotkeyService
     private long _keyboardMoveFailuresReported;
     private long _keyboardFoundGoneReported;
     private long _keyboardMovesDeferredReported;
+    private long _keyboardMovesDroppedReported;
 
     public HotkeyService(ILogger<HotkeyService> logger)
         : this(logger, HotkeyBinding.DefaultDictation)
@@ -345,7 +346,16 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     /// <summary>Asks the hook thread to move the keyboard hook ahead now, as a remote client coming to the front does; for tests.</summary>
-    internal void MoveKeyboardHookAheadNow() => CurrentInstallation?.RequestMoveAhead();
+    internal void MoveKeyboardHookAheadNow() => CurrentInstallation?.RequestMoveAhead(HookInstallation.ForcedMove, 0);
+
+    /// <summary>A foreground notice for <paramref name="window"/>, published as the hook thread's WinEvent callback publishes one; for tests.</summary>
+    internal void NoticeForegroundForTests(nint window) => CurrentInstallation?.NoticeForeground(window);
+
+    /// <summary>Test seam, null in production: run on the hook thread as it takes a move ahead, before it judges it.</summary>
+    internal Action? BeforeKeyboardMoveForTests { get; set; }
+
+    /// <summary>How many of the current installation's moves ahead were dropped because the foreground changed first; for tests.</summary>
+    internal long KeyboardHookMovesDropped => CurrentInstallation?.KeyboardHookMovesDropped ?? 0;
 
     /// <summary>Asks the hook thread to release what its moves replaced now, whatever its age with <paramref name="force"/>; for tests.</summary>
     internal void ReleaseRetiredKeyboardHooksNow(bool force) => CurrentInstallation?.RequestReleaseRetired(force);
@@ -881,6 +891,7 @@ public sealed class HotkeyService : IHotkeyService
             _keyboardMoveFailuresReported = 0;
             _keyboardFoundGoneReported = 0;
             _keyboardMovesDeferredReported = 0;
+            _keyboardMovesDroppedReported = 0;
         }
 
         var (failures, error) = installation.KeyboardHookMoveFailures;
@@ -902,6 +913,16 @@ public sealed class HotkeyService : IHotkeyService
                 "A move of the keyboard hook ahead of a remote desktop client's waited for a key Scribe swallowed to be " +
                 "released ({Count} time(s) for this hook thread), so the release reaches every hook that saw the press.",
                 deferred);
+        }
+
+        var dropped = installation.KeyboardHookMovesDropped;
+        if (dropped != _keyboardMovesDroppedReported)
+        {
+            _keyboardMovesDroppedReported = dropped;
+            _logger.LogDebug(
+                "A move of the keyboard hook ahead of a remote desktop client's was dropped: another window came to the " +
+                "front before the hook thread made it ({Count} time(s) for this hook thread).",
+                dropped);
         }
 
         var gone = installation.RetiredKeyboardHooksFoundGone;
@@ -1203,6 +1224,13 @@ public sealed class HotkeyService : IHotkeyService
         private long _moveAheadFailures;
         private int _moveAheadError;
         private long _moveAheadsDeferred;
+        private long _movesDropped;
+
+        // The move a swallowed key held back, kept for its retry: its foreground revision and window (see MoveAhead). Hook
+        // thread only; _moveAheadDeferred says to other threads that one waits.
+        private long _deferredRevision;
+        private nint _deferredWindow;
+        private bool _hasDeferredMove;
         private int _moveAheadDeferred;
         private long _retiredFoundGone;
         private long _echoes;
@@ -1244,6 +1272,7 @@ public sealed class HotkeyService : IHotkeyService
             _precedence = new KeyboardHookPrecedence(
                 service._foregroundWindow,
                 service._processNameOfWindow,
+                PublishedForegroundRevision,
                 RequestMoveAhead,
                 () => RequestReleaseRetired(force: false),
                 service._logger,
@@ -1400,9 +1429,11 @@ public sealed class HotkeyService : IHotkeyService
 
         /// <summary>
         /// Any thread (the pool side of the moves ahead, tests): asks this installation's thread to register its keyboard
-        /// hook afresh, ahead of every hook registered before, keeping its engine (see <see cref="MoveAhead"/>). Never waits.
+        /// hook afresh, ahead of every hook registered before, keeping its engine (see <see cref="MoveAhead"/>), for the
+        /// foreground revision <paramref name="revision"/> and the window <paramref name="window"/> in front the request
+        /// was judged on (the message carries both), or unconditionally for <see cref="ForcedMove"/>. Never waits.
         /// </summary>
-        public void RequestMoveAhead()
+        public void RequestMoveAhead(long revision, nint window)
         {
             var threadId = _engine.OwnerThreadId;
             if (threadId != 0 && !_engine.IsRetired)
@@ -1410,7 +1441,7 @@ public sealed class HotkeyService : IHotkeyService
                 // Off the hook thread: the keyboard repeat settings, which bound how long after the move an unseen key-down
                 // is uncertain, read afresh in case the user changed them.
                 _engine.SetUncertaintyWindow(_service._keyRepeatWindowMs());
-                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_AHEAD, nint.Zero, nint.Zero);
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_AHEAD, (nint)revision, window);
             }
         }
 
@@ -1429,13 +1460,15 @@ public sealed class HotkeyService : IHotkeyService
 
         /// <summary>
         /// Any thread (a reconcile pass, which follows the release of a key the bindings swallowed): asks again for a move
-        /// ahead that waited for such a key, once; the hook thread judges again whether it may be made. Never waits.
+        /// ahead that waited for such a key, once. The move, its foreground revision and window included, stays on the hook
+        /// thread, which judges it afresh, whether the foreground it was judged on is still in front included. Never waits.
         /// </summary>
         public void RetryDeferredMoveAhead()
         {
-            if (Interlocked.Exchange(ref _moveAheadDeferred, 0) != 0)
+            var threadId = _engine.OwnerThreadId;
+            if (Interlocked.Exchange(ref _moveAheadDeferred, 0) != 0 && threadId != 0)
             {
-                RequestMoveAhead();
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_RETRY, nint.Zero, nint.Zero);
             }
         }
 
@@ -1445,6 +1478,19 @@ public sealed class HotkeyService : IHotkeyService
         /// too. Never waits.
         /// </summary>
         public void NoticeForegroundNow() => _foregroundNotice.Notify(_service._foregroundWindow());
+
+        // The pool side's read of the latest foreground revision, as a method so the notice made after it in the constructor
+        // is read when it is called.
+        private long PublishedForegroundRevision() => _foregroundNotice.PublishedRevision;
+
+        /// <summary>Any thread, for tests: publishes a foreground notice for <paramref name="window"/>, as the WinEvent callback does.</summary>
+        public void NoticeForeground(nint window) => _foregroundNotice.Notify(window);
+
+        /// <summary>A move asked for by a test: made without the foreground check.</summary>
+        public const long ForcedMove = -1;
+
+        /// <summary>Any thread: how many moves ahead were dropped because the foreground they were judged on had changed.</summary>
+        public long KeyboardHookMovesDropped => Interlocked.Read(ref _movesDropped);
 
         public bool Join(TimeSpan timeout) => _thread.Join(timeout);
 
@@ -1570,7 +1616,13 @@ public sealed class HotkeyService : IHotkeyService
                     // The keyboard hook's moves ahead and their clean-up, between messages like the mouse hook's changes.
                     if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_MOVE_AHEAD)
                     {
-                        MoveAhead();
+                        MoveAhead((long)msg.wParam, msg.lParam);
+                        continue;
+                    }
+
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_MOVE_RETRY)
+                    {
+                        RetryDeferredMove();
                         continue;
                     }
 
@@ -1625,18 +1677,28 @@ public sealed class HotkeyService : IHotkeyService
             _precedence.Dispose();
         }
 
-        // Hook thread only, between messages (WM_HOTKEY_MOVE_AHEAD), never inside a hook callback. Registers the keyboard
-        // hook afresh, which Windows puts "at the beginning of a hook chain" (Hooks Overview), so this installation's
-        // callback is called before every hook registered before it, a Remote Desktop client's included (see
-        // KeyboardHookPrecedence). The same engine: no key state, epoch or latch changes, and a key held through the move
-        // is still the key the engine holds.
+        // Hook thread only, between messages (WM_HOTKEY_MOVE_AHEAD, or a retry of a move that waited), never inside a hook
+        // callback. Registers the keyboard hook afresh, which Windows puts "at the beginning of a hook chain" (Hooks
+        // Overview), so this installation's callback is called before every hook registered before it, a Remote Desktop
+        // client's included (see KeyboardHookPrecedence). The same engine: no key state, epoch or latch changes, and a key
+        // held through the move is still the key the engine holds.
+        //
+        // Only while the foreground it was judged on is still in front (review round 2, item 5): KeyboardHookPrecedence
+        // judged a remote client in front at the foreground revision <revision>, with <window> in front, and a move posted or
+        // held back since can be handled after the user left for a local app, where reordering the system-wide chain would
+        // put Scribe's hook ahead of, say, a local key remapper for nothing. So right before registering, the move is dropped
+        // unless no foreground notice was published since (ForegroundNotice.PublishedRevision, bumped by the WinEvent
+        // callback on this thread) and the window is still in front: one GetForegroundWindow through the service's delegate,
+        // which covers a change whose WinEvent this thread has not been handed yet. No process is looked up here. A test's
+        // forced move (ForcedMove) skips the check.
         //
         // Not while a key whose press the engine swallowed is held (HotkeyEngine.HoldsSwallowedKey): its release would
         // then reach Scribe's hook first and be swallowed there, and a hook that was ahead of Scribe's when the key went
         // down, and may have forwarded that press into a remote session, would never see the release. The remote session
         // would keep the key down, and pressing it again would not help, because Scribe swallows that key. The move waits,
-        // counted, and the reconcile pass that follows the key's release asks for it again (RetryDeferredMoveAhead), as
-        // does the next step of KeyboardHookPrecedence's sequence.
+        // counted, with its revision and window kept on this thread, and the reconcile pass that follows the key's
+        // release asks for it again (RetryDeferredMoveAhead), when it is judged afresh, the foreground check included; a
+        // later move asked for meanwhile replaces it.
         //
         // The registration it replaces is kept for a grace (RetiredHookRegistrations), not released: an event already on
         // its way to it when the new one landed (inside a hook ahead of it) must still find a registration of this
@@ -1648,21 +1710,33 @@ public sealed class HotkeyService : IHotkeyService
         // registration is released once its grace is over, at the next move or when the release is asked for. A
         // registration Windows refuses keeps the current one, counted for the watchdog to report. A retired engine moves
         // nothing: its thread may outlive a reinstall's join, and its hook must not go ahead of the replacement's.
-        private void MoveAhead()
+        private void MoveAhead(long revision, nint window)
         {
+            _service.BeforeKeyboardMoveForTests?.Invoke();
             if (_engine.IsRetired)
             {
+                return;
+            }
+
+            if (!StillInFront(revision, window))
+            {
+                Interlocked.Increment(ref _movesDropped);
+                if (_hasDeferredMove && !StillInFront(_deferredRevision, _deferredWindow))
+                {
+                    ForgetDeferredMove();
+                }
+
                 return;
             }
 
             if (_engine.HoldsSwallowedKey)
             {
                 Interlocked.Increment(ref _moveAheadsDeferred);
-                Volatile.Write(ref _moveAheadDeferred, 1);
+                DeferMove(revision, window);
                 return;
             }
 
-            Volatile.Write(ref _moveAheadDeferred, 0);
+            ForgetDeferredMove();
             ReleaseRetired(force: false);
             var registration = FreeRegistration();
             var replacement = registration is null
@@ -1691,6 +1765,36 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             Interlocked.Increment(ref _moveAheads);
+        }
+
+        // Hook thread only: whether a move judged at the foreground revision <revision> with <window> in front may still be
+        // made (see MoveAhead). A published revision the move did not see means the foreground changed since.
+        private bool StillInFront(long revision, nint window) =>
+            revision == ForcedMove ||
+            (revision == _foregroundNotice.PublishedRevision && _service._foregroundWindow() == window);
+
+        // Hook thread only: the move that waited, kept for its retry, and the flag the reconcile pass takes to ask for it.
+        private void DeferMove(long revision, nint window)
+        {
+            _deferredRevision = revision;
+            _deferredWindow = window;
+            _hasDeferredMove = true;
+            Volatile.Write(ref _moveAheadDeferred, 1);
+        }
+
+        private void ForgetDeferredMove()
+        {
+            _hasDeferredMove = false;
+            Volatile.Write(ref _moveAheadDeferred, 0);
+        }
+
+        // Hook thread only, between messages (WM_HOTKEY_MOVE_RETRY): the move that waited, if one still does, judged afresh.
+        private void RetryDeferredMove()
+        {
+            if (_hasDeferredMove)
+            {
+                MoveAhead(_deferredRevision, _deferredWindow);
+            }
         }
 
         // Hook thread only: a slot no registration holds, or null. There is always one (see _registrations); a move that

@@ -19,13 +19,15 @@ internal static partial class NativeMethods
     // Private thread messages to the hook thread. WM_APP and above is the range reserved for application-defined
     // messages. The first wakes it to apply queued commands; the second, from the watchdog, also has it register its
     // mouse hook afresh (see HotkeyService.HookInstallation). The third has it register its keyboard hook afresh, ahead
-    // of a Remote Desktop client's, and the fourth release the registrations those moves replaced (wParam 1: whatever
-    // their age, for tests).
+    // of a Remote Desktop client's (wParam the foreground revision and lParam the window in front it was judged on), the
+    // fourth release the registrations those moves replaced (wParam 1: whatever their age, for tests), and the fifth retry a
+    // move that waited.
     internal const uint WM_APP = 0x8000;
     internal const uint WM_HOTKEY_COMMANDS = WM_APP + 1;
     internal const uint WM_HOTKEY_REFRESH = WM_APP + 2;
     internal const uint WM_HOTKEY_MOVE_AHEAD = WM_APP + 3;
     internal const uint WM_HOTKEY_RELEASE_RETIRED = WM_APP + 4;
+    internal const uint WM_HOTKEY_MOVE_RETRY = WM_APP + 5;
 
     internal const int VK_SHIFT = 0x10;
     internal const int VK_CONTROL = 0x11;

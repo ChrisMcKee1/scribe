@@ -230,6 +230,22 @@ public class KeyboardHookPrecedenceTests
     }
 
     [Fact]
+    public void Every_move_carries_the_foreground_revision_and_the_window_its_step_judged()
+    {
+        // Review round 2, item 5 (A5): the hook thread makes a move only while the foreground it was judged on is still the
+        // one Windows has in front (the notice published no newer revision since, and the window is still in front).
+        var rig = new Rig();
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+
+        rig.Publish(); // a newer notice, published but not yet handled when the second move falls due
+        rig.Time.Timer.Fire();
+
+        Assert.Equal([(1L, RemoteWindow), (2L, RemoteWindow)], rig.Moves);
+    }
+
+    [Fact]
     public void A_failing_process_query_or_request_never_escapes_to_the_pool()
     {
         var rig = new Rig { ThrowFromQuery = true };
@@ -398,7 +414,12 @@ public class KeyboardHookPrecedenceTests
                         _ => null,
                     };
                 },
-                () => Requests.Add("move"),
+                () => Interlocked.Read(ref _revision),
+                (revision, window) =>
+                {
+                    Moves.Add((revision, window));
+                    Requests.Add("move");
+                },
                 () => Requests.Add("release"),
                 Log,
                 Time);
@@ -415,6 +436,9 @@ public class KeyboardHookPrecedenceTests
         public Action<nint>? BeforeLookup { get; set; }
 
         public List<string> Requests { get; } = [];
+
+        /// <summary>Each move asked for: the foreground revision and the window its step judged.</summary>
+        public List<(long Revision, nint Window)> Moves { get; } = [];
 
         public TextInjectionFakes.CapturingLogger<KeyboardHookPrecedenceTests> Log { get; } = new();
 

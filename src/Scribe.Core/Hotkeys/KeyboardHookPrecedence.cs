@@ -55,7 +55,8 @@ internal sealed class KeyboardHookPrecedence : IDisposable
     private readonly object _gate = new();
     private readonly Func<nint> _foregroundWindow;
     private readonly Func<nint, string?> _processNameOfWindow;
-    private readonly Action _moveAhead;
+    private readonly Func<long> _publishedRevision;
+    private readonly Action<long, nint> _moveAhead;
     private readonly Action _releaseRetired;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
@@ -73,20 +74,26 @@ internal sealed class KeyboardHookPrecedence : IDisposable
 
     /// <param name="foregroundWindow">The window in front now (GetForegroundWindow in production).</param>
     /// <param name="processNameOfWindow">The name of the process that owns a window, or null.</param>
-    /// <param name="moveAhead">Asks the hook thread to move its keyboard hook ahead; never waits.</param>
+    /// <param name="publishedRevision">The revision of the latest foreground notice published (<see cref="ForegroundNotice.PublishedRevision"/>).</param>
+    /// <param name="moveAhead">
+    /// Asks the hook thread to move its keyboard hook ahead, for the foreground revision and the window in front the step
+    /// judged, which the hook thread checks are still current right before it registers; never waits.
+    /// </param>
     /// <param name="releaseRetired">Asks the hook thread to release the registrations its moves replaced; never waits.</param>
     /// <param name="logger">Where a remote client coming to the front is recorded, by its process name only.</param>
     /// <param name="time">The clock the delays run on.</param>
     public KeyboardHookPrecedence(
         Func<nint> foregroundWindow,
         Func<nint, string?> processNameOfWindow,
-        Action moveAhead,
+        Func<long> publishedRevision,
+        Action<long, nint> moveAhead,
         Action releaseRetired,
         ILogger logger,
         TimeProvider time)
     {
         _foregroundWindow = foregroundWindow;
         _processNameOfWindow = processNameOfWindow;
+        _publishedRevision = publishedRevision;
         _moveAhead = moveAhead;
         _releaseRetired = releaseRetired;
         _logger = logger;
@@ -184,10 +191,20 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                 schedule = _schedule;
             }
 
+            // The revision before the window, so the move is judged on a foreground no older than that revision: a notice
+            // published after this read makes the hook thread drop the move (HotkeyService.HookInstallation.MoveAhead).
+            long revision = 0;
+            nint window = 0;
             bool inFront;
             try
             {
-                inFront = step != Idle && RemoteClientProcesses.IsRemoteClient(_processNameOfWindow(_foregroundWindow()));
+                if (step != Idle)
+                {
+                    revision = _publishedRevision();
+                    window = _foregroundWindow();
+                }
+
+                inFront = window != 0 && RemoteClientProcesses.IsRemoteClient(_processNameOfWindow(window));
             }
             catch (Exception)
             {
@@ -205,7 +222,7 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                 switch (step)
                 {
                     case FirstMoveDue when inFront:
-                        _moveAhead();
+                        _moveAhead(revision, window);
                         Arm(SecondMoveDue, SecondMoveDelay);
                         break;
                     case FirstMoveDue:
@@ -214,7 +231,7 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                     case SecondMoveDue:
                         if (inFront)
                         {
-                            _moveAhead();
+                            _moveAhead(revision, window);
                         }
 
                         Arm(ReleaseDue, RetiredGrace);
@@ -232,7 +249,7 @@ internal sealed class KeyboardHookPrecedence : IDisposable
 
                         break;
                     case KeepAheadDue when inFront:
-                        _moveAhead();
+                        _moveAhead(revision, window);
                         Arm(ReleaseDue, RetiredGrace);
                         break;
                     case KeepAheadDue:
