@@ -47,6 +47,8 @@ public sealed class RemoteActivityPolicyTests
     [Theory]
     [InlineData(nameof(AppSettings.AiCleanupAzureEndpoint))]
     [InlineData(nameof(AppSettings.AiCleanupAzureDeployment))]
+    [InlineData(nameof(AppSettings.AiCleanupAzureSubscriptionId))]
+    [InlineData(nameof(AppSettings.AiCleanupAzureSubscriptionTenantId))]
     [InlineData(nameof(AppSettings.AiCleanupAzureAuthMode))]
     [InlineData(nameof(AppSettings.AiCleanupAzureTenantId))]
     [InlineData(nameof(AppSettings.AiCleanupAzureClientId))]
@@ -91,9 +93,12 @@ public sealed class RemoteActivityPolicyTests
         settings.AiCleanupProvider = provider;
         settings.AiCleanupAzureEndpoint = "https://example.test";
         settings.AiCleanupAzureDeployment = "cleanup";
+        settings.AiCleanupAzureSubscriptionId = "sub";
+        settings.AiCleanupAzureSubscriptionTenantId = "subscription-tenant";
         settings.AiCleanupAzureTenantId = "tenant";
         settings.AiCleanupAzureClientId = "client";
         settings.AiCleanupAzureClientSecret = "secret";
+        settings.AiCleanupAzureApiKey = "azure-key";
         settings.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
         settings.AiCleanupCustomModel = "qwen";
         settings.AiCleanupCustomApiKey = "key";
@@ -111,6 +116,12 @@ public sealed class RemoteActivityPolicyTests
             case nameof(AppSettings.AiCleanupAzureDeployment):
                 settings.AiCleanupAzureDeployment = "other";
                 break;
+            case nameof(AppSettings.AiCleanupAzureSubscriptionId):
+                settings.AiCleanupAzureSubscriptionId = "sub-other";
+                break;
+            case nameof(AppSettings.AiCleanupAzureSubscriptionTenantId):
+                settings.AiCleanupAzureSubscriptionTenantId = "tenant-other";
+                break;
             case nameof(AppSettings.AiCleanupAzureAuthMode):
                 settings.AiCleanupAzureAuthMode = AzureAuthMode.ServicePrincipal;
                 break;
@@ -121,10 +132,10 @@ public sealed class RemoteActivityPolicyTests
                 settings.AiCleanupAzureClientId = "other";
                 break;
             case nameof(AppSettings.AiCleanupAzureClientSecret):
-                settings.AiCleanupAzureClientSecret = null;
+                settings.AiCleanupAzureClientSecret = "different-secret";
                 break;
             case nameof(AppSettings.AiCleanupAzureApiKey):
-                settings.AiCleanupAzureApiKey = "key";
+                settings.AiCleanupAzureApiKey = "different-key";
                 break;
             case nameof(AppSettings.AiCleanupCustomEndpoint):
                 settings.AiCleanupCustomEndpoint = "http://localhost:1234/v1";
@@ -133,7 +144,7 @@ public sealed class RemoteActivityPolicyTests
                 settings.AiCleanupCustomModel = "other";
                 break;
             case nameof(AppSettings.AiCleanupCustomApiKey):
-                settings.AiCleanupCustomApiKey = null;
+                settings.AiCleanupCustomApiKey = "different-key";
                 break;
         }
     }

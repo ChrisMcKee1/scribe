@@ -67,17 +67,87 @@ public sealed class SettingsChangeTrackerTests
     }
 
     [Fact]
-    public void Draft_rows_mark_their_own_pages_dirty()
+    public void Draft_rows_compare_values_not_touched_state()
     {
         var settings = AppSettings.CreateDefault();
-        var changes = SettingsChangeTracker.Compare(
+        var clean = SettingsChangeTracker.Compare(
             settings,
             settings.Clone(),
             dictionaryRows: [new("d", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b")],
             snippetRows: [new("s", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b")],
-            profileRows: [new("p", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b")]);
+            profileRows: [new("p", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b")],
+            loadedDictionaryRows: [new("d", "a", "b", WholeWord: true, Enabled: true)],
+            loadedSnippetRows: [new("s", "a", "b", Enabled: true)],
+            loadedProfileRows: [new("p", "a", "b")]);
+        Assert.False(clean.IsDirty);
 
+        var changes = SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            dictionaryRows: [new("d", DraftRowOrigin.Saved, Touched: true, "a", "changed", "a", "b")],
+            snippetRows: [new("s", DraftRowOrigin.Saved, Touched: true, "a", "changed", "a", "b")],
+            profileRows: [new("p", DraftRowOrigin.Saved, Touched: true, "changed", "b", "a", "b")],
+            loadedDictionaryRows: [new("d", "a", "b", WholeWord: true, Enabled: true)],
+            loadedSnippetRows: [new("s", "a", "b", Enabled: true)],
+            loadedProfileRows: [new("p", "a", "b")]);
         Assert.Equal([SettingsPage.Dictionary, SettingsPage.VoiceSnippets, SettingsPage.AppProfiles], changes.Pages);
+    }
+
+    [Fact]
+    public void Deleted_saved_rows_are_dirty()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        Assert.Equal(
+            [SettingsPage.Dictionary],
+            SettingsChangeTracker.Compare(
+                settings,
+                settings.Clone(),
+                dictionaryRows: [],
+                loadedDictionaryRows: [new("last", "a", "b", WholeWord: true, Enabled: true)]).Pages);
+
+        Assert.Equal(
+            [SettingsPage.VoiceSnippets],
+            SettingsChangeTracker.Compare(
+                settings,
+                settings.Clone(),
+                snippetRows: [new("kept", DraftRowOrigin.Saved, Touched: false, "c", "d", "c", "d")],
+                loadedSnippetRows: [new("last", "a", "b", Enabled: true), new("kept", "c", "d", Enabled: true)]).Pages);
+    }
+
+    [Fact]
+    public void Flag_only_row_changes_are_dirty()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        var changes = SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            dictionaryRows: [new("d", DraftRowOrigin.Saved, Touched: false, "a", "b", "a", "b", WholeWord: false, Enabled: true)],
+            snippetRows: [new("s", DraftRowOrigin.Saved, Touched: false, "a", "b", "a", "b", Enabled: false)],
+            loadedDictionaryRows: [new("d", "a", "b", WholeWord: true, Enabled: true)],
+            loadedSnippetRows: [new("s", "a", "b", Enabled: true)]);
+
+        Assert.Equal([SettingsPage.Dictionary, SettingsPage.VoiceSnippets], changes.Pages);
+    }
+
+    [Fact]
+    public void Word_pack_id_changes_are_dictionary_changes_and_revert_cleanly()
+    {
+        var baseline = AppSettings.CreateDefault();
+        var draft = baseline.Clone();
+        draft.EnabledDictionaryLibraryIds.Add("github");
+
+        Assert.Equal([SettingsPage.Dictionary], SettingsChangeTracker.Compare(baseline, draft).Pages);
+
+        draft.EnabledDictionaryLibraryIds.Remove("github");
+        Assert.False(SettingsChangeTracker.Compare(baseline, draft).IsDirty);
+
+        draft.EnabledDictionaryLibraryIds.Reverse();
+        Assert.False(SettingsChangeTracker.Compare(baseline, draft).IsDirty);
+
+        draft.EnabledDictionaryLibraryIds.RemoveAt(0);
+        Assert.Equal([SettingsPage.Dictionary], SettingsChangeTracker.Compare(baseline, draft).Pages);
     }
 
     [Fact]

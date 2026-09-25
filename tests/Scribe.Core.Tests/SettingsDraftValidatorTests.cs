@@ -90,6 +90,30 @@ public sealed class SettingsDraftValidatorTests
     }
 
     [Fact]
+    public void Shortcut_conflict_uses_physical_input_not_mode_or_suppression()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = new HotkeyBinding(0x70, KeyModifiers.Control, HotkeyMode.Hold, Suppress: true);
+        settings.DictationOnlyHotkey = new HotkeyBinding(0x70, KeyModifiers.Control, HotkeyMode.Toggle, Suppress: false);
+
+        var issue = Single(new SettingsDraft(settings));
+
+        Assert.Equal(ValidationCode.ShortcutsIdentical, issue.Code);
+    }
+
+    [Fact]
+    public void Mouse_button_shortcut_conflict_uses_the_same_physical_comparison()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.Hotkey = new HotkeyBinding(0x04, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "Middle mouse button");
+        settings.DictationOnlyHotkey = new HotkeyBinding(0x04, KeyModifiers.None, HotkeyMode.Toggle, Suppress: false, "Middle mouse button");
+        Assert.Equal(ValidationCode.ShortcutsIdentical, Single(new SettingsDraft(settings)).Code);
+
+        settings.DictationOnlyHotkey = new HotkeyBinding(0x05, KeyModifiers.None, HotkeyMode.Toggle, Suppress: false, "Back mouse button");
+        Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(settings)));
+    }
+
+    [Fact]
     public void Provider_incomplete_is_allowed_when_ai_cleanup_is_off()
     {
         var settings = AppSettings.CreateDefault();
@@ -157,6 +181,46 @@ public sealed class SettingsDraftValidatorTests
         Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: [row])));
         Assert.True(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(row));
         Assert.Equal("Leave \"um\" out of what you dictate?", SettingsDraftValidator.DictionaryRemovalTitle("um"));
+    }
+
+    [Fact]
+    public void New_removal_rule_needs_confirmation_but_placeholder_and_existing_removal_do_not()
+    {
+        Assert.True(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(
+            new DictionaryDraftRow("new", DraftRowOrigin.New, Touched: true, Pattern: "um", Replacement: "")));
+        Assert.False(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(
+            new DictionaryDraftRow("placeholder", DraftRowOrigin.New, Touched: false, Pattern: "", Replacement: "")));
+        Assert.False(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(
+            new DictionaryDraftRow("saved", DraftRowOrigin.Saved, Touched: true, Pattern: "um", Replacement: "", LoadedReplacement: "")));
+    }
+
+    [Fact]
+    public void Unchanged_legacy_invalid_rows_warn_instead_of_blocking()
+    {
+        var issues = SettingsDraftValidator.Validate(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            SnippetRows: [new("snippet", DraftRowOrigin.Saved, Touched: false, "legacy", "", LoadedPhrase: "legacy", LoadedTemplate: "")],
+            ProfileRows:
+            [
+                new("name-only", DraftRowOrigin.Saved, Touched: false, "Legacy", "", LoadedName: "Legacy", LoadedApps: ""),
+                new("apps-only", DraftRowOrigin.Saved, Touched: false, "", "OUTLOOK", LoadedName: "", LoadedApps: "OUTLOOK"),
+            ]));
+
+        Assert.All(issues, issue => Assert.Equal(ValidationSeverity.Warning, issue.Severity));
+        Assert.Contains(issues, issue => issue.Code == ValidationCode.SnippetTextEmpty);
+        Assert.Contains(issues, issue => issue.Code == ValidationCode.ProfileAppsEmpty);
+        Assert.Contains(issues, issue => issue.Code == ValidationCode.ProfileNameEmpty);
+    }
+
+    [Fact]
+    public void Edited_legacy_invalid_rows_block_save()
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            SnippetRows: [new("snippet", DraftRowOrigin.Saved, Touched: true, "changed", "", LoadedPhrase: "legacy", LoadedTemplate: "")]));
+
+        Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
+        Assert.Equal(ValidationCode.SnippetTextEmpty, issue.Code);
     }
 
     [Fact]
