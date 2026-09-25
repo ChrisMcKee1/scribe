@@ -21,7 +21,11 @@ public interface IBuiltInLibraryOverlay
     /// </summary>
     BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes);
 
-    /// <summary>The version 1 document for <paramref name="edits"/>, which <see cref="ReadEdits"/> reads back unchanged.</summary>
+    /// <summary>
+    /// The version 1 document for <paramref name="edits"/>, which <see cref="ReadEdits"/> reads back unchanged. Throws
+    /// <see cref="ArgumentException"/> when the library id, a key or any value string is not well-formed UTF-16 (an
+    /// unpaired surrogate), which the editor refuses first, so nothing is written with a character it cannot hold.
+    /// </summary>
     byte[] WriteEdits(BuiltInLibraryEdits edits);
 
     /// <summary>
@@ -34,7 +38,15 @@ public interface IBuiltInLibraryOverlay
     /// </summary>
     IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits);
 
-    /// <summary>The row with <paramref name="values"/> as the user's values, authored from now on; the key never changes.</summary>
+    /// <summary>
+    /// The row after the user's edit, authored from now on; the key never changes. Authorship is per field (plan 3.3):
+    /// the user's values (<see cref="BuiltInTermEdit.Value"/>, U) change only in the fields where
+    /// <paramref name="values"/> differs from the row shown (<see cref="LibraryRow.Values"/>), and every other field keeps
+    /// the U it had, so an inherited field stays inherited, U equal to the base (<see cref="BuiltInTermEdit.Base"/>, B),
+    /// and the shipped value keeps applying to it, upgrades included. Editing a shipped row creates the entry with B the
+    /// shipped values and U equal to B except in the changed fields. The whole of U is never replaced by the values
+    /// shown, which would pin every inherited field to today's shipped value.
+    /// </summary>
     LibraryRow Edit(LibraryRow row, TermValues values);
 
     /// <summary>Turn off term or Turn on term.</summary>

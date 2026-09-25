@@ -44,7 +44,11 @@ public enum BuiltInTermIntent
 /// a field the user left equal to the base takes the new shipped value, a field the new version left equal to the base
 /// keeps the user's, and a field both changed keeps the user's and asks (<see cref="TermReview"/>).
 /// </param>
-/// <param name="Value">The user's values.</param>
+/// <param name="Value">
+/// The user's values (U). For an edited row, authorship is per field (plan 3.3): a field of U equal to <see cref="Base"/>
+/// is inherited (the shipped value applies), and a field that differs is authored; an edit changes U only in the fields
+/// the user changed (<see cref="IBuiltInLibraryOverlay.Edit"/>).
+/// </param>
 /// <param name="Acknowledged">
 /// The shipped values the user last reviewed with Keep my changes, so the same shipped change asks once; null until then.
 /// </param>

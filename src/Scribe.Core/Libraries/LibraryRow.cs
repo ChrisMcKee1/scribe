@@ -54,7 +54,11 @@ public enum TermFields
 /// </summary>
 /// <param name="Yours">The values in use now, the user's.</param>
 /// <param name="UpdatedBuiltIn">What the running version ships for this row.</param>
-/// <param name="Differing">The fields that differ between the two; never <see cref="TermFields.None"/>.</param>
+/// <param name="Differing">
+/// The fields that differ between the two; never <see cref="TermFields.None"/>. Every differing field, not only the
+/// ones both sides changed: a UI that highlights the conflicting fields derives them from the entry's value objects
+/// (<see cref="BuiltInTermEdit.Base"/>, <see cref="BuiltInTermEdit.Value"/> and <see cref="BuiltInTermEdit.Acknowledged"/>).
+/// </param>
 public sealed record TermReview(TermValues Yours, TermValues UpdatedBuiltIn, TermFields Differing);
 
 /// <summary>How the user resolves a <see cref="TermReview"/>.</summary>

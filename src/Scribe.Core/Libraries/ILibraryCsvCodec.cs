@@ -8,7 +8,8 @@ namespace Scribe.Core.Libraries;
 /// <para>
 /// Pure and thread-safe: no I/O, no clock, no logging, never throws on content it reads (unusable rows become
 /// <see cref="LibraryCsvDocument.Errors"/>). Only a null argument throws, and a write handed content the editor would
-/// have refused (see <see cref="WriteManaged"/>).
+/// have refused (see <see cref="WriteManaged"/>), a string that is not well-formed UTF-16 included: the writers encode
+/// strictly, so no unpaired surrogate is ever written as U+FFFD.
 /// </para>
 /// <para>
 /// Metadata has two encodings (review finding A11). A managed file stores it as raw comment lines, 0.4.3's form, which
@@ -38,7 +39,8 @@ public interface ILibraryCsvCodec
     /// order with values faithful (no formula guard). <see cref="ReadManaged"/> of the result gives back the same
     /// metadata and rows, and so does 0.4.3's reader apart from the rows the strict writer quotes on purpose. Throws
     /// <see cref="ArgumentException"/> for metadata the editor refuses to commit: a value holding a line break, or a
-    /// header whose double quotes do not pair (<see cref="LibraryMetadata.ReadsBackInOlderVersions"/>).
+    /// header whose double quotes do not pair (<see cref="LibraryMetadata.ReadsBackInOlderVersions"/>); and for any
+    /// value or metadata string that is not well-formed UTF-16, which it never writes as U+FFFD.
     /// </summary>
     byte[] WriteManaged(LibraryContent content);
 
@@ -54,7 +56,8 @@ public interface ILibraryCsvCodec
     /// fields plus <c># formula-guard: 1</c>, and the reversible formula guard applied to every value.
     /// <see cref="ReadImport"/> of the result gives back every value and all metadata exactly, a literal leading
     /// apostrophe and a trailing comma included; after a spreadsheet opened and saved it, the metadata still reads back
-    /// unchanged.
+    /// unchanged. Like <see cref="WriteManaged"/>, throws <see cref="ArgumentException"/> for a string that is not
+    /// well-formed UTF-16.
     /// </summary>
     byte[] WriteExport(LibraryContent content);
 }

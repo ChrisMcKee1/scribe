@@ -43,7 +43,8 @@ namespace Scribe.Core.Libraries;
 /// <para>
 /// Every member does file I/O, takes the service's one library lock (never across an await), and must run off the
 /// dispatcher. Expected failures (outside edits, locked or full disks, unreadable files) are results, never exceptions;
-/// only a null argument throws, and <see cref="LoadCatalog"/> when the settings store cannot be read at all. Logs carry
+/// only a null argument throws, a change set holding a string that is not well-formed UTF-16 (see
+/// <see cref="PrepareSave"/>), and <see cref="LoadCatalog"/> when the settings store cannot be read at all. Logs carry
 /// counts and enum names only (plan 3.15).
 /// </para>
 /// </remarks>
@@ -57,7 +58,9 @@ public interface ILibraryCatalogStore
 
     /// <summary>
     /// Steps 1 and 2: checks every pre-image, writes the redo images and the manifest of the next generation, both
-    /// flushed to disk, and makes the preparation live.
+    /// flushed to disk, and makes the preparation live. Throws <see cref="ArgumentException"/>, before writing anything,
+    /// for a change set holding an id, a key or a value string (content, metadata or edits) that is not well-formed
+    /// UTF-16, an unpaired surrogate the editor refuses first.
     /// </summary>
     LibraryPrepareResult PrepareSave(LibraryChangeSet changes);
 
