@@ -24,7 +24,8 @@ public interface IBuiltInLibraryOverlay
     /// <summary>
     /// The version 1 document for <paramref name="edits"/>, which <see cref="ReadEdits"/> reads back unchanged. Throws
     /// <see cref="ArgumentException"/> when the library id, a key or any value string is not well-formed UTF-16 (an
-    /// unpaired surrogate), which the editor refuses first, so nothing is written with a character it cannot hold.
+    /// unpaired surrogate), which the editor refuses first: it refuses rather than replacing the character, so nothing
+    /// is written with a character it cannot hold.
     /// </summary>
     byte[] WriteEdits(BuiltInLibraryEdits edits);
 
@@ -34,7 +35,9 @@ public interface IBuiltInLibraryOverlay
     /// merge and sets <see cref="LibraryRow.Review"/> where the user owes a decision. With no document, every row is
     /// <see cref="TermOrigin.Shipped"/>. An edit whose shipped row is gone keeps its authored values as
     /// <see cref="TermOrigin.NoLongerShipped"/>; an off entry whose row is gone stays in the document and shows no row,
-    /// and <see cref="Collect"/> carries it over from the committed document.
+    /// and <see cref="Collect"/> carries it over from the committed document. Null means the built-in has no document: a
+    /// caller whose document exists but is unreadable, newer or awaiting release never passes null for it, which would
+    /// bring back every row the user turned off; that built-in pauses or keeps its last content instead.
     /// </summary>
     IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits);
 
@@ -49,7 +52,14 @@ public interface IBuiltInLibraryOverlay
     /// </summary>
     LibraryRow Edit(LibraryRow row, TermValues values);
 
-    /// <summary>Turn off term or Turn on term.</summary>
+    /// <summary>
+    /// Turn off term or Turn on term. Turning a shipped row off records an <see cref="BuiltInTermIntent.Off"/> entry.
+    /// Turning an off row on removes its entry only when the shipped row is enabled, so the row is shipped again; when
+    /// the shipped row is itself disabled at that moment, Turn on is the user's own choice against it and records an
+    /// authored <see cref="BuiltInTermIntent.Edited"/> entry whose user value turns <see cref="TermValues.Enabled"/> on,
+    /// as it does for a shipped row that ships disabled. On any other row the flag is changed like the other three
+    /// values, per field (<see cref="Edit"/>).
+    /// </summary>
     LibraryRow SetEnabled(LibraryRow row, bool enabled);
 
     /// <summary>
@@ -72,7 +82,10 @@ public interface IBuiltInLibraryOverlay
     /// off entry whose shipped row this version does not ship (it shows no row and applies again if the row returns)
     /// and a shipped row the caller left out (shipped rows are turned off, never deleted); the one exception is an
     /// added or no-longer-shipped entry, a row the user can delete, whose absence deletes it. Removing everything,
-    /// inert entries included, is not a <see cref="Collect"/>: Restore all built-in values writes no document.
+    /// inert entries included, is not a <see cref="Collect"/>: Restore all built-in values writes no document. Entries
+    /// come in one order whatever the document held: the entries of shipped rows in shipped order, then the entries of
+    /// rows this version does not ship in the order of <paramref name="rows"/>, then kept off entries whose shipped row
+    /// is not in this version, in their committed order; so a document ordered by hand is reordered by the next Save.
     /// </summary>
     BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows);
 
