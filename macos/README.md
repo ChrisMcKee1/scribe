@@ -68,7 +68,7 @@ privacy/offline promise.
   itself does, its words stay). Those others are the template-like replacements: one that is more than one line,
   longer than 100 characters, holds an em or en dash, deletes the words, or has spacing the reply's
   normalization would change (a tab, a run of spaces, a space at either end, or a space before a punctuation
-  mark that no letter or digit follows). The reply's normalization keeps the space before a mark that begins a
+  mark that no letter or number follows). The reply's normalization keeps the space before a mark that begins a
   word, so ".NET" after a word, whether your dictionary or the model wrote it, is not glued to it. With
   cleanup off, snippets and then your dictionary, as on Windows; then line breaks for the target app. A cleanup
   request contains the dictation with your vocabulary corrections applied, never a snippet body or a

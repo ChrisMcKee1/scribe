@@ -126,7 +126,7 @@ final class TextPostProcessor {
     /// Whether `entry` is a vocabulary rule, one whose replacement may be made in text a provider is sent: a spelling
     /// of one line and 1 to `vocabularyReplacementLimit` characters, with no em or en dash, already in the form a reply
     /// is normalized to (`normalizeReply`: no tab, no run of spaces, none at either end, and no space before one of
-    /// `, . ! ? ;` or `:` that no letter or digit follows, so "Visual Basic .NET" is one). Every other rule is
+    /// `, . ! ? ;` or `:` that no letter or number follows, so "Visual Basic .NET" is one). Every other rule is
     /// template-like, and its replacement never leaves the Mac: a template in all but name, a deletion, a replacement
     /// with a dash (made after the reply's dash normalization, so the user's own dash survives, as on Windows, where
     /// every rule runs after cleanup), and one whose spacing the normalization of the reply would change. The Usage
@@ -686,7 +686,7 @@ final class TextPostProcessor {
     /// The text a provider is sent for `normalized`: the edits that are one vocabulary rule's replacement made in it,
     /// and every other edit held back, its words written with the vocabulary rules where that is safe (`writtenForm`)
     /// and as spoken otherwise. A replacement the reply's normalization would pull up against a space or tab before it
-    /// (`tightensAfterSpace`: one that begins with `, . ! ? ;` or `:` that no letter or digit follows) is held back
+    /// (`tightensAfterSpace`: one that begins with `, . ! ? ;` or `:` that no letter or number follows) is held back
     /// after one. With `vocabulary` nil nothing is made and every edit's words go as spoken, so the text sent is
     /// `normalized` itself.
     private static func vocabularyPass(
@@ -905,7 +905,7 @@ final class TextPostProcessor {
     }
 
     /// Whether the reply's normalization would pull `text` up against a space or tab before it: `text` begins with one
-    /// of `, . ! ? ;` or `:` that no letter or digit follows. Asked of the normalization itself, on `text` alone, so a
+    /// of `, . ! ? ;` or `:` that no letter or number follows. Asked of the normalization itself, on `text` alone, so a
     /// lone punctuation mark always counts, whatever follows it where it is made.
     private static func tightensAfterSpace(_ text: String) -> Bool {
         let probe = "x " + text
