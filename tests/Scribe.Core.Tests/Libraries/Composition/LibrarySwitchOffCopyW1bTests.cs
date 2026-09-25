@@ -286,10 +286,15 @@ public sealed class LibrarySwitchOffCopyW1bTests
 
     // --- Helpers ---
 
-    // A base catalog holding none of the draft's libraries, so each is one its Save writes and AI permission is the draft's
-    // choice, which is what these cases vary; how a preview judges an unchanged file has its own tests.
+    // A base catalog holding none of the draft's libraries, each marked as one its Save writes (round 3, A6: the workspace
+    // says so), so AI permission is the draft's choice, which is what these cases vary; how a preview composes a library
+    // the Save keeps has its own tests.
     private static LibraryComposition Preview(LibraryDraft draft, IReadOnlyList<DictionaryEntry>? dictionary = null) =>
-        LibraryComposition.Preview(draft, Catalog(draft.BaseGeneration, draft.LocalState), dictionary ?? [], new GlossaryBudget(80));
+        LibraryComposition.Preview(
+            new LibraryDraft(
+                draft.Revision, draft.BaseGeneration, [.. draft.Libraries.Select(l => l with { WritesContent = true })],
+                draft.LocalState, draft.RecentlyDeleted),
+            Catalog(draft.BaseGeneration, draft.LocalState), dictionary ?? [], new GlossaryBudget(80));
 
     // The review's verdict on one library in use: the named spoken forms kept, the rest unused.
     private static LibraryUsage UsageOf(LibraryComposition composition, string id, IReadOnlyList<string> keep)

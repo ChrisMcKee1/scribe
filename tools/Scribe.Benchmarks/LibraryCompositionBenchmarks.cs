@@ -13,10 +13,9 @@ namespace Scribe.Benchmarks;
 /// markers the first start adopts.
 /// <para>
 /// Committed and Preview are what a Save's publication and each Settings revision pay (Preview against the committed
-/// catalog the draft was built from; PreviewOfARebuiltDraft when no draft row is the committed row object itself);
-/// FirstStatus adds what the first Term details on a composition pays (the statuses' indexes and the glossary inclusion,
-/// computed once); ComposeVocabulary is what dictation's vocabulary costs; EncodeState is the libraries.state row a
-/// commit writes.
+/// catalog the draft was built from); FirstStatus adds what the first Term details on a composition pays (the statuses'
+/// indexes and the glossary inclusion, computed once); ComposeVocabulary is what dictation's vocabulary costs;
+/// EncodeState is the libraries.state row a commit writes.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -27,7 +26,6 @@ public class LibraryCompositionBenchmarks
 
     private LibraryCatalog _catalog = null!;
     private LibraryDraft _draft = null!;
-    private LibraryDraft _rebuiltDraft = null!;
     private IReadOnlyList<LibraryIdentity> _identities = [];
     private IReadOnlyList<DictionaryEntry> _dictionary = [];
     private (string LibraryId, LibraryTermKey Key) _probe;
@@ -77,14 +75,6 @@ public class LibraryCompositionBenchmarks
         _draft = new LibraryDraft(
             2, 1, [.. libraries.Select(l => new DraftLibrary(l.Content, LibraryOrigin.Existing, l.State, FileName: l.FileName))],
             _catalog.LocalState, []);
-        // Every row a fresh object with equal values, as a draft rebuilt from the editor's rows may hold, so the preview's
-        // check of which files the Save keeps compares every row instead of meeting the committed lists themselves.
-        _rebuiltDraft = new LibraryDraft(
-            3, 1,
-            [.. libraries.Select(l => new DraftLibrary(
-                l.Content with { Rows = [.. l.Content.Rows.Select(row => row with { Values = row.Values with { } })] },
-                LibraryOrigin.Existing, l.State, FileName: l.FileName))],
-            _catalog.LocalState, []);
         _dictionary = [.. Enumerable.Range(0, 60).Select(i => DictionaryEntry.New($"personal term {i}", $"Personal{i}"))];
         var last = libraries[^1];
         _probe = (last.Content.Id, last.Content.Rows[^1].Key);
@@ -95,9 +85,6 @@ public class LibraryCompositionBenchmarks
 
     [Benchmark]
     public LibraryComposition Preview() => LibraryComposition.Preview(_draft, _catalog, _dictionary, _budget);
-
-    [Benchmark]
-    public LibraryComposition PreviewOfARebuiltDraft() => LibraryComposition.Preview(_rebuiltDraft, _catalog, _dictionary, _budget);
 
     [Benchmark]
     public TermStatus FirstStatus() => LibraryComposition.Committed(_catalog, _dictionary, _budget).StatusOf(_probe.LibraryId, _probe.Key);
