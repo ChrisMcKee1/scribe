@@ -1327,18 +1327,18 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
 - In this checkout `origin` is the maintainer's repository, `https://github.com/ChrisMcKee1/scribe.git`,
   which is also the review and merge target. Run `git remote -v` before pushing anything: a
   contributor's fork checkout is laid out differently.
-- **Contributor path (a fork).** John (`x3nc0n`) works from a fork. There `origin` is
-  `https://github.com/x3nc0n/scribe.git`, the only remote that working tree pushes to, and `upstream`
-  is the maintainer's repository. Push branches to the fork and open pull requests from them to
-  `upstream:main`; never push directly to `upstream`. To update an existing upstream pull request,
-  push more commits to the exact same fork branch the pull request already uses as its head branch.
+- **John (`x3nc0n`) was added as a direct collaborator (write access) on 2026-09-25** and now works
+  straight against `origin`, no fork hop: branch off `main`, push the branch to `origin`, open a PR
+  against `origin:main`. To update an existing PR, push more commits to that same branch. His prior
+  fork, `https://github.com/x3nc0n/scribe.git`, is kept as the `fork` remote purely for reference
+  (its history up to PR #61 lives there) and is no longer part of the normal contribution flow.
+- **Contributor-without-write-access path (a fork), for anyone else.** `origin` would be the
+  contributor's own fork, the only remote that working tree pushes to, and `upstream` the
+  maintainer's repository. Push branches to the fork and open pull requests from them to
+  `upstream:main`; never push directly to `upstream`.
 - John's ongoing split on this repo is: primary maintainer for the native macOS port under
   `macos/Scribe/`, secondary contributor for Windows bug fixes under `src/Scribe.*`,
   `tests/Scribe.Core.Tests/`, and related docs.
-- Current example: upstream PR #61 is `x3nc0n/scribe:main` into `ChrisMcKee1/scribe:main` and
-  carries the native macOS port. Because unrelated Windows work can land on the maintainer's `main` at
-  any time, the fork's `main` must periodically catch up from `upstream/main` and be pushed back to the
-  fork so PR #61 stays mergeable.
 - Commit message: what changed **and why**. Always append this trailer (per house rule):
 
 ```
