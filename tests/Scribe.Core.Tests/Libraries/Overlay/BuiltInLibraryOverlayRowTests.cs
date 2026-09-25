@@ -199,26 +199,79 @@ public sealed class BuiltInLibraryOverlayRowTests
     [Fact]
     public void An_edit_asks_nothing_about_the_field_it_changes_and_keeps_open_questions_about_the_others()
     {
-        // Both Spoken and Written were changed by the user and, differently, by a later version: two questions. The user
-        // retypes Written: that question is answered, the Spoken one stays.
+        // Both Spoken and Written were changed by the user and, differently, by a later version: both ask. The user
+        // retypes Written: the row still asks, about Spoken, and the review still lists both fields, since both differ
+        // from the updated version (round 2, A4). Once Spoken is retyped too, nothing asks and there is no review, though
+        // the two versions still differ.
         var @base = T("get hub", "GitHub");
-        var document = Document(Edited("get hub", @base, T("git hub", "GitHub Enterprise")));
         var shipped = T("Get Hub", "GitHub, Inc.");
-        var asking = Assert.Single(BuiltInOverlay.Apply(Shipped(shipped), document));
-        Assert.Equal(TermFields.Spoken | TermFields.Written, asking.Review?.Differing);
+        foreach (var entry in new[] { Edited("get hub", @base, T("git hub", "GitHub Enterprise")), Pinned("get hub", @base, T("git hub", "GitHub Enterprise")) })
+        {
+            var asking = Assert.Single(BuiltInOverlay.Apply(Shipped(shipped), Document(entry)));
+            Assert.Equal(TermFields.Spoken | TermFields.Written, asking.Review?.Differing);
 
-        var typed = BuiltInOverlay.Edit(asking, T("git hub", "GitHub Enterprise Server"));
+            var written = BuiltInOverlay.Edit(asking, T("git hub", "GitHub Enterprise Server"));
 
-        Assert.Equal(T("git hub", "GitHub Enterprise Server"), typed.Values);
-        Assert.Equal(new TermReview(typed.Values, shipped, TermFields.Spoken), typed.Review);
+            Assert.Equal(T("git hub", "GitHub Enterprise Server"), written.Values);
+            Assert.Equal(new TermReview(written.Values, shipped, TermFields.Spoken | TermFields.Written), written.Review);
 
-        // The same for a pinned entry.
-        var pinnedDocument = Document(Pinned("get hub", @base, T("git hub", "GitHub Enterprise")));
-        var pinnedAsking = Assert.Single(BuiltInOverlay.Apply(Shipped(shipped), pinnedDocument));
-        Assert.Equal(TermFields.Spoken | TermFields.Written, pinnedAsking.Review?.Differing);
-        var pinnedTyped = BuiltInOverlay.Edit(pinnedAsking, T("git hub", "GitHub Enterprise Server"));
-        Assert.Equal(new TermReview(pinnedTyped.Values, shipped, TermFields.Spoken), pinnedTyped.Review);
-        Assert.Equal(@base, pinnedTyped.Edit?.Base);
+            var both = BuiltInOverlay.Edit(written, T("git hubs", "GitHub Enterprise Server"));
+
+            Assert.Equal(T("git hubs", "GitHub Enterprise Server"), both.Values);
+            Assert.Null(both.Review);
+            if (entry.Intent == BuiltInTermIntent.Pinned)
+            {
+                // A pinned entry's base moves only with Use updated values.
+                Assert.Equal(@base, both.Edit?.Base);
+            }
+        }
+    }
+
+    [Fact]
+    public void Editing_a_row_turned_off_keeps_the_off_intent_authored_when_the_version_in_use_ships_it_off()
+    {
+        // Round 2, A1 (Astra's case): turned off in v1; v2 ships the term off too; the user changes only Written there.
+        // The off intent is the user's value of Enabled, so it stays authored rather than being inherited from v2: v3
+        // ships the term on again, and the row stays off with nothing to ask.
+        var on = T("octo cat", "Octocat");
+        var shippedOff = T("octo cat", "Octocat", enabled: false);
+        var off = BuiltInOverlay.SetEnabled(Assert.Single(BuiltInOverlay.Apply(Shipped(on), null)), enabled: false);
+        var inV2 = Assert.Single(BuiltInOverlay.Apply(Shipped(shippedOff), Document(off.Edit!)));
+        Assert.Equal(TermOrigin.Off, inV2.Origin);
+
+        var edited = BuiltInOverlay.Edit(inV2, T("octo cat", "Octo Cat", enabled: false));
+
+        Assert.Equal(T("octo cat", "Octo Cat", enabled: false), edited.Values);
+        Assert.Null(edited.Review);
+
+        // The check box stays the user's (off against a base that is on); the other fields inherit v2's values.
+        Assert.Equal(new BuiltInTermEdit(K("octo cat"), BuiltInTermIntent.Edited, on, T("octo cat", "Octo Cat", enabled: false)), edited.Edit);
+        var inV3 = Assert.Single(BuiltInOverlay.Apply(Shipped(on), Document(edited.Edit!)));
+        Assert.Equal(T("octo cat", "Octo Cat", enabled: false), inV3.Values);
+        Assert.Null(inV3.Review);
+
+        // Turning it on in the same edit is the user's choice as well: a version that ships it off leaves it on.
+        var turnedOn = BuiltInOverlay.Edit(inV2, T("octo cat", "Octo Cat"));
+        Assert.Equal(T("octo cat", "Octo Cat"), turnedOn.Values);
+        Assert.True(Assert.Single(BuiltInOverlay.Apply(Shipped(shippedOff), Document(turnedOn.Edit!))).Values.Enabled);
+        Assert.True(Assert.Single(BuiltInOverlay.Apply(Shipped(on), Document(turnedOn.Edit!))).Values.Enabled);
+    }
+
+    [Fact]
+    public void Commands_refuse_text_that_is_not_well_formed()
+    {
+        // Round 2, A2: an unpaired surrogate is not text, and two spoken forms differing only in one would be written
+        // alike, so neither Add nor Edit takes one, in any field. A surrogate pair is text.
+        var shipped = Assert.Single(BuiltInOverlay.Apply(Shipped(GetHub), null));
+        foreach (var bad in new[] { "gh\uD800", "\uDC00gh", "g\uDBFF\uDBFFh", "gh\uDC00\uD800" })
+        {
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Add(T(bad, "GitHub")));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Add(T("gh", bad)));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Edit(shipped, T(bad, "GitHub")));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Edit(shipped, T("get hub", bad)));
+        }
+
+        Assert.Equal("gh \uD83D\uDE00", BuiltInOverlay.Add(T("gh \uD83D\uDE00", "GitHub \uD83D\uDC69\u200D\uD83D\uDCBB")).Key.Value);
     }
 
     [Fact]

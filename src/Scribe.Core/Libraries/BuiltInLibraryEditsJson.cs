@@ -90,8 +90,8 @@ internal static class BuiltInLibraryEditsJson
 
     /// <summary>
     /// The version 1 document for <paramref name="edits"/>, which the overlay has already checked is one
-    /// <see cref="Read"/> takes back unchanged. A value holding an unpaired surrogate, which is not text, is written
-    /// with U+FFFD in its place, as the library CSV writer's UTF-8 encoding does.
+    /// <see cref="Read"/> takes back unchanged: in particular every string is text, so the writer never has an unpaired
+    /// surrogate to replace (round 2, A2).
     /// </summary>
     internal static byte[] Write(BuiltInLibraryEdits edits)
     {

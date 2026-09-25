@@ -7,8 +7,10 @@ namespace Scribe.Core.Tests.Libraries.Overlay;
 /// <summary>
 /// O-6: any sequence of the row commands, across saves, loads and upgrades to other shipped versions, then collect,
 /// write, read back and apply, reproduces exactly the rows the user saw; and restoring everything leaves no document and
-/// the shipped library. Each command is also checked as it runs: an edit gives exactly the values asked for and never a
-/// question about a field it changed.
+/// the shipped library. Each command is also checked as it runs, against rules this test states for itself (which fields
+/// are authored, which ask): an edit gives exactly the values asked for, never raises a question about a field it
+/// changed, and leaves every field it did not change exactly as authored or inherited as it was; an upgrade never changes
+/// a field the user authored; and a review lists every field in which the user's version and the updated one differ.
 /// </summary>
 public sealed class BuiltInLibraryOverlayPropertyTests
 {
@@ -23,6 +25,8 @@ public sealed class BuiltInLibraryOverlayPropertyTests
         "GitHub", "GitHub, Inc.", "Copilot", "GitHub Copilot", "Octocat", "GitHub CLI", "Kubernetes", "K8s", ".NET",
         "C#", "Azure", "Microsoft Entra", "Zulu", "", "multi\r\nline", "caf\u00E9 \uD83D\uDE00", "  padded  ",
     ];
+
+    private static readonly TermFields[] Fields = [TermFields.Spoken, TermFields.Written, TermFields.WholeWord, TermFields.Enabled];
 
     [Fact]
     public void Any_sequence_of_row_commands_saves_and_loads_back_to_the_rows_the_user_saw()
@@ -41,12 +45,97 @@ public sealed class BuiltInLibraryOverlayPropertyTests
             world.RestoreEverything();
         }
 
-        // Every command ran, and ran often, so a green run means something.
+        // Every command ran, and ran often, so a green run means something; so did the rarer case of an off row edited
+        // while the version in use ships it off (round 2, A1).
         foreach (var command in new[] { "edit", "typed back", "enabled", "restore", "add", "delete", "keep mine", "use updated", "save", "upgrade" })
         {
             Assert.True(commands.GetValueOrDefault(command) > 200, $"{command} ran {commands.GetValueOrDefault(command)} times");
         }
+
+        Assert.True(commands.GetValueOrDefault("edit off row shipped off") > 30, $"the off row case ran {commands.GetValueOrDefault("edit off row shipped off")} times");
     }
+
+    // Which fields of a row ask, by the contract's rules (3.2.1), stated here apart from the overlay's code: an edited
+    // entry asks where the user and the running version both changed a field, to different values, and the user has not
+    // kept this very value; a pinned entry asks where the running version differs from it and from the acknowledged value.
+    private static TermFields Asks(LibraryRow row)
+    {
+        if (row.Edit is not { } entry || row.Shipped is not { } shipped)
+        {
+            return TermFields.None;
+        }
+
+        var asks = TermFields.None;
+        foreach (var field in Fields)
+        {
+            var ask = entry.Intent switch
+            {
+                BuiltInTermIntent.Edited =>
+                    !Same(field, entry.Value!, entry.Base!) && !Same(field, shipped, entry.Base!) &&
+                    !Same(field, entry.Value!, shipped) && (entry.Acknowledged is null || !Same(field, entry.Acknowledged, shipped)),
+                BuiltInTermIntent.Pinned =>
+                    !Same(field, shipped, entry.Value!) && (entry.Acknowledged is null || !Same(field, shipped, entry.Acknowledged)),
+                _ => false,
+            };
+            if (ask)
+            {
+                asks |= field;
+            }
+        }
+
+        return asks;
+    }
+
+    // Which fields the user authored (round 2, A3): in an edited entry a field whose value differs from its base (the
+    // others are inherited, so the shipped value applies); every field of a pinned or added entry; the check box of an
+    // off entry. A shipped row authors nothing.
+    private static TermFields Authored(LibraryRow row) => row.Edit switch
+    {
+        null => TermFields.None,
+        { Intent: BuiltInTermIntent.Edited } entry => Differences(entry.Value!, entry.Base!),
+        { Intent: BuiltInTermIntent.Off } => TermFields.Enabled,
+        _ => TermFields.Spoken | TermFields.Written | TermFields.WholeWord | TermFields.Enabled,
+    };
+
+    // A review exists exactly while a field asks, and then lists every field in which the two versions differ (round 2,
+    // A4): Use updated values replaces all of them.
+    private static void AssertReviewShape(LibraryRow row)
+    {
+        var asks = Asks(row);
+        Assert.True((row.Review is null) == (asks == TermFields.None), $"review {row.Review?.Differing} while {asks} asks\n{Describe([row])}");
+        if (row.Review is { } review)
+        {
+            Assert.Equal(row.Values, review.Yours);
+            Assert.Equal(row.Shipped, review.UpdatedBuiltIn);
+            Assert.Equal(Differences(review.Yours, review.UpdatedBuiltIn), review.Differing);
+        }
+    }
+
+    private static TermFields Differences(TermValues before, TermValues after)
+    {
+        var fields = TermFields.None;
+        foreach (var field in Fields)
+        {
+            if (!Same(field, before, after))
+            {
+                fields |= field;
+            }
+        }
+
+        return fields;
+    }
+
+    private static bool Same(TermFields field, TermValues left, TermValues right) => field switch
+    {
+        TermFields.Spoken => string.Equals(left.Spoken, right.Spoken, StringComparison.Ordinal),
+        TermFields.Written => string.Equals(left.Written, right.Written, StringComparison.Ordinal),
+        TermFields.WholeWord => left.WholeWord == right.WholeWord,
+        _ => left.Enabled == right.Enabled,
+    };
+
+    // The user's value of a field the user authored, as the row must show it whatever a version ships.
+    private static bool ShowsAuthored(LibraryRow row, TermFields field) =>
+        row.Edit!.Intent == BuiltInTermIntent.Off ? !row.Values.Enabled : Same(field, row.Values, row.Edit.Value!);
 
     private sealed class World(Random random, Dictionary<string, int> commands)
     {
@@ -104,6 +193,11 @@ public sealed class BuiltInLibraryOverlayPropertyTests
                 AssertSameDocument(stored, BuiltInOverlay.Collect(_shipped, stored, reloaded));
             }
 
+            foreach (var row in reloaded)
+            {
+                AssertReviewShape(row);
+            }
+
             _committed = stored;
             _rows = reloaded;
         }
@@ -133,7 +227,7 @@ public sealed class BuiltInLibraryOverlayPropertyTests
 
         private void Edit()
         {
-            var row = Pick();
+            var row = PickForEdit();
             TermValues values;
             if (row.Shipped is not null && random.Next(6) == 0)
             {
@@ -150,12 +244,16 @@ public sealed class BuiltInLibraryOverlayPropertyTests
                     random.Next(6) == 0 ? !row.Values.Enabled : row.Values.Enabled);
             }
 
+            if (row.Edit?.Intent == BuiltInTermIntent.Off && row.Shipped is { Enabled: false } && !values.Enabled && values != row.Values)
+            {
+                Count("edit off row shipped off");
+            }
+
             var edited = BuiltInOverlay.Edit(row, values);
 
             Assert.Equal(values, edited.Values);
             Assert.Equal(row.Key, edited.Key);
-            var changed = Changed(row.Values, values);
-            Assert.Equal((row.Review?.Differing ?? TermFields.None) & ~changed, edited.Review?.Differing ?? TermFields.None);
+            CheckChange(row, edited, Differences(row.Values, values));
             if (edited.Origin == TermOrigin.Shipped && values != row.Values)
             {
                 // Only turning an off row back on makes a row shipped again; any other change is the user's.
@@ -175,7 +273,17 @@ public sealed class BuiltInLibraryOverlayPropertyTests
             var changed = BuiltInOverlay.SetEnabled(row, enabled);
 
             Assert.Equal(row.Values with { Enabled = enabled }, changed.Values);
+            CheckChange(row, changed, row.Values.Enabled == enabled ? TermFields.None : TermFields.Enabled);
             Replace(row, changed);
+        }
+
+        // What a command did to the fields it did not change: each keeps exactly its standing (authored or inherited),
+        // and whatever asked still asks; the fields it changed never ask.
+        private static void CheckChange(LibraryRow before, LibraryRow after, TermFields changed)
+        {
+            Assert.Equal(Authored(before) & ~changed, Authored(after) & ~changed);
+            Assert.Equal(Asks(before) & ~changed, Asks(after));
+            AssertReviewShape(after);
         }
 
         private void Restore()
@@ -254,9 +362,27 @@ public sealed class BuiltInLibraryOverlayPropertyTests
             Count("upgrade");
             _shipped = RandomVersion(random, _shipped);
             _rows = null;
+
+            // A version never changes what the user authored: those fields show the user's values whatever it ships.
+            foreach (var row in Rows.Where(row => row.Edit is not null))
+            {
+                foreach (var field in Fields.Where(field => Authored(row).HasFlag(field)))
+                {
+                    Assert.True(ShowsAuthored(row, field), $"{field} was authored, but the upgrade changed it\n{Describe([row])}");
+                }
+
+                AssertReviewShape(row);
+            }
         }
 
         private LibraryRow Pick() => Rows[random.Next(Rows.Count)];
+
+        // Now and then an off row the version in use ships off: the case that once lost the user's off (round 2, A1).
+        private LibraryRow PickForEdit()
+        {
+            var offShippedOff = Rows.Where(row => row.Edit?.Intent == BuiltInTermIntent.Off && row.Shipped is { Enabled: false }).ToArray();
+            return offShippedOff.Length > 0 && random.Next(2) == 0 ? offShippedOff[random.Next(offShippedOff.Length)] : Pick();
+        }
 
         private void Replace(LibraryRow before, LibraryRow after) => _rows = OverlayTestData.Replace(Rows, before, after);
 
@@ -285,14 +411,8 @@ public sealed class BuiltInLibraryOverlayPropertyTests
             return text;
         }
 
-        private static TermFields Changed(TermValues before, TermValues after) =>
-            (before.Spoken == after.Spoken ? TermFields.None : TermFields.Spoken) |
-            (before.Written == after.Written ? TermFields.None : TermFields.Written) |
-            (before.WholeWord == after.WholeWord ? TermFields.None : TermFields.WholeWord) |
-            (before.Enabled == after.Enabled ? TermFields.None : TermFields.Enabled);
-
         // A shipped version: most of the pool, in pool order, each row's values varying between versions the way real
-        // updates do (a correction to Written, WholeWord flipped, a spoken form recased, rarely a row shipped off).
+        // updates do (a correction to Written, WholeWord flipped, a spoken form recased, now and then a row shipped off).
         private static DictionaryLibrary RandomVersion(Random random, DictionaryLibrary? previous = null)
         {
             var rows = new List<TermValues>();
@@ -314,7 +434,7 @@ public sealed class BuiltInLibraryOverlayPropertyTests
                     random.Next(5) == 0 ? spoken.ToUpperInvariant() : spoken,
                     Writings[random.Next(Writings.Length)],
                     random.Next(4) != 0,
-                    random.Next(20) != 0));
+                    random.Next(5) != 0));
             }
 
             return Shipped("github", [.. rows]);

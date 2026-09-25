@@ -145,6 +145,29 @@ public sealed class BuiltInLibraryOverlayUpgradeSequenceTests
     }
 
     [Fact]
+    public void A_term_turned_off_stays_off_when_it_is_edited_in_a_version_that_ships_it_off()
+    {
+        // Round 2, A1 (Astra's sequence), through saves and loads: turned off in v1; v2 ships it off and the user edits
+        // only its Written there; v3 ships it on again. The off intent is the user's, so it is still off, and nothing asks.
+        var v1 = Shipped(GetHub, OctoCat);
+        var rows = BuiltInOverlay.Apply(v1, null);
+        rows = Replace(rows, Row(rows, "octo cat"), BuiltInOverlay.SetEnabled(Row(rows, "octo cat"), enabled: false));
+        var (committed, _) = SaveAndReload(v1, null, rows);
+
+        var v2 = Shipped(GetHub, T("octo cat", "Octocat", enabled: false));
+        var inV2 = BuiltInOverlay.Apply(v2, committed);
+        Assert.Equal(TermOrigin.Off, Row(inV2, "octo cat").Origin);
+        inV2 = Replace(inV2, Row(inV2, "octo cat"), BuiltInOverlay.Edit(Row(inV2, "octo cat"), T("octo cat", "Octo Cat", enabled: false)));
+        var (saved, reloadedInV2) = SaveAndReload(v2, committed, inV2);
+        AssertSameRows(inV2, reloadedInV2);
+
+        var v3 = Shipped(GetHub, OctoCat);
+        var inV3 = Row(BuiltInOverlay.Apply(v3, saved), "octo cat");
+        Assert.Equal(T("octo cat", "Octo Cat", enabled: false), inV3.Values);
+        Assert.Null(inV3.Review);
+    }
+
+    [Fact]
     public void An_edit_that_leaves_a_field_alone_lets_later_versions_keep_correcting_that_field()
     {
         // The user changed only Spoken; each later version's Written reaches the row, across saves, and the user is

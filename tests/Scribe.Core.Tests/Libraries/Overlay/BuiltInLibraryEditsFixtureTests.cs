@@ -34,7 +34,10 @@ public sealed class BuiltInLibraryEditsFixtureTests
     private static readonly TermValues[] V4 =
         [T("get hub", "GitHub Corp"), T("copilot", "GitHub Copilot"), Actions, T("gh cli", "GitHub CLI"), T("git hub", "Git Hub")];
 
-    private static readonly (string Name, TermValues[] Rows)[] ShippedVersions = [("v1", V1), ("v2", V2), ("v3", V3), ("v4", V4)];
+    // v5 is v1 with "octo cat" shipped off (round 2, A1).
+    private static readonly TermValues[] V5 = [GetHub, Copilot, T("octo cat", "Octocat", enabled: false), Actions];
+
+    private static readonly (string Name, TermValues[] Rows)[] ShippedVersions = [("v1", V1), ("v2", V2), ("v3", V3), ("v4", V4), ("v5", V5)];
 
     private static string FixtureDirectory
     {
@@ -395,6 +398,32 @@ public sealed class BuiltInLibraryEditsFixtureTests
                 Added("caf\u00E9", T("caf\u00E9", "Caf\u00E9 \"au lait\"\r\nline two \uD83D\uDE00")),
                 Edited("octo cat", OctoCat, T("octo  cat", "Octo\tcat", wholeWord: false)),
             ]);
+
+        // Round 2, A4: a review lists every field the two versions differ in, not only the fields that ask.
+        yield return new(
+            "edited-review-lists-every-difference",
+            "The user changed Spoken and Written; the version changed only Written. Written asks, and the review lists both fields, since Use updated values replaces both.",
+            V2,
+            [Edited("get hub", GetHub, T("git hub", "GitHub Enterprise"))]);
+        yield return new(
+            "pinned-review-lists-a-kept-field",
+            "Keep my changes was chosen for this Written; the change to WholeWord is new and asks. The review lists both fields.",
+            V2,
+            [Pinned("get hub", GetHub, T("get hub", "GitHub", wholeWord: false), T("get hub", "GitHub, Inc.", wholeWord: false))]);
+
+        // Round 2, A1: an off row edited while its version shipped it off keeps the check box as the user's own value, so
+        // the base holds the value it was turned off from; the entry is what the overlay's Edit gives there.
+        BuiltInTermEdit offEdited = Edited("octo cat", OctoCat, T("octo cat", "Octo Cat", enabled: false));
+        yield return new(
+            "off-then-edited-stays-off-when-shipped-on",
+            "Turned off, then edited (Written only) while a version shipped it off: a version that ships it on leaves it off, and nothing asks.",
+            V1,
+            [offEdited]);
+        yield return new(
+            "off-then-edited-stays-off-when-shipped-off",
+            "The same entry while the version ships it off: off, and nothing asks, since the user and the version agree.",
+            V5,
+            [offEdited]);
     }
 
     private static IEnumerable<ReadCase> ReadCases()

@@ -31,9 +31,21 @@ namespace Scribe.Core.Libraries;
 /// a field the user and a later version both changed was changed to the same value.
 /// </para>
 /// <para>
-/// <see cref="TermReview.Differing"/> names exactly the fields that ask. The two versions a review shows can also differ
-/// in a field only the user changed, which asks nothing; Use updated values replaces that field too, so a view of the
-/// review compares <see cref="TermReview.Yours"/> with <see cref="TermReview.UpdatedBuiltIn"/> field by field.
+/// <b>Per-field authorship</b> (the coordinator's decision in round 2, A3; plan 3.3). Each field of an edited entry is
+/// either inherited, when the user's value equals the base, so the shipped value applies, or authored, when it differs,
+/// so the user's value applies. An off entry authors only the check box (off); a pinned or added entry authors every
+/// field. An edit (<see cref="Edit"/>, and <see cref="SetEnabled"/> on an authored row) changes the user's value only for
+/// the fields the user changed relative to the displayed row: a field it leaves alone keeps its value and its base, so an
+/// inherited field keeps inheriting (a later shipped change still reaches it) and an authored one stays authored. A
+/// field it changes takes the typed value, and in an edited entry the shipped value in use as its base, so the row shows
+/// exactly what was typed and nothing asks about that field until a later version changes it; a field typed back to the
+/// shipped value inherits again.
+/// </para>
+/// <para>
+/// <see cref="TermReview.Differing"/> is every field in which <see cref="TermReview.Yours"/> and
+/// <see cref="TermReview.UpdatedBuiltIn"/> differ, because Use updated values replaces all of them; a review exists only
+/// while at least one field asks (the coordinator's decision in round 2, A4, following the surface's
+/// <see cref="TermReview"/>). Which fields conflict can be read from the row's entry and shipped values.
 /// </para>
 /// <para>
 /// <b>Rows are canonical.</b> Every row this class returns is exactly what <see cref="Apply"/> gives for its entry against
@@ -48,6 +60,8 @@ namespace Scribe.Core.Libraries;
 /// </remarks>
 public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
 {
+    private const string NotText = "A term's spoken and written values are text: never null, and every surrogate in a pair.";
+
     private static readonly TermFields[] Fields = [TermFields.Spoken, TermFields.Written, TermFields.WholeWord, TermFields.Enabled];
 
     private BuiltInLibraryOverlay()
@@ -58,17 +72,24 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     public static BuiltInLibraryOverlay Instance { get; } = new();
 
     /// <inheritdoc />
+    /// <remarks>Throws <see cref="ArgumentException"/> for a library id that is blank or not text (an unpaired surrogate).</remarks>
     public BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(libraryId);
+        if (!IsText(libraryId))
+        {
+            throw new ArgumentException("A library id is text.", nameof(libraryId));
+        }
+
         return BuiltInLibraryEditsJson.Read(libraryId, bytes);
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// Throws <see cref="ArgumentException"/> for a document that would not read back as written (a blank library id, an
-    /// empty or repeated key, an entry without the values its intent needs, a null value string): that is a bug upstream,
-    /// and writing it would pause the library at the next start.
+    /// empty or repeated key, an entry without the values its intent needs, a null value string, or an id, key or value
+    /// that is not text, holding an unpaired surrogate): that is a bug upstream, and writing it would pause the library at
+    /// the next start.
     /// </remarks>
     public byte[] WriteEdits(BuiltInLibraryEdits edits)
     {
@@ -113,20 +134,23 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     /// <inheritdoc />
     /// <remarks>
     /// <para>
-    /// Editing a shipped row (or one turned off) starts an edited entry based on the shipped values. Editing an authored
-    /// row replaces the user's values and keeps where each field stands: a field the edit changes counts as the user's,
-    /// set against the shipped value in use now, so the edit never asks about the field it just changed and the returned
-    /// row's values are exactly <paramref name="values"/>; a field it leaves alone keeps its place in the merge (still
-    /// following the shipped value if the user never changed it, still asking if a question was open). Replacing the
+    /// Per-field authorship (see the class remarks): the edit changes the user's value only for the fields that differ
+    /// from the displayed row. A field it leaves alone keeps its value and base: inherited, it keeps following the shipped
+    /// value; authored, it stays the user's, and a question open about it stays open. A field it changes becomes the typed
+    /// value against the shipped value in use as its base, so the returned row's values are exactly
+    /// <paramref name="values"/>, the edit asks nothing about that field, and typing the shipped value makes it inherit
+    /// again. Editing a shipped row starts an edited entry based on the shipped values. Editing a turned-off row keeps the
+    /// check box authored (off, against a base that is on) unless the edit turns it on, even while the version in use ships
+    /// the row off. A pinned entry keeps its base, which only Use updated values moves; a field the edit changes is
+    /// acknowledged against the shipped value in use, so it asks again only when a later version changes it. Replacing the
     /// user's values whole against the original base would instead show the new shipped value where the user typed the
-    /// old one, count shipped values the user never touched as the user's, and ask about a field the user had just
-    /// decided. A pinned entry keeps its base, which only Use updated values moves; a field the edit changes is
-    /// acknowledged against the shipped value in use now, so it asks again only when a later version changes it.
+    /// old one, author shipped values the user never touched, and ask about a field the user had just decided.
     /// </para>
     /// <para>
     /// A value typed back to the shipped values stays authored (<see cref="TermOrigin.Pinned"/>): authorship ends only at
     /// Restore built-in values. An edit that changes nothing returns the row as it is, and one that changes only
-    /// <see cref="TermValues.Enabled"/> is <see cref="SetEnabled"/>.
+    /// <see cref="TermValues.Enabled"/> is <see cref="SetEnabled"/>. Values that are not text (an unpaired surrogate) are an
+    /// <see cref="ArgumentException"/>.
     /// </para>
     /// </remarks>
     public LibraryRow Edit(LibraryRow row, TermValues values)
@@ -188,9 +212,10 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
 
     /// <inheritdoc />
     /// <remarks>
-    /// The row's key is its spoken form's, which must not be blank. The overlay cannot see the library, so the caller
-    /// checks that no row of it already has that key (a shipped row, or an edited one whose Spoken the user changed,
-    /// which keeps its original key): keys are unique within a built-in, and <see cref="Collect"/> refuses a repeat.
+    /// The row's key is its spoken form's, which must not be blank, and the values must be text (no unpaired surrogate).
+    /// The overlay cannot see the library, so the caller checks that no row of it already has that key (a shipped row, or
+    /// an edited one whose Spoken the user changed, which keeps its original key): keys are unique within a built-in, and
+    /// <see cref="Collect"/> refuses a repeat.
     /// </remarks>
     public LibraryRow Add(TermValues values)
     {
@@ -396,9 +421,19 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
         var shipped = row.Shipped;
         var entry = row.Edit;
         BuiltInTermEdit edited;
-        if (entry is null || entry.Intent == BuiltInTermIntent.Off)
+        if (entry is null)
         {
+            // A shipped row inherits every field; the ones the edit changes become the user's.
             edited = new BuiltInTermEdit(row.Key, BuiltInTermIntent.Edited, shipped, values);
+        }
+        else if (entry.Intent == BuiltInTermIntent.Off)
+        {
+            // A turned-off row: the check box is authored (off) and every other field inherited, and an edit that leaves
+            // the check box alone keeps it authored, so its base is the value it was turned off from, on, even while the
+            // version in use ships the row off. Inherited from that version instead, the off would follow the next one
+            // that ships the row on, and the row would come back on unasked (round 2, A1).
+            var @base = values.Enabled == row.Values.Enabled ? shipped! with { Enabled = true } : shipped!;
+            edited = new BuiltInTermEdit(row.Key, BuiltInTermIntent.Edited, @base, values);
         }
         else if (entry.Intent == BuiltInTermIntent.Edited && shipped is not null)
         {
@@ -467,7 +502,7 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     }
 
     private static TermReview? Review(TermValues yours, TermValues shipped, TermFields questions) =>
-        questions == TermFields.None ? null : new TermReview(yours, shipped, questions);
+        questions == TermFields.None ? null : new TermReview(yours, shipped, Differences(yours, shipped));
 
     private static TermFields Differences(TermValues before, TermValues after)
     {
@@ -524,9 +559,9 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     private static void EnsureValid(BuiltInLibraryEdits edits, string parameter)
     {
         ArgumentNullException.ThrowIfNull(edits, parameter);
-        if (string.IsNullOrWhiteSpace(edits.LibraryId))
+        if (string.IsNullOrWhiteSpace(edits.LibraryId) || !IsText(edits.LibraryId))
         {
-            throw new ArgumentException("An edits document needs its library's id.", parameter);
+            throw new ArgumentException("An edits document needs its library's id, as text.", parameter);
         }
 
         if (edits.Terms is null)
@@ -552,9 +587,9 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
             throw new ArgumentException("An entry of an edits document is missing.", parameter);
         }
 
-        if (entry.Key.IsEmpty)
+        if (entry.Key.IsEmpty || !IsText(entry.Key.Value))
         {
-            throw new ArgumentException("An entry of an edits document needs a key.", parameter);
+            throw new ArgumentException("An entry of an edits document needs a key, as text.", parameter);
         }
 
         if (!Enum.IsDefined(entry.Intent) || !HasTheValuesItsIntentNeeds(entry.Intent, entry.Base, entry.Value))
@@ -562,20 +597,45 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
             throw new ArgumentException("An entry of an edits document lacks the values its intent needs.", parameter);
         }
 
-        if (!HasText(entry.Base) || !HasText(entry.Value) || !HasText(entry.Acknowledged))
+        if (!HoldsText(entry.Base) || !HoldsText(entry.Value) || !HoldsText(entry.Acknowledged))
         {
-            throw new ArgumentException("A term's spoken and written values are never null.", parameter);
+            throw new ArgumentException(NotText, parameter);
         }
     }
 
-    private static bool HasText(TermValues? values) => values is null || (values.Spoken is not null && values.Written is not null);
+    private static bool HoldsText(TermValues? values) => values is null || (IsText(values.Spoken) && IsText(values.Written));
+
+    // Text is well-formed UTF-16: never null, and every surrogate in a pair. Anything else is refused wherever an id, a
+    // key or a value is taken in: written out, an unpaired surrogate becomes U+FFFD, so two different keys could be written
+    // alike and the document read back with a repeated key, pausing the library (round 2, A2).
+    internal static bool IsText(string? value)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(value[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static void EnsureValues(TermValues values, string parameter)
     {
         ArgumentNullException.ThrowIfNull(values, parameter);
-        if (!HasText(values))
+        if (!HoldsText(values))
         {
-            throw new ArgumentException("A term's spoken and written values are never null.", parameter);
+            throw new ArgumentException(NotText, parameter);
         }
     }
 

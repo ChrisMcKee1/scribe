@@ -104,6 +104,9 @@ public sealed class BuiltInLibraryEditsDocumentTests
             [0x7B, 0x22, 0x76, 0xC3, 0x28, 0x22, 0x3A, 0x31, 0x7D],
             [0x00, 0x00, 0x00],
             [0xEF, 0xBB, 0xBF],
+
+            // A surrogate encoded in UTF-8 bytes (as CESU-8 does), in a key: not UTF-8, so never read as text (round 2, A2).
+            [.. """{ "version": 1, "library": "github", "terms": [ { "key": "a"""u8, 0xED, 0xA0, 0x80, .. "\", \"intent\": \"added\", \"value\": { \"spoken\": \"a\", \"written\": \"b\", \"wholeWord\": true, \"enabled\": true } } ] }"u8],
         ];
 
         Assert.All(samples, bytes => Assert.Equal(LibraryFileState.Unreadable, BuiltInOverlay.ReadEdits("github", bytes).State));
@@ -242,14 +245,82 @@ public sealed class BuiltInLibraryEditsDocumentTests
     }
 
     [Fact]
-    public void A_value_holding_an_unpaired_surrogate_is_written_with_a_replacement_character_as_utf8_writes_it()
+    public void The_writer_refuses_text_that_is_not_well_formed_so_distinct_keys_are_never_written_alike()
     {
-        var edits = Document(Added("get hub", T("get hub", "Git\uD800Hub")));
+        // Round 2, A2 (Astra's case): "key\uD800" and "key\uD801" are different keys, but an unpaired surrogate is not
+        // text; written, each would become U+FFFD, both entries would read back as "key\uFFFD", and the repeated key would
+        // make the document unreadable, pausing the whole library. So nothing that is not text is accepted: not in the
+        // library id, a key, or any value, wherever a document is taken in.
+        var colliding = Document(Added("key\uD800", T("key\uD800", "A")), Added("key\uD801", T("key\uD801", "B")));
+        Assert.Throws<ArgumentException>(() => BuiltInOverlay.WriteEdits(colliding));
 
-        var read = BuiltInOverlay.ReadEdits("github", BuiltInOverlay.WriteEdits(edits));
+        var good = T("get hub", "GitHub");
+        BuiltInLibraryEdits[] refused =
+        [
+            colliding,
+            new("git\uD800hub", [Added("get hub", good)]),
+            Document(Added("get hub\uDC00", good)),
+            Document(Added("get hub", T("get\uD800hub", "GitHub"))),
+            Document(Added("get hub", T("get hub", "Git\uDFFFHub"))),
+            Document(Edited("get hub", T("get hub", "GitHub\uD800"), good)),
+            Document(Edited("get hub", good, good, acknowledged: T("get hub", "\uDC00"))),
+            Document(Off("get hub", T("get hub", "\uDC00\uD800"))),
+        ];
+        foreach (var edits in refused)
+        {
+            var shipped = Shipped(edits.LibraryId, good);
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.WriteEdits(edits));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Apply(shipped, edits));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.Collect(shipped, edits, []));
+            Assert.Throws<ArgumentException>(() => BuiltInOverlay.AuthoredTerms(edits));
+        }
 
-        Assert.Equal(LibraryFileState.Available, read.State);
-        Assert.Equal("Git\uFFFDHub", read.Edits!.Terms[0].Value!.Written);
+        Assert.Throws<ArgumentException>(() => BuiltInOverlay.ReadEdits("git\uD800hub", """{ "version": 1 }"""u8));
+
+        // Surrogate pairs are text, and come back as they went.
+        var pairs = Document(Added("gh \uD83D\uDE00", T("gh \uD83D\uDE00", "\uD83D\uDC69\u200D\uD83D\uDCBB")));
+        AssertSameDocument(pairs, BuiltInOverlay.ReadEdits("github", BuiltInOverlay.WriteEdits(pairs)).Edits);
+    }
+
+    [Fact]
+    public void Whatever_the_writer_takes_reads_back_the_same_and_it_takes_only_text()
+    {
+        // Round 2, A2 as a property: seeded documents, some with unpaired surrogates somewhere; the writer refuses exactly
+        // those that are not text (judged here by a strict UTF-8 encoder), and every document it writes reads back equal.
+        var strict = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        var random = new Random(7);
+        var written = 0;
+        var refused = 0;
+        for (var round = 0; round < 600; round++)
+        {
+            var edits = RandomDocument(random, maxTerms: 5, maxLength: 10, notText: true);
+            var isText = Strings(edits).All(text =>
+            {
+                try
+                {
+                    strict.GetByteCount(text);
+                    return true;
+                }
+                catch (EncoderFallbackException)
+                {
+                    return false;
+                }
+            });
+
+            if (!isText)
+            {
+                Assert.Throws<ArgumentException>(() => BuiltInOverlay.WriteEdits(edits));
+                refused++;
+                continue;
+            }
+
+            var read = BuiltInOverlay.ReadEdits(edits.LibraryId, BuiltInOverlay.WriteEdits(edits));
+            Assert.Equal(LibraryFileState.Available, read.State);
+            AssertSameDocument(edits, read.Edits, $"round {round}");
+            written++;
+        }
+
+        Assert.True(written > 100 && refused > 100, $"{written} written, {refused} refused");
     }
 
     [Fact]
@@ -306,7 +377,7 @@ public sealed class BuiltInLibraryEditsDocumentTests
         Assert.Throws<ArgumentException>(() => BuiltInOverlay.ReadEdits(" ", "{}"u8));
     }
 
-    internal static BuiltInLibraryEdits RandomDocument(Random random, int maxTerms = 30, int maxLength = 0)
+    internal static BuiltInLibraryEdits RandomDocument(Random random, int maxTerms = 30, int maxLength = 0, bool notText = false)
     {
         string[] ids = ["github", "ai-model-names", "microsoft-365", "scribe.new-pack"];
         var terms = new List<BuiltInTermEdit>();
@@ -314,29 +385,37 @@ public sealed class BuiltInLibraryEditsDocumentTests
         var count = random.Next(maxTerms + 1);
         while (terms.Count < count)
         {
-            var key = LibraryTermKey.From(RandomText(random, maxLength == 0 ? 40 : maxLength));
+            var key = LibraryTermKey.From(RandomText(random, maxLength == 0 ? 40 : maxLength, notText));
             if (key.IsEmpty || !keys.Add(key))
             {
                 continue;
             }
 
             var intent = (BuiltInTermIntent)random.Next(4);
-            var @base = intent == BuiltInTermIntent.Added ? null : RandomValues(random, maxLength);
-            var value = intent == BuiltInTermIntent.Off ? null : RandomValues(random, maxLength);
-            var acknowledged = random.Next(3) == 0 ? RandomValues(random, maxLength) : null;
+            var @base = intent == BuiltInTermIntent.Added ? null : RandomValues(random, maxLength, notText);
+            var value = intent == BuiltInTermIntent.Off ? null : RandomValues(random, maxLength, notText);
+            var acknowledged = random.Next(3) == 0 ? RandomValues(random, maxLength, notText) : null;
             terms.Add(new BuiltInTermEdit(key, intent, @base, value, acknowledged));
         }
 
         return new BuiltInLibraryEdits(ids[random.Next(ids.Length)], terms);
     }
 
-    private static TermValues RandomValues(Random random, int maxLength)
+    private static IEnumerable<string> Strings(BuiltInLibraryEdits edits) =>
+        edits.Terms
+            .SelectMany(term => new[] { term.Base, term.Value, term.Acknowledged })
+            .OfType<TermValues>()
+            .SelectMany(values => new[] { values.Spoken, values.Written })
+            .Concat(edits.Terms.Select(term => term.Key.Value))
+            .Append(edits.LibraryId);
+
+    private static TermValues RandomValues(Random random, int maxLength, bool notText = false)
     {
         var longest = maxLength != 0 ? maxLength : random.Next(150) == 0 ? 60_000 : 80;
-        return new TermValues(RandomText(random, longest), RandomText(random, longest), random.Next(2) == 0, random.Next(2) == 0);
+        return new TermValues(RandomText(random, longest, notText), RandomText(random, longest, notText), random.Next(2) == 0, random.Next(2) == 0);
     }
 
-    private static string RandomText(Random random, int maxLength)
+    private static string RandomText(Random random, int maxLength, bool notText = false)
     {
         string[] pieces =
         [
@@ -345,11 +424,13 @@ public sealed class BuiltInLibraryEditsDocumentTests
             "\u05E9\u05DC\u05D5\u05DD", "\u0645\u0631\u062D\u0628\u0627", "\u4E2D\u6587", "\uD83D\uDE00", "\uD83D\uDC69\u200D\uD83D\uDCBB",
             "\uFFFD", "\uFEFF", "=SUM(A1)", "#tag", ",",
         ];
+        string[] halves = ["\uD800", "\uDBFF", "\uDC00", "\uDFFF"];
         var length = random.Next(maxLength + 1);
         var text = new StringBuilder();
         while (text.Length < length)
         {
-            text.Append(pieces[random.Next(pieces.Length)]);
+            // Now and then, when asked for, half of a surrogate pair: not text (round 2, A2).
+            text.Append(notText && random.Next(40) == 0 ? halves[random.Next(halves.Length)] : pieces[random.Next(pieces.Length)]);
         }
 
         return text.ToString();

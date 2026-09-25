@@ -7,7 +7,8 @@ namespace Scribe.Core.Tests.Libraries.Overlay;
 /// <summary>
 /// How an edits document applies to the rows a version ships (contract 3.2.1): the per-field upgrade merge of an edited
 /// entry and its questions (O-2), pinned, off and added entries, rows a version stopped shipping (O-3), the order of the
-/// rows, and an edited row whose spoken form the user renamed (O-9).
+/// rows, and an edited row whose spoken form the user renamed (O-9). A review, when a field asks, lists every field in
+/// which the user's version and the updated one differ (round 2, A4).
 /// </summary>
 public sealed class BuiltInLibraryOverlayApplyTests
 {
@@ -160,6 +161,41 @@ public sealed class BuiltInLibraryOverlayApplyTests
         Assert.Equal(TermOrigin.Edited, later.Origin);
         Assert.Equal(v2, later.Values);
         Assert.Equal(new TermReview(v2, v3, TermFields.WholeWord), later.Review);
+    }
+
+    [Fact]
+    public void A_review_lists_every_field_use_updated_values_would_replace_not_only_the_one_that_asks()
+    {
+        // Round 2, A4 (Astra's case): the user changed Spoken and Written, a later version changed only Written. Only
+        // Written asks, but Use updated values replaces both, so the review lists both; which of them conflicts is the
+        // shell's to work out from the values, if it wants to show that.
+        var getHub = T("get hub", "GitHub");
+        var user = T("git hub", "GitHub Enterprise");
+        var shipped = T("get hub", "GitHub, Inc.");
+
+        var row = Assert.Single(BuiltInOverlay.Apply(Shipped(shipped), Document(Edited("get hub", getHub, user))));
+
+        Assert.Equal(new TermReview(user, shipped, TermFields.Spoken | TermFields.Written), row.Review);
+        Assert.Equal(shipped, BuiltInOverlay.ResolveReview(row, TermReviewChoice.UseUpdated).Values);
+
+        // With nothing asking there is no review, however the two versions differ.
+        var alone = Assert.Single(BuiltInOverlay.Apply(Shipped(T("get hub", "GitHub", wholeWord: false)), Document(Edited("get hub", getHub, user))));
+        Assert.Equal(T("git hub", "GitHub Enterprise", wholeWord: false), alone.Values);
+        Assert.Null(alone.Review);
+    }
+
+    [Fact]
+    public void A_pinned_review_lists_a_field_already_kept_beside_the_one_that_asks()
+    {
+        // Keep my changes was chosen for this very Written; the change to WholeWord is new and asks. Use updated values
+        // would replace both, so both are listed.
+        var user = T("get hub", "GitHub", wholeWord: false);
+        var shipped = T("get hub", "GitHub, Inc.", wholeWord: true);
+        var entry = Pinned("get hub", T("get hub", "GitHub"), user, acknowledged: T("get hub", "GitHub, Inc.", wholeWord: false));
+
+        var row = Assert.Single(BuiltInOverlay.Apply(Shipped(shipped), Document(entry)));
+
+        Assert.Equal(new TermReview(user, shipped, TermFields.Written | TermFields.WholeWord), row.Review);
     }
 
     [Fact]
@@ -320,6 +356,13 @@ public sealed class BuiltInLibraryOverlayApplyTests
         var expectedValues = new TermValues(spoken.Merged, written.Merged, wholeWord.Merged, enabled.Merged);
         var questions = (Asks(states[0], withAcknowledgment) ? TermFields.Spoken : TermFields.None) |
             (Asks(states[1], withAcknowledgment) ? TermFields.Written : TermFields.None);
+
+        // A review, once a field asks, lists every field the user's version and the updated one differ in (round 2, A4):
+        // the fields the user changed alone, and ones already kept, as well as the ones that ask.
+        var differing = (Differs(states[0]) ? TermFields.Spoken : TermFields.None) |
+            (Differs(states[1]) ? TermFields.Written : TermFields.None) |
+            (states[2] == FieldState.UserChanged ? TermFields.WholeWord : TermFields.None) |
+            (states[3] == FieldState.UserChanged ? TermFields.Enabled : TermFields.None);
         var expectedOrigin = expectedValues == shipped ? TermOrigin.Pinned : TermOrigin.Edited;
         var entry = Edited("get hub", @base, user, acknowledged);
 
@@ -331,9 +374,13 @@ public sealed class BuiltInLibraryOverlayApplyTests
         Assert.True(shipped == row.Shipped, because);
         Assert.Same(entry, row.Edit);
         Assert.True(
-            (questions == TermFields.None ? null : new TermReview(expectedValues, shipped, questions)) == row.Review,
+            (questions == TermFields.None ? null : new TermReview(expectedValues, shipped, differing)) == row.Review,
             $"{because}: review {row.Review?.Differing}");
     }
+
+    // The states in which the user's value stands against a shipped value it differs from.
+    private static bool Differs(FieldState state) =>
+        state is FieldState.UserChanged or FieldState.BothDiffer or FieldState.BothDifferKept;
 
     // An older acknowledgment (for a shipped value since replaced) never stops a question; one for this very value does.
     private static bool Asks(FieldState state, bool withAcknowledgment) =>
@@ -378,12 +425,19 @@ public sealed class BuiltInLibraryOverlayApplyTests
                 fields[3] == "kept" ? shipped.Enabled : user.Enabled)
             : null;
         var questions = TermFields.None;
+        var differing = TermFields.None;
         TermFields[] flags = [TermFields.Spoken, TermFields.Written, TermFields.WholeWord, TermFields.Enabled];
         for (var i = 0; i < fields.Length; i++)
         {
             if (fields[i] == "differs")
             {
                 questions |= flags[i];
+            }
+
+            // Once a field asks, the review lists every field that differs, the ones already kept too (round 2, A4).
+            if (fields[i] != "equal")
+            {
+                differing |= flags[i];
             }
         }
 
@@ -396,7 +450,7 @@ public sealed class BuiltInLibraryOverlayApplyTests
             var because = $"{string.Join(", ", fields)}, acknowledged: {withAcknowledgment}";
             Assert.True(user == row.Values, because);
             Assert.True((fields.All(field => field == "equal") ? TermOrigin.Pinned : TermOrigin.Edited) == row.Origin, because);
-            Assert.True((questions == TermFields.None ? null : new TermReview(user, shipped, questions)) == row.Review, because);
+            Assert.True((questions == TermFields.None ? null : new TermReview(user, shipped, differing)) == row.Review, because);
         }
     }
 }
