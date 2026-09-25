@@ -25,13 +25,18 @@ public sealed class LibraryContractTests
     [Fact]
     public void A_custom_row_is_keyed_by_its_spoken_form()
     {
-        var row = LibraryRow.Custom(new TermValues("  Get  Hub ", "GitHub"));
+        var row = LibraryRow.Custom(new TermValues("  Get Hub ", "GitHub"));
+        var legacy = LibraryRow.Custom(new TermValues("get  hub", "GitHub"));
 
         Assert.Equal(LibraryTermKey.From("get hub"), row.Key);
         Assert.Equal(TermOrigin.Custom, row.Origin);
         Assert.Null(row.Shipped);
         Assert.Null(row.Edit);
         Assert.Null(row.Review);
+
+        // An older file's row with a double space keeps its own key, as 0.4.3 did (review finding A10).
+        Assert.NotEqual(row.Key, legacy.Key);
+        Assert.Equal("get  hub", legacy.Key.Value);
     }
 
     [Fact]
@@ -39,8 +44,9 @@ public sealed class LibraryContractTests
     {
         var marker = new LegacyMarker("Team-Terms", LibraryTermKey.From("get hub"));
 
-        Assert.Equal(marker, new LegacyMarker("team-terms", LibraryTermKey.From("GET  HUB")));
-        Assert.Equal(marker.GetHashCode(), new LegacyMarker("team-terms", LibraryTermKey.From("GET  HUB")).GetHashCode());
+        Assert.Equal(marker, new LegacyMarker("team-terms", LibraryTermKey.From(" GET HUB ")));
+        Assert.Equal(marker.GetHashCode(), new LegacyMarker("team-terms", LibraryTermKey.From(" GET HUB ")).GetHashCode());
+        Assert.NotEqual(marker, new LegacyMarker("team-terms", LibraryTermKey.From("GET  HUB")));
         Assert.NotEqual(marker, new LegacyMarker("team-terms-2", LibraryTermKey.From("get hub")));
         Assert.NotEqual(marker, new LegacyMarker("team-terms", LibraryTermKey.From("kube")));
     }
@@ -84,7 +90,71 @@ public sealed class LibraryContractTests
         Assert.Empty(state.AiPermissions);
         Assert.Empty(state.LegacyMarkers);
         Assert.Empty(state.AiUpgradeNotice);
+        Assert.Empty(state.AcceptedContent);
+        Assert.False(state.AiPermissionsLost);
         Assert.Equal(LocalStateHealth.Absent, state.Health);
+    }
+
+    [Fact]
+    public void Local_state_binds_content_by_id_without_case_and_keeps_a_lost_permission_state()
+    {
+        var first = new LibraryContentHash(new string('a', 64));
+        var second = new LibraryContentHash(new string('b', 64));
+        var state = LibraryLocalState.Create(
+            enabledIds: null,
+            legacyEnabledIds: null,
+            aiPermissions: null,
+            legacyMarkers: null,
+            aiUpgradeNotice: null,
+            LocalStateHealth.Ok,
+            acceptedContent: [new(" Team-Terms ", first), new("team-terms", second), new(" ", first), new("github", first)],
+            aiPermissionsLost: true);
+
+        Assert.Equal(2, state.AcceptedContent.Count);
+        Assert.Equal(second, state.AcceptedContent["TEAM-TERMS"]);
+        Assert.Equal(first, state.AcceptedContent["GitHub"]);
+        Assert.True(state.AiPermissionsLost);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, LibraryContentHash>)state.AcceptedContent).Add("x", first));
+    }
+
+    [Fact]
+    public void The_state_context_says_a_first_start_only_when_no_witness_says_otherwise()
+    {
+        var firstStart = new LibraryStateContext(RunningOnDefaults: false, DatabaseRepaired: false, GenerationStored: false);
+        var witnessed = firstStart with { CommitWitnessed = true };
+
+        Assert.False(firstStart.CommitWitnessed);
+        Assert.True(witnessed.CommitWitnessed);
+        Assert.NotEqual(firstStart, witnessed);
+        Assert.Equal(LibraryAdoptionReasons.None, default(LibraryAdoptionReasons));
+        Assert.True((LibraryAdoptionReasons.FirstStart | LibraryAdoptionReasons.Discovered).HasFlag(LibraryAdoptionReasons.Discovered));
+    }
+
+    [Fact]
+    public void A_catalog_carries_the_versions_kept_this_session_and_why_a_save_is_unfinished()
+    {
+        var kept = new List<LibraryKeptVersion>
+        {
+            new("team-terms", LibraryKeptVersionKind.OutsideVersion, "team-terms-changed-outside"),
+        };
+        var plain = new LibraryCatalog(2, [], LibraryLocalState.Absent, [], [], filesAwaitingRelease: 0);
+        var pending = new LibraryCatalog(
+            3, [], LibraryLocalState.Absent, [], [], filesAwaitingRelease: 1, kept, LibraryIoFailure.SharingViolation);
+
+        kept.Clear();
+
+        Assert.Empty(plain.KeptVersions);
+        Assert.Equal(LibraryIoFailure.None, plain.PendingFailure);
+        Assert.Single(pending.KeptVersions);
+        Assert.Equal(LibraryIoFailure.SharingViolation, pending.PendingFailure);
+        Assert.Equal(1, pending.FilesAwaitingRelease);
+    }
+
+    [Fact]
+    public void Set_aside_journal_files_are_kept_as_long_as_damaged_database_copies()
+    {
+        Assert.Equal(Scribe.Core.Persistence.StorageRetentionPolicy.DamagedCopyRetentionDays, LibraryLimits.QuarantineRetentionDays);
     }
 
     [Fact]

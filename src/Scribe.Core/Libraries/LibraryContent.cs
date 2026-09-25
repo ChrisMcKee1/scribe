@@ -35,7 +35,8 @@ public sealed record LibraryContent(
 
 /// <summary>
 /// The SHA-256 of a library file's bytes, as 64 lowercase hexadecimal digits: the pre-image the journal checks before
-/// it replaces a file, and how an edit made outside Scribe is noticed.
+/// it replaces a file, the post-image it checks after, the content identity AI permission is bound to, and how an edit
+/// made outside Scribe is noticed.
 /// </summary>
 /// <param name="Value">The digest in lowercase hexadecimal.</param>
 public readonly record struct LibraryContentHash(string Value);
@@ -47,10 +48,21 @@ public enum LibraryFileState
     Available,
 
     /// <summary>
-    /// The file could not be read or parsed. The library pauses: it supplies no rules and no AI vocabulary, keeps its
-    /// enabled state, and its file is never rewritten until the user chooses a recovery.
+    /// The file could not be read or parsed for a reason that lasts (bytes that are not a document, access denied). The
+    /// library pauses: it supplies no rules and no AI vocabulary, keeps its enabled state, and its file is never
+    /// rewritten until the user chooses a recovery. A file another app holds open is never this state; see
+    /// <see cref="AwaitingRelease"/>.
     /// </summary>
     Unreadable,
+
+    /// <summary>
+    /// A custom library file the codec returned row errors for (an unclosed quote swallowed the rest of the file, a row
+    /// with a bad whole_word value, say). The rows that could be read are in use exactly as 0.4.3 used them, so dictation
+    /// does not change, and the library can still be turned on or off and its AI permission changed. Its content cannot
+    /// be saved, because a rewrite would drop the rows the file holds and the codec could not read; the page offers to
+    /// import the file again, which lists those rows with their reasons.
+    /// </summary>
+    PartlyReadable,
 
     /// <summary>
     /// A built-in's edits document from a newer version of Scribe. The library pauses as for
@@ -59,8 +71,12 @@ public enum LibraryFileState
     Newer,
 
     /// <summary>
-    /// The committed version of the file waits in a staged copy because another app keeps the target open; readers use
-    /// the staged copy until the journal can finish.
+    /// Another app holds the file open (a sharing violation, review finding G10), or the committed version of the file
+    /// is not in place yet because the journal could not finish. The library keeps its committed content for dictation:
+    /// the journal's redo image while a committed manifest names the file, otherwise the content this process last read
+    /// from it (none at a start that has not read it yet, which for a built-in means its shipped rows are held back too,
+    /// so no turned-off term comes back). The shell asks the user to close the other app; it never offers a reset or a
+    /// restore for a lock, and the next load tries again.
     /// </summary>
     AwaitingRelease,
 }

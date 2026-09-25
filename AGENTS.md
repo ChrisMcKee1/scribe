@@ -331,7 +331,8 @@ Scribe.slnx                         solution (Core, App, Overlay, tests, 4 tools
                                     Local storage policy and janitor
     Libraries/                      LibraryOrdering (the Libraries list's A to Z order), LibraryPrecedence
                                     (which library wins a spoken form: frozen built-in ids, then file names),
-                                    LibraryTermKey (one key per spoken form), and the library model's shared types:
+                                    LibraryTermKey (one key per spoken form), LibraryMetadata (names 0.4.3 reads
+                                    back), and the library model's shared types:
                                     the committed LibraryCatalog, the editor's LibraryDraft, LibraryChangeSet, the
                                     save payload, LibraryVocabulary, and the interfaces of the library CSV codec,
                                     the built-in overlay, composition and the committed store
@@ -807,11 +808,19 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
   turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
-- **One key per library term.** `LibraryTermKey` is a spoken form trimmed, with every inner run of white space
-  (`char.IsWhiteSpace`) collapsed to one space, compared `OrdinalIgnoreCase`; it keeps the spelling it was made from and
-  its `ToString()` shows only the length, so a key handed to a log template leaks nothing. The personal dictionary's
-  merge keeps its own trim-only key. `tests/fixtures/libraries/term-keys.json` pins its answers for the macOS port,
-  including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s, final sigma).
+- **One key per library term.** `LibraryTermKey` is 0.4.3's key: a spoken form trimmed (`string.Trim`, the Unicode
+  White_Space set), compared `OrdinalIgnoreCase`, with inner white space kept, so an older file's row with a double space
+  or a tab inside it keeps 0.4.3's matching and de-duplication and never suppresses a row that matches (review finding
+  A10). The editor commits every typed Spoken value in `LibraryTermKey.Normalize`'s form (trimmed, each inner run of white
+  space collapsed to one space), so for everything written from now on the key and a collapsing comparison agree. The
+  key keeps the spelling it was made from and its `ToString()` shows only the length, so a key handed to a log template
+  leaks nothing. The personal dictionary's merge trims and compares case-insensitively too.
+  `tests/fixtures/libraries/term-keys.json` pins the key and the commit form for the macOS port, including the letters
+  where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s, final sigma).
+- **Library metadata stays readable by 0.4.3.** A managed library file stores its name, category and description as raw
+  `# key: value` comment lines, and 0.4.3's CSV reader treats a double quote on them as a quoted field, so an unpaired
+  quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
+  has an even number of them), checked against `Legacy043LibraryCsv`, a verbatim copy of 0.4.3's reader in the tests.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
