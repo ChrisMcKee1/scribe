@@ -130,6 +130,13 @@ internal sealed class HotkeyEngine
     public long DesktopSwitchNotices => Interlocked.Read(ref _desktopSwitchNotices);
 
     /// <summary>
+    /// Owner thread, for tests: whether a press still owns the dictation, or either machine holds a hold or toggle latch.
+    /// False means the next press of either binding starts afresh.
+    /// </summary>
+    internal bool HoldsAnyLatch =>
+        _arbiter.HasOwner || _standard.IsLatched || Volatile.Read(ref _dictationOnly)?.IsLatched == true;
+
+    /// <summary>
     /// Owner thread: an <c>EVENT_SYSTEM_DESKTOPSWITCH</c> notice arrived. It is only a reason to check again: it also
     /// arrives for the switch back, and any process can raise it with <c>NotifyWinEvent</c> (this repository's own wiring
     /// test does). So the switch is applied (<see cref="OnDesktopSwitch"/>) only when this thread's desktop has stopped

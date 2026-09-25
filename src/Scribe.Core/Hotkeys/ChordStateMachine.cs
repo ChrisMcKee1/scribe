@@ -216,6 +216,9 @@ internal sealed class ChordStateMachine
 
     public void CancelToggle() => _active = false;
 
+    /// <summary>Owner thread: whether a hold is held or a toggle is on in this machine's view.</summary>
+    public bool IsLatched => _active;
+
     /// <summary>
     /// Enters or leaves pause. Pausing cancels a hold or toggle latch WITHOUT reporting a
     /// deactivation, because the caller owns stopping a dictation that was already running; it

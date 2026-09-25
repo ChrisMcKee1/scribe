@@ -362,9 +362,10 @@ public sealed class HotkeyService : IHotkeyService
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
                 // Shape only, and only Debug: the engine sends this whenever its arbiter names an owner, and that can be
-                // with nothing recording (an activation the controller refused while it was still processing leaves its
-                // binding latched, and an activation dropped above as queued before the switch is still followed by
-                // this stop). The controller's reason=DesktopSwitch line is the record of a recording actually ended.
+                // with nothing recording (an activation dropped above as queued before the switch is still followed by
+                // this stop, and a press the controller turned away as still processing owns the dictation until the
+                // release the controller then asks for reaches the hook). The controller's reason=DesktopSwitch line is
+                // the record of a recording actually ended.
                 if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
                 {
                     _logger.LogDebug("Desktop switch: stop sent ({Trigger}).", item.Trigger);
@@ -792,6 +793,9 @@ internal sealed class HotkeyTriggerArbiter
     private const long CodeMask = (1L << CodeBits) - 1;
 
     private long _word;
+
+    /// <summary>Any thread: whether a press owns the dictation (false while nobody does, and once retired).</summary>
+    public bool HasOwner => IsOwned(Volatile.Read(ref _word));
 
     /// <summary>Claims the dictation for this press, unless a trigger already owns one or the engine was retired.</summary>
     public bool TryActivate(HotkeyTrigger trigger, long activation) =>

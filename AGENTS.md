@@ -603,9 +603,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
   release had just made that tap a new start, a latch left on cost the user a third tap. The other
   refusals keep the latch: a pause clears it in the hook, and while a recording is live the press the
-  hook took is what can still end it. A new `DictationStopReason` releases by default and must be
-  classified in `DictationStopPolicyTests`, and a new `ActivationDecision` in `DictationStartPolicyTests`;
-  `HotkeyStopReleaseTests` drives the hotkey and the lifecycle together through these orderings.
+  hook took is what can still end it. Together these give, for every stop Scribe makes itself and for a
+  hold or a toggle binding: the first press after the stopped dictation has processed starts a
+  dictation, a press made while it still processes is refused and leaves no latch behind, and no queued
+  press can start a recording whose release the hook will not report. No activation is invalidated for
+  it: a release never clears a latch that a queued or live press depends on. A new `DictationStopReason`
+  releases by default and must be classified in `DictationStopPolicyTests` (it then joins the
+  `HotkeyStopReleaseTests` matrix by itself), and a new `ActivationDecision` in
+  `DictationStartPolicyTests`; `HotkeyStopReleaseTests` drives the hotkey and the lifecycle together
+  through these orderings.
 - **`ClosableTimer` records each schedule's due time.** A tick with nothing armed is dropped, an early
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
