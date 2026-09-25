@@ -187,6 +187,21 @@ public sealed class LibraryContractTests
         Assert.Equal(3, draft.BaseGeneration);
     }
 
+    // WritesContent (review finding A6 on the composition stream) is the last positional parameter, so every existing
+    // construction compiles unchanged and says the Save writes nothing until the workspace says otherwise.
+    [Fact]
+    public void A_draft_library_writes_no_content_unless_the_workspace_says_so()
+    {
+        var team = Library("team-terms", builtIn: false);
+        var untouched = new DraftLibrary(team, LibraryOrigin.Existing, LibraryFileState.Available, false, true, "team-terms.csv");
+        var written = untouched with { WritesContent = true };
+
+        Assert.False(untouched.WritesContent);
+        Assert.True(written.WritesContent);
+        Assert.Equal("team-terms.csv", written.FileName);
+        Assert.NotEqual(untouched, written);
+    }
+
     [Fact]
     public void A_change_set_is_empty_only_when_it_changes_nothing()
     {

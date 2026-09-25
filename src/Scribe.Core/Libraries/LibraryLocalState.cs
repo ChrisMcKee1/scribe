@@ -98,8 +98,10 @@ public sealed class LibraryLocalState
     /// By library id, the hash of the content every choice above was made for: a custom library's CSV, or a built-in's
     /// edits document (no entry for a built-in with no document). A library whose file does not match was replaced
     /// outside Scribe (review finding A4), and so was an available built-in with no document while its entry remains:
-    /// the document disappeared, so its AI permission goes and its enabled state stays
-    /// (<see cref="LibraryAdoptionReasons.ContentReplaced"/>).
+    /// the document disappeared, so the built-in is not permitted from that moment, on defaults too (review finding A5 on
+    /// the composition stream), and the adoption turns its AI permission off and keeps its enabled state
+    /// (<see cref="LibraryAdoptionReasons.ContentReplaced"/>). Scribe's own removal of a document drops the entry in the same
+    /// commit, so an unedited or reset built-in, which has none, stays permitted.
     /// </summary>
     public IReadOnlyDictionary<string, LibraryContentHash> AcceptedContent { get; }
 

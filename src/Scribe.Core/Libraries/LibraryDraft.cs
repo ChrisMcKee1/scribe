@@ -12,13 +12,23 @@ namespace Scribe.Core.Libraries;
 /// written yet the name it will be written as, <c>Id + ".csv"</c>. Null for a built-in, and null for a custom library
 /// means <c>Id + ".csv"</c>.
 /// </param>
+/// <param name="WritesContent">
+/// The Save of this draft revision writes this library's content: a custom file written; a built-in's edits document
+/// written or removed, a Restore all built-in values that clears intents no row shows included; or a library created,
+/// imported, duplicated or restored. False for a change of enabled state or AI permission alone, and for a pending
+/// deletion. The workspace sets it at every revision to exactly what its capture would write, and a preview never infers
+/// it (review finding A6 on the composition stream): the preview judges a library that writes its content by the draft's
+/// choices, since that Save records the hash of what it writes, and composes every other library exactly as the
+/// committed composition after the Save will.
+/// </param>
 public sealed record DraftLibrary(
     LibraryContent Content,
     LibraryOrigin Origin,
     LibraryFileState State,
     bool PendingDelete = false,
     bool Unsaved = false,
-    string? FileName = null);
+    string? FileName = null,
+    bool WritesContent = false);
 
 /// <summary>
 /// The editor's view of every library at one revision: what the Libraries page shows and previews against, never what
@@ -28,8 +38,9 @@ public sealed record DraftLibrary(
 /// <remarks>
 /// A distinct type from <see cref="LibraryCatalog"/> on purpose (review finding R12): quick add, dictation and the
 /// usage report accept committed state only, so a draft cannot be handed to them. Previews (statuses, badges, the
-/// glossary hint, the overlap prompt) compose over a draft, and a preview computed for one revision is discarded once
-/// the revision moves on. Immutable; the workspace hands out a new one per revision.
+/// glossary hint, the overlap prompt) compose over a draft together with the committed catalog it was built from, and
+/// each library's <see cref="DraftLibrary.WritesContent"/> tells them which content the Save writes; a preview computed
+/// for one revision is discarded once the revision moves on. Immutable; the workspace hands out a new one per revision.
 /// </remarks>
 public sealed class LibraryDraft
 {
