@@ -246,7 +246,7 @@ inserted, and the space Scribe adds after each dictation.
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
-| Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in a space or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
+| Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
 | Hotkey self-healing | Detects and repairs stuck modifiers and silently removed keyboard hooks, so push-to-talk keeps working across long sessions |
 
 **Text quality**
