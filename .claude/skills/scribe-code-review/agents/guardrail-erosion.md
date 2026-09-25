@@ -61,7 +61,7 @@ This is the named rubric. Match what the diff touched against it. An entry not t
 ### G-1: The xUnit suite in `tests/Scribe.Core.Tests`
 
 `AGENTS.md` (line 101) states the rule inside the command itself: _"must stay green; the count only ever
-grows"_. That file also quotes a number, `2695 as of 0.4.3`. **The prose number is stale by design.**
+grows"_. That file also quotes a number, `3756 as of 0.4.4`. **The prose number is stale by design.**
 Never cite it, never cite a number you remember, and never build a finding on "the count went down".
 Judge the diff: xUnit `[Theory]` cases expand at runtime, so attribute counts and reported test counts
 are different quantities and neither is derivable from a patch.
@@ -378,7 +378,7 @@ not need the full recital.
   API surface, `CS0649` over the Win32 job-object structs) are acknowledgements, not erosion. A new one
   matching those shapes, scoped tightly and explained, is not a finding.
 - **The deliberate em-dash round-trips** in `Win32ClipboardTests` and `tools/Scribe.InjectionLab`.
-- **Test counts from prose.** `AGENTS.md` quotes `2695 as of 0.4.3` and is stale by design. Never make a
+- **Test counts from prose.** `AGENTS.md` quotes `3756 as of 0.4.4` and is stale by design. Never make a
   finding out of a remembered or quoted number.
 - **Decisions AGENTS.md has already closed** are not guardrails you get to re-open from this lens: the
   absence of a language picker, `DefaultAzureCredential`, an in-process WPF transparent pill, an MSI,
