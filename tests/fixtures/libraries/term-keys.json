@@ -1,7 +1,7 @@
 {
-  "description": "LibraryTermKey: how the Windows build decides that two spoken forms are one library term. A key is the spoken form trimmed, with every inner run of white space (char.IsWhiteSpace, the Unicode White_Space set) replaced by one U+0020, compared with .NET's StringComparison.OrdinalIgnoreCase: per code point simple uppercase, with no normalization. Shared with the macOS port, which must give the same answers; the notes mark the pairs where Swift's lowercased() differs. Generated from and checked against .NET 10 by tests/Scribe.Core.Tests/Libraries/LibraryTermKeyTests.cs.",
-  "normalize": [
-    { "input": "get hub", "expected": "get hub", "note": "already in key form" },
+  "description": "LibraryTermKey: how the Windows build decides that two spoken forms are one library term, and the form the editor commits a typed Spoken value in. A key is the spoken form trimmed (char.IsWhiteSpace, the Unicode White_Space set), inner white space kept, compared with .NET's StringComparison.OrdinalIgnoreCase: per code point simple uppercase, with no normalization. It is exactly the key 0.4.3 composed libraries by, so an older file's row with a double space or a tab inside it keeps 0.4.3's behaviour (review finding A10). The commit form (Normalize) is the spoken form trimmed with every inner run of white space replaced by one U+0020; everything the editor commits is in that form, so for it the key and a collapsing comparison agree. Shared with the macOS port, which must give the same answers; the notes mark the pairs where Swift's lowercased() differs. Checked against .NET 10 by tests/Scribe.Core.Tests/Libraries/LibraryTermKeyTests.cs.",
+  "commitForm": [
+    { "input": "get hub", "expected": "get hub", "note": "already in commit form" },
     { "input": "  get hub  ", "expected": "get hub", "note": "trimmed" },
     { "input": "get  hub", "expected": "get hub", "note": "two spaces" },
     { "input": "get\thub", "expected": "get hub", "note": "tab" },
@@ -20,9 +20,30 @@
     { "input": " \t\r\n ", "expected": "", "note": "only white space" },
     { "input": null, "expected": "", "note": "null" }
   ],
+  "key": [
+    { "input": "get hub", "expected": "get hub", "note": "already trimmed" },
+    { "input": "  get hub  ", "expected": "get hub", "note": "edges trimmed" },
+    { "input": "\t get hub\r\n", "expected": "get hub", "note": "tab and line break at the edges" },
+    { "input": "\u00A0get hub\u3000", "expected": "get hub", "note": "no-break and ideographic space at the edges" },
+    { "input": "get  hub", "expected": "get  hub", "note": "inner double space kept" },
+    { "input": "get\thub", "expected": "get\thub", "note": "inner tab kept" },
+    { "input": "get\u00A0hub", "expected": "get\u00A0hub", "note": "inner no-break space kept" },
+    { "input": "get\r\nhub", "expected": "get\r\nhub", "note": "inner line break kept" },
+    { "input": "\u200Bget hub", "expected": "\u200Bget hub", "note": "zero width space is not trimmed" },
+    { "input": "  GitHub   Copilot ", "expected": "GitHub   Copilot", "note": "case and inner run kept" },
+    { "input": "", "expected": "", "note": "empty" },
+    { "input": " \t\r\n ", "expected": "", "note": "only white space" },
+    { "input": null, "expected": "", "note": "null" }
+  ],
   "same": [
     { "a": "GitHub", "b": "github", "same": true, "note": "ASCII case" },
-    { "a": "get hub", "b": "Get  Hub", "same": true, "note": "case and white space" },
+    { "a": "get hub", "b": "  Get Hub\t", "same": true, "note": "case and edge white space" },
+    { "a": "get hub", "b": "Get  Hub", "same": false, "note": "an inner double space is part of the key, as in 0.4.3" },
+    { "a": "get hub", "b": "get\thub", "same": false, "note": "an inner tab is part of the key" },
+    { "a": "get hub", "b": "get\u00A0hub", "same": false, "note": "an inner no-break space is part of the key" },
+    { "a": "get hub", "b": "get\nhub", "same": false, "note": "an inner line break is part of the key" },
+    { "a": "get  hub", "b": "GET  HUB", "same": true, "note": "the same irregular run in both" },
+    { "a": "get  hub", "b": "get   hub", "same": false, "note": "runs of different lengths" },
     { "a": "get hub", "b": "gethub", "same": false, "note": "white space is not removed" },
     { "a": "get hub", "b": "get-hub", "same": false, "note": "punctuation counts" },
     { "a": "get hub", "b": "get\u200Bhub", "same": false, "note": "zero width space counts" },

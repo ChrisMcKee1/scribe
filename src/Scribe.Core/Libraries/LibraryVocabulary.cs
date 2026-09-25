@@ -5,9 +5,10 @@ namespace Scribe.Core.Libraries;
 
 /// <summary>
 /// The library ids whose terms one vocabulary may carry to AI cleanup: every enabled, available library whose AI
-/// permission is on (Decision 2). A dictation keeps the scope it was admitted with, and before every outbound cleanup
-/// request (each chunk, a retry, the Chat Completions fallback, a probe) the pipeline asks whether that scope still
-/// holds; if permission has narrowed since, the request is not sent and local rules finish the dictation.
+/// permission is on (Decision 2). A dictation keeps the scope it was admitted with, and every outbound cleanup request
+/// (each chunk, a retry, the Chat Completions fallback, a probe, the usage insight) is handed over only through
+/// <see cref="ILibraryVocabularySource.TryHandOff"/> with that scope; if permission has narrowed since, the request is
+/// not sent and local rules finish the dictation.
 /// </summary>
 /// <remarks>Only composition builds one (the constructor is internal to Core). Ids compare case-insensitively.</remarks>
 public sealed class AiVocabularyScope

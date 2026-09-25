@@ -52,11 +52,22 @@ public enum RecentlyDeletedActionKind
 /// <summary>A staged action on a Recently deleted entry.</summary>
 /// <param name="Kind">Restore or delete permanently.</param>
 /// <param name="EntryName">The entry (<see cref="RecentlyDeletedLibrary.EntryName"/>).</param>
+/// <param name="ExpectedHash">
+/// The entry's hash as the workspace read it: for <see cref="RecentlyDeletedActionKind.Restore"/>, the hash of the
+/// <see cref="RecentlyDeletedContent"/> it restored from; for <see cref="RecentlyDeletedActionKind.DeletePermanently"/>,
+/// the entry's <see cref="RecentlyDeletedLibrary.ContentHash"/> (null for an entry that could not be read). Required for
+/// a restore: the journal stages exactly those bytes at prepare, and refuses the Save as an outside edit when the entry
+/// no longer matches them.
+/// </param>
 /// <param name="RestoreAsId">
 /// For <see cref="RecentlyDeletedActionKind.Restore"/>: the id the library comes back with, its original id unless that
 /// is taken now; required. Null otherwise.
 /// </param>
-public sealed record RecentlyDeletedAction(RecentlyDeletedActionKind Kind, string EntryName, string? RestoreAsId = null);
+public sealed record RecentlyDeletedAction(
+    RecentlyDeletedActionKind Kind,
+    string EntryName,
+    LibraryContentHash? ExpectedHash = null,
+    string? RestoreAsId = null);
 
 /// <summary>
 /// Everything one Save changes in the libraries, captured from a draft at one revision after validation: the files to
@@ -70,9 +81,15 @@ public sealed record RecentlyDeletedAction(RecentlyDeletedActionKind Kind, strin
 /// whose <see cref="BaseGeneration"/> is not the committed generation.
 /// </para>
 /// <para>
-/// Ordering the journal relies on: a <see cref="RecentlyDeletedActionKind.Restore"/> action runs before any write to the
-/// restored id, and no id is both written and deleted. Enabled state and AI permission travel only in
-/// <see cref="LocalState"/>, never in a file.
+/// Ordering the journal relies on: no id is both written and deleted, and a restored library the draft also edited is a
+/// <see cref="RecentlyDeletedActionKind.Restore"/> action plus a <see cref="LibraryWrite"/> for its
+/// <see cref="RecentlyDeletedAction.RestoreAsId"/> whose pre-image is the entry's hash; the journal merges the two into
+/// one restore of the edited content, so no file is the target of two operations in one manifest. Enabled state and AI
+/// permission travel only in <see cref="LocalState"/>, never in a file. The journal adds to the local state it commits
+/// the hash of every file it writes, creates or restores, custom CSVs and edits documents alike
+/// (<see cref="LibraryLocalState.AcceptedContent"/>), so Scribe's own writes never read as an outside replacement. A
+/// change set whose local state is <see cref="LocalStateHealth.Newer"/> is refused
+/// (<see cref="LibraryPrepareStatus.ReadOnly"/>): a newer version's library state makes the libraries read-only.
 /// </para>
 /// </remarks>
 public sealed class LibraryChangeSet

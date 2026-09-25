@@ -3,26 +3,33 @@ namespace Scribe.Core.Libraries;
 /// <summary>
 /// One committed library, as the catalog loaded it.
 /// </summary>
-/// <param name="Content">Its content. A paused library (<see cref="LibraryFileState.Unreadable"/> or
-/// <see cref="LibraryFileState.Newer"/>) has no rows here.</param>
+/// <param name="Content">
+/// Its content. A paused library (<see cref="LibraryFileState.Unreadable"/> or <see cref="LibraryFileState.Newer"/>)
+/// has no rows here; a <see cref="LibraryFileState.PartlyReadable"/> one has the rows that could be read; an
+/// <see cref="LibraryFileState.AwaitingRelease"/> one has its committed content (from the journal's redo image, or the
+/// content this process last read when another app holds the file open), or no rows at a start that has read neither.
+/// </param>
 /// <param name="State">Whether its file could be used.</param>
 /// <param name="FileName">
 /// Custom: the CSV's file name in the libraries folder, <c>Id + ".csv"</c> except for a hand-placed file remapped
 /// because its stem is a built-in id. Built-in: null.
 /// </param>
 /// <param name="ContentHash">
-/// The pre-image the journal checks before replacing the file: the custom CSV's bytes, or the built-in's edits document
-/// (null when it has none).
+/// The pre-image the journal checks before replacing the file, and the content identity compared with
+/// <see cref="LibraryLocalState.AcceptedContent"/>: the custom CSV's bytes, or the built-in's edits document (null when
+/// it has none). While a committed manifest is unresolved, the hash of the committed content it names.
 /// </param>
 /// <param name="Edits">A built-in's parsed edits document, or null when it has none or it could not be used.</param>
 /// <param name="PreviousEditsAvailable">A built-in's last good edits document is kept beside it (Restore the previous copy).</param>
+/// <param name="ReadErrorCount">Rows of the file the codec could not use; nonzero exactly for a partly readable file.</param>
 public sealed record CatalogLibrary(
     LibraryContent Content,
     LibraryFileState State,
     string? FileName,
     LibraryContentHash? ContentHash,
     BuiltInLibraryEdits? Edits = null,
-    bool PreviousEditsAvailable = false);
+    bool PreviousEditsAvailable = false,
+    int ReadErrorCount = 0);
 
 /// <summary>A custom library in Recently deleted, restorable until the janitor removes it 30 days after its deletion.</summary>
 /// <param name="EntryName">The file's name in <c>LibrariesDir\deleted</c>: the handle Restore and Delete permanently use.</param>
@@ -31,7 +38,10 @@ public sealed record CatalogLibrary(
 /// <param name="TermCount">How many rows it holds.</param>
 /// <param name="DeletedUtc">When the Save that deleted it committed, from the entry's name.</param>
 /// <param name="State">Whether the entry could be read; an unreadable one can still be deleted permanently.</param>
-/// <param name="ContentHash">The entry's bytes, for a restore that is also edited before Save.</param>
+/// <param name="ContentHash">
+/// The entry's bytes; set whenever the bytes could be read. A restore names it, and the journal restores only a file
+/// that still matches it.
+/// </param>
 public sealed record RecentlyDeletedLibrary(
     string EntryName,
     string OriginalId,
@@ -40,6 +50,23 @@ public sealed record RecentlyDeletedLibrary(
     DateTimeOffset DeletedUtc,
     LibraryFileState State,
     LibraryContentHash? ContentHash = null);
+
+/// <summary>
+/// A Recently deleted entry's content, read by the store (<c>ILibraryCatalogStore.ReadRecentlyDeleted</c>) and checked
+/// against the entry's hash, so the workspace can restore it into a draft, and preview, export or edit it before Save,
+/// without any file I/O of its own (review finding A8). Immutable: the restore the Save commits names the same hash,
+/// and the journal restores these bytes (edited, when the draft edited them), never whatever the entry holds by then.
+/// </summary>
+/// <param name="Entry">The entry, whose <see cref="RecentlyDeletedLibrary.ContentHash"/> the content matched.</param>
+/// <param name="Content">The content, as a custom library with the entry's original id and every readable row.</param>
+/// <param name="State">
+/// <see cref="LibraryFileState.Available"/>, or <see cref="LibraryFileState.PartlyReadable"/> when some rows could not
+/// be read; such a restore brings the file back byte for byte and cannot be edited in the same Save.
+/// </param>
+public sealed record RecentlyDeletedContent(
+    RecentlyDeletedLibrary Entry,
+    LibraryContent Content,
+    LibraryFileState State = LibraryFileState.Available);
 
 /// <summary>
 /// The edits document of a built-in the running version no longer ships. Inert: it is never applied or rewritten; a
@@ -77,7 +104,9 @@ public sealed class LibraryCatalog
         LibraryLocalState localState,
         IReadOnlyList<RecentlyDeletedLibrary> recentlyDeleted,
         IReadOnlyList<RetiredBuiltInEdits> retiredBuiltInEdits,
-        int filesAwaitingRelease)
+        int filesAwaitingRelease,
+        IReadOnlyList<LibraryKeptVersion>? keptVersions = null,
+        LibraryIoFailure pendingFailure = LibraryIoFailure.None)
     {
         ArgumentNullException.ThrowIfNull(libraries);
         ArgumentNullException.ThrowIfNull(localState);
@@ -92,6 +121,8 @@ public sealed class LibraryCatalog
         RecentlyDeleted = [.. recentlyDeleted];
         RetiredBuiltInEdits = [.. retiredBuiltInEdits];
         FilesAwaitingRelease = filesAwaitingRelease;
+        KeptVersions = keptVersions is null ? [] : [.. keptVersions];
+        PendingFailure = pendingFailure;
 
         _byId = new Dictionary<string, CatalogLibrary>(StringComparer.OrdinalIgnoreCase);
         foreach (var library in Libraries)
@@ -119,8 +150,21 @@ public sealed class LibraryCatalog
     /// <summary>Edits documents of built-ins the running version no longer ships.</summary>
     public IReadOnlyList<RetiredBuiltInEdits> RetiredBuiltInEdits { get; }
 
-    /// <summary>Files of the committed generation still waiting for another app to release their target.</summary>
+    /// <summary>
+    /// Files of the committed generation not in place yet (another app holds one open, access is denied, the disk is
+    /// full). While it is above zero the journal reads the committed content from its redo images, so dictation is
+    /// unaffected, but no library change can be saved until recovery has finished them.
+    /// </summary>
     public int FilesAwaitingRelease { get; }
+
+    /// <summary>Why files of the committed generation are not in place yet; <see cref="LibraryIoFailure.None"/> when all are.</summary>
+    public LibraryIoFailure PendingFailure { get; }
+
+    /// <summary>
+    /// Versions this process's completions and recoveries kept rather than overwrote, oldest first, for the Libraries
+    /// page's notices. In memory only: after a restart each kept version is simply a custom library that is off.
+    /// </summary>
+    public IReadOnlyList<LibraryKeptVersion> KeptVersions { get; }
 
     /// <summary>The library with <paramref name="id"/> (case-insensitive), or null.</summary>
     public CatalogLibrary? Find(string? id) =>

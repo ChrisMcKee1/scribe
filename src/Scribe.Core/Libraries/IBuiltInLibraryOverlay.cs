@@ -29,7 +29,8 @@ public interface IBuiltInLibraryOverlay
     /// rows in shipped order, then added and no-longer-shipped rows in document order. Applies the per-field upgrade
     /// merge and sets <see cref="LibraryRow.Review"/> where the user owes a decision. With no document, every row is
     /// <see cref="TermOrigin.Shipped"/>. An edit whose shipped row is gone keeps its authored values as
-    /// <see cref="TermOrigin.NoLongerShipped"/>; an off entry whose row is gone stays in the document and shows no row.
+    /// <see cref="TermOrigin.NoLongerShipped"/>; an off entry whose row is gone stays in the document and shows no row,
+    /// and <see cref="Collect"/> carries it over from the committed document.
     /// </summary>
     IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits);
 
@@ -52,11 +53,16 @@ public interface IBuiltInLibraryOverlay
     LibraryRow ResolveReview(LibraryRow row, TermReviewChoice choice);
 
     /// <summary>
-    /// The edits document for a built-in whose effective rows are <paramref name="rows"/>, or null when no row is
-    /// authored (the document is removed). A shipped key missing from <paramref name="rows"/> counts as unchanged,
-    /// never as deleted: shipped rows are turned off, never deleted.
+    /// The edits document for a built-in whose effective rows are <paramref name="rows"/>, or null when nothing is
+    /// authored (the document is removed). <paramref name="committed"/> is the document the draft started from
+    /// (<see cref="CatalogLibrary.Edits"/>), because not every entry has a row (review finding A7): an entry of
+    /// <paramref name="committed"/> whose key has no row in <paramref name="rows"/> is kept unchanged, which covers an
+    /// off entry whose shipped row this version does not ship (it shows no row and applies again if the row returns)
+    /// and a shipped row the caller left out (shipped rows are turned off, never deleted); the one exception is an
+    /// added or no-longer-shipped entry, a row the user can delete, whose absence deletes it. Removing everything,
+    /// inert entries included, is not a <see cref="Collect"/>: Restore all built-in values writes no document.
     /// </summary>
-    BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, IReadOnlyList<LibraryRow> rows);
+    BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows);
 
     /// <summary>The values the user authored in a document (edited, pinned and added rows), for keeping a retired built-in's work.</summary>
     IReadOnlyList<TermValues> AuthoredTerms(BuiltInLibraryEdits edits);

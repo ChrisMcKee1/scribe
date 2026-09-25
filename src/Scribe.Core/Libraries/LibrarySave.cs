@@ -35,7 +35,9 @@ public readonly record struct LibrarySettingValue(string Key, string? Value);
 /// What a library commit adds to the settings transaction: the generation it commits, the enabled list for the
 /// settings document, and the library's auxiliary rows. <c>ISettingsRepository.SaveBundle</c> commits it with the
 /// settings document, the dictionary and snippets in one BEGIN IMMEDIATE transaction, and refuses it, changing
-/// nothing, when the stored generation is not <see cref="ExpectedGeneration"/>.
+/// nothing, when the stored generation is not <see cref="ExpectedGeneration"/>. <c>CommitLibraryState</c> commits one
+/// on its own for state the service records without a Save (adoption, a lost state's denial); it may patch the stored
+/// document's enabled list and nothing else of the document.
 /// </summary>
 /// <remarks>
 /// Only the journal builds one (the constructor is internal to Core), because a generation with no manifest behind it
@@ -79,7 +81,8 @@ public sealed class LibrarySavePayload
 
     /// <summary>
     /// The list the settings document's <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/> takes, or null to
-    /// leave the document's list as the caller's document has it.
+    /// leave the document's list as the caller's document has it (<c>SaveBundle</c>) or as it is stored
+    /// (<c>CommitLibraryState</c>, which refuses to patch a document it cannot read or that a repair lost).
     /// </summary>
     public IReadOnlyList<string>? EnabledLibraryIds { get; }
 
@@ -91,10 +94,12 @@ public sealed class LibrarySavePayload
 public readonly record struct LibraryChangeCounts(int Created, int Updated, int Deleted, int Restored, int Terms);
 
 /// <summary>
-/// A Save whose files are staged and whose manifest is written (steps 1 and 2 of the Save commit), waiting for the
-/// settings transaction. Hand <see cref="Payload"/> to <c>SaveBundle</c>, then pass this to
-/// <c>ILibraryCatalogStore.CompleteSave</c> whether or not <c>SaveBundle</c> threw: completion reads the committed
-/// generation and finishes or discards accordingly.
+/// A Save whose redo images and manifest are written (steps 1 and 2 of the Save commit), waiting for the settings
+/// transaction. It is live from the moment <c>ILibraryCatalogStore.PrepareSave</c> returns it until
+/// <c>CompleteSave</c> returns for it: recovery never touches its manifest meanwhile, and nothing else advances the
+/// generation. Hand <see cref="Payload"/> to <c>SaveBundle</c>, then pass this to <c>CompleteSave</c> exactly once,
+/// whether or not <c>SaveBundle</c> threw (from a <c>finally</c>): completion reads the committed generation and
+/// finishes or discards accordingly.
 /// </summary>
 public sealed class PreparedLibrarySave
 {
@@ -126,17 +131,92 @@ public sealed class PreparedLibrarySave
 public enum LibraryIoFailure
 {
     None,
+
+    /// <summary>Windows refused access (a read-only file, a permission): lasts until someone changes the file.</summary>
     AccessDenied,
+
+    /// <summary>The disk is full.</summary>
     DiskFull,
+
+    /// <summary>Another app holds the file open. Lasts until that app lets it go; never a reason to reset or restore.</summary>
     SharingViolation,
+
+    /// <summary>A path is too long for this system.</summary>
     PathTooLong,
+
+    /// <summary>A journal file failed its recorded hash or could not be parsed, so what it held cannot be trusted.</summary>
+    Corrupt,
+
+    /// <summary>Anything else; the log carries its <c>FailureShape</c>.</summary>
     Other,
+}
+
+/// <summary>
+/// The journal's file operations, by name: the <c>{Operation}</c> of the log line
+/// <c>Library file operation {Operation} failed: {Failure}</c>, so that line can carry what failed without a path, a
+/// file name or an id (review finding G8).
+/// </summary>
+public enum LibraryFileOperation
+{
+    /// <summary>Reading a library file, an edits document, a Recently deleted entry or a journal file.</summary>
+    Read,
+
+    /// <summary>Listing the libraries folder or one of its subfolders.</summary>
+    Enumerate,
+
+    /// <summary>Writing a redo image at prepare.</summary>
+    WriteRedoImage,
+
+    /// <summary>Writing a manifest at prepare.</summary>
+    WriteManifest,
+
+    /// <summary>Copying a redo image to the install copy beside its target.</summary>
+    CreateInstallCopy,
+
+    /// <summary><c>File.Replace</c> of a target by its install copy.</summary>
+    Replace,
+
+    /// <summary>A step of the checked move that stands in for <c>File.Replace</c>.</summary>
+    CheckedReplace,
+
+    /// <summary>Moving an install copy onto an absent target.</summary>
+    Install,
+
+    /// <summary>Keeping a version found outside Scribe as a new library, or setting a foreign edits document aside.</summary>
+    KeepVersion,
+
+    /// <summary>Keeping a replaced edits document as its last good copy.</summary>
+    KeepPrevious,
+
+    /// <summary>Setting an edits document aside with a time stamp.</summary>
+    SetAside,
+
+    /// <summary>Moving a custom library into Recently deleted.</summary>
+    MoveToRecentlyDeleted,
+
+    /// <summary>Moving a Recently deleted entry back.</summary>
+    RestoreFromRecentlyDeleted,
+
+    /// <summary>Deleting a Recently deleted entry for good, by the user's choice or the janitor's retention.</summary>
+    Purge,
+
+    /// <summary>Deleting a resolved backup, a spent install copy or a redo image.</summary>
+    DeleteSpent,
+
+    /// <summary>Deleting or renaming a manifest when it is retired, discarded or set aside.</summary>
+    RetireManifest,
+
+    /// <summary>Removing a staged, backup or redo file no manifest names.</summary>
+    RemoveOrphan,
+
+    /// <summary>Writing the witness file after a commit.</summary>
+    WriteWitness,
 }
 
 /// <summary>What <c>ILibraryCatalogStore.PrepareSave</c> did.</summary>
 public enum LibraryPrepareStatus
 {
-    /// <summary>Files staged and the manifest written; commit <see cref="PreparedLibrarySave.Payload"/> next.</summary>
+    /// <summary>Redo images and the manifest written, and the preparation live; commit <see cref="PreparedLibrarySave.Payload"/> next.</summary>
     Prepared,
 
     /// <summary>The change set was empty; nothing was written.</summary>
@@ -151,10 +231,23 @@ public enum LibraryPrepareStatus
     /// <summary>The change set was based on a generation that is no longer the committed one; reload and try again.</summary>
     Stale,
 
-    /// <summary>Another Save is between prepare and completion; this one was not started.</summary>
+    /// <summary>Another Save is between prepare and completion in this process; this one was not started.</summary>
     Busy,
 
-    /// <summary>Staging failed (<see cref="LibraryPrepareResult.Failure"/>); staged files were removed and nothing changed.</summary>
+    /// <summary>
+    /// The committed generation's files are not all in place yet (<see cref="LibraryPrepareResult.Failure"/> says why,
+    /// most often another app holding a file open). Nothing advances the generation until they are, so nothing was
+    /// written; the shell asks the user to close the file, and the next attempt finishes the earlier Save first.
+    /// </summary>
+    PreviousSaveUnfinished,
+
+    /// <summary>
+    /// The library state was written by a newer version of Scribe (<see cref="LocalStateHealth.Newer"/>), which makes
+    /// the libraries read-only in this one; nothing was written.
+    /// </summary>
+    ReadOnly,
+
+    /// <summary>Staging failed (<see cref="LibraryPrepareResult.Failure"/>); what was staged was removed and nothing changed.</summary>
     Failed,
 }
 
@@ -162,7 +255,10 @@ public enum LibraryPrepareStatus
 /// <param name="Status">What happened.</param>
 /// <param name="Save">The prepared Save when <paramref name="Status"/> is <see cref="LibraryPrepareStatus.Prepared"/>.</param>
 /// <param name="OutsideEditIds">For <see cref="LibraryPrepareStatus.OutsideEdit"/>: the libraries changed outside Scribe. Empty otherwise.</param>
-/// <param name="Failure">For <see cref="LibraryPrepareStatus.Failed"/>: why.</param>
+/// <param name="Failure">
+/// For <see cref="LibraryPrepareStatus.Failed"/>: why staging failed. For
+/// <see cref="LibraryPrepareStatus.PreviousSaveUnfinished"/>: why the earlier Save's files are not in place.
+/// </param>
 public sealed record LibraryPrepareResult(
     LibraryPrepareStatus Status,
     PreparedLibrarySave? Save,
@@ -176,48 +272,85 @@ public enum LibrarySaveStatus
     Applied,
 
     /// <summary>
-    /// Committed; some files wait for another app to release their target, readers use the staged copies, and recovery
-    /// finishes later. The Save stands and is never reported as unsaved.
+    /// Committed; some files are not in place yet (<see cref="LibrarySaveOutcome.Failure"/> says why, most often another
+    /// app holding a file open). Readers use the committed content from the journal, recovery finishes later, and until
+    /// it has no other library change can be saved. The Save stands and is never reported as unsaved.
     /// </summary>
     AppliedAwaitingRelease,
 
-    /// <summary>The settings transaction did not commit; the staged files were discarded and nothing changed.</summary>
+    /// <summary>The settings transaction did not commit; the preparation was discarded and nothing changed.</summary>
     NotCommitted,
 
     /// <summary>
-    /// The stored generation is neither the base nor this Save's: something else committed. The staged files were
+    /// The stored generation is neither the base nor this Save's: something else committed. The preparation was
     /// discarded; reload.
     /// </summary>
     Superseded,
 }
 
+/// <summary>What a kept version is.</summary>
+public enum LibraryKeptVersionKind
+{
+    /// <summary>
+    /// A custom library's file changed outside Scribe after the pre-image check. Scribe's committed content is in place
+    /// under <see cref="LibraryKeptVersion.LibraryId"/>, and the outside bytes, unchanged, are a new custom library
+    /// under <see cref="LibraryKeptVersion.KeptAsId"/>, off and not sent to AI cleanup.
+    /// </summary>
+    OutsideVersion,
+
+    /// <summary>
+    /// Another app created a file under the id a new library was being saved as (review finding G3). That file stays
+    /// under <see cref="LibraryKeptVersion.LibraryId"/>, where its content does not match what the Save accepted, so it
+    /// is treated as newly discovered; Scribe's content is a new custom library under
+    /// <see cref="LibraryKeptVersion.KeptAsId"/>, off and not sent to AI cleanup.
+    /// </summary>
+    SavedUnderNewId,
+
+    /// <summary>
+    /// A built-in's edits document changed outside Scribe. Scribe's committed document is in place and the other version
+    /// was set aside with a time stamp, never read again (<see cref="LibraryKeptVersion.KeptAsId"/> is null).
+    /// </summary>
+    EditsSetAside,
+}
+
+/// <summary>
+/// A version of a library that completion or recovery kept rather than overwrote, so nothing written outside Scribe is
+/// lost. The shell shows one notice per kept version; the library it describes stays either way.
+/// </summary>
+/// <param name="LibraryId">The library the Save wrote.</param>
+/// <param name="Kind">What was kept, and where.</param>
+/// <param name="KeptAsId">The id of the new custom library that holds the kept version, or null when it was set aside.</param>
+public sealed record LibraryKeptVersion(string LibraryId, LibraryKeptVersionKind Kind, string? KeptAsId);
+
 /// <summary>The result of completing a Save.</summary>
 /// <param name="Status">Where the Save stands.</param>
 /// <param name="CommittedGeneration">The stored generation after completion.</param>
-/// <param name="FilesAwaitingRelease">Files still waiting for another app.</param>
-/// <param name="OutsideVersionIds">
-/// Custom libraries created from outside versions found when replacing (a file changed after it was checked), each
-/// Off with its own notice. Empty when there were none.
-/// </param>
-/// <param name="Failure">A file failure met while finishing, when there was one; the Save stands regardless.</param>
+/// <param name="FilesAwaitingRelease">Files of the committed generation not in place yet.</param>
+/// <param name="KeptVersions">Versions kept rather than overwritten; empty when there were none.</param>
+/// <param name="Failure">Why files are not in place, when some are not; the Save stands regardless.</param>
 public sealed record LibrarySaveOutcome(
     LibrarySaveStatus Status,
     long CommittedGeneration,
     int FilesAwaitingRelease,
-    IReadOnlyList<string> OutsideVersionIds,
+    IReadOnlyList<LibraryKeptVersion> KeptVersions,
     LibraryIoFailure Failure = LibraryIoFailure.None);
 
-/// <summary>What recovery found and did, as counts.</summary>
-/// <param name="Completed">Manifests of the committed generation finished.</param>
-/// <param name="Discarded">Manifests of a generation that never committed, discarded with their staged files.</param>
-/// <param name="SetAside">Manifests kept unapplied because the committed generation was lost or older than them.</param>
-/// <param name="FilesAwaitingRelease">Files still waiting for another app.</param>
-/// <param name="OutsideVersionsKept">Outside versions kept as new custom libraries.</param>
-/// <param name="OrphansRemoved">Staged or backup files no manifest referred to, removed.</param>
+/// <summary>What recovery found and did, as counts, plus the versions it kept.</summary>
+/// <param name="Completed">Manifests of the committed generation finished and retired.</param>
+/// <param name="Discarded">Manifests of a generation that never committed, discarded with their redo images.</param>
+/// <param name="SetAside">
+/// Manifests quarantined unapplied because the committed generation was lost, was older than them, or their redo image
+/// failed its hash; kept with every file they name for the quarantine retention.
+/// </param>
+/// <param name="FilesAwaitingRelease">Files of the committed generation still not in place.</param>
+/// <param name="OrphansRemoved">Staged, backup or redo files no manifest, live or set aside, names, removed.</param>
+/// <param name="KeptVersions">Versions kept rather than overwritten while finishing.</param>
+/// <param name="Failure">Why files are not in place, when some are not.</param>
 public sealed record LibraryRecoveryResult(
     int Completed,
     int Discarded,
     int SetAside,
     int FilesAwaitingRelease,
-    int OutsideVersionsKept,
-    int OrphansRemoved);
+    int OrphansRemoved,
+    IReadOnlyList<LibraryKeptVersion> KeptVersions,
+    LibraryIoFailure Failure = LibraryIoFailure.None);

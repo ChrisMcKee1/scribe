@@ -4,9 +4,9 @@ namespace Scribe.Core.Libraries;
 
 /// <summary>
 /// The library state that lives in local settings rather than in library files: which libraries are on, which may be
-/// sent to AI cleanup as vocabulary (Decision 2), and which legacy custom rows keep their pre-upgrade result (Decision
-/// 1). None of it ever travels in a library file, so a shared library cannot switch itself on or grant itself AI
-/// permission.
+/// sent to AI cleanup as vocabulary (Decision 2), which legacy custom rows keep their pre-upgrade result (Decision 1),
+/// and which file content each of those choices was made for. None of it ever travels in a library file, so a shared
+/// library cannot switch itself on or grant itself AI permission.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,6 +20,13 @@ namespace Scribe.Core.Libraries;
 /// AI permission is off is kept out of the document's list, which older builds would send whole to AI cleanup, and
 /// in the auxiliary row instead; this build reads both.
 /// </para>
+/// <para>
+/// Consent is bound to content (review finding A4): <see cref="AcceptedContent"/> holds, per library, the hash of the
+/// file this version last wrote or adopted. A file whose bytes no longer match was replaced outside Scribe (an older
+/// build deleted the library and imported another under the same file name, say), and composition treats it as newly
+/// discovered: this version's earlier choices for that id no longer apply to it. The journal records the hash of
+/// every file it writes in the same commit, so Scribe's own writes never read as a replacement.
+/// </para>
 /// </remarks>
 public sealed class LibraryLocalState
 {
@@ -29,7 +36,9 @@ public sealed class LibraryLocalState
         FrozenDictionary<string, bool> aiPermissions,
         IReadOnlyList<LegacyMarker> legacyMarkers,
         FrozenSet<string> aiUpgradeNotice,
-        LocalStateHealth health)
+        LocalStateHealth health,
+        FrozenDictionary<string, LibraryContentHash> acceptedContent,
+        bool aiPermissionsLost)
     {
         EnabledIds = enabledIds;
         LegacyEnabledIds = legacyEnabledIds;
@@ -37,6 +46,8 @@ public sealed class LibraryLocalState
         LegacyMarkers = legacyMarkers;
         AiUpgradeNotice = aiUpgradeNotice;
         Health = health;
+        AcceptedContent = acceptedContent;
+        AiPermissionsLost = aiPermissionsLost;
     }
 
     /// <summary>Nothing stored yet: no library on, no choices made, <see cref="LocalStateHealth.Absent"/>.</summary>
@@ -55,8 +66,9 @@ public sealed class LibraryLocalState
 
     /// <summary>
     /// The explicit AI permission choices, by library id. A library with no entry takes the policy default for its
-    /// kind, and any state whose <see cref="Health"/> is <see cref="LocalStateHealth.Unreadable"/> or
-    /// <see cref="LocalStateHealth.Newer"/> permits nothing: permission fails closed.
+    /// kind, unless <see cref="AiPermissionsLost"/> is set, which denies it. Any state whose <see cref="Health"/> is
+    /// <see cref="LocalStateHealth.Unreadable"/> or <see cref="LocalStateHealth.Newer"/> permits nothing: permission
+    /// fails closed.
     /// </summary>
     public IReadOnlyDictionary<string, bool> AiPermissions { get; }
 
@@ -70,9 +82,24 @@ public sealed class LibraryLocalState
     public LocalStateHealth Health { get; }
 
     /// <summary>
+    /// By library id, the hash of the content every choice above was made for: a custom library's CSV, or a built-in's
+    /// edits document (no entry for a built-in with no document). A library whose file does not match is treated as
+    /// newly discovered (review finding A4).
+    /// </summary>
+    public IReadOnlyDictionary<string, LibraryContentHash> AcceptedContent { get; }
+
+    /// <summary>
+    /// The AI permission choices were lost (a repair lost the auxiliary row, or it could not be read) and the user has
+    /// not chosen again. While set, a library with no explicit entry in <see cref="AiPermissions"/> is denied whatever
+    /// its kind, every commit keeps the flag, and only the user's explicit confirmation of the choices clears it, so a
+    /// loss never re-grants permission on a later start or through an unrelated Save (review finding A3).
+    /// </summary>
+    public bool AiPermissionsLost { get; }
+
+    /// <summary>
     /// A state from its parts. Null collections are empty; ids are trimmed, blank ones dropped, and compared
     /// case-insensitively (<see cref="StringComparer.OrdinalIgnoreCase"/>); a repeated marker is kept once, in first
-    /// position; for a repeated permission id the last value wins.
+    /// position; for a repeated permission or content id the last value wins.
     /// </summary>
     public static LibraryLocalState Create(
         IEnumerable<string?>? enabledIds,
@@ -80,7 +107,9 @@ public sealed class LibraryLocalState
         IEnumerable<KeyValuePair<string, bool>>? aiPermissions,
         IEnumerable<LegacyMarker>? legacyMarkers,
         IEnumerable<string?>? aiUpgradeNotice,
-        LocalStateHealth health)
+        LocalStateHealth health,
+        IEnumerable<KeyValuePair<string, LibraryContentHash>>? acceptedContent = null,
+        bool aiPermissionsLost = false)
     {
         var permissions = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, permitted) in aiPermissions ?? [])
@@ -88,6 +117,15 @@ public sealed class LibraryLocalState
             if (!string.IsNullOrWhiteSpace(id))
             {
                 permissions[id.Trim()] = permitted;
+            }
+        }
+
+        var accepted = new Dictionary<string, LibraryContentHash>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, hash) in acceptedContent ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                accepted[id.Trim()] = hash;
             }
         }
 
@@ -111,7 +149,9 @@ public sealed class LibraryLocalState
             permissions.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase),
             markers.AsReadOnly(),
             IdSet(aiUpgradeNotice),
-            health);
+            health,
+            accepted.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase),
+            aiPermissionsLost);
     }
 
     private static FrozenSet<string> IdSet(IEnumerable<string?>? ids)
@@ -149,8 +189,9 @@ public readonly record struct LegacyMarker(string LibraryId, LibraryTermKey Key)
 public enum LocalStateHealth
 {
     /// <summary>
-    /// No row, and nothing says one was lost: the first start of this version. Libraries without an explicit choice
-    /// take the policy default for their kind.
+    /// No row, and nothing says one was lost: no stored generation, no repair at this start, no session on defaults,
+    /// and no witness file of an earlier commit in the libraries folder. The first start of this version. Libraries
+    /// without an explicit choice take the policy default for their kind.
     /// </summary>
     Absent,
 
@@ -158,14 +199,15 @@ public enum LocalStateHealth
     Ok,
 
     /// <summary>
-    /// A row this build could not parse, or a row that should exist and is gone (a stored generation, or a repaired
-    /// database). AI permission fails closed and nothing is adopted; the next Save writes a fresh row.
+    /// A row this build could not parse, or a row that should exist and is gone (see <see cref="LibraryStateContext"/>).
+    /// AI permission fails closed, and the state committed next carries <see cref="LibraryLocalState.AiPermissionsLost"/>,
+    /// so the denial outlives this start.
     /// </summary>
     Unreadable,
 
     /// <summary>
-    /// A row from a newer version. AI permission fails closed, enabled and permission choices cannot be changed, and
-    /// this version never writes the row.
+    /// A row from a newer version. AI permission fails closed, the libraries are read-only in this version (no library
+    /// change is saved), and this version never writes the row.
     /// </summary>
     Newer,
 }
@@ -178,26 +220,65 @@ public enum LocalStateHealth
 /// </param>
 public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryIds, string? StateValue);
 
-/// <summary>What the service knows about the session when it reads the library state or asks whether to adopt libraries into it.</summary>
+/// <summary>
+/// What the service knows about the session when it reads the library state or asks whether to commit state on its own.
+/// Any of the four flags turns an absent state row from a first start into a lost one.
+/// </summary>
 /// <param name="RunningOnDefaults">
 /// The session runs on defaults because the saved settings could not be read or were lost
-/// (<see cref="Persistence.SettingsRepository.StartsWithoutSavedSettings"/>). Nothing is adopted or written then.
+/// (<see cref="Persistence.SettingsRepository.StartsWithoutSavedSettings"/>). Nothing library-related is written
+/// automatically then: no adoption, no marker, no denial, no Recently deleted or journal clean-up. The user's own Save,
+/// which ends that state, commits the library changes with the settings.
 /// </param>
 /// <param name="DatabaseRepaired">A repair rebuilt the database at this start, so an absent row may be a lost one.</param>
 /// <param name="GenerationStored">
 /// <see cref="LibrarySettingKeys.Generation"/> is stored. Every commit writes the state row with it, so a stored
 /// generation beside an absent state row means the row was lost, not that this is the first start.
 /// </param>
-public readonly record struct LibraryStateContext(bool RunningOnDefaults, bool DatabaseRepaired, bool GenerationStored);
+/// <param name="CommitWitnessed">
+/// The libraries folder holds the witness file the journal writes after every successful commit. It lives outside the
+/// database, so it still says a state existed on the start after a repair that lost both library rows, when nothing in
+/// the database does (review finding A3).
+/// </param>
+public readonly record struct LibraryStateContext(
+    bool RunningOnDefaults, bool DatabaseRepaired, bool GenerationStored, bool CommitWitnessed = false);
+
+/// <summary>Why the service commits library state it was not asked to save.</summary>
+[Flags]
+public enum LibraryAdoptionReasons
+{
+    None = 0,
+
+    /// <summary>
+    /// The first start of this version: every custom library that exists is recorded with AI permission on (Decision
+    /// 2), its content accepted, legacy markers added (Decision 1), and the upgrade notice pending.
+    /// </summary>
+    FirstStart = 1,
+
+    /// <summary>A custom file appeared that this version never recorded: recorded with AI off and markers as at the upgrade.</summary>
+    Discovered = 2,
+
+    /// <summary>
+    /// A library's content no longer matches <see cref="LibraryLocalState.AcceptedContent"/>: this version's earlier
+    /// choices for its id are dropped (AI off, out of the enabled lists, markers recomputed) and the new content accepted.
+    /// </summary>
+    ContentReplaced = 4,
+
+    /// <summary>
+    /// The stored state was lost or unreadable: a fresh state is committed with
+    /// <see cref="LibraryLocalState.AiPermissionsLost"/> set, the document's enabled list as read, markers recomputed
+    /// as at the upgrade and the current content accepted.
+    /// </summary>
+    StateLost = 8,
+}
 
 /// <summary>
-/// Library state to commit because the service met libraries it had never recorded: at the first start of this
-/// version, every custom library that exists (AI permission kept on, Decision 2, and legacy markers, Decision 1); later,
-/// a custom file that appeared from elsewhere (<see cref="LibraryOrigin.Discovered"/>: AI off, markers as at the
-/// upgrade). Deterministic from the catalog, so a start whose write failed plans the same again next time.
+/// Library state the service commits on its own because it met libraries or a loss it had never recorded. Deterministic
+/// from the catalog and the stored state, so a start whose write failed, or had to wait, plans the same again and uses
+/// the plan in memory meanwhile.
 /// </summary>
 /// <param name="State">The complete state to commit and use.</param>
-/// <param name="LibrariesAdopted">How many libraries were recorded.</param>
+/// <param name="Reasons">Why.</param>
+/// <param name="LibrariesAdopted">How many libraries were recorded or re-recorded.</param>
 /// <param name="MarkersAdded">How many legacy markers were added.</param>
-/// <param name="FirstStart">Whether this is the first start of this version.</param>
-public sealed record LibraryAdoption(LibraryLocalState State, int LibrariesAdopted, int MarkersAdded, bool FirstStart);
+public sealed record LibraryAdoption(LibraryLocalState State, LibraryAdoptionReasons Reasons, int LibrariesAdopted, int MarkersAdded);
