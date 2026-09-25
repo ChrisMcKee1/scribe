@@ -649,6 +649,203 @@ public sealed class LibraryWorkspaceChangeSetTests
     private static (bool, bool) Enabled(LibraryWorkspace workspace, string first, string second) =>
         (workspace.Draft.LocalState.EnabledIds.Contains(first), workspace.Draft.LocalState.EnabledIds.Contains(second));
 
+    // The rule for W2 after round 4: a Save whose outcome kept a library under another id is completed by a follow-up Save
+    // while reference repairs are pending, so a copy's file names the other app's library only until then; and Use this
+    // copy instead is confirmed with the name of the library CopyOriginal gives.
+    [Fact]
+    public void D4_a_reference_repair_is_pending_from_the_save_that_kept_the_original_elsewhere_until_a_save_writes_it()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        var copy = workspace.Duplicate(original);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        var changes = Capture(workspace);
+        var keptAs = original + "-7";
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        Assert.True(workspace.HasPendingReferenceRepairs);
+        Assert.Equal([copy], workspace.PendingReferenceRepairs);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+
+        // The follow-up Save writes the repair, which is pending until that Save is marked saved.
+        var followUp = Capture(workspace);
+        Assert.Equal(keptAs, followUp.Writes.Single(write => write.LibraryId == copy).Content!.BasedOn);
+        Assert.True(workspace.HasPendingReferenceRepairs);
+        var repaired = Apply(saved, followUp);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Empty(workspace.PendingReferenceRepairs);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Equal(keptAs, repaired.Find(copy)!.Content.BasedOn);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+
+        workspace.Reload(repaired);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+    }
+
+    [Fact]
+    public void D4_no_reference_repair_is_pending_when_no_saved_copy_names_a_library_kept_elsewhere()
+    {
+        var catalog = Standard();
+        TermValues[] theirs = [new("theirs", "Theirs")];
+
+        // A library and its copy saved as planned.
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        var copy = workspace.Duplicate(original);
+        var changes = Capture(workspace);
+        workspace.MarkSaved(changes.DraftRevision, Apply(catalog, changes));
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(original, workspace.CopyOriginal(copy));
+
+        // A library with no copy kept under another id.
+        workspace = Workspace(catalog);
+        var alone = workspace.CreateLibrary();
+        workspace.AddTerm(alone, new TermValues("ga", "general availability"));
+        changes = Capture(workspace);
+        workspace.MarkSaved(changes.DraftRevision, Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(alone, alone + "-7", theirs)]));
+        Assert.False(workspace.HasPendingReferenceRepairs);
+
+        // A copy made while the Save ran is corrected before any file holds it, and then saved with the right reference.
+        workspace = Workspace(catalog);
+        var planned = workspace.CreateLibrary();
+        workspace.AddTerm(planned, new TermValues("ga", "general availability"));
+        changes = Capture(workspace);
+        var later = workspace.Duplicate(planned);
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(planned, planned + "-7", theirs)]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.Equal(planned + "-7", workspace.Draft.Find(later)!.Content.BasedOn);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        var next = Capture(workspace);
+        workspace.MarkSaved(next.DraftRevision, Apply(saved, next));
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(planned + "-7", workspace.CopyOriginal(later));
+    }
+
+    [Fact]
+    public void D4_a_reference_repair_discarded_deleted_or_reloaded_is_no_longer_pending()
+    {
+        var catalog = Standard();
+        LibraryWorkspace Repairing(out string original, out string copy, out LibraryCatalog saved)
+        {
+            var workspace = Workspace(catalog);
+            original = workspace.CreateLibrary();
+            workspace.AddTerm(original, new TermValues("ga", "general availability"));
+            copy = workspace.Duplicate(original);
+            var changes = Capture(workspace);
+            saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, original + "-7", [new TermValues("theirs", "Theirs")])]);
+            workspace.MarkSaved(changes.DraftRevision, saved);
+            Assert.True(workspace.HasPendingReferenceRepairs);
+            return workspace;
+        }
+
+        // Discarded: the copy is its file again, whose reference this session knows to be stale.
+        var workspace = Repairing(out var original, out var copy, out _);
+        workspace.DiscardLibrary(copy);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(original, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Null(workspace.CopyOriginal(copy));
+
+        // Deleted: the Save moves the file to Recently deleted, and there is nothing to repair.
+        workspace = Repairing(out _, out copy, out _);
+        workspace.DeleteLibrary(copy);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+
+        // Reloaded before the follow-up Save: the same as a discard.
+        workspace = Repairing(out _, out copy, out var saved);
+        workspace.Reload(saved);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Null(workspace.CopyOriginal(copy));
+    }
+
+    [Fact]
+    public void D4_a_reference_repair_stays_pending_across_a_rebase_until_the_file_holds_it()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        var copy = workspace.Duplicate(original);
+        var changes = Capture(workspace);
+        var keptAs = original + "-7";
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.True(workspace.HasPendingReferenceRepairs);
+
+        LibraryCatalog WithCopy(LibraryCatalog from, Func<LibraryContent, LibraryContent> change) =>
+            new(
+                from.Generation + 1,
+                from.Libraries
+                    .Select(library => library.Content.Id == copy
+                        ? new CatalogLibrary(change(library.Content), library.State, library.FileName, HashOf(change(library.Content)))
+                        : library)
+                    .ToList(),
+                from.LocalState,
+                from.RecentlyDeleted.ToList(),
+                from.RetiredBuiltInEdits.ToList(),
+                filesAwaitingRelease: 0,
+                from.KeptVersions.ToList());
+
+        // Another app renamed the copy's file, which still names the planned id: the repair stays pending, and trusted.
+        var renamedOutside = WithCopy(saved, content => content with { Name = "Renamed outside" });
+        workspace.Rebase(renamedOutside);
+        Assert.Equal("Renamed outside", workspace.Draft.Find(copy)!.Content.Name);
+        Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Equal([copy], workspace.PendingReferenceRepairs);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+
+        // Another Scribe sharing the data folder wrote the repair: the file holds it, so nothing is pending or unsaved.
+        var written = WithCopy(renamedOutside, content => content with { BasedOn = keptAs });
+        workspace.Rebase(written);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+    }
+
+    [Fact]
+    public void D4_a_repair_discarded_while_the_follow_up_save_ran_is_not_pending_and_use_this_copy_instead_stays_refused()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        var copy = workspace.Duplicate(original);
+        var changes = Capture(workspace);
+        var keptAs = original + "-7";
+        var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var followUp = Capture(workspace);
+        workspace.DiscardLibrary(copy);
+        var repaired = Apply(saved, followUp);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+
+        // The Save wrote the repair; the discard made meanwhile is kept like any change made while a Save runs, so the copy
+        // shows the reference its file held before, as an unsaved change, and no repair is pending.
+        Assert.Equal(keptAs, repaired.Find(copy)!.Content.BasedOn);
+        Assert.Equal(original, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Contains(copy, workspace.UnsavedLibraryIds);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+
+        // That reference is neither its file's nor Scribe's repair, so Use this copy instead refuses rather than turn off the
+        // other app's library.
+        Assert.Null(workspace.CopyOriginal(copy));
+        workspace.SetEnabled(original, true);
+        Assert.Throws<InvalidOperationException>(() => workspace.UseCopyInstead(copy));
+        Assert.Contains(original, workspace.Draft.LocalState.EnabledIds);
+
+        // Discarded again, the copy is its file, which names where the original went.
+        workspace.DiscardLibrary(copy);
+        Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
+        Assert.Equal(keptAs, workspace.CopyOriginal(copy));
+    }
+
     private static (bool, bool, bool) Enabled(LibraryWorkspace workspace, string first, string second, string third) =>
         (workspace.Draft.LocalState.EnabledIds.Contains(first),
          workspace.Draft.LocalState.EnabledIds.Contains(second),

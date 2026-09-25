@@ -41,6 +41,8 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.OutsideVersions > 10, $"outside versions kept {totals.OutsideVersions}");
         Assert.True(totals.Probes > 100, $"change sets checked after marking saved {totals.Probes}");
         Assert.True(totals.KeptWithACopy > 5, $"libraries kept under another id with a copy {totals.KeptWithACopy}");
+        Assert.True(totals.RepairsPending > 3, $"saves that left a reference repair pending {totals.RepairsPending}");
+        Assert.True(totals.FollowUpSaves == totals.RepairsPending, $"follow-up saves {totals.FollowUpSaves}");
     }
 
     private sealed class Coverage
@@ -61,6 +63,9 @@ public sealed class LibraryWorkspacePropertyTests
         public int OutsideVersions;
         public int Probes;
         public int KeptWithACopy;
+        public int RepairsPending;
+        public int RepairsWithoutAKeptOriginal;
+        public int FollowUpSaves;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -233,7 +238,8 @@ public sealed class LibraryWorkspacePropertyTests
         int seed,
         int step,
         Coverage totals,
-        Func<string, string> fresh)
+        Func<string, string> fresh,
+        int depth = 0)
     {
         var context = $"seed {seed} step {step}: ";
         var changes = CaptureOrFail(workspace, seed, step);
@@ -276,7 +282,60 @@ public sealed class LibraryWorkspacePropertyTests
             Assert.Equal(Content(Workspace(saved)), Content(workspace));
         }
 
+        AssertReferences(workspace, saved, context);
+
+        // W2's rule after round 4: a Save that left reference repairs pending (a kept original's copy the Save wrote) is
+        // completed by a follow-up Save, which the user may work through as well.
+        if (workspace.HasPendingReferenceRepairs)
+        {
+            totals.RepairsPending++;
+            if (!outcomes.Any(outcome => outcome is StoreOutcome.SavedUnderNewId))
+            {
+                totals.RepairsWithoutAKeptOriginal++;
+            }
+
+            Assert.True(depth < 5, $"{context}follow-up Saves did not settle");
+            totals.FollowUpSaves++;
+            saved = Save(workspace, saved, store, random, seed, step, totals, fresh, depth + 1);
+            Assert.False(workspace.HasPendingReferenceRepairs, $"{context}a reference repair is still pending after the follow-up Save");
+        }
+
         return saved;
+    }
+
+    // Every pending reference repair is a saved copy whose draft reference is not its file's, and Use this copy instead
+    // acts on the library that reference names; a saved copy whose draft reference is neither its file's nor a repair
+    // (a discard made while a Save wrote its repair) is refused.
+    private static void AssertReferences(LibraryWorkspace workspace, LibraryCatalog committed, string context)
+    {
+        var draft = workspace.Draft;
+        var repairs = workspace.PendingReferenceRepairs.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.True(workspace.HasPendingReferenceRepairs == repairs.Count > 0, $"{context}the repair flag disagrees with the list");
+        foreach (var id in repairs)
+        {
+            Assert.True(draft.Find(id) is { PendingDelete: false, Content.BuiltIn: false }, $"{context}{id} is listed as a repair but is no live custom library");
+        }
+
+        foreach (var library in draft.Libraries.Where(library => !library.Content.BuiltIn && !library.PendingDelete))
+        {
+            var id = library.Content.Id;
+            var file = committed.Find(id);
+            var differs = file is not null && !string.Equals(file.Content.BasedOn, library.Content.BasedOn, StringComparison.Ordinal);
+            if (repairs.Contains(id))
+            {
+                Assert.True(differs, $"{context}{id} is listed as a repair, but its file holds its reference");
+                var referent = draft.Find(library.Content.BasedOn!) is { PendingDelete: false } original ? original.Content.Id : null;
+                Assert.True(
+                    string.Equals(workspace.CopyOriginal(id), referent, StringComparison.OrdinalIgnoreCase),
+                    $"{context}Use this copy instead for the repaired {id} would act on {workspace.CopyOriginal(id)}, not {referent}");
+            }
+            else if (differs)
+            {
+                Assert.True(
+                    workspace.CopyOriginal(id) is null,
+                    $"{context}{id}'s reference is neither its file's nor a repair, yet Use this copy instead would act on {workspace.CopyOriginal(id)}");
+            }
+        }
     }
 
     // What the user does while a Save runs: one to three operations, some aimed at what the Save is doing.
@@ -619,8 +678,9 @@ public sealed class LibraryWorkspacePropertyTests
                 break;
 
             case 14:
-                var copies = custom.Where(id => workspace.Draft.Find(id)!.Content.BasedOn is { } basedOn
-                    && workspace.Draft.Find(basedOn) is { PendingDelete: false }).ToList();
+                // The page offers Use this copy instead from CopyOriginal (request 3h), so a copy whose original can't be
+                // told is not offered.
+                var copies = custom.Where(id => workspace.CopyOriginal(id) is not null).ToList();
                 if (copies.Count > 0)
                 {
                     workspace.UseCopyInstead(Pick(copies));

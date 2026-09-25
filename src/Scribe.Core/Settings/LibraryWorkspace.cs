@@ -214,6 +214,23 @@ public sealed class LibraryWorkspace
     /// <summary>The libraries that differ from the committed catalog, in precedence order.</summary>
     public IReadOnlyList<string> UnsavedLibraryIds => Diff.UnsavedIds;
 
+    /// <summary>
+    /// The saved copies whose based-on reference the draft repaired and no Save has written yet, in precedence order. A
+    /// Save kept a copy's original under another id because another app took its file (<c>SavedUnderNewId</c>), so the
+    /// copy's file names the other app's library while the draft names where the original went (review finding A10). A
+    /// copy made while that Save ran is corrected before any file holds it and is never listed. Empty again once a Save
+    /// writes the repaired references, or when the draft lets them go (a discard or a reload of the copy, a deletion).
+    /// </summary>
+    public IReadOnlyList<string> PendingReferenceRepairs => Diff.RepairIds;
+
+    /// <summary>
+    /// Whether <see cref="PendingReferenceRepairs"/> lists any copy: true exactly while a repaired reference has not been
+    /// committed. W2 completes a Save after which this is true with a follow-up Save, so a stale reference outlives only a
+    /// crash between the two, and the confirmation of Use this copy instead, which names the library
+    /// <see cref="CopyOriginal"/> gives, covers that.
+    /// </summary>
+    public bool HasPendingReferenceRepairs => Diff.RepairIds.Count > 0;
+
     /// <summary>A library's rows in saved order, blank placeholders included.</summary>
     public IReadOnlyList<DraftTermRow> RowsOf(string libraryId) => Get(libraryId).Rows;
 
@@ -480,11 +497,12 @@ public sealed class LibraryWorkspace
     /// <summary>
     /// The library Use this copy instead would turn off for <paramref name="copyId"/>: the live library its based-on
     /// reference names. Null when there is none to act on: the library is not a copy, its original is deleted or gone,
-    /// or the reference is one this session cannot trust. That is a saved copy whose file still names the id of a library
-    /// the store kept under another id this session (another app took its file): the id now holds the other app's
-    /// library, and the repair of the reference (made when the Save was marked saved) was discarded before it was saved.
-    /// The page offers the command, and names the library it turns off, from this, so it never turns off a library that
-    /// is not the copy's original (review finding A10).
+    /// or the reference is one this session cannot trust. A saved copy's reference is trusted when it is Scribe's repair
+    /// (<see cref="PendingReferenceRepairs"/>), or when it is its file's, unless the file names the id of a library the
+    /// store kept under another id this session (another app took its file, so the id now holds the other app's library
+    /// and the repair was let go before a Save wrote it). Any other difference from its file (a discard made while a Save
+    /// wrote the repair) is not trusted. The page offers the command, and names the library it turns off, from this, so
+    /// it never turns off a library that is not the copy's original (review finding A10).
     /// </summary>
     public string? CopyOriginal(string copyId)
     {
@@ -494,12 +512,13 @@ public sealed class LibraryWorkspace
             return null;
         }
 
-        var stale = copy.Header.Committed is { } committed
-            && string.Equals(committed.Content.BasedOn, basedOn, StringComparison.OrdinalIgnoreCase)
-            && _committed.KeptVersions.Any(kept =>
-                kept.Kind == LibraryKeptVersionKind.SavedUnderNewId
-                && string.Equals(kept.LibraryId, basedOn, StringComparison.OrdinalIgnoreCase));
-        return !stale && Find(basedOn) is { } original && !original.Header.PendingDelete ? original.Header.Id : null;
+        var untrusted = copy.Header.Committed is { } committed
+            && (string.Equals(committed.Content.BasedOn, basedOn, StringComparison.OrdinalIgnoreCase)
+                ? _committed.KeptVersions.Any(kept =>
+                    kept.Kind == LibraryKeptVersionKind.SavedUnderNewId
+                    && string.Equals(kept.LibraryId, basedOn, StringComparison.OrdinalIgnoreCase))
+                : !copy.Header.ReferenceRepaired);
+        return !untrusted && Find(basedOn) is { } original && !original.Header.PendingDelete ? original.Header.Id : null;
     }
 
     /// <summary>
@@ -1350,7 +1369,9 @@ public sealed class LibraryWorkspace
                 && lib.Header.BasedOn is { } basedOn
                 && moved.TryGetValue(basedOn, out var movedTo))
             {
-                merged = merged.WithLib(lib with { Header = lib.Header with { BasedOn = movedTo } });
+                var repaired = lib.Header.Committed is { } committed
+                    && !string.Equals(movedTo, committed.Content.BasedOn, StringComparison.Ordinal);
+                merged = merged.WithLib(lib with { Header = lib.Header with { BasedOn = movedTo, ReferenceRepaired = repaired } });
             }
         }
 
@@ -2037,6 +2058,7 @@ public sealed class LibraryWorkspace
         var libraries = new Dictionary<string, LibraryChange>(StringComparer.OrdinalIgnoreCase);
         var unsaved = new List<string>();
         var untouched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var repairs = new List<string>();
         var localChanged = false;
         foreach (var lib in Ordered(_state))
         {
@@ -2052,14 +2074,25 @@ public sealed class LibraryWorkspace
                 unsaved.Add(lib.Header.Id);
             }
 
+            if (IsPendingRepair(lib))
+            {
+                repairs.Add(lib.Header.Id);
+            }
+
             localChanged |= change.LocalChanged;
         }
 
         var global = !_state.Local.Notice.SetEquals(_base.Local.Notice) || _state.Local.Lost != _base.Local.Lost;
         return new Differences(
             libraries, unsaved, untouched, localChanged || global,
-            unsaved.Count > 0 || global || !_state.Local.Purges.IsEmpty);
+            unsaved.Count > 0 || global || !_state.Local.Purges.IsEmpty,
+            repairs);
     }
+
+    // A saved copy whose based-on reference is Scribe's repair, which its file does not hold yet.
+    private static bool IsPendingRepair(Lib lib) =>
+        lib.Header is { BuiltIn: false, PendingDelete: false, ReferenceRepaired: true, Committed: { } committed }
+        && !string.Equals(lib.Header.BasedOn, committed.Content.BasedOn, StringComparison.Ordinal);
 
     private LibraryChange Analyze(Lib lib)
     {
@@ -2763,7 +2796,10 @@ public sealed class LibraryWorkspace
             Pick(mine.FileName, before.FileName, after.FileName),
             Pick(mine.Committed, before.Committed, after.Committed),
             Pick(mine.RestoredFrom, before.RestoredFrom, after.RestoredFrom),
-            Pick(mine.Created, before.Created, after.Created));
+            Pick(mine.Created, before.Created, after.Created))
+        {
+            ReferenceRepaired = Pick(mine.ReferenceRepaired, before.ReferenceRepaired, after.ReferenceRepaired),
+        };
         return merged == mine ? mine : merged;
     }
 
@@ -2964,7 +3000,8 @@ public sealed class LibraryWorkspace
         IReadOnlyList<string> UnsavedIds,
         IReadOnlySet<string> UntouchedIds,
         bool LocalChanged,
-        bool HasChanges);
+        bool HasChanges,
+        IReadOnlyList<string> RepairIds);
 
     private sealed record LibraryChange(
         bool Untouched, bool ContentChanged, BuiltInLibraryEdits? Edits, bool LocalChanged, bool Unsaved);
@@ -3007,7 +3044,13 @@ public sealed class LibraryWorkspace
         string? FileName,
         CatalogLibrary? Committed,
         RecentlyDeletedContent? RestoredFrom,
-        Creation? Created);
+        Creation? Created)
+    {
+        // The based-on reference is Scribe's repair of what the library's file holds: a Save kept the copy's original under
+        // another id, so the file names the library that took the planned id (review finding A10). The committed side
+        // never carries it, so a Save that writes the repair clears it, and so does a discard of the library.
+        public bool ReferenceRepaired { get; init; }
+    }
 
     private sealed record Lib(Header Header, ImmutableList<DraftTermRow> Rows);
 
