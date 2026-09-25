@@ -114,10 +114,12 @@ public sealed class LibraryPrecedenceTests
     [Fact]
     public void A_retirement_after_an_earlier_one_leaves_both_out_of_the_catalog()
     {
-        // As if data-and-ai had already been retired for real: its CSV no longer ships and RetiredBuiltInIds names it.
-        var shipping = BuiltInDictionaryLibraries.All.Where(l => l.Id != "data-and-ai").ToList();
+        // As if data-and-ai had been retired for real, on top of any retirement already made: its CSV no longer ships and
+        // RetiredBuiltInIds names it with the others.
+        string[] earlier = [.. LibraryPrecedence.RetiredBuiltInIds.Append("data-and-ai").Distinct(StringComparer.OrdinalIgnoreCase)];
+        var shipping = BuiltInDictionaryLibraries.All.Where(l => !earlier.Contains(l.Id, StringComparer.OrdinalIgnoreCase)).ToList();
 
-        AssertRetirementKeepsTheOrder(shipping, ["data-and-ai"], "github");
+        AssertRetirementKeepsTheOrder(shipping, earlier, "github");
     }
 
     // BuiltInDictionaryLibraries.All is LibraryPrecedence.Order over the libraries that ship, so the same call over the ones
