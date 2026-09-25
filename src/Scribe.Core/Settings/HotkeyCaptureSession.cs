@@ -57,8 +57,10 @@ public readonly record struct HotkeyCaptureStep(
 /// make a two-input chord like two keys do. Beyond two, only a key or button held with modifiers is recorded: Ctrl,
 /// Alt and Shift keys and at most one other input, which is what a mouse's own software sends for an extra button set
 /// to a shortcut such as Ctrl+Shift+F13; that becomes the one input with the modifiers as flags, either side of each
-/// (<see cref="Build"/>). A Windows key is never one of more than two inputs: only the key of a shortcut is kept from
-/// Windows, and a Windows key it saw pressed and released with nothing between opens Start. Two inputs with a Windows
+/// (<see cref="Build"/>). Only the input that completes a shortcut is kept from Windows and the app, which is its key
+/// when the modifiers go down first, as a mouse's software and a person send one; recorded the other way round, the
+/// capture warns (<see cref="ChordOrderWarning"/>). A Windows key is never one of more than two inputs: Windows would see
+/// it pressed and released with nothing between, which opens Start. Two inputs with a Windows
 /// key stay the chord they always were, whose Windows key is kept from Windows from its first press (see
 /// <c>ChordStateMachine</c>). Only the middle, Back and Forward buttons can be recorded
 /// (<see cref="MouseButtons.IsBindable"/>); the left and right buttons are refused and keep their meaning. A release
@@ -88,8 +90,9 @@ public sealed class HotkeyCaptureSession
         "A dictation hotkey is one or two keys or mouse buttons, or one key or button with Ctrl, Alt or Shift.";
 
     /// <summary>
-    /// The warning for a shortcut of Shift with Ctrl or Alt: only its key is kept from Windows, which so sees those
-    /// modifiers pressed and released with nothing between, the gesture that switches the keyboard language or layout.
+    /// The warning for a shortcut of Shift with Ctrl or Alt: only the input that completes it is kept from Windows, which
+    /// so sees the modifiers pressed and released with nothing between, the gesture that switches the keyboard language
+    /// or layout.
     /// </summary>
     public const string LayoutSwitchWarning =
         "Windows still sees this hotkey's modifier keys, so they can switch your keyboard language or layout " +
@@ -270,9 +273,10 @@ public sealed class HotkeyCaptureSession
         _ => KeyModifiers.None,
     };
 
-    // Only the key of a shortcut with modifier flags is kept from Windows, which so sees the modifiers held with it
-    // pressed and released with nothing between: for Shift with Ctrl or Alt, the gesture that switches the keyboard
-    // language or layout. The key counts when it is a modifier itself, since the modifiers can be pressed in any order.
+    // Only the input that completes a shortcut with modifier flags is kept from Windows, so Windows sees the modifiers
+    // pressed before it pressed and released with nothing between: for Shift with Ctrl or Alt, the gesture that switches
+    // the keyboard language or layout. The key counts when it is a modifier itself, since the modifiers can be pressed in
+    // any order.
     private static string? LayoutSwitchRisk(HotkeyBinding binding)
     {
         var held = binding.Modifiers | ModifierOf(binding.VirtualKey);
@@ -283,18 +287,27 @@ public sealed class HotkeyCaptureSession
             : null;
     }
 
-    // A chord is swallowed from the input that completes it, so an input pressed before that still reaches the app under
-    // the pointer. For a key that costs nothing, but a mouse button pressed early still does its job there (Back goes
-    // back), so the warning says which to press first, or, for two buttons, which reaches the app.
+    // A chord or shortcut is swallowed from the input that completes it, so one pressed before that still reaches the app.
+    // For a chord's first key that costs little, as it always has, but a mouse button pressed early still does its job
+    // there (Back goes back), and so does a shortcut's key pressed before its modifiers (a media key still plays), so the
+    // warning says which to press last, or, for two buttons, which reaches the app.
     private string? ChordOrderWarning(IReadOnlyList<uint> inputs)
     {
         if (inputs.Count > 2)
         {
-            var early = inputs.Take(inputs.Count - 1).Where(MouseButtons.IsBindable).ToList();
-            return early.Count == 0
-                ? null
-                : $"Press {Name(early[0])} last when you use this hotkey: a mouse button pressed before the keys held " +
-                  "with it still reaches the app under the pointer.";
+            // The one input that is not a modifier, unless the modifiers alone were recorded. Only the input that
+            // completes a shortcut is kept from the app, so this one must go down last.
+            var key = inputs.FirstOrDefault(input => !IsModifier(input));
+            if (key == 0 || key == inputs[^1])
+            {
+                return null;
+            }
+
+            return MouseButtons.IsBindable(key)
+                ? $"Press {Name(key)} last when you use this hotkey: a mouse button pressed before the keys held with " +
+                  "it still reaches the app under the pointer."
+                : $"Press {Name(key)} last when you use this hotkey: pressed before the keys held with it, it still " +
+                  "reaches the app you're using.";
         }
 
         if (inputs.Count != 2 || !MouseButtons.IsBindable(inputs[0]))

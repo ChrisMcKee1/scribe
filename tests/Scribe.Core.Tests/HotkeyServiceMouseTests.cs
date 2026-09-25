@@ -97,6 +97,87 @@ public partial class HotkeyServiceTests
         Assert.NotEqual(second, service.MouseHookHandle);
     }
 
+    [Fact]
+    public void Start_hands_a_mouse_hook_found_gone_to_the_engine_once()
+    {
+        // The renewal that finds the registration gone tells the engine, on the hook thread and before the renewal counts,
+        // so a dictation a button was driving is ended there (MouseButtonRecoveryTests); a healthy renewal tells it nothing.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        service.Start();
+
+        AwaitRenewal(service);
+        Assert.Equal(0, service.MouseHookLossesHandled);
+
+        Assert.True(UnhookWindowsHookEx(service.MouseHookHandle), $"Could not remove the registration (Win32 error {Marshal.GetLastWin32Error()}).");
+        AwaitRenewal(service);
+        Assert.Equal(1, service.MouseHookLossesHandled);
+
+        AwaitRenewal(service);
+        Assert.Equal(1, service.MouseHookLossesHandled);
+    }
+
+    [Fact]
+    public void Start_ends_a_button_hold_whose_release_came_while_the_mouse_hook_was_gone()
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        using var guard = new InjectedMouseGuard();
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        var events = new ConcurrentQueue<string>();
+        service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
+        service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger + " " + e.Deactivation);
+        service.Start();
+
+        Inject(ButtonDown(MouseButtons.Back));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The bound button started nothing.");
+
+        // Windows removes the hook (a missed deadline), the user lets go of Back meanwhile, and only the guard sees it.
+        Assert.True(UnhookWindowsHookEx(service.MouseHookHandle), $"Could not remove the registration (Win32 error {Marshal.GetLastWin32Error()}).");
+        Inject(ButtonUp(MouseButtons.Back));
+        Assert.True(guard.WaitFor(1), "The release never reached the guard.");
+        Assert.Single(events);
+
+        // The watchdog's renewal finds the hook gone and ends the dictation, with no further click.
+        AwaitRenewal(service);
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The renewal left the dictation running.");
+        Assert.Equal(new[] { "start Standard", "stop Standard MouseHookLost" }, events.ToArray());
+    }
+
+    [Fact]
+    public void Start_keeps_a_swallowed_button_release_from_the_app_across_a_desktop_switch()
+    {
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        // The input-desktop query answers "lost input" for the notice, as it would under a UAC prompt, so the switch is
+        // applied; the button is then released back on this desktop.
+        using var guard = new InjectedMouseGuard();
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => false);
+        var events = new ConcurrentQueue<string>();
+        service.Activated += (_, e) => events.Enqueue("start " + e.Trigger);
+        service.Deactivated += (_, e) => events.Enqueue("stop " + e.Trigger + " " + e.Deactivation);
+        service.Start();
+
+        Inject(ButtonDown(MouseButtons.Back));
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 1, HookTimeout), "The bound button started nothing.");
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+        Assert.True(SpinWait.SpinUntil(() => events.Count == 2, HookTimeout), "The desktop switch left the dictation running.");
+
+        // Back's release, then an unbound Forward click: once the guard has the click, Back's release, sent before it,
+        // would be there too had the service passed it on.
+        Inject(ButtonUp(MouseButtons.Back), ButtonDown(MouseButtons.Forward), ButtonUp(MouseButtons.Forward));
+        Assert.True(guard.WaitFor(2), "The unbound click never came through the service's hook.");
+        Assert.Equal(
+            new[] { Message(ButtonDown(MouseButtons.Forward)), Message(ButtonUp(MouseButtons.Forward)) },
+            guard.SeenWithoutMoves);
+        Assert.Equal(new[] { "start Standard", "stop Standard DesktopSwitch" }, events.ToArray());
+    }
+
     [Theory]
     [InlineData(MouseButtons.Middle)]
     [InlineData(MouseButtons.Back)]

@@ -29,6 +29,7 @@ internal sealed class SuppressedKeyReconciler
     private readonly Func<uint, bool> _isLogicallyDown;
     private readonly Func<uint, bool> _isPhysicallyPressed;
     private readonly Func<uint, bool> _releaseKey;
+    private readonly Func<uint, bool>? _claimButtonRelease;
 
     /// <param name="isLogicallyDown">The system's view (GetAsyncKeyState high bit).</param>
     /// <param name="isPhysicallyPressed">The hook's view (ChordStateMachine.IsPressed).</param>
@@ -36,21 +37,30 @@ internal sealed class SuppressedKeyReconciler
     /// Injects a synthetic, marker-tagged key-up; returns false when the injection was rejected
     /// (e.g. UIPI or a desktop switch), so a failed release is never reported as healed.
     /// </param>
+    /// <param name="claimButtonRelease">
+    /// For a mouse button: claims the engine's evidence that it swallowed that button's release (true once per swallowed
+    /// release; see <see cref="HotkeyEngine.ClaimButtonReleaseEvidence"/>). Null: no mouse button is ever released.
+    /// </param>
     public SuppressedKeyReconciler(
         Func<uint, bool> isLogicallyDown,
         Func<uint, bool> isPhysicallyPressed,
-        Func<uint, bool> releaseKey)
+        Func<uint, bool> releaseKey,
+        Func<uint, bool>? claimButtonRelease = null)
     {
         _isLogicallyDown = isLogicallyDown;
         _isPhysicallyPressed = isPhysicallyPressed;
         _releaseKey = releaseKey;
+        _claimButtonRelease = claimButtonRelease;
     }
 
     /// <summary>
     /// Releases every candidate key of <paramref name="binding"/> that the system believes is
     /// still down although the hook saw it released. A key the user genuinely holds right now
     /// (hook agrees it is down) is never touched, so a real modifier held for a shortcut
-    /// survives reconciliation.
+    /// survives reconciliation. A mouse button needs more than that: the hook not holding a button
+    /// also means it never saw it go down (held in another app since before the mouse hook existed,
+    /// or while Windows had removed it), so one is released only on the engine's evidence of a
+    /// release it swallowed, claimed here once whatever Windows reports, and never without it.
     /// </summary>
     public Result ReleaseLeakedKeys(HotkeyBinding binding)
     {
@@ -63,6 +73,11 @@ internal sealed class SuppressedKeyReconciler
         List<uint>? failed = null;
         foreach (var key in CandidateKeys(binding))
         {
+            if (MouseButtons.IsMouseButton(key) && _claimButtonRelease?.Invoke(key) != true)
+            {
+                continue;
+            }
+
             if (_isLogicallyDown(key) && !_isPhysicallyPressed(key))
             {
                 if (_releaseKey(key))

@@ -23,6 +23,12 @@ public enum DictationStopReason
     /// hook cannot see the key's release there, so it ended the recording as the binding would have.
     /// </summary>
     DesktopSwitch,
+
+    /// <summary>
+    /// Windows had removed the mouse hook while a mouse button binding was held or toggled on, and the hook's renewal
+    /// found it gone. The button's release may have happened while no hook saw the mouse, so the hook ended the recording.
+    /// </summary>
+    MouseHookLost,
 }
 
 /// <summary>What a stop means for the hotkey hook, decided here so a test can reach it.</summary>
@@ -33,12 +39,14 @@ public static class DictationStopPolicy
     /// (<c>IHotkeyService.CancelToggle</c>, through <see cref="BeginStop"/>). A stop Scribe makes itself (the silence
     /// auto-stop, a microphone fault, a pause, the duration ceiling) leaves the hook believing that press is still held
     /// or its toggle still on, so the next press would be swallowed as the toggle-off of a dictation that has already
-    /// ended. The two stops the hook sends itself release nothing: a release or second press ended that press's latch,
-    /// and a desktop switch reset every latch, before the stop was sent, so nothing of it is left to release. A reason
-    /// added later releases unless it is one of those two, which is the safe default for a stop the hook did not send.
+    /// ended. The stops the hook sends itself release nothing: a release or second press ended that press's latch, and
+    /// a desktop switch or a mouse hook found removed cleared the latches it concerned, before the stop was sent, so
+    /// nothing of it is left to release. A reason added later releases unless it is one of those, which is the safe
+    /// default for a stop the hook did not send.
     /// </summary>
     public static bool ReleasesHotkeyToggle(DictationStopReason reason) =>
-        reason is not (DictationStopReason.HotkeyReleased or DictationStopReason.DesktopSwitch);
+        reason is not (DictationStopReason.HotkeyReleased or DictationStopReason.DesktopSwitch
+            or DictationStopReason.MouseHookLost);
 
     /// <summary>
     /// The first step of every stop, in the only safe order: the lifecycle admits the stop (only the one that ends the

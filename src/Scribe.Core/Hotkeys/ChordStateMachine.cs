@@ -101,6 +101,32 @@ internal sealed class ChordStateMachine
     /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
     public long Generation => _generation;
 
+    /// <summary>Owner thread: whether this machine's binding presses a mouse button.</summary>
+    public bool UsesMouseButtons => MouseButtons.Uses(_binding);
+
+    /// <summary>
+    /// Owner thread: Windows had removed the mouse hook, so a button this machine holds may have been released where no
+    /// hook could see it (see <see cref="HotkeyEngine.OnMouseHookLost"/>). The buttons are forgotten; every key stays as
+    /// the keyboard hook, which was not removed, saw it. A binding that presses a button gives up its hold or toggle
+    /// latch as well, because the dictation it drove is ended, so its next press starts afresh; any other binding keeps
+    /// its latch. A release still owed to a swallowed press is the engine's to keep, not this machine's.
+    /// </summary>
+    public void ForgetMouseButtons()
+    {
+        _pressed.Remove(MouseButtons.Middle);
+        _pressed.Remove(MouseButtons.Back);
+        _pressed.Remove(MouseButtons.Forward);
+        _suppressed.Remove(MouseButtons.Middle);
+        _suppressed.Remove(MouseButtons.Back);
+        _suppressed.Remove(MouseButtons.Forward);
+        _satisfied = IsSatisfied(_binding);
+        if (UsesMouseButtons)
+        {
+            _active = false;
+            _generation++;
+        }
+    }
+
     public ChordUpdate Process(uint virtualKey, bool isDown)
     {
         // Binding capture in Settings owns the keyboard: every event passes through untouched

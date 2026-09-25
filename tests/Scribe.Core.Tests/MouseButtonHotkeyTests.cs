@@ -434,8 +434,8 @@ public sealed class MouseButtonHotkeyTests
 
         h.Router.SetCaptureMode(true);
         Assert.False(h.WouldDispatch(activation));
-        var up = h.ButtonUp(Middle); // the release of the button held when capture began reaches the capture box
-        Assert.False(up.Suppress);
+        var up = h.ButtonUp(Middle); // the release of the button held when capture began: its press was swallowed
+        Assert.True(up.Suppress);
         var stop = Assert.Single(h.TakeTransitions());
         Assert.Equal(HotkeyTransition.Deactivated, stop.Transition);
         Assert.False(stop.AllowReconcile);
@@ -697,11 +697,13 @@ public sealed class MouseButtonHotkeyTests
     }
 
     [Fact]
-    public void The_leak_check_covers_a_bound_button_and_releases_it_only_when_windows_holds_it_and_the_hook_does_not()
+    public void The_leak_check_covers_a_bound_button_but_releases_one_only_on_evidence()
     {
         Assert.Equal(new[] { Back }, SuppressedKeyReconciler.CandidateKeys(Bare(Back)));
         Assert.Equal(new[] { Back, LeftCtrl }, SuppressedKeyReconciler.CandidateKeys(Chord(LeftCtrl, Back)).OrderBy(k => k));
 
+        // Windows holding a button the hook sees released is not enough: without the engine's evidence of a release it
+        // swallowed (MouseButtonRecoveryTests), the button may simply be held for another app since before the hook saw it.
         var windowsDown = new HashSet<uint> { Back, Middle };
         var hookDown = new HashSet<uint> { Middle };
         var released = new List<uint>();
@@ -711,9 +713,24 @@ public sealed class MouseButtonHotkeyTests
             return true;
         });
 
-        Assert.Equal(new[] { Back }, reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
-        Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Middle)).Released); // held for real
+        Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
+        Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Middle)).Released);
+        Assert.Empty(released);
+
+        var claimed = new List<uint>();
+        var withEvidence = new SuppressedKeyReconciler(windowsDown.Contains, hookDown.Contains, key =>
+        {
+            released.Add(key);
+            return true;
+        }, button =>
+        {
+            claimed.Add(button);
+            return button == Back;
+        });
+        Assert.Equal(new[] { Back }, withEvidence.ReleaseLeakedKeys(Bare(Back)).Released);
+        Assert.Empty(withEvidence.ReleaseLeakedKeys(Bare(Middle)).Released); // no evidence for Middle, held for real besides
         Assert.Equal(new[] { Back }, released);
+        Assert.Equal(new[] { Back, Middle }, claimed.ToArray());
     }
 
     // A mouse's buttons beyond the fifth reach Scribe only as the keys its software or firmware sends for them (Windows
@@ -768,6 +785,24 @@ public sealed class MouseButtonHotkeyTests
         Assert.False(h.Up(0x7C).Suppress);
         h.Up(ctrl);
         Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void A_shortcut_whose_key_goes_down_first_keeps_its_last_modifier_from_the_app_instead()
+    {
+        // What is kept from the app is the input that completes the shortcut: the key when the modifiers go down first,
+        // as a mouse's software and a person send one, and otherwise the last modifier, while the key reaches the app
+        // whole. Set warns when it records that order (HotkeyCaptureSessionTests).
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([LeftCtrl, LeftShift, 0x7C], HotkeyMode.Hold));
+
+        Assert.False(h.Down(0x7C).Suppress);
+        Assert.False(h.Down(LeftShift).Suppress);
+        Assert.True(h.Down(LeftCtrl).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+        Assert.False(h.Up(0x7C).Suppress);
+        Assert.Equal(HotkeyTransition.Deactivated, Assert.Single(h.TakeTransitions()).Transition);
+        Assert.True(h.Up(LeftCtrl).Suppress);
+        Assert.False(h.Up(LeftShift).Suppress);
     }
 
     [Fact]
