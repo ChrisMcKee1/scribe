@@ -268,6 +268,7 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Contains("Left and right clicks can't be used", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("press the key first", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("Ctrl, Shift, Alt, Win or the Narrator key", HotkeyCaptureSession.MouseButtonsHint);
+        Assert.Contains("though a game that reads the mouse directly may still see it", HotkeyCaptureSession.MouseButtonsHint);
     }
 
     // What a mouse's own software or firmware sends for a button beyond the fifth, which Windows does not deliver as a
@@ -521,6 +522,19 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(code, @"if \(step\.Handled\)\s*\{\s*e\.Handled = true;").Count);
         Assert.Contains("AddHook(CaptureNonClientMouseButtons)", code);
         Assert.Contains("MouseButtonsHintText.Text = HotkeyCaptureSession.MouseButtonsHint;", code);
+    }
+
+    [Fact]
+    public void The_settings_window_names_every_kind_of_input_a_hotkey_can_now_hold()
+    {
+        // The hold hint and the duplicate-trigger message predate mouse buttons and shortcuts of three inputs.
+        var root = RepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml"));
+        var code = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+
+        Assert.Contains("Hold: keep the key, mouse button, chord or shortcut down while speaking.", xaml);
+        Assert.DoesNotContain("two-part chord", xaml);
+        Assert.Contains("The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.", code);
     }
 
     private static string RepositoryRoot()

@@ -107,15 +107,17 @@ public sealed class HotkeyCaptureSession
     /// The Settings help text about mouse buttons: which ones bind directly, how to bind any other, and what binding one
     /// costs in other apps (see <c>ChordStateMachine</c> for the modifier rule it states). Windows itself delivers only
     /// five mouse buttons to apps, the left, right, middle, Back and Forward, so a mouse's other buttons reach Scribe
-    /// only as the keys its software or firmware sends for them.
+    /// only as the keys its software or firmware sends for them. The promise is kept exact: nothing Microsoft documents
+    /// says whether a press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured,
+    /// so the text says a game that reads the mouse directly may still see it.
     /// </summary>
     public const string MouseButtonsHint =
         "Middle, Back and Forward mouse buttons bind directly: choose Set, then press the button with the pointer on this " +
         "window, on its own or after a key (for a chord such as Ctrl and Back, press the key first). For other mouse " +
         "buttons, set the button to a key such as F13 in your mouse's software, then choose Set and press it here. Left " +
         "and right clicks can't be used. While Scribe runs, a bound button no longer does its usual job in other apps, so " +
-        "Back stops going back in your browser; a button bound on its own still does, pressed with Ctrl, Shift, Alt, Win " +
-        "or the Narrator key.";
+        "Back stops going back in your browser, though a game that reads the mouse directly may still see it. Pressed " +
+        "with Ctrl, Shift, Alt, Win or the Narrator key, a button bound on its own still does its usual job.";
 
     /// <summary>The inputs recorded so far, in the order they went down.</summary>
     public IReadOnlyList<uint> Recorded => _recorded;

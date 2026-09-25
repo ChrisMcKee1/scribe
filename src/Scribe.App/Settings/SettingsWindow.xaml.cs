@@ -5053,7 +5053,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             ShowSection(SectionGeneral);
             ShowThemedMessage(
                 "Hotkey conflict",
-                "The AI-cleanup and dictation-only hotkeys must use different keys.");
+                "The AI-cleanup and dictation-only hotkeys must use different keys or mouse buttons.");
             return false;
         }
 
