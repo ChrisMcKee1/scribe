@@ -68,6 +68,81 @@ public partial class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_never_releases_a_replaced_registration_inside_its_grace_however_fast_the_moves_come()
+    {
+        // Review round 2, item 3 (A3 = G2). Moves 300 ms apart: the fifth used to find every slot taken and unhook the oldest
+        // registration at once, 1.2 s after it was replaced, so an event still inside a hook ahead of it reached none of
+        // Scribe's. The clock is the test's (the grace is timed on the service's), and nothing in front schedules moves of
+        // its own; each move is asked for directly.
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var service = ScriptedForegroundService(clock, () => 0);
+        service.Start();
+        for (var move = 1; move <= RetiredHookRegistrations.Capacity; move++)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(move == 1 ? 0 : 300));
+            MoveAhead(service, move);
+        }
+
+        var handle = service.KeyboardHookHandle;
+        Assert.Equal(RetiredHookRegistrations.Capacity, service.RetiredKeyboardHooks);
+
+        // The fifth, 1.2 s after the first: every kept registration is inside its grace, so it waits for the oldest's to end,
+        // and a sixth asked for meanwhile waits with it (a retry the thread's own timer makes early changes nothing).
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        service.MoveKeyboardHookAheadNow();
+        AwaitFifthMove(service);
+        Assert.Equal(800, service.KeyboardMoveRetryDueMsForTests);
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        service.MoveKeyboardHookAheadNow();
+        Assert.True(
+            SpinWait.SpinUntil(() => service.KeyboardHookMovesDeferredForSlots >= 2, HookTimeout),
+            "The sixth move neither waited nor was made.");
+        Assert.Equal(500, service.KeyboardMoveRetryDueMsForTests);
+        Assert.Equal(RetiredHookRegistrations.Capacity, service.KeyboardHookMoves);
+        Assert.Equal(handle, service.KeyboardHookHandle);
+        Assert.Equal(0, service.RetiredKeyboardHooksReleased);
+
+        // 2 s after the first was replaced: the retry releases it and makes one move for the two that waited.
+        clock.Advance(TimeSpan.FromMilliseconds(500));
+        service.RetryDeferredKeyboardMoveNowForTests();
+        Assert.True(
+            SpinWait.SpinUntil(() => service.KeyboardHookMoves == RetiredHookRegistrations.Capacity + 1, HookTimeout),
+            "The move that waited was never made.");
+        AwaitQuiet(service);
+        Assert.Equal(RetiredHookRegistrations.Capacity + 1, service.KeyboardHookMoves);
+        Assert.Equal(1, service.RetiredKeyboardHooksReleased);
+        Assert.Equal(RetiredHookRegistrations.Capacity, service.RetiredKeyboardHooks);
+        Assert.NotEqual(handle, service.KeyboardHookHandle);
+        Assert.Equal(0, service.RetiredKeyboardHooksFoundGone);
+    }
+
+    [Fact]
+    public void Start_makes_a_move_held_back_for_a_slot_by_its_own_timer_once_the_oldest_grace_ends()
+    {
+        // The same wait with no test seam: the hook thread's own timer (SetTimer, with no TimerProc, so WM_TIMER reaches its
+        // message loop) retries the move until a slot is free.
+        var clock = new KeyboardHookPrecedenceTests.OneTimerClock();
+        using var service = ScriptedForegroundService(clock, () => 0);
+        service.Start();
+        for (var move = 1; move <= RetiredHookRegistrations.Capacity; move++)
+        {
+            MoveAhead(service, move);
+        }
+
+        clock.Advance(TimeSpan.FromMilliseconds(RetiredHookRegistrations.GraceMs - 1));
+        service.MoveKeyboardHookAheadNow();
+        AwaitFifthMove(service);
+        Assert.Equal(1, service.KeyboardMoveRetryDueMsForTests);
+        Assert.Equal(RetiredHookRegistrations.Capacity, service.KeyboardHookMoves);
+
+        clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.True(
+            SpinWait.SpinUntil(() => service.KeyboardHookMoves == RetiredHookRegistrations.Capacity + 1, HookTimeout),
+            "The thread's own timer never made the move that waited.");
+        Assert.Equal(RetiredHookRegistrations.Capacity, service.RetiredKeyboardHooksReleased);
+    }
+
+    [Fact]
     public void Start_reinstalls_the_hook_when_a_replaced_registration_was_already_gone()
     {
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, HotkeyBinding.DefaultDictation, () => true);
@@ -147,7 +222,11 @@ public partial class HotkeyServiceTests
         Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMoves == 1, HookTimeout), "The hook thread never moved its hook.");
         clock.Timer.Fire();
         Assert.True(SpinWait.SpinUntil(() => service.KeyboardHookMoves == 2, HookTimeout), "The second move never came.");
-        Assert.Equal(2, service.RetiredKeyboardHooks);
+
+        // The grace is timed on the service's clock, the test's: the second move comes exactly 2 s after the first, when the
+        // registration the first replaced has been replaced for its whole grace, so it is released then, and one is kept.
+        Assert.Equal(1, service.RetiredKeyboardHooks);
+        Assert.Equal(1, service.RetiredKeyboardHooksReleased);
     }
 
     [Fact]
@@ -279,6 +358,20 @@ public partial class HotkeyServiceTests
 
         Assert.Equal(0, service.KeyboardHookMoves);
         Assert.Equal(1, service.KeyboardHookMovesDropped);
+    }
+
+    // The hook thread has taken a fifth move with every kept registration inside its grace: it must have waited, releasing
+    // nothing and moving nothing (a failure names what it did instead).
+    private static void AwaitFifthMove(HotkeyService service)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => service.KeyboardHookMovesDeferredForSlots >= 1 || service.KeyboardHookMoves > RetiredHookRegistrations.Capacity,
+                HookTimeout),
+            "The hook thread never took the fifth move.");
+        Assert.True(
+            service.RetiredKeyboardHooksReleased == 0 && service.KeyboardHookMoves == RetiredHookRegistrations.Capacity,
+            $"The fifth move was made, releasing {service.RetiredKeyboardHooksReleased} registration(s) inside their grace.");
     }
 
     // Window handles of the test's own, never real windows, named by the scripted process lookup below.

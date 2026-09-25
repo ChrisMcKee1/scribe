@@ -3,11 +3,16 @@ namespace Scribe.Core.Hotkeys;
 /// <summary>
 /// Hook thread only: the keyboard hook registrations a move ahead replaced and still keeps. An event already on its way to
 /// a replaced registration when the new one landed (inside a hook ahead of it, such as a Remote Desktop client's) still
-/// finds it there, and is decided there (<see cref="KeyEventPassOn"/>); a replaced registration is released once it has
-/// been replaced for a grace longer than any such event can take to reach it. Every hook ahead of it answers within
-/// LowLevelHooksTimeout ("The maximum timeout value the system allows is 1000 milliseconds", Windows 10 1709 and later) or
-/// is removed and the event passed on, so the hook thread releases a registration only after twice that. Fed the time, so
-/// the rule is tested without a clock. A few slots, filled only by moves; a move past them releases the oldest at once.
+/// finds it there, and is decided there (<see cref="KeyEventPassOn"/>); a replaced registration is released only once it
+/// has been replaced for <see cref="GraceMs"/>. Each hook ahead of it answers within LowLevelHooksTimeout or is skipped:
+/// "The hook procedure should process a message in less time than the data entry specified in the LowLevelHooksTimeout
+/// value ... If the hook procedure times out, the system passes the message to the next hook", and "The maximum timeout
+/// value the system allows is 1000 milliseconds" (Windows 10 1709 and later, LowLevelKeyboardProc). The timeout is each
+/// hook's, not the chain's, so the grace, twice that maximum, covers an event held by up to two slow hooks between the new
+/// registration and the replaced one, not a longer chain of them. Never released sooner (review round 2, item 3): when
+/// every slot holds a registration still inside its grace, the hook thread makes no move until the oldest one's grace ends
+/// (<see cref="MillisecondsUntilOldestExpires"/>), rather than release one early. Fed the time, so the rule is tested
+/// without a clock.
 /// </summary>
 internal sealed class RetiredHookRegistrations
 {
@@ -24,29 +29,32 @@ internal sealed class RetiredHookRegistrations
     /// <summary>Any thread: how many replaced registrations are kept.</summary>
     public int Count => Volatile.Read(ref _count);
 
-    /// <summary>
-    /// Keeps <paramref name="handle"/>, replaced at <paramref name="nowMs"/>. Returns the oldest one, which must be
-    /// released now, when every slot was taken, or zero.
-    /// </summary>
-    public nint Retire(nint handle, long nowMs)
-    {
-        if (handle == 0)
-        {
-            return 0;
-        }
+    /// <summary>Whether every slot is taken, so no registration can be replaced until one is released.</summary>
+    public bool IsFull => _count == Capacity;
 
-        nint evicted = 0;
-        if (_count == Capacity)
+    /// <summary>
+    /// Keeps <paramref name="handle"/>, replaced at <paramref name="nowMs"/>. Returns false, keeping nothing, when every slot
+    /// is taken; the hook thread checks <see cref="IsFull"/> before it registers the replacement, so that never happens.
+    /// </summary>
+    public bool Retire(nint handle, long nowMs)
+    {
+        if (handle == 0 || _count == Capacity)
         {
-            evicted = _handles[0];
-            RemoveAt(0);
+            return false;
         }
 
         _handles[_count] = handle;
         _retiredAt[_count] = nowMs;
         Volatile.Write(ref _count, _count + 1);
-        return evicted;
+        return true;
     }
+
+    /// <summary>
+    /// How long, from <paramref name="nowMs"/>, until the oldest registration kept has been replaced for
+    /// <paramref name="graceMs"/>: zero when it already has, or when none is kept.
+    /// </summary>
+    public long MillisecondsUntilOldestExpires(long nowMs, long graceMs) =>
+        _count == 0 ? 0 : Math.Max(0, graceMs - (nowMs - _retiredAt[0]));
 
     /// <summary>
     /// The oldest registration replaced at least <paramref name="graceMs"/> before <paramref name="nowMs"/>, no longer

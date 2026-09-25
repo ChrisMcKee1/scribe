@@ -194,6 +194,77 @@ public class KeyboardHookPrecedenceTests
     }
 
     [Fact]
+    public void The_same_remote_window_coming_to_the_front_again_does_not_restart_a_sequence_under_way()
+    {
+        // Review round 2, item 3 (Grok's G2): every remote notice restarted the sequence at the first move, so notices about
+        // 300 ms apart each produced a move, and the fifth found every kept registration still inside its grace.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+
+        rig.Notice(RemoteWindow);
+        Assert.Equal(KeyboardHookPrecedence.SecondMoveDelay, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        rig.Notice(RemoteWindow);
+        Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
+        rig.Time.Timer.Fire();
+        rig.Notice(RemoteWindow);
+        Assert.Equal(KeyboardHookPrecedence.KeepAheadPeriod, rig.Time.Timer.Due);
+
+        Assert.Equal(["move", "move", "release"], rig.Requests);
+        Assert.Single(rig.Log.Entries);
+    }
+
+    [Fact]
+    public void A_repeated_notice_for_the_window_whose_first_move_is_pending_does_not_postpone_it()
+    {
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Advance(TimeSpan.FromMilliseconds(200));
+
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+
+        Assert.Equal(["move"], rig.Requests);
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Elapsed);
+    }
+
+    [Fact]
+    public void The_same_remote_window_back_in_front_after_another_one_starts_over()
+    {
+        // Deactivated and activated again, the client may register its hook again: the first move follows its return.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+
+        rig.Foreground = LocalWindow;
+        rig.Notice(LocalWindow);
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+    }
+
+    [Fact]
+    public void A_step_that_finds_the_client_gone_lets_its_return_start_over()
+    {
+        // The notice for the change can still be on its way when a step finds no remote client in front; the client coming
+        // back afterwards is a return, not a repeat.
+        var rig = new Rig { Foreground = RemoteWindow };
+        rig.Notice(RemoteWindow);
+        rig.Time.Timer.Fire();
+
+        rig.Foreground = LocalWindow;
+        rig.Time.Timer.Fire();
+        Assert.Equal(KeyboardHookPrecedence.RetiredGrace, rig.Time.Timer.Due);
+        rig.Foreground = RemoteWindow;
+        rig.Notice(RemoteWindow);
+
+        Assert.Equal(KeyboardHookPrecedence.FirstMoveDelay, rig.Time.Timer.Due);
+        Assert.Equal(["move"], rig.Requests);
+    }
+
+    [Fact]
     public void Another_remote_client_coming_to_the_front_starts_over()
     {
         var rig = new Rig();

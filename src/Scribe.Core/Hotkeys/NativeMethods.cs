@@ -15,6 +15,7 @@ internal static partial class NativeMethods
     internal const int WM_SYSKEYDOWN = 0x0104;
     internal const int WM_SYSKEYUP = 0x0105;
     internal const uint WM_QUIT = 0x0012;
+    internal const uint WM_TIMER = 0x0113;
 
     // Private thread messages to the hook thread. WM_APP and above is the range reserved for application-defined
     // messages. The first wakes it to apply queued commands; the second, from the watchdog, also has it register its
@@ -139,6 +140,14 @@ internal static partial class NativeMethods
 
     [LibraryImport("user32.dll")]
     internal static partial short GetAsyncKeyState(int vKey);
+
+    // A thread timer for the hook thread (no window, no TimerProc): WM_TIMER arrives in its own message loop.
+    [LibraryImport("user32.dll", SetLastError = true)]
+    internal static partial nuint SetTimer(nint hWnd, nuint nIDEvent, uint uElapse, nint lpTimerFunc);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool KillTimer(nint hWnd, nuint uIDEvent);
 
     /// <summary>High bit of <see cref="GetAsyncKeyState"/>: the system's logical "key is down".</summary>
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>

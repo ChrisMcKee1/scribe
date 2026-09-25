@@ -357,6 +357,18 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>How many of the current installation's moves ahead were dropped because the foreground changed first; for tests.</summary>
     internal long KeyboardHookMovesDropped => CurrentInstallation?.KeyboardHookMovesDropped ?? 0;
 
+    /// <summary>How many of the current installation's moves ahead waited for a kept registration's grace to end; for tests.</summary>
+    internal long KeyboardHookMovesDeferredForSlots => CurrentInstallation?.KeyboardHookMovesDeferredForSlots ?? 0;
+
+    /// <summary>The wait, in milliseconds, the hook thread last set its retry timer for; for tests.</summary>
+    internal long KeyboardMoveRetryDueMsForTests => CurrentInstallation?.MoveRetryDueMs ?? 0;
+
+    /// <summary>How many registrations the current installation's moves replaced it has released; for tests.</summary>
+    internal long RetiredKeyboardHooksReleased => CurrentInstallation?.RetiredKeyboardHooksReleased ?? 0;
+
+    /// <summary>Asks the hook thread to retry a move that waited now, as its retry timer does; for tests.</summary>
+    internal void RetryDeferredKeyboardMoveNowForTests() => CurrentInstallation?.RequestMoveRetry();
+
     /// <summary>Asks the hook thread to release what its moves replaced now, whatever its age with <paramref name="force"/>; for tests.</summary>
     internal void ReleaseRetiredKeyboardHooksNow(bool force) => CurrentInstallation?.RequestReleaseRetired(force);
 
@@ -940,6 +952,10 @@ public sealed class HotkeyService : IHotkeyService
         {
             installation.RequestReleaseRetired(force: false);
         }
+
+        // A move still waiting is asked for again once a period, whatever held it back: a backstop for a retry its own
+        // trigger could not deliver (a timer Windows refused, a posted message lost). Judged afresh on the hook thread.
+        installation.RetryDeferredMoveAhead();
     }
 
     // A marker-tagged key-up for the unassigned VK 0xFF is inert for every app but still traverses
@@ -1170,6 +1186,10 @@ public sealed class HotkeyService : IHotkeyService
         private readonly HotkeyEngine _engine;
         private readonly bool _replacesRegistration;
 
+        // Where this installation's clock for the kept registrations' grace starts, on the service's TimeProvider (the
+        // system's in production, a test's own in the tests).
+        private readonly long _clockOrigin;
+
         // This installation's own, never shared with its replacement (review round 11, A14): a callback of this
         // installation that is still running after a reinstall (its thread can outlive the 2 s join) writes its repair
         // request here, where it cannot replace the replacement's pending one. Its requests are refused anyway, since
@@ -1178,9 +1198,10 @@ public sealed class HotkeyService : IHotkeyService
 
         // The keyboard hook's registrations, each with the delegate Windows calls for it, rooted here for as long as the
         // hook can call it (a collected delegate behind a live hook crashes the process on the next key event). Slot 0 is
-        // the first registration; a move ahead takes a free slot for the new one. At most the current registration and
-        // RetiredHookRegistrations.Capacity replaced ones are registered, plus the new one a move adds before it evicts,
-        // so there is always a free slot. _current is the registration made last: written and read on the hook thread only.
+        // the first registration; a move ahead takes a free slot for the new one. A move registers its new one only while
+        // fewer than RetiredHookRegistrations.Capacity replaced ones are kept (it waits otherwise, see MoveAhead), so at
+        // most that many plus the current one and the new one are registered at once, and Capacity + 1 slots always leave
+        // one free for it. _current is the registration made last: written and read on the hook thread only.
         private readonly KeyboardRegistration[] _registrations;
         private KeyboardRegistration _current;
 
@@ -1225,12 +1246,18 @@ public sealed class HotkeyService : IHotkeyService
         private int _moveAheadError;
         private long _moveAheadsDeferred;
         private long _movesDropped;
+        private long _movesDeferredForSlots;
+        private long _moveRetryDueMs;
+        private long _retiredReleased;
 
         // The move a swallowed key held back, kept for its retry: its foreground revision and window (see MoveAhead). Hook
         // thread only; _moveAheadDeferred says to other threads that one waits.
         private long _deferredRevision;
         private nint _deferredWindow;
         private bool _hasDeferredMove;
+
+        // The thread timer that retries a move which waited for a slot (ArmMoveRetry), or zero. Hook thread only.
+        private nuint _moveRetryTimer;
         private int _moveAheadDeferred;
         private long _retiredFoundGone;
         private long _echoes;
@@ -1253,13 +1280,14 @@ public sealed class HotkeyService : IHotkeyService
             _service = service;
             _engine = engine;
             _replacesRegistration = replacesRegistration;
+            _clockOrigin = service._time.GetTimestamp();
 
             // Read here, off the hook thread (it asks Windows for the keyboard repeat settings), and published to the engine,
             // which reads it on the callback's path. Each move ahead asks again, in case the user changed the settings.
             _engine.SetUncertaintyWindow(service._keyRepeatWindowMs());
             _reconcileSignal = new HotkeyReconcileSignal(service.ScheduleReconcile);
             _desktopReceivesInput = service._desktopReceivesInput;
-            _registrations = new KeyboardRegistration[RetiredHookRegistrations.Capacity + 2];
+            _registrations = new KeyboardRegistration[RetiredHookRegistrations.Capacity + 1];
             for (var slot = 0; slot < _registrations.Length; slot++)
             {
                 _registrations[slot] = new KeyboardRegistration(this);
@@ -1492,6 +1520,25 @@ public sealed class HotkeyService : IHotkeyService
         /// <summary>Any thread: how many moves ahead were dropped because the foreground they were judged on had changed.</summary>
         public long KeyboardHookMovesDropped => Interlocked.Read(ref _movesDropped);
 
+        /// <summary>Any thread: how many moves ahead waited because every kept registration was still inside its grace.</summary>
+        public long KeyboardHookMovesDeferredForSlots => Interlocked.Read(ref _movesDeferredForSlots);
+
+        /// <summary>Any thread, for tests: the wait the retry timer was last set for, in milliseconds.</summary>
+        public long MoveRetryDueMs => Interlocked.Read(ref _moveRetryDueMs);
+
+        /// <summary>Any thread: how many replaced registrations were released (found gone or not).</summary>
+        public long RetiredKeyboardHooksReleased => Interlocked.Read(ref _retiredReleased);
+
+        /// <summary>Any thread, for tests: asks this installation's thread to retry a move that waited. Never waits.</summary>
+        public void RequestMoveRetry()
+        {
+            var threadId = _engine.OwnerThreadId;
+            if (threadId != 0)
+            {
+                NativeMethods.PostThreadMessage(threadId, NativeMethods.WM_HOTKEY_MOVE_RETRY, nint.Zero, nint.Zero);
+            }
+        }
+
         public bool Join(TimeSpan timeout) => _thread.Join(timeout);
 
         private void Run()
@@ -1620,6 +1667,13 @@ public sealed class HotkeyService : IHotkeyService
                         continue;
                     }
 
+                    if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_TIMER && _moveRetryTimer != 0 &&
+                        (nuint)msg.wParam == _moveRetryTimer)
+                    {
+                        OnMoveRetryTimer();
+                        continue;
+                    }
+
                     if (msg.hwnd == nint.Zero && msg.message == NativeMethods.WM_HOTKEY_MOVE_RETRY)
                     {
                         RetryDeferredMove();
@@ -1639,6 +1693,7 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             _engine.DetachOwner();
+            KillMoveRetryTimer();
             RemoveMouseHook();
             if (foregroundHook != 0)
             {
@@ -1736,8 +1791,19 @@ public sealed class HotkeyService : IHotkeyService
                 return;
             }
 
-            ForgetDeferredMove();
+            // Never release a replaced registration inside its grace (review round 2, item 3): with every slot holding one,
+            // the move waits, kept with its revision and window like a move a key holds back, until the oldest one's grace
+            // ends, when this thread's own timer retries it; a later move asked for meanwhile replaces it.
             ReleaseRetired(force: false);
+            if (_retired.IsFull)
+            {
+                Interlocked.Increment(ref _movesDeferredForSlots);
+                DeferMove(revision, window);
+                ArmMoveRetry(_retired.MillisecondsUntilOldestExpires(NowMs(), RetiredHookRegistrations.GraceMs));
+                return;
+            }
+
+            ForgetDeferredMove();
             var registration = FreeRegistration();
             var replacement = registration is null
                 ? 0
@@ -1758,11 +1824,7 @@ public sealed class HotkeyService : IHotkeyService
             // swallowed, since a hook that was ahead may have kept its press (HotkeyEngine.OnRegisteredAhead). Taken before
             // this thread takes another message, so before any event can reach the new registration.
             _engine.OnRegisteredAhead(unchecked((uint)Environment.TickCount));
-            var evicted = _retired.Retire(replaced.Handle, Environment.TickCount64);
-            if (evicted != 0)
-            {
-                Release(evicted);
-            }
+            _ = _retired.Retire(replaced.Handle, NowMs());
 
             Interlocked.Increment(ref _moveAheads);
         }
@@ -1786,6 +1848,38 @@ public sealed class HotkeyService : IHotkeyService
         {
             _hasDeferredMove = false;
             Volatile.Write(ref _moveAheadDeferred, 0);
+            KillMoveRetryTimer();
+        }
+
+        // Hook thread only: the retry of a move that waited for a kept registration's grace to end, after waitMs, on a thread
+        // timer of this thread's own. SetTimer with no window and no TimerProc has the system post WM_TIMER to this thread's
+        // queue, which the loop handles between messages like the rest; "If a NULL value for hWnd is passed in along with an
+        // nIDEvent of an existing timer, that timer will be replaced", and a wait below USER_TIMER_MINIMUM (10 ms) is raised to
+        // it (SetTimer, Learn). A timer Windows refuses leaves the move to the next move asked for, or to the watchdog's
+        // retry each period.
+        private void ArmMoveRetry(long waitMs)
+        {
+            Interlocked.Exchange(ref _moveRetryDueMs, waitMs);
+            var timer = NativeMethods.SetTimer(0, _moveRetryTimer, (uint)Math.Clamp(waitMs, 1, int.MaxValue), 0);
+            if (timer != 0)
+            {
+                _moveRetryTimer = timer;
+            }
+        }
+
+        private void OnMoveRetryTimer()
+        {
+            KillMoveRetryTimer();
+            RetryDeferredMove();
+        }
+
+        private void KillMoveRetryTimer()
+        {
+            if (_moveRetryTimer != 0)
+            {
+                NativeMethods.KillTimer(0, _moveRetryTimer);
+                _moveRetryTimer = 0;
+            }
         }
 
         // Hook thread only, between messages (WM_HOTKEY_MOVE_RETRY): the move that waited, if one still does, judged afresh.
@@ -1796,6 +1890,9 @@ public sealed class HotkeyService : IHotkeyService
                 MoveAhead(_deferredRevision, _deferredWindow);
             }
         }
+
+        // Hook thread only: milliseconds on the service's clock since this installation was made.
+        private long NowMs() => (long)_service._time.GetElapsedTime(_clockOrigin).TotalMilliseconds;
 
         // Hook thread only: a slot no registration holds, or null. There is always one (see _registrations); a move that
         // found none would be refused as a failed registration rather than throw on the hook thread.
@@ -1815,7 +1912,7 @@ public sealed class HotkeyService : IHotkeyService
         // Hook thread only, between messages. Releases the replaced registrations whose grace is over, or all of them.
         private void ReleaseRetired(bool force)
         {
-            var now = Environment.TickCount64;
+            var now = NowMs();
             for (var retired = force ? _retired.TakeAny() : _retired.TakeExpired(now, RetiredHookRegistrations.GraceMs);
                  retired != 0;
                  retired = force ? _retired.TakeAny() : _retired.TakeExpired(now, RetiredHookRegistrations.GraceMs))
@@ -1837,6 +1934,7 @@ public sealed class HotkeyService : IHotkeyService
                 }
             }
 
+            Interlocked.Increment(ref _retiredReleased);
             if (!NativeMethods.UnhookWindowsHookEx(handle))
             {
                 Interlocked.Increment(ref _retiredFoundGone);

@@ -16,7 +16,7 @@ public class RetiredHookRegistrationsTests
     {
         var retired = new RetiredHookRegistrations();
 
-        Assert.Equal(0, retired.Retire(0x10, nowMs: 1000));
+        Assert.True(retired.Retire(0x10, nowMs: 1000));
         Assert.Equal(1, retired.Count);
 
         Assert.Equal(0, retired.TakeExpired(nowMs: 2999, Grace));
@@ -41,17 +41,26 @@ public class RetiredHookRegistrationsTests
     }
 
     [Fact]
-    public void A_retirement_past_the_capacity_hands_back_the_oldest_to_release_now()
+    public void A_full_set_releases_nothing_early_and_says_when_its_oldest_grace_ends()
     {
+        // Review round 2, item 3 (A3 = G2). This used to pin the opposite: a retirement past the capacity handed back the
+        // oldest registration to be unhooked at once, whatever its age.
         var retired = new RetiredHookRegistrations();
         for (var i = 1; i <= RetiredHookRegistrations.Capacity; i++)
         {
-            Assert.Equal(0, retired.Retire(i, nowMs: i));
+            Assert.True(retired.Retire(i, nowMs: i * 300));
         }
 
-        Assert.Equal(1, retired.Retire(0x99, nowMs: 10));
+        Assert.True(retired.IsFull);
+        Assert.False(retired.Retire(0x99, nowMs: 1300));
         Assert.Equal(RetiredHookRegistrations.Capacity, retired.Count);
-        Assert.Equal(2, retired.TakeExpired(nowMs: 100_000, Grace));
+        Assert.Equal(1000, retired.MillisecondsUntilOldestExpires(nowMs: 1300, Grace));
+        Assert.Equal(0, retired.TakeExpired(nowMs: 2299, Grace));
+        Assert.Equal(1, retired.TakeExpired(nowMs: 2300, Grace));
+        Assert.False(retired.IsFull);
+        Assert.Equal(300, retired.MillisecondsUntilOldestExpires(nowMs: 2300, Grace)); // the second, replaced at 600
+        Assert.Equal(0, retired.MillisecondsUntilOldestExpires(nowMs: 5000, Grace));
+        Assert.Equal(0, new RetiredHookRegistrations().MillisecondsUntilOldestExpires(nowMs: 0, Grace));
     }
 
     [Fact]
@@ -76,7 +85,7 @@ public class RetiredHookRegistrationsTests
     {
         var retired = new RetiredHookRegistrations();
 
-        Assert.Equal(0, retired.Retire(0, nowMs: 0));
+        Assert.False(retired.Retire(0, nowMs: 0));
         Assert.Equal(0, retired.Count);
     }
 }

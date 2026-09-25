@@ -23,10 +23,14 @@ namespace Scribe.Core.Hotkeys;
 /// release the registrations the moves replaced <see cref="RetiredGrace"/> after the last one; and for as long as the
 /// client stays in front, to move ahead again every <see cref="KeepAheadPeriod"/>, each followed by its release, in case it
 /// registers once more without leaving the front. Every move and every keep-ahead step is made only if a remote client
-/// is still in front when it falls due. The moves themselves, the rule that a move waits while a key whose press Scribe
-/// swallowed is held, and the rules for an event on its way to a replaced registration are the hook thread's
-/// (<c>HotkeyService.HookInstallation</c>). Nothing here waits for the hook thread: a request is a posted thread message.
-/// Nothing thrown here reaches the pool thread, which would end the process.
+/// is still in front when it falls due, and carries the foreground revision and the window it was judged on, which the
+/// hook thread checks are still current right before it registers. The same remote window coming to the front again, with
+/// nothing else in front since, does not start the sequence over; a notice or a tick older than the newest decision
+/// changes nothing (review round 2, items 3 to 5). The moves themselves, the rule that a move waits while a key whose
+/// press Scribe swallowed is held or while every kept registration is inside its grace, and the rules for an event on its
+/// way to a replaced registration are the hook thread's (<c>HotkeyService.HookInstallation</c>). Nothing here waits for the
+/// hook thread: a request is a posted thread message. Nothing thrown here reaches the pool thread, which would end the
+/// process.
 /// </para>
 /// </summary>
 internal sealed class KeyboardHookPrecedence : IDisposable
@@ -62,11 +66,13 @@ internal sealed class KeyboardHookPrecedence : IDisposable
     private readonly TimeProvider _time;
     private readonly ITimer _timer;
 
-    // Under _gate: the step the sequence is at; the newest foreground revision decided (a notice's revision is its
+    // Under _gate: the step the sequence is at; the remote window it serves (zero once one that is not a remote client came
+    // to the front, or a step found none in front); the newest foreground revision decided (a notice's revision is its
     // publication's, ForegroundNotice); the schedule, one number per Arm, so a tick knows whether the schedule it read is
     // still the one in force; and when that schedule is due, on _time's clock, or null once its one tick was taken or while
     // nothing is armed (ClosableTimer keeps its schedules the same way).
     private int _step;
+    private nint _client;
     private long _decided;
     private long _schedule;
     private long? _dueTimestamp;
@@ -124,17 +130,29 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                 }
 
                 _decided = revision;
+                if (remote && window == _client && _step is FirstMoveDue or SecondMoveDue or ReleaseDue or KeepAheadDue)
+                {
+                    // The same remote window again, with nothing else in front since: its sequence goes on as scheduled
+                    // (review round 2, item 3), rather than start over and add a move for every repeated notice.
+                    return;
+                }
+
                 if (remote)
                 {
+                    _client = window;
                     Arm(FirstMoveDue, FirstMoveDelay);
                 }
-                else if (_step is FirstMoveDue or KeepAheadDue)
+                else
                 {
-                    Arm(Idle, Timeout.InfiniteTimeSpan);
-                }
-                else if (_step == SecondMoveDue)
-                {
-                    Arm(ReleaseDue, RetiredGrace);
+                    _client = 0;
+                    if (_step is FirstMoveDue or KeepAheadDue)
+                    {
+                        Arm(Idle, Timeout.InfiniteTimeSpan);
+                    }
+                    else if (_step == SecondMoveDue)
+                    {
+                        Arm(ReleaseDue, RetiredGrace);
+                    }
                 }
             }
 
@@ -217,6 +235,13 @@ internal sealed class KeyboardHookPrecedence : IDisposable
                 if (_disposed || _schedule != schedule)
                 {
                     return;
+                }
+
+                // A step that finds no remote client in front forgets the one it served, so that client coming back to the
+                // front afterwards starts the sequence over (it may register its hook again on its activation).
+                if (!inFront)
+                {
+                    _client = 0;
                 }
 
                 switch (step)

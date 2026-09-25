@@ -155,8 +155,8 @@ public sealed class RemoteDesktopHookPathTests
         var installation = typeof(HotkeyService).GetNestedType("HookInstallation", BindingFlags.NonPublic)!;
         foreach (var name in new[]
                  {
-                     "MoveAhead", "StillInFront", "DeferMove", "ForgetDeferredMove", "RetryDeferredMove", "FreeRegistration",
-                     "ReleaseRetired", "Release",
+                     "MoveAhead", "StillInFront", "DeferMove", "ForgetDeferredMove", "RetryDeferredMove", "ArmMoveRetry",
+                     "OnMoveRetryTimer", "KillMoveRetryTimer", "NowMs", "FreeRegistration", "ReleaseRetired", "Release",
                  })
         {
             yield return installation.GetMethod(name, Declared)!;
