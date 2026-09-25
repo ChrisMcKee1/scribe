@@ -530,8 +530,8 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             before: ["One", "One", "One", "One", "One"]);
     }
 
-    // --- Round 4, Astra's two cases: judging a rule on its own spoken form says nothing about the text around it. Neither
-    // copying the rule nor leaving it out keeps what dictation writes, so the library stays on. ---
+    // --- Round 4, Astra's two cases and Grok's: judging a rule on its own spoken form says nothing about the text around it.
+    // Neither copying the rule nor leaving it out keeps what dictation writes, so the library stays on. ---
 
     [Fact]
     public void Round_4_case_1_a_substring_rule_that_ties_with_a_whole_word_rule_that_stays_on()
@@ -573,6 +573,31 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         string[] before = [canonical, $"the {canonical} release", canonical, canonical, "New " + canonical];
         AssertKeptOnAndUnchanged(plan, "zebra", [], [aardvark, zebra], asked, inputs, before);
         Assert.NotEqual(before, Dictated([zebra.Entries[0]], [aardvark], inputs));
+    }
+
+    [Fact]
+    public void Round_4_Grok_case_a_substring_rule_the_review_kept_for_a_word_it_sits_inside()
+    {
+        // Grok's case, the class of Astra's first: aardvark stays on with the Kelvin sign writing Second (whole word); zebra
+        // writes First for "k" anywhere in a word, and the review keeps that row because the history has "kilo". Today "k"
+        // and "K" tie and aardvark's rule comes first, while inside "kilo" only zebra's can match. Round 3 saw the bare
+        // forms unchanged without a copy and changed with one, so it copied nothing, and "kilo" silently lost its rule. It
+        // takes a custom library: no shipped row matches inside a word, and none has the Kelvin sign.
+        var aardvark = Library("aardvark", builtIn: false, (Kelvin, "Second"));
+        var zebraK = DictionaryEntry.New("k", "First", wholeWord: false);
+        var zebra = new DictionaryLibrary("zebra", "zebra", "Custom", Description: null, BuiltIn: false,
+            [zebraK, DictionaryEntry.New("unused term", "Unused Term")]);
+        var usage = UsageFromHistory([aardvark, zebra], "kilo", "zebra");
+        Assert.Equal([zebraK], usage.KeepTerms);
+        LibraryUsage[] asked = [usage];
+
+        var plan = PlanWithTicked([], [aardvark, zebra], asked);
+
+        string[] inputs = ["k", "K", "kilo"];
+        string[] before = ["Second", "Second", "Firstilo"];
+        AssertKeptOnAndUnchanged(plan, "zebra", [], [aardvark, zebra], asked, inputs, before);
+        Assert.NotEqual(before, Dictated([], [aardvark], inputs));
+        Assert.NotEqual(before, Dictated([zebraK], [aardvark], inputs));
     }
 
     // --- The property ---
