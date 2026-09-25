@@ -81,8 +81,10 @@ public sealed class LibraryPrecedenceTests
         Assert.True(duplicates.Count == 0, "Retired more than once: " + string.Join(", ", duplicates));
     }
 
+    // The fixture is the copy of these lists meant for the macOS port, which does not read it yet: it will in stream M1.
+    // Until then this test only keeps the fixture equal to the C# lists, and nothing checks the Swift order at all.
     [Fact]
-    public void The_lists_match_the_fixture_the_macOS_port_reads()
+    public void The_lists_match_the_fixture_the_macOS_port_will_read()
     {
         using var document = JsonDocument.Parse(File.ReadAllText(FixturePath()));
         List<string> Read(string property) =>

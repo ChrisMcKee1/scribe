@@ -16,8 +16,9 @@ namespace Scribe.Core.Libraries;
 /// <para>
 /// A view captures one instance when it loads (<see cref="ForCurrentCulture"/>), so a row it places later, an import
 /// for example, is compared by the same rules as the rows already shown even if the regional format changes while it
-/// is open. Enabled state is not an input, so turning a library on or off never moves it. The macOS port sorts with
-/// <c>localizedStandardCompare</c> and the same two tie-breaks.
+/// is open. Enabled state is not an input, so turning a library on or off never moves it. The macOS port does not
+/// sort this way yet: in stream M1 it will sort with <c>localizedStandardCompare</c> and the same two tie-breaks, and
+/// until then its Dictionary Libraries row in macos/PORTING-PLAN.md is stale.
 /// </para>
 /// </remarks>
 public sealed class LibraryOrdering
