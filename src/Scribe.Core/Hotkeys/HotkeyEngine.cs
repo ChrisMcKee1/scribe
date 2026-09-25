@@ -67,6 +67,10 @@ internal sealed class HotkeyEngine
     // number, with one interlocked add; it never wraps in practice (2^55 presses).
     private static long _lastActivation;
 
+    // Numbers every key view an engine has had, across every engine in the process, so a value names one view of one
+    // engine: a new engine takes a fresh one, and so does each clear of an engine's view (see KeyViewEpoch).
+    private static long _lastKeyViewEpoch;
+
     private readonly LockFreeInbox<HotkeyCommand> _commands = new();
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
@@ -80,6 +84,7 @@ internal sealed class HotkeyEngine
     private bool _usesMouseButtons;
     private long _generation;
     private long _appliedCaptureGeneration;
+    private long _keyViewEpoch;
     private long _activationEpoch;
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
@@ -134,6 +139,7 @@ internal sealed class HotkeyEngine
         _paused = paused;
         _generation = generation;
         _appliedCaptureGeneration = appliedCaptureGeneration;
+        _keyViewEpoch = Interlocked.Increment(ref _lastKeyViewEpoch);
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
         _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
@@ -240,10 +246,25 @@ internal sealed class HotkeyEngine
     public long AppliedCaptureGeneration => Volatile.Read(ref _appliedCaptureGeneration);
 
     /// <summary>
+    /// Any thread. Which key view this engine has now: a value no other view of any engine in the process has had. The
+    /// owner takes a new one immediately before its machines clear or replace their keys (new bindings, capture's start
+    /// and end, a desktop reset), and a new engine starts with its own (a reinstall), so a leaked-key repair asked for at
+    /// one epoch judges only while the current engine's view still has it (review round 10, A12;
+    /// <c>HotkeyService.KeyViewIsWhole</c>).
+    /// </summary>
+    public long KeyViewEpoch => Volatile.Read(ref _keyViewEpoch);
+
+    /// <summary>
     /// Test seam, null in production: run by the owner between the two machines' capture changes, where a test pauses
     /// the change it is applying.
     /// </summary>
     internal Action? BetweenCaptureMachinesForTests { get; set; }
+
+    /// <summary>
+    /// Test seam, null in production: run by the owner right after its machines have cleared or replaced their keys (new
+    /// bindings, capture's start or end, a desktop reset), where a test checks that the view's new epoch is already out.
+    /// </summary>
+    internal Action? AfterKeyViewClearedForTests { get; set; }
 
     /// <summary>
     /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>). It is
@@ -415,8 +436,10 @@ internal sealed class HotkeyEngine
         // A release still owed to a swallowed button press survives the reset (the engine keeps those, not the
         // machines): a button held as the desktop switched and let go once it is back must reach no app, or a side
         // button's release navigates it.
+        NewKeyView();
         _ = _standard.Reset();
         _ = _dictationOnly?.Reset();
+        AfterKeyViewClearedForTests?.Invoke();
         if (_arbiter.TryTakeActive() is { } active)
         {
             EmitStateClear(HotkeyTransition.Deactivated, active, HotkeyDeactivation.DesktopSwitch);
@@ -645,6 +668,10 @@ internal sealed class HotkeyEngine
     private void ApplyBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
     {
         var activeTrigger = _arbiter.TryTake(HotkeyTrigger.Standard);
+
+        // Both machines forget their keys (the standard one always, the dictation-only one whether it is updated, reset,
+        // created empty or removed), so the view is a new one from here.
+        NewKeyView();
         var (transition, _) = _standard.UpdateBinding(binding);
         var secondaryTransition = HotkeyTransition.None;
         if (dictationOnlyBinding is null)
@@ -665,6 +692,7 @@ internal sealed class HotkeyEngine
             (secondaryTransition, _) = _dictationOnly.UpdateBinding(dictationOnlyBinding);
         }
 
+        AfterKeyViewClearedForTests?.Invoke();
         if (transition != HotkeyTransition.None)
         {
             EmitStateClear(transition, activeTrigger);
@@ -681,9 +709,11 @@ internal sealed class HotkeyEngine
     private void ApplyCaptureMode(bool enabled)
     {
         _captureMode = enabled;
+        NewKeyView();
         var (transition, _) = _standard.SetCaptureMode(enabled);
         BetweenCaptureMachinesForTests?.Invoke();
         var secondary = _dictationOnly?.SetCaptureMode(enabled);
+        AfterKeyViewClearedForTests?.Invoke();
         if (transition != HotkeyTransition.None)
         {
             EmitStateClear(transition, _arbiter.TryTake(HotkeyTrigger.Standard));
@@ -706,6 +736,14 @@ internal sealed class HotkeyEngine
             _arbiter.Reset();
         }
     }
+
+    // Owner thread, immediately before its machines clear or replace their key view (ApplyBindings, ApplyCaptureMode,
+    // ApplyDesktopSwitch; a new engine takes its first epoch in its constructor): the view gets a new epoch, published
+    // before the first key is cleared, so a reader that sees any cleared key sees the new epoch too. One interlocked add
+    // and one volatile write, no lock and no allocation, since it can run inside a hook callback (a queued command
+    // applied at the start of a key event). A mouse hook found gone (OnMouseHookLost) forgets buttons, never keys, and
+    // the leaked-key repair judges keys alone, so it takes none.
+    private void NewKeyView() => Volatile.Write(ref _keyViewEpoch, Interlocked.Increment(ref _lastKeyViewEpoch));
 
     // A machine created mid-session (a dictation-only binding added later) joins the modes already
     // in force instead of starting live while Settings is capturing or dictation is paused.
@@ -750,10 +788,11 @@ internal sealed class HotkeyEngine
 
         // The activation epoch is this engine's, read here on the owner thread, the only one that advances it, so an
         // Activated computed after a desktop switch always carries the new one; the item names this engine, whose epoch
-        // the consumer judges it by.
+        // the consumer judges it by. The key view's epoch goes with it too, so the repair a Deactivated asks for judges
+        // only the view the release was seen in.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
             transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this,
-            Activation: activation));
+            Activation: activation, KeyViewEpoch: _keyViewEpoch));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.

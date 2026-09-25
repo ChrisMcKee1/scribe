@@ -171,35 +171,36 @@ public sealed class MouseButtonRound8Tests
     }
 
     // The signal's one word (A9): a sync-only request runs a pass that repairs nothing, a repair request one that repairs,
-    // and a repair asked for is never lost to a sync-only signal that coalesced with it, whichever pass takes it.
+    // and a repair asked for is never lost to a sync-only signal that coalesced with it, whichever pass takes it. Since
+    // round 10 the word is the key view epoch the repair was asked for in (A12), zero for none.
     [Fact]
     public void The_signal_tells_each_pass_whether_the_key_repair_was_asked_for()
     {
-        using var passes = new BlockingCollection<bool>();
+        using var passes = new BlockingCollection<long>();
         using var signal = new HotkeyReconcileSignal(passes.Add);
 
         signal.SignalMouseHookSync();
         Assert.True(passes.TryTake(out var syncOnly, TimeSpan.FromSeconds(10)), "The sync-only signal ran no pass.");
-        Assert.False(syncOnly);
+        Assert.Equal(0, syncOnly);
 
-        signal.Signal();
+        signal.Signal(7);
         Assert.True(passes.TryTake(out var repair, TimeSpan.FromSeconds(10)), "The repair signal ran no pass.");
-        Assert.True(repair);
+        Assert.Equal(7, repair);
 
         signal.SignalMouseHookSync();
-        signal.Signal();
-        var repaired = false;
-        while (!repaired && passes.TryTake(out var pass, TimeSpan.FromSeconds(10)))
+        signal.Signal(8);
+        long repairedAt = 0;
+        while (repairedAt == 0 && passes.TryTake(out var pass, TimeSpan.FromSeconds(10)))
         {
-            repaired = pass;
+            repairedAt = pass;
         }
 
-        Assert.True(repaired, "The repair asked for beside a sync-only signal was lost.");
+        Assert.Equal(8, repairedAt); // the repair asked for beside a sync-only signal is not lost
     }
 
     // The same split through MouseHookFilter and a real signal: after the last mouse binding went, an owed release asks for
     // a pass that only syncs the mouse hook, and a release the bindings swallowed (the control, a bound Back) for one that
-    // repairs keys too.
+    // repairs keys too, in the key view the release was judged in.
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -207,7 +208,7 @@ public sealed class MouseButtonRound8Tests
     {
         using var h = new HotkeyEngineHarness(
             HotkeyCaptureSession.Build([Back], HotkeyMode.Hold), buttonDownInWindows: _ => false);
-        using var passes = new BlockingCollection<bool>();
+        using var passes = new BlockingCollection<long>();
         using var signal = new HotkeyReconcileSignal(passes.Add);
         var message = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.MSLLHOOKSTRUCT>());
         try
@@ -222,8 +223,8 @@ public sealed class MouseButtonRound8Tests
 
             Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONUP, message, h.Engine, signal));
 
-            Assert.True(passes.TryTake(out var repairKeys, TimeSpan.FromSeconds(10)), "The release asked for no pass.");
-            Assert.Equal(stillBound, repairKeys);
+            Assert.True(passes.TryTake(out var repairAt, TimeSpan.FromSeconds(10)), "The release asked for no pass.");
+            Assert.Equal(stillBound ? h.Engine.KeyViewEpoch : 0, repairAt);
         }
         finally
         {

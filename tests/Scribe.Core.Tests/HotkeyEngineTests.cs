@@ -580,10 +580,10 @@ public class HotkeyEngineTests
         using var signal = new HotkeyReconcileSignal(_ => checks.Release());
 
         // The dispatcher plays no part: the hook callback's SetEvent alone gets the check run.
-        signal.Signal();
+        signal.Signal(1);
         Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
 
-        signal.Signal();
+        signal.Signal(1);
         Assert.True(await checks.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
@@ -593,7 +593,7 @@ public class HotkeyEngineTests
         var signal = new HotkeyReconcileSignal(_ => { });
         signal.Dispose();
 
-        signal.Signal();
+        signal.Signal(1);
     }
 
     [Fact]
