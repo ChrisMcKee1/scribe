@@ -48,7 +48,8 @@ internal static class KeyboardHookFilter
     /// <list type="bullet">
     /// <item>Scribe's own input passes unjudged, except the watchdog's probe, which stops here (<see cref="IsProbe"/>).</item>
     /// <item>An echo passes unjudged: the event one of this thread's passes is handing on, back through a registration a
-    /// move ahead replaced, further down the chain.</item>
+    /// move ahead replaced, further down the chain. Only a replaced registration is asked: an event entering the current
+    /// registration is always a new one, whatever it matches.</item>
     /// <item>Anything else is judged by the engine. Through the current registration it may be swallowed. Through a
     /// replaced one it may not (<see cref="HotkeyEngine.OnKeyEvent"/> with mayBeSwallowed false): such an event entered
     /// the chain before the move and has passed every hook registered between the two registrations, which may have
@@ -75,7 +76,13 @@ internal static class KeyboardHookFilter
             return new KeyboardHookRoute(Swallow: IsProbe(identity.VirtualKey, !isDown, extraInfo), TrackPass: false, Echo: false, RepairAt: 0);
         }
 
-        if (passOn.IsEcho(identity))
+        // Only a replaced registration can be handed an echo: it sits further down the chain than the current one, inside
+        // whose CallNextHookEx the event it passed on travels. An event entering the current registration is always new,
+        // even one that matches a pass on the stack field for field (review round 2, A2): KEYBDINPUT.time is the caller's,
+        // so a key remapper behind Scribe's hook can synthesize a press and a release identical to an event Scribe is still
+        // passing on, and injected input enters the chain at its head. Taken for an echo, that release never reached the
+        // engine, and a hold it ended kept recording.
+        if (!throughCurrentRegistration && passOn.IsEcho(identity))
         {
             return new KeyboardHookRoute(Swallow: false, TrackPass: false, Echo: true, RepairAt: 0);
         }
@@ -105,9 +112,12 @@ internal readonly record struct KeyboardHookRoute(bool Swallow, bool TrackPass, 
 
 /// <summary>
 /// One keyboard event as a low-level hook receives it: its virtual key, scan code, flags and time stamp. Windows hands every
-/// hook in the chain the same event, so two of Scribe's registrations see the same four values for one event, while two
-/// events differ in at least one of them: a key's release differs from its press in its flags (LLKHF_UP), and a physical
-/// key's repeat in its time. Compared field by field, with no equality comparer, so the comparison allocates nothing.
+/// hook in the chain the same event, so two of Scribe's registrations see the same four values for one event. Two events
+/// usually differ in at least one of them (a key's release differs from its press in its flags, LLKHF_UP, and a physical
+/// key's repeat in its time), but not always: KEYBDINPUT.time is whatever the injecting program passes, so two injected
+/// events can match field for field. That is why only a registration a move replaced ever takes an event for an echo
+/// (<see cref="KeyboardHookFilter.Route"/>). Compared field by field, with no equality comparer, so the comparison
+/// allocates nothing.
 /// </summary>
 internal readonly struct KeyEventIdentity(uint virtualKey, uint scanCode, uint flags, uint time)
 {

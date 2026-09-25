@@ -21,6 +21,7 @@ public sealed class KeyboardHookMoveSafetyTests
     private const uint LeftWin = 0x5B;
     private const uint KeyA = 0x41;
     private const uint KeyH = 0x48;
+    private const uint F13 = 0x7C;
     private const uint F20 = 0x83;
     private const uint VkPacket = 0xE7;
     private static readonly nuint TestMarker = unchecked((nuint)0x5343524954455354UL);
@@ -165,6 +166,38 @@ public sealed class KeyboardHookMoveSafetyTests
 
         Assert.Equal(new KeyboardHookRoute(Swallow: false, TrackPass: false, Echo: true, RepairAt: 0), echo);
         Assert.False(h.Engine.IsPressed(KeyA));
+    }
+
+    [Fact]
+    public void An_event_entering_the_current_registration_is_judged_even_when_it_matches_an_event_being_passed_on()
+    {
+        // Review round 2 (A2). The four fields do not name one event: KEYBDINPUT.time is the caller's. A synthesized F13-up
+        // passes through Scribe and stays on the pass stack while its CallNextHookEx runs; a key remapper behind Scribe's hook
+        // synthesizes F13-down and F13-up with the same time, scan code and flags; injected input enters the chain at its
+        // head, the current registration, so both are new events there, never echoes.
+        using var h = new HotkeyEngineHarness(HotkeyCaptureSession.Build([F13], HotkeyMode.Hold));
+        var passOn = new KeyEventPassOn();
+        var outerUp = new KeyEventIdentity(F13, 0x64, 0x90, 777);
+        var down = new KeyEventIdentity(F13, 0x64, 0x10, 777);
+        var up = new KeyEventIdentity(F13, 0x64, 0x90, 777);
+
+        Assert.Equal(Judged(), Route(h, passOn, current: true, outerUp, isDown: false));
+        passOn.Enter(outerUp);
+        var press = Route(h, passOn, current: true, down, isDown: true);
+        var release = Route(h, passOn, current: true, up, isDown: false);
+        passOn.Leave();
+
+        Assert.True(press.Swallow);
+        Assert.False(release.Echo);
+        Assert.True(release.Swallow);
+        Assert.Equal(
+            [HotkeyTransition.Activated, HotkeyTransition.Deactivated], h.TakeTransitions().Select(t => t.Transition));
+        Assert.False(h.Engine.IsPressed(F13));
+
+        // The same identity reaching a replaced registration inside that pass is the echo, as before.
+        passOn.Enter(up);
+        Assert.True(Route(h, passOn, current: false, up, isDown: false).Echo);
+        passOn.Leave();
     }
 
     [Fact]
