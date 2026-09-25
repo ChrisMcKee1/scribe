@@ -476,6 +476,33 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Null(last.Release(LeftCtrl, HotkeyMode.Hold).Message);
     }
 
+    [Theory]
+    [InlineData(new uint[] { 0x7C, LeftCtrl, LeftAlt })]
+    [InlineData(new uint[] { LeftCtrl, 0x7C, LeftAlt })]
+    public void A_key_pressed_before_the_modifiers_held_with_it_is_warned_about(uint[] pressed)
+    {
+        // Only the input that completes a shortcut is kept from the app, which is its key only when the modifiers go down
+        // first; recorded the other way round, the key reaches the app you're using and the last modifier is kept instead.
+        var capture = new HotkeyCaptureSession();
+        foreach (var input in pressed)
+        {
+            capture.Press(input);
+        }
+
+        HotkeyCaptureStep done = default;
+        foreach (var input in pressed)
+        {
+            done = capture.Release(input, HotkeyMode.Hold);
+        }
+
+        Assert.Equal(
+            "Press F13 last when you use this hotkey: pressed before the keys held with it, it still reaches the app " +
+            "you're using.",
+            done.Message);
+        Assert.Equal(new HotkeyBinding(0x7C, KeyModifiers.Control | KeyModifiers.Alt, HotkeyMode.Hold, Suppress: true,
+            "Ctrl+Alt+F13"), done.Binding);
+    }
+
     [Fact]
     public void The_settings_window_maps_mouse_buttons_into_the_capture_and_keeps_side_buttons_from_wpf()
     {

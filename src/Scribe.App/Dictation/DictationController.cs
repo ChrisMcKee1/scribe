@@ -798,12 +798,16 @@ internal sealed class DictationController : IDisposable
         }
     }
 
-    // A desktop switch ends a recording the way its binding would have (see HotkeyEngine.OnDesktopSwitch); it goes the
-    // same way as a release from here on, and only its logged reason differs.
+    // A desktop switch, or a mouse hook Windows had removed, ends a recording the way its binding would have (see
+    // HotkeyEngine.OnDesktopSwitch and OnMouseHookLost); it goes the same way as a release from here on, and only its
+    // logged reason differs.
     private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) =>
-        StopAndProcess(e.Deactivation == HotkeyDeactivation.DesktopSwitch
-            ? DictationStopReason.DesktopSwitch
-            : DictationStopReason.HotkeyReleased);
+        StopAndProcess(e.Deactivation switch
+        {
+            HotkeyDeactivation.DesktopSwitch => DictationStopReason.DesktopSwitch,
+            HotkeyDeactivation.MouseHookLost => DictationStopReason.MouseHookLost,
+            _ => DictationStopReason.HotkeyReleased,
+        });
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {

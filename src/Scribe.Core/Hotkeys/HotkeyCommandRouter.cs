@@ -75,6 +75,13 @@ internal sealed class HotkeyCommandRouter
     /// <summary>The current engine's physical key view; false while stopped.</summary>
     public bool IsPressed(uint virtualKey) => CurrentEngine?.IsPressed(virtualKey) == true;
 
+    /// <summary>
+    /// Claims the current engine's evidence that it swallowed this button's release (see
+    /// <see cref="HotkeyEngine.ClaimButtonReleaseEvidence"/>); false while stopped, and after a reinstall until the new
+    /// engine swallows one.
+    /// </summary>
+    public bool ClaimButtonRelease(uint button) => CurrentEngine?.ClaimButtonReleaseEvidence(button) == true;
+
     /// <summary>Returns whether anything changed, and the engine to wake so it applies the change now.</summary>
     public (bool Changed, HotkeyEngine? Wake) UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding)
     {

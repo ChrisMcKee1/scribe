@@ -105,11 +105,17 @@ public sealed class HotkeyService : IHotkeyService
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
         _router = router;
-        _reconciler = new SuppressedKeyReconciler(
-            NativeMethods.IsKeyLogicallyDown,
-            _router.IsPressed,
-            ReleaseLeakedInput);
+        _reconciler = CreateReconciler(_router, NativeMethods.IsKeyLogicallyDown, ReleaseLeakedInput);
     }
+
+    /// <summary>
+    /// The leak check the service runs, over <paramref name="router"/>'s current engine; <paramref name="isLogicallyDown"/>
+    /// is Windows' view and <paramref name="releaseInput"/> the repair, which a test replaces. A mouse button is released
+    /// only on the engine's evidence of a release it swallowed (<see cref="HotkeyEngine.ClaimButtonReleaseEvidence"/>).
+    /// </summary>
+    internal static SuppressedKeyReconciler CreateReconciler(
+        HotkeyCommandRouter router, Func<uint, bool> isLogicallyDown, Func<uint, bool> releaseInput) =>
+        new(isLogicallyDown, router.IsPressed, releaseInput, router.ClaimButtonRelease);
 
     // A key left down gets a marked key-up and a mouse button left down a marked button-up: the same repair for either
     // hook. GetAsyncKeyState, the reconciler's view of Windows, reports the mouse buttons as well as the keys.
@@ -151,6 +157,9 @@ public sealed class HotkeyService : IHotkeyService
 
     /// <summary>How many middle and side button events reached the current engine from the mouse hook; for tests.</summary>
     internal long MouseButtonEventsSeen => _router.CurrentEngine?.MouseButtonEvents ?? 0;
+
+    /// <summary>How many times the current engine was told its mouse hook had been found removed; for tests.</summary>
+    internal long MouseHookLossesHandled => _router.CurrentEngine?.MouseHookLossesHandled ?? 0;
 
     /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
     internal void MaintainMouseHookNow()
@@ -403,7 +412,8 @@ public sealed class HotkeyService : IHotkeyService
                     // Shape only: which rule dropped it.
                     if (_router.IsCurrent(item.Generation))
                     {
-                        _logger.LogInformation("Discarded a hotkey activation queued before a desktop switch.");
+                        _logger.LogInformation(
+                            "Discarded a hotkey activation queued before a desktop switch or a mouse hook found removed.");
                     }
                     else
                     {
@@ -425,6 +435,10 @@ public sealed class HotkeyService : IHotkeyService
                 if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
                 {
                     _logger.LogDebug("Desktop switch: stop sent ({Trigger}).", item.Trigger);
+                }
+                else if (item.Deactivation == HotkeyDeactivation.MouseHookLost)
+                {
+                    _logger.LogDebug("Mouse hook found removed: stop sent ({Trigger}).", item.Trigger);
                 }
 
                 Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, item.Deactivation));
@@ -560,8 +574,9 @@ public sealed class HotkeyService : IHotkeyService
     // any more (a wake that could not be posted after a change is made good here). Windows removes a low-level hook
     // whose callback misses the deadline, and the mouse hook is the one called for every pointer move, but it is not
     // probed: any mouse input that clicks nothing is a move, and a move reaching the desktop brings back a pointer hidden
-    // while typing. Renewing injects nothing, adds nothing to any event and keeps the engine's state, and a hook Windows
-    // removed is back within one period. Callers hold _sync.
+    // while typing. Renewing injects nothing, adds nothing to any event and keeps the engine's state, and a registration
+    // Windows removed is back within one period; that renewal is also when the engine learns the hook was gone and ends a
+    // dictation a mouse button was driving (HotkeyEngine.OnMouseHookLost). Callers hold _sync.
     private void MaintainMouseHookLocked()
     {
         if (_installation is not { } installation)
@@ -629,8 +644,8 @@ public sealed class HotkeyService : IHotkeyService
             _mouseReportedLosses = losses;
             _logger.LogWarning(
                 "The mouse hook was already gone when it was renewed ({Count} time(s) for this hook thread; Windows " +
-                "removes a low-level hook whose callback misses the deadline). It is registered again; a mouse button " +
-                "released while it was gone may take one more press.",
+                "removes a low-level hook whose callback misses the deadline). It is registered again, and any dictation " +
+                "a mouse button was driving is ended, since its release may have come while no hook saw the mouse.",
                 losses);
         }
     }
@@ -702,8 +717,9 @@ public sealed class HotkeyService : IHotkeyService
     /// mouse hook, and every mouse event on the desktop waits for this thread only while one is bound.
     /// It is not probed like the keyboard hook: the only probe that clicks nothing is a move, and a
     /// move reaching the desktop brings back a pointer hidden while typing. Instead the watchdog has
-    /// the thread register it afresh every period (<see cref="SyncMouseHook"/>), so a hook Windows
-    /// removed for missing the callback deadline is back within one period.
+    /// the thread register it afresh every period (<see cref="SyncMouseHook"/>), so a registration
+    /// Windows removed for missing the callback deadline is back within one period, and a dictation a
+    /// mouse button was driving meanwhile is ended then (<see cref="HotkeyEngine.OnMouseHookLost"/>).
     /// </summary>
     private sealed class HookInstallation
     {
@@ -972,12 +988,16 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             // The old registration is released, or found already gone, before the count moves, so a reader that sees
-            // the count sees everything this renewal did.
+            // the count sees everything this renewal did. Found gone, it was removed by Windows (a missed deadline), and
+            // for as long as it was gone no hook saw the mouse: the engine ends a dictation a button was driving, since
+            // its release may be the input nobody saw, here between messages and before any button event reaches the
+            // new registration.
             Volatile.Write(ref _mouseHookId, replacement);
             Volatile.Write(ref _mouseHookError, 0);
             if (current != 0 && !NativeMethods.UnhookWindowsHookEx(current))
             {
                 Interlocked.Increment(ref _mouseHookLosses);
+                _engine.OnMouseHookLost();
             }
 
             Interlocked.Increment(ref _mouseHookRegistrations);
