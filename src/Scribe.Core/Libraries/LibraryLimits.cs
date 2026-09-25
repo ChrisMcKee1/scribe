@@ -28,10 +28,12 @@ public static class LibraryLimits
     public const int RecentlyDeletedRetentionDays = 30;
 
     /// <summary>
-    /// Days a set-aside journal manifest, and every redo image, install copy and backup it names, stays quarantined
-    /// before the janitor removes them together: the retention damaged database copies get
+    /// Days a set-aside journal manifest and its own journal files (its redo images, install copies and spare backups)
+    /// stay quarantined before the janitor removes them: the retention damaged database copies get
     /// (<see cref="Persistence.StorageRetentionPolicy.DamagedCopyRetentionDays"/>), because both hold what a failure
-    /// left behind and may be the only copy of it (review finding G5).
+    /// left behind and may be the only copy of it (review finding G5). Library files the manifest names (a target, a
+    /// kept outside version, a set-aside edits document, a Recently deleted entry) are never removed by the quarantine:
+    /// they follow their own rules (review finding G11).
     /// </summary>
     public const int QuarantineRetentionDays = Persistence.StorageRetentionPolicy.DamagedCopyRetentionDays;
 }
