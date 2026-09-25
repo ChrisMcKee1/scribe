@@ -125,7 +125,8 @@ public partial class App : Application
 
     /// <summary>
     /// Everything startup does once this is the only instance. Returns false when it ended the process on purpose,
-    /// having told the user why: the data folder cannot be created, or the database is from a newer Scribe.
+    /// having told the user why: the data folder cannot be created, or the database is from a newer Scribe; and when
+    /// shutdown began while it waited for the first vocabulary generation, when nothing is left to start.
     /// </summary>
     private async Task<bool> StartAsync()
     {
@@ -297,6 +298,31 @@ public partial class App : Application
             settingsRepository,
             callback => Dispatcher.BeginInvoke(callback));
 
+        _controller = new DictationController(
+            services.GetRequiredService<IHotkeyService>(),
+            services.GetRequiredService<IAudioCaptureService>(),
+            services.GetRequiredService<IVadService>(),
+            services.GetRequiredService<ITranscriptionService>(),
+            services.GetRequiredService<ITextPostProcessor>(),
+            services.GetRequiredService<ITextCleanupService>(),
+            services.GetRequiredService<ITextInjector>(),
+            services.GetRequiredService<IHistoryWriter>(),
+            services.GetRequiredService<VocabularyPublisher>(),
+            services.GetRequiredService<ICleanupFailureLog>(),
+            services.GetRequiredService<LastTranscriptStore>(),
+            services.GetRequiredService<ISettingsRepository>(),
+            services.GetRequiredService<ILogger<DictationController>>());
+
+        // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the
+        // first vocabulary generation is built on a worker and awaited here, never waited on, so the library source's first
+        // read, which can load a cold catalog, stays off this thread and the first dictation never runs without its
+        // vocabulary. A failure here is a startup failure like any other (AbandonStartup).
+        await _controller.PrepareAsync();
+        if (Dispatcher.HasShutdownStarted || _controller.IsClosing)
+        {
+            return false;
+        }
+
         _tray = new TrayIconHost(ex =>
         {
             try
@@ -325,21 +351,6 @@ public partial class App : Application
         _tray.MicrophoneMenuProvider = BuildTrayMicrophoneMenu;
         _tray.MicrophoneChosen += ChooseMicrophone;
         _tray.SoundSettingsRequested += OpenSoundSettings;
-
-        _controller = new DictationController(
-            services.GetRequiredService<IHotkeyService>(),
-            services.GetRequiredService<IAudioCaptureService>(),
-            services.GetRequiredService<IVadService>(),
-            services.GetRequiredService<ITranscriptionService>(),
-            services.GetRequiredService<ITextPostProcessor>(),
-            services.GetRequiredService<ITextCleanupService>(),
-            services.GetRequiredService<ITextInjector>(),
-            services.GetRequiredService<IHistoryWriter>(),
-            services.GetRequiredService<VocabularyPublisher>(),
-            services.GetRequiredService<ICleanupFailureLog>(),
-            services.GetRequiredService<LastTranscriptStore>(),
-            services.GetRequiredService<ISettingsRepository>(),
-            services.GetRequiredService<ILogger<DictationController>>());
 
         _overlay = new OverlayProcessClient(
             services.GetRequiredService<IAudioCaptureService>(),
@@ -988,7 +999,8 @@ public partial class App : Application
     // again. Otherwise an open window takes it unless something newer, such as a later click in it, has set its switch.
     private void OnAiCleanupToggleSaved(AppSettings stored, bool superseded, long revision)
     {
-        _controller?.ApplySettings(stored);
+        // The switch changes no vocabulary, so nothing here waits for the generation ApplySettings asks for.
+        _ = _controller?.ApplySettings(stored);
         if (!superseded)
         {
             _settingsWindow?.AdoptExternalAiCleanup(stored.EnableAiCleanup, revision);
@@ -1084,7 +1096,9 @@ public partial class App : Application
     private void OnMicrophoneChoiceSaved(AppSettings stored, bool superseded, long revision)
     {
         ClearPendingTrayMicrophone(revision);
-        _controller?.ApplySettings(stored);
+
+        // A microphone changes no vocabulary, so nothing here waits for the generation ApplySettings asks for.
+        _ = _controller?.ApplySettings(stored);
         var storedChoice = Scribe.Core.Settings.MicrophoneSelection.From(stored);
         if (!superseded)
         {
@@ -1224,12 +1238,14 @@ public partial class App : Application
                 {
                     // The window has just saved its whole document, or applied the stored settings after storing a
                     // dictionary entry itself, so a tray change still on its way reads the stored settings again before
-                    // applying anything.
+                    // applying anything. The window awaits what this returns, the answer of the vocabulary generation the
+                    // application asked for, before it says the change is in effect.
                     _settingsWrites?.NoteExternalApply();
-                    _controller!.ApplySettings(settings);
+                    var applying = _controller!.ApplySettings(settings);
                     _overlay?.SetKeepWarm(settings.ReleaseModelsAfterIdleMinutes);
                     _overlay?.SetPosition(settings.OverlayPosition);
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
+                    return applying;
                 },
                 () => _controller!.ReloadVocabulary(),
                 services.GetRequiredService<ILibraryVocabularySource>(),
@@ -1411,14 +1427,24 @@ public partial class App : Application
             var learned = _settingsWindow is { } settings
                 ? settings.PersistLearnedDictionaryEntries(candidates)
                 : services.GetRequiredService<IDictionaryRepository>().AddRange(candidates);
+
+            // The terms reach dictation in the next vocabulary generation, built off this thread from the dictionary as
+            // stored now; they are said to be learned only once that generation is what a dictation is given.
+            var applied = true;
             if (learned.Count > 0)
             {
-                await Task.Run(() => services.GetRequiredService<ITextPostProcessor>().Reload());
+                var controller = _controller!;
+                applied = (await Task.Run(() => controller.ReloadVocabulary())).Applied;
             }
 
-            _tray.ShowNotification(learned.Count == 0
-                ? "No new recurring terms were found."
-                : $"Learned {learned.Count} new {(learned.Count == 1 ? "term" : "terms")} from your dictation history.");
+            var learnedNotice = $"Learned {learned.Count} new {(learned.Count == 1 ? "term" : "terms")} from your dictation history";
+            _tray.ShowNotification(
+                learned.Count == 0
+                    ? "No new recurring terms were found."
+                    : applied
+                        ? learnedNotice + "."
+                        : VocabularyNotice.SavedButNotApplied(learnedNotice),
+                isError: !applied);
         }
         catch (Exception ex)
         {
@@ -1581,7 +1607,7 @@ public partial class App : Application
         var entry = result.Entry;
 
         // Before the await: the repair is a plain in-memory swap, and doing it first means a failure
-        // to reload the post-processor cannot leave the user with a stale transcript as well.
+        // to reload the vocabulary cannot leave the user with a stale transcript as well.
         var repaired = false;
         if (result.CorrectedTranscript is not null)
         {
@@ -1603,20 +1629,26 @@ public partial class App : Application
 
         try
         {
-            var services = _host.Services;
-            await Task.Run(() => services.GetRequiredService<ITextPostProcessor>().Reload());
+            // The rule reaches dictation in the next vocabulary generation, built off this thread from the dictionary as
+            // stored now; it is said to be written only once that generation is what a dictation is given.
+            var controller = _controller!;
+            var refresh = await Task.Run(() => controller.ReloadVocabulary());
+            var corrected = repaired ? " Your last dictation was corrected to match." : string.Empty;
+            if (!refresh.Applied)
+            {
+                _tray.ShowNotification(VocabularyNotice.SavedButNotApplied("Saved the rule") + corrected, isError: true);
+                return;
+            }
 
             _tray.ShowNotification(entry.Replacement.Length == 0
-                ? $"\"{entry.Pattern}\" will now be left out of what you dictate."
-                    + (repaired ? " Your last dictation was corrected to match." : string.Empty)
-                : $"\"{entry.Pattern}\" will now be written as \"{entry.Replacement}\"."
-                    + (repaired ? " Your last dictation was corrected to match." : string.Empty));
+                ? $"\"{entry.Pattern}\" will now be left out of what you dictate." + corrected
+                : $"\"{entry.Pattern}\" will now be written as \"{entry.Replacement}\"." + corrected);
         }
         catch (Exception ex)
         {
             _host.Services.GetRequiredService<ILogger<App>>()
                 .LogError(
-                    "Failed to reload the post-processor after a quick dictionary add: {Failure}",
+                    "Failed to reload the vocabulary after a quick dictionary add: {Failure}",
                     FailureShape.DescribeWithStack(ex));
             _tray.ShowNotification(
                 "Saved the rule, but it won't apply until Scribe restarts.", isError: true);

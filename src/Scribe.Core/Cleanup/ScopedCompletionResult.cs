@@ -9,10 +9,18 @@ public enum ScopedCompletionOutcome
     /// <summary>The model answered; <see cref="ScopedCompletionResult.Text"/> holds its answer.</summary>
     Completed,
 
-    /// <summary>Nothing was sent: no model is ready.</summary>
+    /// <summary>
+    /// A request was not handed over because no model is ready: none was when the completion began, or AI cleanup was
+    /// turned off or began setting up another configuration before a later attempt. Nothing was sent at all when
+    /// <see cref="ScopedCompletionResult.RequestsHandedOver"/> is 0.
+    /// </summary>
     NotReady,
 
-    /// <summary>Nothing was sent: the service now serves a different configuration from the recipient passed.</summary>
+    /// <summary>
+    /// A request was not handed over because the service now serves a different configuration from the recipient passed:
+    /// it already did when the completion began, or it switched before a later attempt. Nothing was sent at all when
+    /// <see cref="ScopedCompletionResult.RequestsHandedOver"/> is 0; otherwise an earlier attempt went to that recipient.
+    /// </summary>
     RecipientChanged,
 
     /// <summary>

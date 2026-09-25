@@ -82,14 +82,14 @@ public sealed class InterimLibraryVocabularySourceTests : IDisposable
     }
 
     [Fact]
-    public void Through_the_interim_source_dictation_writes_and_sends_what_0_4_4_wrote_and_sent()
+    public async Task Through_the_interim_source_dictation_writes_and_sends_what_0_4_4_wrote_and_sent()
     {
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor"), DictionaryEntry.New("x unit", "XUNIT-mine")]);
         var inUse = new List<string> { "dotnet-development", "ai-model-names" };
         var source = new InterimLibraryVocabularySource(_libraries, () => inUse);
         var processor = new TextPostProcessor(_dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: _libraries);
         using var publisher = new VocabularyPublisher(source, _dictionary, processor, NullLogger<VocabularyPublisher>.Instance, work => work());
-        var generation = publisher.Start();
+        var generation = (await publisher.StartAsync().WaitAsync(TimeSpan.FromSeconds(30))).Generation;
         var dictation = new DictationPostProcessor(processor);
         dictation.Use(generation);
 

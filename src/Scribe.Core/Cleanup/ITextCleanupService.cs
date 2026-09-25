@@ -79,10 +79,13 @@ public interface ITextCleanupService : IAsyncDisposable
     /// It carries no library vocabulary of its own, so its attempts are handed over under no library scope; a request
     /// whose message carries library terms uses the overload that takes their scope.
     /// <para>
-    /// Fails closed: it sends nothing, and says <see cref="CompletionOutcome.RecipientChanged"/>, unless the
-    /// service is serving exactly <paramref name="recipient"/> at the moment it builds the request, so a
-    /// provider saved after the user agreed to send never receives what they agreed to send elsewhere. Never
-    /// throws for a failed call; <see cref="CompletionOutcome.Failed"/> says so.
+    /// Fails closed: every attempt, the first and each retry the client makes (for GitHub Copilot, the session's
+    /// creation and its send), is sent only while the service is serving exactly <paramref name="recipient"/> and is
+    /// ready, checked as that attempt is handed over, so a provider saved after the user agreed to send, or cleanup
+    /// turned off, never receives what they agreed to send. When that fails before anything was sent the result says
+    /// <see cref="CompletionOutcome.RecipientChanged"/> or <see cref="CompletionOutcome.NotReady"/>; when it stops a later
+    /// attempt after an earlier one went, <see cref="CompletionOutcome.Failed"/>. Never throws for a failed call;
+    /// <see cref="CompletionOutcome.Failed"/> says so.
     /// </para>
     /// </summary>
     Task<CompletionResult> CompleteAsync(
@@ -91,12 +94,13 @@ public interface ITextCleanupService : IAsyncDisposable
     /// <summary>
     /// <see cref="CompleteAsync(string, string, CleanupRecipient, CancellationToken)"/> for a request that carries
     /// library vocabulary: the usage insight's labels, whose libraries <paramref name="libraryScope"/> names with the
-    /// content each was permitted for (a usage report's <c>LibraryScope</c>). Every attempt, the first and each retry,
-    /// goes only while both hold: the service still serves <paramref name="recipient"/>, checked when the request is
-    /// built as the other overload checks it, and the published library scope still covers
-    /// <paramref name="libraryScope"/>, checked as each attempt is handed over. When the scope no longer holds, that
-    /// attempt is not sent and the result says <see cref="ScopedCompletionOutcome.LibraryScopeNarrowed"/>. Never throws for
-    /// a failed call.
+    /// content each was permitted for (a usage report's <c>LibraryScope</c>). Every attempt, the first and each retry (for
+    /// GitHub Copilot, the session's creation and its send), goes only while both hold, both checked as that attempt is
+    /// handed over: the service still serves <paramref name="recipient"/> and is ready, and the published library scope
+    /// still covers <paramref name="libraryScope"/>. When one no longer holds, that attempt is not sent and the result says
+    /// why (<see cref="ScopedCompletionOutcome.LibraryScopeNarrowed"/>, <see cref="ScopedCompletionOutcome.RecipientChanged"/>
+    /// or <see cref="ScopedCompletionOutcome.NotReady"/>), with how many requests had left before it. Never throws for a
+    /// failed call.
     /// </summary>
     Task<ScopedCompletionResult> CompleteAsync(
         string systemPrompt,

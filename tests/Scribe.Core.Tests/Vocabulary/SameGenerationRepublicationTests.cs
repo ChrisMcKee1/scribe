@@ -35,7 +35,7 @@ public sealed class SameGenerationRepublicationTests
         var source = new TestVocabularySource(Whole());
         var publisherLog = new CapturingLogger<VocabularyPublisher>();
         using var publisher = new VocabularyPublisher(source, dictionary, processor, publisherLog, work => work());
-        var whole = publisher.Start();
+        var whole = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
         await using var harness = new VocabularyCleanupHarness(source);
         await harness.ConfigureAndWaitAsync(VocabularyCleanupHarness.Custom());
         var dictation = new DictationPostProcessor(processor);
@@ -107,7 +107,7 @@ public sealed class SameGenerationRepublicationTests
         var processor = new TextPostProcessor(dictionary, NullLogger<TextPostProcessor>.Instance);
         using var publisher = new VocabularyPublisher(
             source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, work => _ = Task.Run(work));
-        Assert.Same(heldBack, publisher.Start().Libraries);
+        Assert.Same(heldBack, (await publisher.StartAsync().WaitAsync(Bound)).Generation.Libraries);
 
         var restored = Whole();
         var restoredPublished = new TaskCompletionSource<VocabularyGeneration>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -137,7 +137,7 @@ public sealed class SameGenerationRepublicationTests
 
         // The build that was running publishes what it read; the restoration is built after it, not dropped for having
         // the generation that build already had.
-        var answered = await building.WaitAsync(Bound);
+        var answered = (await building.WaitAsync(Bound)).Generation;
         Assert.Same(heldBack, answered.Libraries);
         var afterRestore = await restoredPublished.Task.WaitAsync(Bound);
         Assert.True(afterRestore.Number > answered.Number);

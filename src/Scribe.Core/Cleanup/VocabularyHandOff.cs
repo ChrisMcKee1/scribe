@@ -16,10 +16,33 @@ internal enum CleanupRequestKind
     Completion,
 }
 
+/// <summary>Why a cleanup request was not handed over; logged by name, never with any content.</summary>
+internal enum HandOffRefusal
+{
+    /// <summary>It was handed over.</summary>
+    None,
+
+    /// <summary>It reached a gate with no admission, which only a defect can cause.</summary>
+    NoAdmission,
+
+    /// <summary>The published library scope no longer covers the one its vocabulary was admitted with.</summary>
+    LibraryScope,
+
+    /// <summary>
+    /// A request bound to a recipient found cleanup no longer ready for it: switched off, setting up another
+    /// configuration, unavailable, or closing.
+    /// </summary>
+    NotReady,
+
+    /// <summary>A request bound to a recipient found the service serving another configuration.</summary>
+    RecipientChanged,
+}
+
 /// <summary>
 /// The admission one cleanup request runs under: the library scope its vocabulary was admitted with, and the source
 /// that decides, at the moment the request would leave, whether that scope still holds
-/// (<see cref="ILibraryVocabularySource.TryHandOff"/>, contract 2.10).
+/// (<see cref="ILibraryVocabularySource.TryHandOff"/>, contract 2.10). A one-off completion is also bound to the
+/// recipient its caller captured (release 0.4.4's recipient rule), which is judged at the same moment.
 /// </summary>
 /// <remarks>
 /// Carried ambiently, from the agent run <see cref="TextCleanupService"/> makes down to the last in-process step before
@@ -33,15 +56,29 @@ internal sealed class CleanupAdmission
     private static readonly AsyncLocal<CleanupAdmission?> Ambient = new();
 
     private readonly ILibraryVocabularySource? _source;
+    private readonly Func<Action, HandOffRefusal>? _whileServing;
     private int _handedOver;
     private int _refused;
 
-    internal CleanupAdmission(CleanupRequestKind kind, AiVocabularyScope scope, ILibraryVocabularySource? source)
+    /// <param name="kind">What the request is, for the log.</param>
+    /// <param name="scope">The library scope its vocabulary was admitted with.</param>
+    /// <param name="source">The admission point; null only where no library vocabulary can reach the service.</param>
+    /// <param name="whileServing">
+    /// For a request bound to a recipient: runs the send it is given only while the service still serves that recipient
+    /// and is ready, in one step with the check, and returns why not otherwise. Null for a request bound to its library
+    /// scope alone.
+    /// </param>
+    internal CleanupAdmission(
+        CleanupRequestKind kind,
+        AiVocabularyScope scope,
+        ILibraryVocabularySource? source,
+        Func<Action, HandOffRefusal>? whileServing = null)
     {
         ArgumentNullException.ThrowIfNull(scope);
         Kind = kind;
         Scope = scope;
         _source = source;
+        _whileServing = whileServing;
     }
 
     /// <summary>The admission of the calling flow, or null outside every request the service makes.</summary>
@@ -69,24 +106,43 @@ internal sealed class CleanupAdmission
 
     /// <summary>
     /// Runs <paramref name="send"/>, which starts the request and returns without waiting for its response, when the
-    /// published scope still covers <see cref="Scope"/>, under the source's permission gate. With no source (a service
-    /// built without the library vocabulary, as tests and tools build it) there is no permission to check, and it runs.
+    /// published scope still covers <see cref="Scope"/>, under the source's permission gate; for a request bound to a
+    /// recipient, only when the service still serves it and is ready as well, checked under the service's own gate inside
+    /// the permission gate, so one check and the start of the send are a single step against a revocation and a
+    /// reconfiguration alike. Nothing awaits under either gate. With no source (a service built without the library
+    /// vocabulary, as tests and tools build it) there is no library permission to check.
     /// </summary>
-    internal bool TryHandOff(Action send)
+    internal bool TryHandOff(Action send) => TryHandOff(send, out _);
+
+    /// <inheritdoc cref="TryHandOff(Action)"/>
+    /// <param name="send">Starts the request and returns without waiting for its response.</param>
+    /// <param name="refusal">Why the request was not handed over, or <see cref="HandOffRefusal.None"/> when it was.</param>
+    internal bool TryHandOff(Action send, out HandOffRefusal refusal)
     {
-        bool handedOver;
-        if (_source is null)
+        var served = HandOffRefusal.None;
+        void SendWhileServed()
         {
-            send();
-            handedOver = true;
-        }
-        else
-        {
-            handedOver = _source.TryHandOff(Scope, send);
+            if (_whileServing is null)
+            {
+                send();
+            }
+            else
+            {
+                served = _whileServing(send);
+            }
         }
 
+        var ran = _source is null ? RunWithoutSource(SendWhileServed) : _source.TryHandOff(Scope, SendWhileServed);
+        refusal = ran ? served : HandOffRefusal.LibraryScope;
+        var handedOver = refusal == HandOffRefusal.None;
         Interlocked.Increment(ref handedOver ? ref _handedOver : ref _refused);
         return handedOver;
+    }
+
+    private static bool RunWithoutSource(Action send)
+    {
+        send();
+        return true;
     }
 
     internal readonly struct Entered(CleanupAdmission? previous) : IDisposable
@@ -97,24 +153,35 @@ internal sealed class CleanupAdmission
 
 /// <summary>
 /// Thrown in place of a request the admission point did not hand over, so the request never leaves: the library
-/// vocabulary it was admitted with is no longer permitted, or it reached a gate with no admission at all. Its message
-/// is fixed text; it never names a library, a term or an endpoint.
+/// vocabulary it was admitted with is no longer permitted, the recipient it was bound to is no longer served or ready, or
+/// it reached a gate with no admission at all. Its message is fixed text; it never names a library, a term or an endpoint.
 /// </summary>
 internal sealed class VocabularyHandOffRefusedException : InvalidOperationException
 {
-    internal VocabularyHandOffRefusedException(bool admitted)
-        : base(admitted
-            ? "The request was not handed over: the library vocabulary it was admitted with is no longer permitted."
-            : "The request was not handed over: it carried no admission.")
+    internal VocabularyHandOffRefusedException(HandOffRefusal reason)
+        : base(MessageFor(reason))
     {
-        Admitted = admitted;
+        Reason = reason;
     }
 
+    /// <summary>Why the request was not handed over; never <see cref="HandOffRefusal.None"/>.</summary>
+    internal HandOffRefusal Reason { get; }
+
     /// <summary>False when the request reached the gate with no admission, which only a defect can cause.</summary>
-    internal bool Admitted { get; }
+    internal bool Admitted => Reason != HandOffRefusal.NoAdmission;
 
     /// <summary>The refusal in <paramref name="exception"/> or any exception it wraps, or null.</summary>
     internal static VocabularyHandOffRefusedException? Find(Exception? exception) => Find(exception, depth: 0);
+
+    private static string MessageFor(HandOffRefusal reason) => reason switch
+    {
+        HandOffRefusal.NoAdmission => "The request was not handed over: it carried no admission.",
+        HandOffRefusal.LibraryScope =>
+            "The request was not handed over: the library vocabulary it was admitted with is no longer permitted.",
+        HandOffRefusal.NotReady => "The request was not handed over: AI cleanup is no longer ready for it.",
+        HandOffRefusal.RecipientChanged => "The request was not handed over: AI cleanup now serves another configuration.",
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "A request that was handed over was not refused."),
+    };
 
     // Depth-bounded: an exception chain that loops must not hang the failure path.
     private static VocabularyHandOffRefusedException? Find(Exception? exception, int depth)
@@ -175,13 +242,13 @@ internal sealed class VocabularyHandOffHandler : DelegatingHandler
     {
         if (CleanupAdmission.Current is not { } admission)
         {
-            return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(admitted: false));
+            return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(HandOffRefusal.NoAdmission));
         }
 
         Task<HttpResponseMessage>? sending = null;
-        if (!admission.TryHandOff(() => sending = StartSend(request, cancellationToken)))
+        if (!admission.TryHandOff(() => sending = StartSend(request, cancellationToken), out var refusal))
         {
-            return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(admitted: true));
+            return Task.FromException<HttpResponseMessage>(new VocabularyHandOffRefusedException(refusal));
         }
 
         return sending!;

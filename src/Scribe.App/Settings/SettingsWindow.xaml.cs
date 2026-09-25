@@ -31,6 +31,7 @@ using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Scribe.Core.Transcription;
+using Scribe.Core.Vocabulary;
 
 namespace Scribe.App.Settings;
 
@@ -71,8 +72,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool _settingsRecovered;
     private readonly SessionDiagnostics? _diagnostics;
     private readonly Action<OverlayPosition> _previewOverlay;
-    private readonly Action<AppSettings> _applySettings;
-    private readonly Action _reloadVocabulary;
+
+    // Both return the answer of the vocabulary generation the application asked for, which the window awaits before it
+    // says a stored change is in effect.
+    private readonly Func<AppSettings, Task<VocabularyRefresh>> _applySettings;
+    private readonly Func<Task<VocabularyRefresh>> _reloadVocabulary;
 
     // The committed library vocabulary dictation uses, which the usage report's library selection comes from: never the
     // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
@@ -190,8 +194,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AppPaths paths,
         StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
-        Action<AppSettings> applySettings,
-        Action reloadVocabulary,
+        Func<AppSettings, Task<VocabularyRefresh>> applySettings,
+        Func<Task<VocabularyRefresh>> reloadVocabulary,
         ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
@@ -4866,8 +4870,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    // Validates, persists and applies the settings. Returns true on success; on a validation problem
-    // or a save error it surfaces its own message, leaves the window open, and returns false.
+    // Validates, persists and applies the settings. Returns true on success; on a validation problem, a save error, or a
+    // save whose vocabulary dictation could not load yet, it surfaces its own message, leaves the window open, and returns
+    // false.
     private async Task<bool> TrySaveAsync()
     {
         // A Start with Windows change may still be saving its preference; writing the whole
@@ -5129,7 +5134,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             // The one place this window applies its own document, which SaveBundle has just stored. Anything else here
             // that has to put settings into effect uses the stored ones (StoredSettingsReapply).
-            _applySettings(_settings);
+            var applying = _applySettings(_settings);
 
             // Refresh the saved-state snapshots so an immediate re-save of an unchanged section is a
             // no-op; important now that Save keeps the window open for page-by-page editing. Only
@@ -5142,6 +5147,22 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             if (snippets is not null)
             {
                 _snippetLoad.MarkSaved(snippetSignature);
+            }
+
+            // Reported as saved only once dictation can use what was stored: the dictionary and libraries reach it in the
+            // next vocabulary generation, built off this thread and awaited here, never waited on. A build that could not
+            // read the dictionary leaves the settings saved and dictation on its previous vocabulary, which the window
+            // says, staying open.
+            var applied = await applying;
+            if (_closed)
+            {
+                return false;
+            }
+
+            if (!applied.Applied)
+            {
+                ShowInfo(VocabularyNotice.SavedButNotApplied("Settings saved"), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                return false;
             }
 
             return true;
@@ -6221,9 +6242,25 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // Only what is stored goes live. After a Save that failed, _settings still holds every edit it was given, a
             // picked AI cleanup provider among them, and applying it would send later dictations there with nothing
             // saved. The stored settings rebuild the post-processor and the glossary with the new entry; when none can be
-            // used, only the vocabulary reloads.
-            StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
-            ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+            // used, only the vocabulary reloads. Either way the entry is said to be added once dictation can use it.
+            var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary);
+            var refresh = await reapplied.Vocabulary;
+            if (_closed)
+            {
+                return;
+            }
+
+            if (refresh.Applied)
+            {
+                ShowInfo($"Added \"{term.Text}\" to your dictionary.");
+            }
+            else
+            {
+                ShowInfo(
+                    VocabularyNotice.SavedButNotApplied($"Added \"{term.Text}\" to your dictionary"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
+            }
+
             LoadUsage();
         }
         catch (Exception ex)
@@ -6282,8 +6319,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             UsageInsightText.Text = completion.Outcome switch
             {
-                ScopedCompletionOutcome.RecipientChanged =>
+                ScopedCompletionOutcome.RecipientChanged when completion.NothingSent =>
                     "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again.",
+
+                // A later attempt was stopped after an earlier one had gone, so this must not say nothing was sent.
+                ScopedCompletionOutcome.RecipientChanged or ScopedCompletionOutcome.NotReady =>
+                    "AI cleanup changed while the insight was being requested, so it was stopped. Try again.",
                 ScopedCompletionOutcome.LibraryScopeNarrowed =>
                     "Usage changed while the insight was being prepared. Generate it again.",
                 _ => UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.",

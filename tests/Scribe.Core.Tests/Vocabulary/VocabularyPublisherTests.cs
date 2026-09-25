@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Libraries;
+using Scribe.Core.Lifecycle;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -26,18 +27,23 @@ public sealed class VocabularyPublisherTests
         new Library("private", H2, false, Entry("quill moor", "Quillmoor")));
 
     [Fact]
-    public void Start_publishes_the_first_generation_on_the_calling_thread_from_one_snapshot_and_the_dictionary()
+    public async Task StartAsync_builds_the_first_generation_through_the_scheduler_from_one_snapshot_and_the_dictionary()
     {
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
         var queued = new List<Action>();
         using var publisher = Publisher(source, dictionary, Processor(dictionary), queued.Add);
 
+        // Nothing is read on the caller's thread: the first build is queued like any other, and the answer waits for it.
+        var starting = publisher.StartAsync();
+        Assert.False(starting.IsCompleted);
+        Assert.Equal(0, source.CurrentReads);
         Assert.Same(VocabularyGeneration.Empty, publisher.Current);
-        var first = publisher.Start();
+        Assert.Single(queued)();
 
-        // Built inline, before Start returned: nothing was queued, and the generation is the one published.
-        Assert.Empty(queued);
+        var answer = await starting.WaitAsync(Bound);
+        Assert.Equal(VocabularyRefreshOutcome.Applied, answer.Outcome);
+        var first = answer.Generation;
         Assert.Same(first, publisher.Current);
         Assert.Equal(1, source.CurrentReads);
         Assert.Same(TwoLibraries, first.Libraries);
@@ -59,13 +65,52 @@ public sealed class VocabularyPublisherTests
     }
 
     [Fact]
+    public async Task In_production_the_first_generation_is_read_on_a_pool_thread_and_the_caller_is_never_held()
+    {
+        // The public constructor, as the app's container builds it. The first read of the library source can load a cold
+        // catalog; holding that read shows StartAsync returned to its caller before it finished, and on another thread.
+        // The caller waits here without awaiting, so its thread cannot be the one that reads; the hook never holds the
+        // caller's own thread, so a build on it shows as a completed start instead of a wait.
+        var source = new TestVocabularySource(TwoLibraries);
+        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
+        using var readStarted = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var caller = Environment.CurrentManagedThreadId;
+        var reader = 0;
+        source.ReadingCurrent = () =>
+        {
+            source.ReadingCurrent = null;
+            reader = Environment.CurrentManagedThreadId;
+            readStarted.Set();
+            if (reader != caller)
+            {
+                release.Wait(Bound);
+            }
+        };
+        using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), NullLogger<VocabularyPublisher>.Instance);
+
+        var starting = publisher.StartAsync();
+        Assert.True(readStarted.Wait(Bound), "The first generation's build never read the library source.");
+
+        Assert.NotEqual(caller, reader);
+        Assert.False(starting.IsCompleted);
+        Assert.Same(VocabularyGeneration.Empty, publisher.Current);
+
+        release.Set();
+        var answer = await starting.WaitAsync(Bound);
+        Assert.True(answer.Applied);
+        Assert.Same(answer.Generation, publisher.Current);
+        Assert.Same(TwoLibraries, answer.Generation.Libraries);
+    }
+
+    [Fact]
     public async Task Requests_that_arrive_while_a_build_waits_to_run_coalesce_into_one_newer_generation()
     {
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([]);
         var queued = new List<Action>();
         using var publisher = Publisher(source, dictionary, Processor(dictionary), queued.Add);
-        var first = publisher.Start();
+        var first = await StartQueuedAsync(publisher, queued);
 
         dictionary.Entries = [Entry("harbour", "Harbour")];
         var a = publisher.RefreshAsync();
@@ -81,9 +126,10 @@ public sealed class VocabularyPublisherTests
         builder();
 
         // One build, reading its inputs after the newest request, answers all three with the same generation.
-        var built = await a.WaitAsync(Bound);
-        Assert.Same(built, await b.WaitAsync(Bound));
-        Assert.Same(built, await c.WaitAsync(Bound));
+        var answers = new[] { await a.WaitAsync(Bound), await b.WaitAsync(Bound), await c.WaitAsync(Bound) };
+        var built = answers[0].Generation;
+        Assert.All(answers, answer => Assert.Equal(VocabularyRefreshOutcome.Applied, answer.Outcome));
+        Assert.All(answers, answer => Assert.Same(built, answer.Generation));
         Assert.Same(built, publisher.Current);
         Assert.Equal(first.Number + 1, built.Number);
         Assert.Equal(["harbour", "lantern"], built.Dictionary.Select(entry => entry.Pattern));
@@ -93,7 +139,7 @@ public sealed class VocabularyPublisherTests
         var d = publisher.RefreshAsync();
         Assert.Equal(2, queued.Count);
         queued[1]();
-        Assert.Equal(built.Number + 1, (await d.WaitAsync(Bound)).Number);
+        Assert.Equal(built.Number + 1, (await d.WaitAsync(Bound)).Generation.Number);
     }
 
     [Fact]
@@ -102,7 +148,7 @@ public sealed class VocabularyPublisherTests
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([]);
         using var publisher = Publisher(source, dictionary, Processor(dictionary), work => _ = Task.Run(work));
-        publisher.Start();
+        await publisher.StartAsync().WaitAsync(Bound);
 
         // Hold the next build once it has read its inputs, before it publishes.
         var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -120,57 +166,211 @@ public sealed class VocabularyPublisherTests
         var during = publisher.RefreshAsync();
         release.Set();
 
-        var answeredBefore = await before.WaitAsync(Bound);
+        var answeredBefore = (await before.WaitAsync(Bound)).Generation;
         var answeredDuring = await during.WaitAsync(Bound);
         Assert.Empty(answeredBefore.Dictionary);
-        Assert.Equal(["lantern"], answeredDuring.Dictionary.Select(entry => entry.Pattern));
-        Assert.True(answeredDuring.Number > answeredBefore.Number);
-        Assert.Same(answeredDuring, publisher.Current);
+        Assert.Equal(VocabularyRefreshOutcome.Applied, answeredDuring.Outcome);
+        Assert.Equal(["lantern"], answeredDuring.Generation.Dictionary.Select(entry => entry.Pattern));
+        Assert.True(answeredDuring.Generation.Number > answeredBefore.Number);
+        Assert.Same(answeredDuring.Generation, publisher.Current);
     }
 
     [Fact]
-    public async Task A_build_that_read_older_inputs_never_publishes_over_a_newer_generation()
+    public async Task A_start_while_a_build_runs_starts_no_second_build_and_is_answered_by_the_build_after_it()
     {
-        // Two builds overlap: Start builds on the caller's thread while a refresh builds on the pool. Start reads its
-        // inputs first and is held there; the refresh reads newer inputs and publishes; then Start finishes. Its ticket
-        // is older than the published generation's, so it must not replace it.
+        // One builder at a time, the first generation's included: a start that arrives while a build runs (a library
+        // publication raised before the app started the publisher, say) is queued behind it, so no two builds overlap and
+        // none can publish over a newer one.
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
-        using var publisher = Publisher(source, dictionary, Processor(dictionary), work => _ = Task.Run(work));
+        var queued = new List<Action>();
+        using var publisher = Publisher(source, dictionary, Processor(dictionary), queued.Add);
 
-        var startRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var releaseStart = new ManualResetEventSlim();
+        var early = publisher.RefreshAsync();
+        var builder = Assert.Single(queued);
+        queued.Clear();
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
         dictionary.Read = () =>
         {
             dictionary.Read = null;
-            startRead.TrySetResult();
-            releaseStart.Wait(Bound);
+            reading.TrySetResult();
+            release.Wait(Bound);
         };
-
-        var starting = Task.Run(publisher.Start);
-        await startRead.Task.WaitAsync(Bound);
+        var running = Task.Run(builder);
+        await reading.Task.WaitAsync(Bound);
 
         dictionary.Entries = [Entry("lantern", "Lantern")];
-        var refreshed = await publisher.RefreshAsync().WaitAsync(Bound);
-        Assert.Equal(["lantern"], refreshed.Dictionary.Select(entry => entry.Pattern));
-        Assert.Same(refreshed, publisher.Current);
+        var starting = publisher.StartAsync();
+        Assert.Empty(queued);
+        Assert.False(starting.IsCompleted);
+        Assert.Equal(1, source.CurrentReads);
+        release.Set();
+        await running.WaitAsync(Bound);
 
-        releaseStart.Set();
-        await starting.WaitAsync(Bound);
-
-        Assert.Same(refreshed, publisher.Current);
-        Assert.Equal(["lantern"], publisher.Current.Dictionary.Select(entry => entry.Pattern));
+        var earlyAnswer = await early.WaitAsync(Bound);
+        var startAnswer = await starting.WaitAsync(Bound);
+        Assert.Equal(["harbour"], earlyAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
+        Assert.Equal(VocabularyRefreshOutcome.Applied, startAnswer.Outcome);
+        Assert.Equal(["lantern"], startAnswer.Generation.Dictionary.Select(entry => entry.Pattern));
+        Assert.True(startAnswer.Generation.Number > earlyAnswer.Generation.Number);
+        Assert.Same(startAnswer.Generation, publisher.Current);
+        Assert.Equal(2, source.CurrentReads);
     }
 
     [Fact]
-    public void A_new_library_vocabulary_and_a_dictionary_reload_each_ask_for_a_new_generation()
+    public async Task A_change_is_acknowledged_only_once_its_generation_is_published_and_that_is_the_generation_the_next_admission_takes()
+    {
+        // The Settings Save's case, with the build held: a dictionary correction is stored, the application asks for a
+        // generation, and the answer is what the Save awaits before it says the settings are saved.
+        var source = new TestVocabularySource(TwoLibraries);
+        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
+        var queued = new List<Action>();
+        using var publisher = Publisher(source, dictionary, Processor(dictionary), queued.Add);
+        var before = await StartQueuedAsync(publisher, queued);
+
+        dictionary.Entries = [Entry("harbour", "Harbour"), Entry("quill more", "Quillmoor")];
+        var acknowledgement = publisher.RefreshAsync();
+
+        // Until the build runs nothing is acknowledged, and a dictation admitted now takes the generation before the change,
+        // which is what an acknowledgement given at this point would have claimed was in effect.
+        Assert.False(acknowledgement.IsCompleted);
+        Assert.Same(before, Admit(publisher));
+
+        Assert.Single(queued)();
+        var answer = await acknowledgement.WaitAsync(Bound);
+
+        // Acknowledged: the generation it names carries the correction, and it is exactly what the next admission takes.
+        Assert.Equal(VocabularyRefreshOutcome.Applied, answer.Outcome);
+        Assert.True(answer.Applied);
+        Assert.Contains(answer.Generation.Dictionary, entry => entry.Replacement == "Quillmoor");
+        Assert.Same(answer.Generation, Admit(publisher));
+        Assert.Equal("Quillmoor", Processor(dictionary).ProcessDetailed("quill more", null, Admit(publisher).Rules).Text);
+    }
+
+    [Fact]
+    public async Task A_build_that_cannot_read_the_dictionary_answers_not_applied_with_the_generation_dictation_keeps()
+    {
+        var source = new TestVocabularySource(TwoLibraries);
+        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
+        var log = new CapturingLogger<VocabularyPublisher>();
+        var queued = new List<Action>();
+        using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), log, queued.Add);
+        var before = await StartQueuedAsync(publisher, queued);
+
+        // Saved but not applied: the build for the request could not read the dictionary, so the next dictation keeps the
+        // generation from before the change, and the answer says so rather than that the change is in effect.
+        dictionary.Failure = new InvalidOperationException("database is locked at C:\\Users\\canary\\scribe.db");
+        var failed = publisher.RefreshAsync();
+        Assert.Single(queued)();
+        var answered = await failed.WaitAsync(Bound);
+
+        Assert.Equal(VocabularyRefreshOutcome.NotApplied, answered.Outcome);
+        Assert.False(answered.Applied);
+        Assert.Same(before, answered.Generation);
+        Assert.Same(before, publisher.Current);
+        Assert.Same(before, Admit(publisher));
+        Assert.Contains(log.Entries, entry => entry.Message.StartsWith("A vocabulary generation could not be built", StringComparison.Ordinal));
+        Assert.DoesNotContain("canary", log.AllText, StringComparison.OrdinalIgnoreCase);
+
+        // The next request, once the dictionary can be read, is applied.
+        dictionary.Failure = null;
+        var retried = publisher.RefreshAsync();
+        queued[1]();
+        Assert.Equal(VocabularyRefreshOutcome.Applied, (await retried.WaitAsync(Bound)).Outcome);
+    }
+
+    [Fact]
+    public async Task A_request_the_publisher_can_no_longer_build_for_is_answered_stopped_never_applied()
+    {
+        var source = new TestVocabularySource(TwoLibraries);
+        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
+        var queued = new List<Action>();
+        var publisher = Publisher(source, dictionary, Processor(dictionary), queued.Add);
+        var before = await StartQueuedAsync(publisher, queued);
+
+        var waiting = publisher.RefreshAsync();
+        publisher.Dispose();
+        var answer = await waiting.WaitAsync(Bound);
+        Assert.Equal(VocabularyRefreshOutcome.Stopped, answer.Outcome);
+        Assert.Same(before, answer.Generation);
+        Assert.Equal(VocabularyRefreshOutcome.Stopped, (await publisher.RefreshAsync().WaitAsync(Bound)).Outcome);
+        Assert.Throws<ObjectDisposedException>(() => { _ = publisher.StartAsync(); });
+
+        // A scheduler that refuses the build answers its requests too, as not applied.
+        var refusing = Publisher(source, dictionary, Processor(dictionary), _ => throw new InvalidOperationException("no threads"));
+        using (refusing)
+        {
+            Assert.Equal(VocabularyRefreshOutcome.NotApplied, (await refusing.StartAsync().WaitAsync(Bound)).Outcome);
+            Assert.Same(VocabularyGeneration.Empty, refusing.Current);
+        }
+    }
+
+    [Fact]
+    public async Task A_commit_between_a_builds_two_reads_gives_one_transient_mix_and_the_next_generation_is_consistent()
+    {
+        // A Settings save that commits libraries and dictionary together, landing after a running build read the library
+        // snapshot and before it read the dictionary: that build publishes the old libraries with the new dictionary. Each
+        // commit asks for a generation after it lands (the library source's Changed, the save's application), so the build
+        // after it reads both new, and that consistent generation is the one the save's acknowledgement names.
+        var oldLibraries = Of(4, new Library("team", H1, true, Entry("kes trel", "Kestrel")));
+        var newLibraries = Of(5, new Library("team", H2, true, Entry("kes trel", "Kestrelsaved")));
+        var source = new TestVocabularySource(oldLibraries);
+        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
+        using var publisher = Publisher(source, dictionary, Processor(dictionary), work => _ = Task.Run(work));
+        await publisher.StartAsync().WaitAsync(Bound);
+
+        // Hold the next build after its library read, before its dictionary read.
+        var between = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        dictionary.Reading = () =>
+        {
+            dictionary.Reading = null;
+            between.TrySetResult();
+            release.Wait(Bound);
+        };
+        var straddling = publisher.RefreshAsync();
+        await between.Task.WaitAsync(Bound);
+
+        // The commit lands between the two reads, and each source asks for a generation after it, as it does in the app.
+        source.Publish(newLibraries);
+        dictionary.Entries = [Entry("harbour", "Harbour"), Entry("lan tern", "Lantern")];
+        var saved = publisher.RefreshAsync();
+        release.Set();
+
+        // The build that straddled the commit is a transient mix: the old libraries, the new dictionary. It is whole in
+        // itself, and its glossary and the scope that judges it come from one snapshot, the old one, whose content the
+        // published vocabulary no longer covers: AI cleanup stays bound to the content that snapshot permitted.
+        var mixed = (await straddling.WaitAsync(Bound)).Generation;
+        Assert.Same(oldLibraries, mixed.Libraries);
+        Assert.Equal(["harbour", "lan tern"], mixed.Dictionary.Select(entry => entry.Pattern));
+        Assert.Same(oldLibraries.AiScope, mixed.Cleanup.Scope);
+        Assert.Contains("Kestrel (transcribed as", mixed.Cleanup.GlossaryFor(CleanupPrompt.MaxGlossaryTermsCloud), StringComparison.Ordinal);
+        Assert.False(source.Current.AiScope.Covers(mixed.AiScope));
+        Assert.False(source.TryHandOff(mixed.AiScope, () => Assert.Fail("A request of the mixed generation was handed over.")));
+
+        // The mix never persists: the next generation, the one the save's acknowledgement names, reads both new.
+        var consistent = await saved.WaitAsync(Bound);
+        Assert.Equal(VocabularyRefreshOutcome.Applied, consistent.Outcome);
+        Assert.True(consistent.Generation.Number > mixed.Number);
+        Assert.Same(newLibraries, consistent.Generation.Libraries);
+        Assert.Equal(["harbour", "lan tern"], consistent.Generation.Dictionary.Select(entry => entry.Pattern));
+        Assert.Same(newLibraries.AiScope, consistent.Generation.Cleanup.Scope);
+        Assert.Same(consistent.Generation, publisher.Current);
+        Assert.Equal(
+            "Kestrelsaved at the Harbour Lantern",
+            Processor(dictionary).ProcessDetailed("kes trel at the harbour lan tern", null, consistent.Generation.Rules).Text);
+    }
+
+    [Fact]
+    public async Task A_new_library_vocabulary_and_a_dictionary_reload_each_ask_for_a_new_generation()
     {
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([]);
         var processor = Processor(dictionary);
         var queued = new List<Action>();
         using var publisher = Publisher(source, dictionary, processor, queued.Add);
-        publisher.Start();
+        await StartQueuedAsync(publisher, queued);
 
         var published = new List<VocabularyGeneration>();
         publisher.Published += published.Add;
@@ -180,7 +380,7 @@ public sealed class VocabularyPublisherTests
         Assert.Single(queued)();
         Assert.Same(next, publisher.Current.Libraries);
 
-        // Quick add and learning from history store an entry and reload the post-processor, which is the signal.
+        // A reload of the post-processor is the signal too, for whatever stores the dictionary and reloads it.
         dictionary.Entries = [Entry("harbour", "Harbour")];
         processor.Reload();
         Assert.Equal(2, queued.Count);
@@ -199,33 +399,15 @@ public sealed class VocabularyPublisherTests
         var source = new TestVocabularySource(TwoLibraries);
         var dictionary = new ScriptedDictionary([]);
         using var publisher = Publisher(source, dictionary, Processor(dictionary), work => work());
-        var before = publisher.Start();
+        var before = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
 
         dictionary.Entries = [Entry("harbour", "Harbour")];
-        var after = await publisher.RefreshAsync().WaitAsync(Bound);
+        var after = (await publisher.RefreshAsync().WaitAsync(Bound)).Generation;
 
         Assert.Same(before.Libraries, after.Libraries);
         Assert.Same(before.AiScope, after.AiScope);
         Assert.Equal(before.Rules.Count + 1, after.Rules.Count);
         Assert.Equal("Harbour Kestrel Quillmoor", Processor(dictionary).ProcessDetailed("harbour kes trel quill moor", null, after.Rules).Text);
-    }
-
-    [Fact]
-    public async Task A_build_that_cannot_read_the_dictionary_keeps_the_previous_generation_and_answers_its_request()
-    {
-        var source = new TestVocabularySource(TwoLibraries);
-        var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
-        var log = new CapturingLogger<VocabularyPublisher>();
-        using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), log, work => work());
-        var before = publisher.Start();
-
-        dictionary.Failure = new InvalidOperationException("database is locked at C:\\Users\\canary\\scribe.db");
-        var answered = await publisher.RefreshAsync().WaitAsync(Bound);
-
-        Assert.Same(before, answered);
-        Assert.Same(before, publisher.Current);
-        Assert.Contains(log.Entries, entry => entry.Message.StartsWith("A vocabulary generation could not be built", StringComparison.Ordinal));
-        Assert.DoesNotContain("canary", log.AllText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -235,12 +417,14 @@ public sealed class VocabularyPublisherTests
         var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
         var log = new CapturingLogger<VocabularyPublisher>();
         using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), log, work => work());
-        publisher.Start();
+        await publisher.StartAsync().WaitAsync(Bound);
 
         source.CurrentFailure = new IOException("C:\\Users\\canary\\libraries\\team.csv is locked");
-        var generation = await publisher.RefreshAsync().WaitAsync(Bound);
+        var answer = await publisher.RefreshAsync().WaitAsync(Bound);
+        var generation = answer.Generation;
 
         // Fail closed for AI cleanup, the personal dictionary alone for local rules, as the post-processor falls back.
+        Assert.Equal(VocabularyRefreshOutcome.Applied, answer.Outcome);
         Assert.Same(LibraryVocabulary.Empty, generation.Libraries);
         Assert.Same(AiVocabularyScope.None, generation.AiScope);
         Assert.Equal(["harbour"], generation.GlossaryEntries.Select(entry => entry.Pattern));
@@ -255,7 +439,7 @@ public sealed class VocabularyPublisherTests
         var dictionary = new ScriptedDictionary([Entry("harbour", "Harbour")]);
         var log = new CapturingLogger<VocabularyPublisher>();
         using var publisher = new VocabularyPublisher(source, dictionary, Processor(dictionary), log, work => work());
-        publisher.Start();
+        await publisher.StartAsync().WaitAsync(Bound);
         await publisher.RefreshAsync().WaitAsync(Bound);
 
         var line = Assert.Single(log.Entries, entry => entry.Message.StartsWith("Vocabulary generation 2 published", StringComparison.Ordinal));
@@ -275,15 +459,17 @@ public sealed class VocabularyPublisherTests
         var processor = Processor(dictionary);
         var queued = new List<Action>();
         var publisher = Publisher(source, dictionary, processor, queued.Add);
-        var current = publisher.Start();
+        var current = await StartQueuedAsync(publisher, queued);
         Assert.Equal(1, source.ChangedSubscribers);
         var waiting = publisher.RefreshAsync();
 
         publisher.Dispose();
 
         Assert.Equal(0, source.ChangedSubscribers);
-        Assert.Same(current, await waiting.WaitAsync(Bound));
-        Assert.Same(current, await publisher.RefreshAsync().WaitAsync(Bound));
+        var stopped = await waiting.WaitAsync(Bound);
+        Assert.Equal(VocabularyRefreshOutcome.Stopped, stopped.Outcome);
+        Assert.Same(current, stopped.Generation);
+        Assert.Same(current, (await publisher.RefreshAsync().WaitAsync(Bound)).Generation);
         source.Publish(Of(6));
         processor.Reload();
         Assert.Single(queued);
@@ -379,9 +565,45 @@ public sealed class VocabularyPublisherTests
         Assert.Equal([1L, 2L], reloads);
     }
 
+    [Fact]
+    public void The_not_applied_notice_says_what_was_saved_and_that_dictation_keeps_its_previous_vocabulary()
+    {
+        var notice = VocabularyNotice.SavedButNotApplied("Settings saved");
+
+        Assert.Equal(
+            "Settings saved, but dictation couldn't load the change yet and keeps its previous vocabulary until the next " +
+            "change or a restart.",
+            notice);
+        Assert.StartsWith("Added \"Quillmoor\" to your dictionary, but", VocabularyNotice.SavedButNotApplied("Added \"Quillmoor\" to your dictionary"), StringComparison.Ordinal);
+        Assert.DoesNotContain("will now", notice, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain('\u2014', notice);
+        Assert.DoesNotContain('\u2013', notice);
+        Assert.Throws<ArgumentException>(() => VocabularyNotice.SavedButNotApplied(" "));
+    }
+
     private static VocabularyPublisher Publisher(
         ILibraryVocabularySource source, IDictionaryRepository dictionary, ITextPostProcessor processor, Action<Action> schedule) =>
         new(source, dictionary, processor, NullLogger<VocabularyPublisher>.Instance, schedule);
+
+    // Starts a publisher whose builds the test runs: the first build is queued like any other, run here, and its generation
+    // returned with the queue left empty.
+    private static async Task<VocabularyGeneration> StartQueuedAsync(VocabularyPublisher publisher, List<Action> queued)
+    {
+        var starting = publisher.StartAsync();
+        Assert.Single(queued)();
+        queued.Clear();
+        return (await starting.WaitAsync(Bound)).Generation;
+    }
+
+    // A recording admitted the way the dictation controller admits one: its capture context takes the publisher's current
+    // generation inside the lifecycle's admission, and that is the generation its cleanup and its dictionary pass use.
+    private static VocabularyGeneration Admit(VocabularyPublisher publisher)
+    {
+        var lifecycle = new DictationLifecycle<VocabularyGeneration>(() => { }, () => { });
+        var activation = lifecycle.TryBeginRecording(() => publisher.Current);
+        Assert.Equal(ActivationDecision.Started, activation.Decision);
+        return activation.Capture!;
+    }
 
     private static TextPostProcessor Processor(IDictionaryRepository dictionary) =>
         new(dictionary, NullLogger<TextPostProcessor>.Instance);
@@ -396,11 +618,15 @@ public sealed class VocabularyPublisherTests
 
         public Exception? Failure { get; set; }
 
+        /// <summary>Runs as each read begins, before it takes the entries, on the reading thread; a test holds a build here.</summary>
+        public Action? Reading { get; set; }
+
         /// <summary>Runs after each read has taken the entries, on the reading thread; a test holds a build here.</summary>
         public Action? Read { get; set; }
 
         public IReadOnlyList<DictionaryEntry> GetEnabled()
         {
+            Reading?.Invoke();
             if (Failure is { } failure)
             {
                 throw failure;

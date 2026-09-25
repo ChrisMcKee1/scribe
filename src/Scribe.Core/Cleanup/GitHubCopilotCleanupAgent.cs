@@ -72,7 +72,7 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
 
         if (CleanupAdmission.Current is not { } admission)
         {
-            throw new VocabularyHandOffRefusedException(admitted: false);
+            throw new VocabularyHandOffRefusedException(HandOffRefusal.NoAdmission);
         }
 
         // Everything a request needs is ready before it is handed over, so each hand-off only starts its request.
@@ -86,9 +86,9 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
         await _client.StartAsync(cancellationToken).ConfigureAwait(false);
 
         Task<CopilotSession>? creating = null;
-        if (!admission.TryHandOff(() => creating = Start(() => _client.CreateSessionAsync(config, cancellationToken))))
+        if (!admission.TryHandOff(() => creating = Start(() => _client.CreateSessionAsync(config, cancellationToken)), out var refusal))
         {
-            throw new VocabularyHandOffRefusedException(admitted: true);
+            throw new VocabularyHandOffRefusedException(refusal);
         }
 
         var copilotSession = await creating!.ConfigureAwait(false);
@@ -99,11 +99,13 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
             var updates = Channel.CreateUnbounded<AgentResponseUpdate>();
             using var subscription = copilotSession.On<SessionEvent>(sessionEvent => Deliver(sessionEvent, streaming, updates.Writer));
 
+            // Judged again, on its own: a revocation, or for a completion a change of recipient, since the creation holds
+            // the send back.
             Task<string>? sending = null;
             var send = new MessageOptions { Prompt = prompt };
-            if (!admission.TryHandOff(() => sending = Start(() => copilotSession.SendAsync(send, cancellationToken))))
+            if (!admission.TryHandOff(() => sending = Start(() => copilotSession.SendAsync(send, cancellationToken)), out refusal))
             {
-                throw new VocabularyHandOffRefusedException(admitted: true);
+                throw new VocabularyHandOffRefusedException(refusal);
             }
 
             await sending!.ConfigureAwait(false);

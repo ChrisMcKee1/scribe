@@ -72,6 +72,7 @@ internal sealed class DictationController : IDisposable
 
     // Replaced wholesale by ApplySettings and only ever read as a snapshot, so a volatile reference is enough.
     private AppSettings _settings = AppSettings.CreateDefault();
+    private bool _prepared;
     private bool _started;
 
     // Tells the user once per episode, not on every press, that the chosen microphone is unavailable and the default is
@@ -194,19 +195,41 @@ internal sealed class DictationController : IDisposable
     /// <summary>The settings currently driving the loop.</summary>
     public AppSettings CurrentSettings => Volatile.Read(ref _settings);
 
-    /// <summary>Loads persisted settings, applies the hotkey binding and installs the hook.</summary>
-    public void Start()
+    /// <summary>
+    /// Loads the persisted settings and builds the first vocabulary generation off the dispatcher (the library source's
+    /// first read can load a cold catalog), completing once it is published. The app awaits this before <see cref="Start"/>
+    /// installs the hotkey, so the first dictation after startup never runs without its vocabulary, and nothing waits on
+    /// the build synchronously. A first build that cannot read the dictionary leaves dictation without vocabulary until
+    /// the next change builds one, as before; the publisher logs it.
+    /// </summary>
+    public async Task PrepareAsync()
     {
-        if (_started) return;
+        if (_prepared)
+        {
+            return;
+        }
 
         var settings = _settingsRepository.Load();
         Volatile.Write(ref _settings, settings);
         _unavailableMicrophone.SelectionCommitted(settings.InputDeviceId);
-
-        // The first generation is built here, before the hotkey is live, so the first dictation after startup never runs
-        // without its vocabulary; later ones are built off the dispatcher.
         _postProcessor.ReloadSnippets();
-        _vocabulary.Start();
+        await _vocabulary.StartAsync();
+        _prepared = true;
+    }
+
+    /// <summary>
+    /// Applies the hotkey binding to the settings <see cref="PrepareAsync"/> loaded, or any applied since, configures AI
+    /// cleanup and installs the hook. Refuses to run before <see cref="PrepareAsync"/> has completed.
+    /// </summary>
+    public void Start()
+    {
+        if (_started) return;
+        if (!_prepared)
+        {
+            throw new InvalidOperationException("The first vocabulary generation must be prepared before dictation starts.");
+        }
+
+        var settings = CurrentSettings;
         var startupOptions = BuildCleanupOptions(settings);
         lock (_announceGate)
         {
@@ -357,10 +380,13 @@ internal sealed class DictationController : IDisposable
     /// Replaces the live settings with settings as stored: the settings window's document right after its save stored
     /// it, the stored settings after a dictionary change the window stored on its own (<see cref="StoredSettingsReapply"/>),
     /// and the tray's change once it is stored. Re-binds the hotkey, reloads the snippets and asks for a new vocabulary
-    /// generation (built off the dispatcher) so changes take effect on the next capture without a restart. Decode-thread
-    /// changes still require a restart (the recognizer is warm-loaded).
+    /// generation, built off the dispatcher, so changes take effect on the next capture without a restart. Returns that
+    /// request's answer: it completes once a generation built from the dictionary and libraries as stored now is what the
+    /// next dictation is admitted with, or says it could not be built. A caller that reports a stored change as in effect
+    /// awaits it first, and never waits on it synchronously. Decode-thread changes still require a restart (the recognizer
+    /// is warm-loaded).
     /// </summary>
-    public void ApplySettings(AppSettings settings)
+    public Task<VocabularyRefresh> ApplySettings(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -375,24 +401,28 @@ internal sealed class DictationController : IDisposable
             _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
         _postProcessor.ReloadSnippets();
-        _ = _vocabulary.RefreshAsync();
+        var vocabulary = _vocabulary.RefreshAsync();
         ReconfigureCleanup(settings);
         RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
         _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
+        return vocabulary;
     }
 
     /// <summary>
-    /// Puts a dictionary change the settings window stored on its own into effect when the stored settings cannot be
-    /// applied (<see cref="StoredSettingsReapply"/>): the snippets reload, and a new vocabulary generation is built from
-    /// the dictionary as stored and the library vocabulary in use, which a dictionary-only reload never changes. No
-    /// settings are applied, so the provider, the hotkeys, the libraries and everything else stay as they are: the stored
-    /// document is not read again, since the defaults standing in for it are not the user's.
+    /// Puts a dictionary change stored outside a settings save into effect: quick add and learning from history, and the
+    /// settings window's own dictionary change when the stored settings cannot be applied (<see cref="StoredSettingsReapply"/>).
+    /// The snippets reload, and a new vocabulary generation is built from the dictionary as stored and the library
+    /// vocabulary in use, which a dictionary-only reload never changes. No settings are applied, so the provider, the
+    /// hotkeys, the libraries and everything else stay as they are: the stored document is not read again, since the
+    /// defaults standing in for it are not the user's. Returns the generation request's answer, as
+    /// <see cref="ApplySettings"/> does. Safe off the dispatcher.
     /// </summary>
-    public void ReloadVocabulary()
+    public Task<VocabularyRefresh> ReloadVocabulary()
     {
         _postProcessor.ReloadSnippets();
-        _ = _vocabulary.RefreshAsync();
+        var vocabulary = _vocabulary.RefreshAsync();
         _log.LogInformation("Reloaded the dictionary on the settings in use; no settings were applied.");
+        return vocabulary;
     }
 
     // Hands cleanup the configuration these settings describe, with the glossary built from the dictionary as it is now.

@@ -44,7 +44,7 @@ public sealed class OneGenerationPerDictationTests : IDisposable
         var source = new TestVocabularySource(before);
         using var publisher = new VocabularyPublisher(
             source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
-        var admitted = publisher.Start();
+        var admitted = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
 
         // The library vocabulary each change publishes; the same Save also stores a dictionary entry.
         var after = change switch
@@ -106,12 +106,12 @@ public sealed class OneGenerationPerDictationTests : IDisposable
     }
 
     [Fact]
-    public void Every_published_generation_is_whole_so_its_rules_glossary_and_scope_come_from_one_snapshot()
+    public async Task Every_published_generation_is_whole_so_its_rules_glossary_and_scope_come_from_one_snapshot()
     {
         var source = new TestVocabularySource(Of(1, new Library("team", H1, true, Entry("kes trel", "Kestrel"))));
         using var publisher = new VocabularyPublisher(
             source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
-        publisher.Start();
+        await publisher.StartAsync().WaitAsync(Bound);
 
         for (var generation = 2; generation < 40; generation++)
         {

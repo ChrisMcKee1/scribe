@@ -80,7 +80,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         var inUse = _settings.Load();
         var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
         using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
-        var generation = publisher.Start();
+        var generation = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
         await using var harness = new CleanupHarness();
         var provider = new RecordingProvider();
         harness.Service.ProviderFactoryForTesting = provider.Connect;
@@ -99,15 +99,17 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         // The document turns unreadable mid-session.
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
 
-        // The Add stores an entry, and with no usable stored settings only the vocabulary reloads, on the settings in use.
+        // The Add stores an entry, and with no usable stored settings only the vocabulary reloads, on the settings in use;
+        // the result carries the answer of the generation that reload asked for.
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor")]);
-        Task<VocabularyGeneration>? reloaded = null;
-        var outcome = StoredSettingsReapply.Reapply(
+        var reapplied = StoredSettingsReapply.Reapply(
             _settings,
-            _ => Assert.Fail("Stored settings that cannot be read are never applied."),
-            () => reloaded = publisher.RefreshAsync());
-        Assert.Equal(StoredSettingsReapplied.VocabularyOnly, outcome);
-        var next = await reloaded!.WaitAsync(Bound);
+            _ => throw new InvalidOperationException("Stored settings that cannot be read are never applied."),
+            publisher.RefreshAsync);
+        Assert.Equal(StoredSettingsReapplied.VocabularyOnly, reapplied.Reapplied);
+        var refresh = await reapplied.Vocabulary.WaitAsync(Bound);
+        Assert.True(refresh.Applied);
+        var next = refresh.Generation;
 
         // Locally the selection holds: the .NET library still applies, the default AI library stays off, the entry applies.
         dictation.Use(next);
@@ -162,7 +164,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
     }
 
     [Fact]
-    public void A_dictionary_only_reload_keeps_the_library_vocabulary()
+    public async Task A_dictionary_only_reload_keeps_the_library_vocabulary()
     {
         var saved = AppSettings.CreateDefault();
         saved.EnabledDictionaryLibraryIds = ["dotnet-development"];
@@ -170,11 +172,11 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         var inUse = _settings.Load();
         var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
         using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
-        var before = publisher.Start();
+        var before = (await publisher.StartAsync().WaitAsync(Bound)).Generation;
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor")]);
 
-        // What quick add and learning from history call once they have stored an entry; the publisher answers it.
+        // A reload of the post-processor after an entry is stored asks for a generation too; the publisher answers it.
         _processor.Reload();
         var after = publisher.Current;
 
@@ -247,17 +249,25 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         Assert.Single(Regex.Matches(controller, Regex.Escape("_postProcessor.ProcessDetailed(")));
         Assert.Single(Regex.Matches(controller, @"_vocabulary\.Current\b"));
 
-        // Settings and the stored-settings reapply ask for a new generation; the first one is built at Start.
-        foreach (var method in new[] { "public void ApplySettings(AppSettings settings)", "public void ReloadVocabulary()" })
+        // Settings and the stored-settings reapply ask for a new generation and hand its answer back; the first one is built
+        // before Start, while the app awaits PrepareAsync (VocabularyApplicationSourceTests pins both in full).
+        foreach (var method in new[]
+        {
+            "public Task<VocabularyRefresh> ApplySettings(AppSettings settings)",
+            "public Task<VocabularyRefresh> ReloadVocabulary()",
+        })
         {
             var start = controller.IndexOf(method, StringComparison.Ordinal);
             var body = controller[start..controller.IndexOf("\n    }", start, StringComparison.Ordinal)];
             Assert.Contains("_postProcessor.ReloadSnippets();", body, StringComparison.Ordinal);
-            Assert.Contains("_ = _vocabulary.RefreshAsync();", body, StringComparison.Ordinal);
+            Assert.Contains("var vocabulary = _vocabulary.RefreshAsync();", body, StringComparison.Ordinal);
         }
 
-        var startMethod = controller.IndexOf("public void Start()", StringComparison.Ordinal);
-        Assert.Contains("_vocabulary.Start();", controller[startMethod..controller.IndexOf("\n    }", startMethod, StringComparison.Ordinal)], StringComparison.Ordinal);
+        var prepareMethod = controller.IndexOf("public async Task PrepareAsync()", StringComparison.Ordinal);
+        Assert.Contains(
+            "await _vocabulary.StartAsync();",
+            controller[prepareMethod..controller.IndexOf("\n    }", prepareMethod, StringComparison.Ordinal)],
+            StringComparison.Ordinal);
 
         // The composition root: the vocabulary source, which AI cleanup and the publisher take, and until the W1b
         // integration it is the interim one over the settings in use. Quick add's conflict check reads its committed

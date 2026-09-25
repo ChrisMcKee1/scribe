@@ -1190,22 +1190,57 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private void LogCompletionHeldBack(AiVocabularyScope scope, int handedOver)
+    private void LogCompletionHeldBack(HandOffRefusal reason, AiVocabularyScope scope, int handedOver)
     {
         try
         {
-            _log.LogInformation(
-                "An AI completion was held back: the library vocabulary it carries (library generation {Generation}, " +
-                "{Libraries} librar(ies)) is no longer permitted; {HandedOver} request(s) had been handed over before.",
-                scope.Generation,
-                scope.PermittedLibraryIds.Count,
-                handedOver);
+            if (reason == HandOffRefusal.LibraryScope)
+            {
+                _log.LogInformation(
+                    "An AI completion was held back: the library vocabulary it carries (library generation {Generation}, " +
+                    "{Libraries} librar(ies)) is no longer permitted; {HandedOver} request(s) had been handed over before.",
+                    scope.Generation,
+                    scope.PermittedLibraryIds.Count,
+                    handedOver);
+            }
+            else
+            {
+                _log.LogInformation(
+                    "An AI completion was stopped before its next request ({Reason}): AI cleanup no longer serves the " +
+                    "recipient it was asked for; {HandedOver} request(s) had been handed over before.",
+                    reason,
+                    handedOver);
+            }
         }
         catch (Exception)
         {
             // Logging must never turn a held-back request into a thrown one.
         }
     }
+
+    // For a completion's hand-off: runs send under _gate only while the service still serves recipient and is ready, the
+    // condition the completion was admitted under, checked in the same step as the send starts. It runs inside the
+    // source's permission gate and never awaits, so neither gate waits on anything slow, and against a Configure, which
+    // changes the options and the status under _gate, a send either started before the change or sees it. The service
+    // never takes the permission gate while it holds _gate, so taking _gate inside it cannot deadlock.
+    private Func<Action, HandOffRefusal> WhileServing(CleanupRecipient recipient) => send =>
+    {
+        lock (_gate)
+        {
+            if (_operations.IsClosed || _status != CleanupStatus.Ready || _agentFactory is null)
+            {
+                return HandOffRefusal.NotReady;
+            }
+
+            if (!recipient.Matches(_options))
+            {
+                return HandOffRefusal.RecipientChanged;
+            }
+
+            send();
+            return HandOffRefusal.None;
+        }
+    };
 
     public CleanupRecipient? Recipient
     {
@@ -1226,11 +1261,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         // No library vocabulary of its own: the dictionary suggester's history sample goes under no library scope.
         var scoped = await CompleteCoreAsync(systemPrompt, userMessage, recipient, AiVocabularyScope.None, cancellationToken)
             .ConfigureAwait(false);
+
+        // This result says nothing was sent for NotReady and RecipientChanged, so a completion stopped at a later attempt,
+        // after one had already left, is reported as failed rather than as never sent.
         return scoped.Outcome switch
         {
             ScopedCompletionOutcome.Completed => new CompletionResult(CompletionOutcome.Completed, scoped.Text),
-            ScopedCompletionOutcome.NotReady => CompletionResult.NotReady,
-            ScopedCompletionOutcome.RecipientChanged => CompletionResult.RecipientChanged,
+            ScopedCompletionOutcome.NotReady when scoped.RequestsHandedOver == 0 => CompletionResult.NotReady,
+            ScopedCompletionOutcome.RecipientChanged when scoped.RequestsHandedOver == 0 => CompletionResult.RecipientChanged,
             _ => CompletionResult.Failed,
         };
     }
@@ -1296,10 +1334,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt)); // pure object construction against the initialized client
         }
 
-        // Each attempt, the first and any retry the client makes, is handed over only while the published scope still
-        // covers libraryScope; the recipient needs no second check, since every attempt goes through the client of the
-        // recipient checked above.
-        var admission = new CleanupAdmission(CleanupRequestKind.Completion, libraryScope, _vocabularySource);
+        // Each attempt, the first and any retry the client makes, and for GitHub Copilot the session's creation and its send
+        // each on its own, is handed over only while the published scope still covers libraryScope and the service still
+        // serves the recipient checked above and is ready (contracts 3.3.6 and 9.4): both are judged again at every attempt,
+        // in one step with the start of its send, so a provider switched or cleanup turned off after the first attempt
+        // stops every later one, whose client would otherwise still reach the old recipient.
+        var admission = new CleanupAdmission(
+            CleanupRequestKind.Completion, libraryScope, _vocabularySource, WhileServing(recipient));
         using var entered = admission.Enter();
         try
         {
@@ -1328,10 +1369,16 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             throw;
         }
-        catch (Exception ex) when (VocabularyHandOffRefusedException.Find(ex) is { Admitted: true })
+        catch (Exception ex) when (VocabularyHandOffRefusedException.Find(ex) is { Admitted: true } refused)
         {
-            LogCompletionHeldBack(libraryScope, admission.HandedOver);
-            return new ScopedCompletionResult(ScopedCompletionOutcome.LibraryScopeNarrowed, null, admission.HandedOver);
+            LogCompletionHeldBack(refused.Reason, libraryScope, admission.HandedOver);
+            var outcome = refused.Reason switch
+            {
+                HandOffRefusal.NotReady => ScopedCompletionOutcome.NotReady,
+                HandOffRefusal.RecipientChanged => ScopedCompletionOutcome.RecipientChanged,
+                _ => ScopedCompletionOutcome.LibraryScopeNarrowed,
+            };
+            return new ScopedCompletionResult(outcome, null, admission.HandedOver);
         }
         catch (Exception ex)
         {
