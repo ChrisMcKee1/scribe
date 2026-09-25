@@ -35,9 +35,18 @@ public sealed class PreviewAfterSaveTests
             Assert.True(differences.Count == 0, $"Round {round} ({string.Join(", ", actions)}):\n{string.Join("\n", differences)}");
         }
 
-        // Every kind of draft change was met, the invisible reset of a built-in whose document is not accepted included.
+        // Every kind of draft change was met, the invisible reset of a built-in whose document is not accepted included, and
+        // so was each cell of whether the Save writes a library's content against whether the draft shows other content
+        // than the committed file: a change the Save does not write (round 4, Astra A7, Grok G2) is the cell no workspace
+        // following D-19 builds, and the preview must still equal the Save's result there.
         Assert.All(
-            new[] { "keep", "boxes", "rewrite", "reset", "reset of an unaccepted document", "invisible reset", "pending delete", "brought in" },
+            new[]
+            {
+                "keep", "boxes", "rewrite", "unflagged change", "reset", "reset of an unaccepted document", "invisible reset",
+                "pending delete", "brought in",
+                "cell: writes, content differs", "cell: writes, content same",
+                "cell: writes nothing, content differs", "cell: writes nothing, content same",
+            },
             kind => Assert.True(cases.GetValueOrDefault(kind) >= 10, $"{kind}: {cases.GetValueOrDefault(kind)} cases"));
     }
 
@@ -128,13 +137,13 @@ public sealed class PreviewAfterSaveTests
         {
             var id = library.Content.Id;
             var roll = random.NextDouble();
-            if (roll < 0.3)
+            if (roll < 0.25)
             {
                 actions.Add("keep");
                 draftLibraries.Add(new DraftLibrary(library.Content, LibraryOrigin.Existing, library.State, FileName: library.FileName));
                 savedLibraries.Add(library);
             }
-            else if (roll < 0.5)
+            else if (roll < 0.42)
             {
                 actions.Add("boxes");
                 if (Chance(0.5) && !draftEnabled.Remove(id))
@@ -146,7 +155,7 @@ public sealed class PreviewAfterSaveTests
                 draftLibraries.Add(new DraftLibrary(library.Content, LibraryOrigin.Existing, library.State, false, true, library.FileName));
                 savedLibraries.Add(library);
             }
-            else if (roll < 0.72)
+            else if (roll < 0.6)
             {
                 actions.Add("rewrite");
                 var rewritten = library.Content.BuiltIn
@@ -156,6 +165,23 @@ public sealed class PreviewAfterSaveTests
                 draftLibraries.Add(new DraftLibrary(rewritten, LibraryOrigin.Existing, library.State, false, true, library.FileName, WritesContent: true));
                 savedLibraries.Add(new CatalogLibrary(rewritten, library.State, library.FileName, hash));
                 savedAccepted[id] = hash;
+            }
+            else if (roll < 0.72)
+            {
+                // The draft shows other content than the file, yet the Save writes nothing: the file stays as committed.
+                actions.Add("unflagged change");
+                var shown = library.Content.BuiltIn
+                    ? library.Content with { Rows = [.. library.Content.Rows, Added("unflagged " + id, "Unflagged " + id)] }
+                    : Chance(0.5)
+                        ? library.Content with { Rows = [.. library.Content.Rows, Custom("unflagged " + id, "Unflagged " + id)] }
+                        : library.Content with { Rows = [Custom("unflagged " + id, "Unflagged " + id)] };
+                if (Chance(0.5))
+                {
+                    draftAi[id] = !(draftAi.TryGetValue(id, out var chosen) && chosen);
+                }
+
+                draftLibraries.Add(new DraftLibrary(shown, LibraryOrigin.Existing, library.State, false, true, library.FileName));
+                savedLibraries.Add(library);
             }
             else if (library.Content.BuiltIn && library.ContentHash is { } document)
             {
@@ -209,6 +235,14 @@ public sealed class PreviewAfterSaveTests
 
         var draftState = LibraryLocalState.Create(draftEnabled, null, draftAi, markers, null, LocalStateHealth.Ok, accepted, lost);
         var draft = new LibraryDraft(9, committed.Generation, draftLibraries, draftState, []);
+
+        // Which of the four cells each library that survives the Save falls in: the Save writes its content or not, and the
+        // draft shows the committed file's content or not (a library the catalog does not hold shows other content).
+        foreach (var library in draftLibraries.Where(l => !l.PendingDelete))
+        {
+            var shownAsCommitted = committed.Find(library.Content.Id) is { } file && SameContent(file.Content, library.Content);
+            actions.Add($"cell: {(library.WritesContent ? "writes" : "writes nothing")}, content {(shownAsCommitted ? "same" : "differs")}");
+        }
         var savedState = LibraryLocalState.Create(
             draftEnabled.Where(id => !deleted.Contains(id)),
             null,
@@ -255,6 +289,11 @@ public sealed class PreviewAfterSaveTests
 
     private static string Rule(ComposedRule rule) =>
         $"{rule.Key.Value}|{rule.LibraryId}|{rule.Tier}|{rule.LegacyMarkerActive}|{Entry(rule.Entry)}";
+
+    // The oracle's own reading of "the draft shows the file's content", used only to count the cells.
+    private static bool SameContent(LibraryContent committed, LibraryContent shown) =>
+        committed.Name == shown.Name && committed.Category == shown.Category && committed.Description == shown.Description &&
+        committed.BasedOn == shown.BasedOn && committed.Rows.SequenceEqual(shown.Rows);
 
     private static string Entry(DictionaryEntry entry) => $"{entry.Pattern}={entry.Replacement}{(entry.WholeWord ? string.Empty : " (in words)")}";
 

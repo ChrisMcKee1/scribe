@@ -456,6 +456,66 @@ public sealed class LibraryCompositionTests
         Assert.Equal(
             ["Alpha", "Argo", "Beta", "Delta", "Gamma", "Helm", "K8s", "Nightjar Hub", "Octocat"],
             preview.AiLibraryEntries.Select(e => e.Replacement).Order(StringComparer.Ordinal));
+
+        // Round 4 (Astra A7, Grok G2): the unflagged library supplies its committed rows, never the draft's added one.
+        Assert.Equal("Zeta", Winner(preview, "zeta"));
+        Assert.Null(Winner(preview, "eta"));
+    }
+
+    [Fact]
+    public void A_library_whose_Save_writes_nothing_composes_its_committed_file_whatever_the_draft_shows()
+    {
+        // Round 4 (Astra A7, Grok G2; decision 52). No workspace that follows D-19 builds these drafts (a visible change is a
+        // write), but the preview must be a function of what the Save leaves. Each library here has WritesContent false:
+        // "unflagged" is accepted and permitted, and its draft adds a row; github's draft adds a row to its accepted edits;
+        // the twin's draft names another file than the one it has; "team" is not accepted, and its draft shows other
+        // rows; "partly"'s draft reports its partly readable file as unreadable; "ghost" is not in the committed catalog.
+        var githubCommitted = BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"), Shipped("octo cat", "Octocat"));
+        var unflagged = CustomLibrary("unflagged", Custom("zeta", "Zeta"));
+        var epsilon = CustomLibrary("epsilon", Custom("project token", "Epsilon"));
+        var twin = CustomLibrary("custom-github", Custom("project token", "Twin"));
+        var team = CustomLibrary("team", Custom("get hub", "TeamHub"));
+        var partly = CustomLibrary("partly", Custom("theta", "Theta"));
+        var state = State(
+            enabled: ["github", "unflagged", "epsilon", "custom-github", "team", "custom-ghost", "partly"],
+            ai: [("unflagged", true), ("epsilon", true), ("custom-github", true), ("team", true), ("custom-ghost", true), ("partly", true)],
+            accepted: [("github", H1), ("unflagged", H2), ("epsilon", H3), ("custom-github", H4), ("partly", Hash('6'))]);
+        CatalogLibrary[] files =
+        [
+            Committed(githubCommitted, H1), Committed(unflagged, H2), Committed(epsilon, H3), Committed(twin, H4, fileName: "github.csv"),
+            Committed(team, Hash('5')), Committed(partly, Hash('6'), state: LibraryFileState.PartlyReadable),
+        ];
+        var committed = Catalog(state, files);
+        var draft = Draft(
+            16, state,
+            Draft(githubCommitted with { Rows = [.. githubCommitted.Rows, Added("git lab", "GitLab")] }) with { Unsaved = true },
+            Draft(unflagged with { Rows = [.. unflagged.Rows, Custom("eta", "DraftOnly")] }) with { Unsaved = true },
+            Draft(epsilon),
+            Draft(twin, fileName: "custom-github.csv") with { Unsaved = true },
+            Draft(team with { Rows = [Custom("kube", "K8s")] }) with { Unsaved = true },
+            Draft(CustomLibrary("custom-ghost", Custom("boo", "Boo")), LibraryOrigin.Created) with { Unsaved = true },
+            Draft(partly, state: LibraryFileState.Unreadable));
+
+        var preview = LibraryComposition.Preview(draft, committed, [], new GlossaryBudget(80));
+        var saved = Compose(Catalog(state, files));
+
+        Assert.Equal(saved.Rules.Select(r => $"{r.Key.Value}={r.Entry.Replacement}@{r.LibraryId}"), preview.Rules.Select(r => $"{r.Key.Value}={r.Entry.Replacement}@{r.LibraryId}"));
+        Assert.Equal(["Epsilon", "Nightjar Hub", "Octocat", "Theta", "Zeta"], preview.AiLibraryEntries.Select(e => e.Replacement).Order(StringComparer.Ordinal));
+        Assert.Equal(saved.AiLibraryEntries.Select(e => e.Replacement), preview.AiLibraryEntries.Select(e => e.Replacement));
+        Assert.Equal(saved.EnabledLibraries.Select(l => l.Id), preview.EnabledLibraries.Select(l => l.Id));
+        Assert.DoesNotContain(preview.Rules, rule => rule.Entry.Replacement is "DraftOnly" or "GitLab" or "K8s" or "Boo");
+        Assert.Equal("Epsilon", Winner(preview, "project token"));
+        Assert.Equal("Nightjar Hub", Winner(preview, "get hub"));
+        Assert.True(preview.StatusOf("team", Key("get hub")).LegacyMarkerActive);
+        foreach (var (id, key) in new[] { ("unflagged", "zeta"), ("unflagged", "eta"), ("github", "git lab"), ("team", "kube"), ("custom-ghost", "boo") })
+        {
+            var expected = saved.StatusOf(id, Key(key));
+            var actual = preview.StatusOf(id, Key(key));
+            Assert.Equal((expected.Winner, expected.Glossary, expected.Marker), (actual.Winner, actual.Glossary, actual.Marker));
+        }
+
+        Assert.Equal(GlossaryInclusion.Included, preview.StatusOf("unflagged", Key("zeta")).Glossary);
+        Assert.Equal(GlossaryInclusion.NotApplied, preview.StatusOf("unflagged", Key("eta")).Glossary);
     }
 
     [Fact]
