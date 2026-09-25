@@ -45,9 +45,9 @@ public sealed class SettingsCloseGuardTests
     public void D8_the_prompt_names_only_the_sections_it_tracks()
     {
         Assert.Equal("You have unsaved changes to Word packs.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries));
-        Assert.Equal("You have unsaved changes to Snippets.", SettingsCloseGuard.Prompt(UnsavedSections.Snippets));
+        Assert.Equal("You have unsaved changes to Voice snippets.", SettingsCloseGuard.Prompt(UnsavedSections.Snippets));
         Assert.Equal(
-            "You have unsaved changes to Word packs, Dictionary and Snippets.",
+            "You have unsaved changes to Word packs, Dictionary and Voice snippets.",
             SettingsCloseGuard.Prompt(UnsavedSections.Snippets | UnsavedSections.Libraries | UnsavedSections.Dictionary));
         Assert.Equal(string.Empty, SettingsCloseGuard.Prompt(UnsavedSections.None));
 
@@ -56,6 +56,22 @@ public sealed class SettingsCloseGuardTests
         Assert.False(SettingsCloseGuard.Decide(untracked, CloseTrigger.CancelButton).Ask);
         Assert.Equal("You have unsaved changes to Dictionary.",
             SettingsCloseGuard.Decide(untracked | UnsavedSections.Dictionary, CloseTrigger.CancelButton).Prompt);
+    }
+
+    [Theory]
+    [InlineData(UnsavedSections.Libraries, "You have unsaved changes to Word packs.")]
+    [InlineData(UnsavedSections.Dictionary, "You have unsaved changes to Dictionary.")]
+    [InlineData(UnsavedSections.Snippets, "You have unsaved changes to Voice snippets.")]
+    [InlineData(UnsavedSections.Libraries | UnsavedSections.Dictionary, "You have unsaved changes to Word packs and Dictionary.")]
+    [InlineData(UnsavedSections.Libraries | UnsavedSections.Snippets, "You have unsaved changes to Word packs and Voice snippets.")]
+    [InlineData(UnsavedSections.Dictionary | UnsavedSections.Snippets, "You have unsaved changes to Dictionary and Voice snippets.")]
+    [InlineData(UnsavedSections.Libraries | UnsavedSections.Dictionary | UnsavedSections.Snippets,
+        "You have unsaved changes to Word packs, Dictionary and Voice snippets.")]
+    public void D8_the_prompt_names_each_section_by_the_title_its_page_shows(UnsavedSections sections, string prompt)
+    {
+        // The redesign's names (Word packs, Dictionary, Voice snippets); the enum members and the order stay as they were.
+        Assert.Equal(prompt, SettingsCloseGuard.Prompt(sections));
+        Assert.Equal(prompt, SettingsCloseGuard.Decide(sections, CloseTrigger.TrayQuit).Prompt);
     }
 
     [Fact]

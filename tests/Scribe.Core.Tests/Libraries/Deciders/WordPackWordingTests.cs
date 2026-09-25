@@ -155,7 +155,7 @@ public sealed class WordPackWordingTests
     public void The_close_prompt_names_the_word_packs_page()
     {
         Assert.Equal("You have unsaved changes to Word packs.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries));
-        Assert.Equal("You have unsaved changes to Word packs and Snippets.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries | UnsavedSections.Snippets));
+        Assert.Equal("You have unsaved changes to Word packs and Voice snippets.", SettingsCloseGuard.Prompt(UnsavedSections.Libraries | UnsavedSections.Snippets));
         for (var flags = 1; flags < 8; flags++)
         {
             var sections = (UnsavedSections)flags;

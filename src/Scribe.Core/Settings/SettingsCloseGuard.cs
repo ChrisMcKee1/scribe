@@ -1,12 +1,22 @@
 namespace Scribe.Core.Settings;
 
-/// <summary>The Settings sections whose unsaved changes the close guard tracks (plan 3.9); nothing else is named.</summary>
+/// <summary>
+/// The Settings sections whose unsaved changes the close guard tracks (plan 3.9); nothing else is named. The prompt names
+/// each by the title its page shows, which is not always the member's name (see <see cref="SettingsCloseGuard.Prompt"/>).
+/// </summary>
 [Flags]
 public enum UnsavedSections
 {
+    /// <summary>Nothing tracked is unsaved.</summary>
     None = 0,
+
+    /// <summary>The word packs (the Word packs tab of the Dictionary page); named "Word packs".</summary>
     Libraries = 1,
+
+    /// <summary>The personal dictionary; named "Dictionary".</summary>
     Dictionary = 2,
+
+    /// <summary>The voice snippets; named "Voice snippets".</summary>
     Snippets = 4,
 }
 
@@ -41,8 +51,13 @@ public enum CloseTrigger
 /// <summary>A button of the close prompt.</summary>
 public enum CloseChoice
 {
+    /// <summary>Save, then close.</summary>
     Save,
+
+    /// <summary>Discard changes: close without saving.</summary>
     DiscardChanges,
+
+    /// <summary>Keep editing: stay open with nothing changed; the default.</summary>
     KeepEditing,
 }
 
@@ -76,32 +91,38 @@ public enum EscapeAction
 }
 
 /// <summary>What the window knows when Escape is pressed.</summary>
+/// <param name="HotkeyCapture">A hotkey box is capturing: every key is the hotkey being recorded.</param>
+/// <param name="ImeComposing">An editor holds an IME composition.</param>
+/// <param name="EditingCell">A grid cell is being edited.</param>
+/// <param name="MenuOpen">A menu or a flyout is open.</param>
+/// <param name="SearchFocused">The search box has the focus.</param>
+/// <param name="SearchHasText">The search box holds text.</param>
 public readonly record struct EscapeState(
     bool HotkeyCapture, bool ImeComposing, bool EditingCell, bool MenuOpen, bool SearchFocused, bool SearchHasText);
 
 /// <summary>
-/// The Settings window's keyboard commands (plan 3.9, S6). The Libraries page and its commands are shown as Word packs
-/// (the maintainer's product decision); the identifiers keep "library".
+/// The Settings window's keyboard commands (plan 3.9, S6). The libraries page is the Word packs tab of the Dictionary page
+/// (the maintainer's product decision and the Settings redesign); the identifiers keep "library".
 /// </summary>
 public enum SettingsAccelerator
 {
     /// <summary>Ctrl+S, Save, on any page.</summary>
     Save,
 
-    /// <summary>Ctrl+F, Search all word packs, on the Word packs page.</summary>
+    /// <summary>Ctrl+F, Search all word packs, on the Word packs tab.</summary>
     Find,
 
-    /// <summary>Ctrl+N, Add term, on the Word packs page.</summary>
+    /// <summary>Ctrl+N, Add term, on the Word packs tab.</summary>
     AddTerm,
 
-    /// <summary>Ctrl+Shift+N, New word pack, on the Word packs page.</summary>
+    /// <summary>Ctrl+Shift+N, New word pack, on the Word packs tab.</summary>
     NewLibrary,
 }
 
 /// <summary>What the window knows when an accelerator is pressed.</summary>
 /// <param name="HotkeyCapture">A hotkey box is capturing: every key is the hotkey being recorded.</param>
 /// <param name="ImeComposing">An editor holds an IME composition.</param>
-/// <param name="OnLibrariesPage">The Libraries page, shown as Word packs, is the one shown.</param>
+/// <param name="OnLibrariesPage">The Word packs tab is the one shown (the libraries page, by the identifier's name).</param>
 public readonly record struct AcceleratorState(bool HotkeyCapture, bool ImeComposing, bool OnLibrariesPage);
 
 /// <summary>
@@ -132,8 +153,9 @@ public static class SettingsCloseGuard
     }
 
     /// <summary>
-    /// "You have unsaved changes to Word packs, Dictionary and Snippets.", naming only the sections given, each by the
-    /// title its page shows (the Libraries section's is Word packs); empty for none.
+    /// "You have unsaved changes to Word packs, Dictionary and Voice snippets.", naming only the sections given, in that
+    /// order, each by the title its page shows (<see cref="UnsavedSections.Libraries"/> as Word packs,
+    /// <see cref="UnsavedSections.Snippets"/> as Voice snippets); empty for none.
     /// </summary>
     public static string Prompt(UnsavedSections sections)
     {
@@ -150,7 +172,7 @@ public static class SettingsCloseGuard
 
         if (sections.HasFlag(UnsavedSections.Snippets))
         {
-            names.Add("Snippets");
+            names.Add("Voice snippets");
         }
 
         return names.Count switch
