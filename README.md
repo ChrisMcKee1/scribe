@@ -247,7 +247,7 @@ inserted, and the space Scribe adds after each dictation.
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
 | Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
-| Hotkey self-healing | Repairs stuck modifiers and mouse buttons, and restores keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
+| Hotkey self-healing | Detects and repairs stuck modifiers, and restores the keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 

@@ -785,7 +785,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   desktop, with the same foreground window before and after the reading, owned by Scribe or by a
   process whose integrity level is no higher than Scribe's (`NativeMethods.ReadMouseButtonState`);
   anything else is unknown, and an unknown drops the debt, which at worst lets one release through and
-  never strands a press (review round 5, A6). Only a button Windows can vouch is up keeps its debt: a
+  never strands a press (review round 5, A6). The watchdog renews the mouse hook on the lock screen and
+  secure desktops too (only the keyboard probe waits for the input desktop), and Windows cannot be
+  asked there, so a loss found there drops every debt. Only a button Windows can vouch is up keeps its debt: a
   press the hook swallows never reaches Windows' view (measured on CI,
   `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`; the keyboard hook's
   documentation says a callback runs before the key's asynchronous state is updated, and nothing
@@ -831,7 +833,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
   `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
   Not covered: a release made while no mouse hook exists (Windows removed it, or a reinstall is between
-  the old thread's exit and the new one's install), which goes to the app.
+  the old thread's exit and the new one's install), which goes to the app, and a debt the recovery
+  decision above drops, whose release goes to the app too.
 - **Scribe injects no mouse input, and the leaked-input check covers keys only.** No mouse button is
   ever a candidate of `SuppressedKeyReconciler`, and no production code builds mouse `INPUT`
   (`MouseButtonHotkeyTests.No_production_code_injects_mouse_input`): "the engine does not hold it" also
@@ -907,7 +910,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
   as an autorepeat. A switch with nothing recording starts and stops nothing. A mouse button whose press
   was swallowed keeps its release owed through the reset (see above), so a side button held through a
-  UAC prompt and let go afterwards navigates nothing. The reset also clears a
+  UAC prompt and let go afterwards navigates nothing, unless the mouse hook is recovered while the
+  prompt is up: the watchdog keeps renewing it meanwhile, a renewal that finds the registration Windows
+  removed (or a registration where there was none) makes the recovery decision, and GetAsyncKeyState
+  fails off the active desktop, so the debt is dropped as unknown and that one release can become
+  `WM_APPCOMMAND` (Grok's G4, folded into review round 5). The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
@@ -1233,7 +1240,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture, any rebinding (one
   that leaves no mouse binding keeps the drain-only hook for it) and a reinstall (the owed release above); a press or
   release made while Windows has removed the mouse hook, before the next successful renewal, can still reach the app,
-  and the hint says so in plain words.
+  and so can the release of a button held as the hook comes back, when the recovery decision finds Windows holding it
+  or cannot ask (on the lock screen or a secure desktop, behind an elevated window). The hint's second exception says
+  both in plain words: the click began before Scribe reconnected.
   It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
   press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
   so the text promises no more than that. The same holds for a swallowed key.
