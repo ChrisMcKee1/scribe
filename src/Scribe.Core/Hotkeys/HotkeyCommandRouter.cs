@@ -110,10 +110,19 @@ internal sealed class HotkeyCommandRouter
     {
         lock (_gate)
         {
-            _captureMode = enabled;
+            // Published at the request, for CaptureOwnsInput, which reads it without the gate.
+            Volatile.Write(ref _captureMode, enabled);
             return Post(HotkeyCommand.CaptureMode(enabled, AdvanceGeneration()));
         }
     }
+
+    /// <summary>
+    /// Any thread, without the gate. Whether binding capture owns input: from the moment Settings asks for it until the
+    /// current engine has applied its end (<see cref="HotkeyEngine.CapturesInput"/>). Capture tracks no key and each of
+    /// its edges clears the engine's key view, so the leaked-key repair skips a pass while this holds: every key the user
+    /// holds for the chord would otherwise look leaked (review round 8, A9).
+    /// </summary>
+    public bool CaptureOwnsInput => Volatile.Read(ref _captureMode) || CurrentEngine?.CapturesInput == true;
 
     /// <summary>Returns whether the pause state changed, and the engine to wake.</summary>
     public (bool Changed, HotkeyEngine? Wake) SetPaused(bool paused)

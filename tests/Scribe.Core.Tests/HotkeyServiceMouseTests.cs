@@ -30,6 +30,7 @@ public partial class HotkeyServiceTests
     private const uint MouseEventWheel = 0x0800;
     private const uint MouseEventHWheel = 0x1000;
     private const uint LeftCtrlKey = 0xA2;
+    private const uint PageDownKey = 0x22;
 
     private static HotkeyBinding BareButton(uint button, HotkeyMode mode = HotkeyMode.Hold) =>
         HotkeyCaptureSession.Build([button], mode);
@@ -308,6 +309,137 @@ public partial class HotkeyServiceTests
         Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
         Assert.False(service.MouseHookInstalled, "The drain-only mouse hook outlived the debt the lost hook dropped.");
     }
+
+    // A9 through the service (review round 8): Astra's capture sequence, played between the hook thread's messages with the
+    // service's own reconcile signal and pass, Windows' key state scripted to show the Left Ctrl the user holds, and every
+    // key-up the leak repair would send recorded instead of sent. The press that forgives the debt the lock screen left
+    // asks for the mouse hook's sync alone, and the pass that runs for it releases nothing.
+    [Fact]
+    public void Start_releases_no_key_for_the_capture_sequence_that_forgives_a_debt()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var injected = new ConcurrentQueue<uint>();
+        using var service = ScriptedKeysService(
+            ChordOf(LeftCtrlKey, MouseButtons.Back), windowsHoldsBack: false, desktopReceivesInput: false, injected);
+        service.Start();
+        using var message = new XButtonMessage(0x0001);
+        var engine = service.CurrentEngineForTests!;
+        Assert.False(engine.OnKeyEvent(LeftCtrlKey, isDown: true).Suppress);
+        Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
+
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf); // the lock screen
+        Assert.True(
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 1, HookTimeout), "The desktop switch was never applied.");
+        Assert.Equal(1 << (int)MouseButtons.Back, engine.OwedButtonReleases);
+
+        service.SetCaptureMode(true);
+        AwaitRenewal(service); // the hook thread has applied capture
+        var passes = service.ReconcilePassesRun;
+        Assert.False(engine.OnKeyEvent(LeftCtrlKey, isDown: true).Suppress);
+        Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
+
+        Assert.True(
+            SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The forgiving press started no pass.");
+        Assert.Empty(injected);
+        Assert.Equal(0, engine.OwedButtonReleases);
+    }
+
+    // The round-6 trigger in capture: Set chosen with the chord still held, then Back released. The release is swallowed,
+    // still owed, and asks for no repair, whose view capture had emptied.
+    [Fact]
+    public void Start_releases_no_key_when_a_debt_from_before_capture_is_released_during_it()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var injected = new ConcurrentQueue<uint>();
+        using var service = ScriptedKeysService(
+            ChordOf(LeftCtrlKey, MouseButtons.Back), windowsHoldsBack: false, desktopReceivesInput: true, injected);
+        service.Start();
+        using var message = new XButtonMessage(0x0001);
+        var engine = service.CurrentEngineForTests!;
+        Assert.False(engine.OnKeyEvent(LeftCtrlKey, isDown: true).Suppress);
+        Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
+
+        service.SetCaptureMode(true);
+        AwaitRenewal(service);
+        var passes = service.ReconcilePassesRun;
+        Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
+
+        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The release started no pass.");
+        Assert.Empty(injected);
+        Assert.Equal(0, engine.OwedButtonReleases);
+    }
+
+    // G5's drain-only removal, with a key held: the chord is held while new bindings with no mouse button are saved, so the
+    // engine's view of Left Ctrl is cleared while Windows still holds it. However the owed release settles, the drain-only
+    // hook goes at once and the leak repair is not asked for, so no Ctrl-up is sent while the user holds Ctrl.
+    [Theory]
+    [InlineData("swallowed")]
+    [InlineData("let through")]
+    [InlineData("forgiven by a new press")]
+    public void Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key(string settled)
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var injected = new ConcurrentQueue<uint>();
+        using var service = ScriptedKeysService(
+            ChordOf(LeftCtrlKey, MouseButtons.Back), windowsHoldsBack: settled == "let through", desktopReceivesInput: true, injected);
+        service.Start();
+        using var message = new XButtonMessage(0x0001);
+        Assert.False(service.CurrentEngineForTests!.OnKeyEvent(LeftCtrlKey, isDown: true).Suppress);
+        Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message));
+        service.UpdateBindings(ChordOf(LeftCtrlKey, PageDownKey), null);
+        AwaitRenewal(service);
+        Assert.True(service.MouseHookInstalled, "The mouse hook was removed while a swallowed press still owed its release.");
+        var passes = service.ReconcilePassesRun;
+
+        switch (settled)
+        {
+            case "swallowed":
+                Assert.True(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
+                break;
+            case "let through":
+                Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONUP, message));
+                break;
+            default:
+                Assert.False(PlayMouseCallback(service, MouseHookFilter.WM_XBUTTONDOWN, message)); // no binding: the user's own
+                break;
+        }
+
+        AwaitMouseHookRemoved(service, allowUpkeep: false);
+        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The settle started no pass.");
+        Assert.Empty(injected);
+    }
+
+    // A service whose leak repair sees a scripted Windows holding Left Ctrl and records the key-ups it would send, over a
+    // router whose view of a mouse button in Windows is scripted too.
+    private static HotkeyService ScriptedKeysService(
+        HotkeyBinding binding, bool windowsHoldsBack, bool desktopReceivesInput, ConcurrentQueue<uint> injected)
+    {
+        var router = new HotkeyCommandRouter(binding, new object(), isLogicallyDown: null, _ => windowsHoldsBack);
+        return new HotkeyService(
+            NullLogger<HotkeyService>.Instance,
+            router,
+            () => desktopReceivesInput,
+            key => key == LeftCtrlKey,
+            key =>
+            {
+                injected.Enqueue(key);
+                return true;
+            });
+    }
+
+    private static HotkeyBinding ChordOf(uint first, uint second) => HotkeyCaptureSession.Build([first, second], HotkeyMode.Hold);
 
     // A button message as the mouse hook callback gets it, and the callback's own decision on it.
     private static bool PlayMouseCallback(HotkeyService service, int message, XButtonMessage data) =>

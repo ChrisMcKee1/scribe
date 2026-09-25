@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
@@ -11,13 +10,13 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// Review round 7. A7: no process is opened, and nothing but GetAsyncKeyState is called, inside the mouse hook's
 /// deadline to decide a release: a release a gap has touched passes without a read, and one no gap has touched is read
-/// once. A8: nothing on the mouse callback's path makes a delegate, the one the release decision invokes is made before
-/// either hook exists, and the first owed release after production initialization allocates nothing.
+/// once. A8: nothing on the mouse callback's path makes a delegate, and the one the release decision invokes is made
+/// before either hook exists; that the first owed release after production initialization allocates nothing is measured
+/// cold by <see cref="MouseButtonRound8Tests"/>.
 /// </summary>
 public sealed class MouseButtonRound7Tests
 {
     private const uint Back = MouseButtons.Back;
-    private const uint XButton1 = 0x0001;
 
     private static readonly Dictionary<short, OpCode> OpCodesByValue = typeof(OpCodes)
         .GetFields(BindingFlags.Public | BindingFlags.Static)
@@ -26,45 +25,8 @@ public sealed class MouseButtonRound7Tests
 
     private static HotkeyBinding Bare(uint button) => HotkeyCaptureSession.Build([button], HotkeyMode.Hold);
 
-    // Production initialization (the service's constructor makes the view every engine is given), then the first owed
-    // release this test makes, through the callback's path from MouseHookFilter with a real reconcile signal, and with no
-    // warm-up of the reader: the reader is called for the first time inside the measurement. Run alone, in a test process
-    // of its own, it is the process's first owed release too, and MouseHookFilter's initializer runs inside the first
-    // measurement (without CreateRouter's first call to GetAsyncKeyState the release allocated 48 bytes there, the
-    // runtime's cost of any P/Invoke's first call).
-    [Fact]
-    public void The_first_owed_release_after_production_initialization_allocates_nothing()
-    {
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
-        using var h = new HotkeyEngineHarness(Bare(Back), buttonDownInWindows: service.WindowsButtonState);
-        using var signal = new HotkeyReconcileSignal(static () => { });
-        var message = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.MSLLHOOKSTRUCT>());
-        try
-        {
-            Marshal.StructureToPtr(
-                new NativeMethods.MSLLHOOKSTRUCT { mouseData = XButton1 << 16 }, message, fDeleteOld: false);
-            var beforeFilter = GC.GetAllocatedBytesForCurrentThread();
-            var scribesOwn = MouseHookFilter.IsScribesOwn(message);
-            var filterAllocated = GC.GetAllocatedBytesForCurrentThread() - beforeFilter;
-
-            Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONDOWN, message, h.Engine, signal));
-            h.Engine.OnDesktopSwitch(); // the machines forget Back and the debt stays: the release is the reader's to decide
-            h.TakeTransitions();
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            var swallowed = MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONUP, message, h.Engine, signal);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            Assert.False(scribesOwn);
-            Assert.Equal(0, filterAllocated);
-            Assert.True(swallowed); // Windows does not hold Back while this runs
-            Assert.Equal(0, allocated);
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(message);
-        }
-    }
+    // The first owed release after production initialization, which round 7 measured here in the shared test host, is now
+    // measured in a load context of its own (MouseButtonRound8Tests, A10): here other tests had warmed what it measured.
 
     // A8, whatever ran first: no method on the mouse callback's path loads a function pointer or constructs a delegate,
     // which is how a delegate is made in IL, lazily cached by the compiler or not. The delegates the path invokes are
@@ -114,8 +76,10 @@ public sealed class MouseButtonRound7Tests
         Assert.Equal(reader, service.WindowsButtonState!.Method);
     }
 
-    // G5 (Grok, round 6): an event that settles a debt asks for the leak check, passed or swallowed, because that check is
-    // when a drain-only mouse hook kept for the debt is removed; an event that settles nothing asks for none.
+    // G5 (Grok, round 6): an event that settles a debt asks for the check that drops a drain-only mouse hook kept for the
+    // debt, passed or swallowed; an event that settles nothing asks for none. Since round 8 (A9) that is the mouse hook's
+    // sync alone: none of these releases was one the bindings swallowed (the last mouse binding went before it), so none
+    // asks for the keyboard's leak repair.
     [Theory]
     [InlineData("a release swallowed", true)]
     [InlineData("a release let through, Windows holding the button", true)]
@@ -135,7 +99,8 @@ public sealed class MouseButtonRound7Tests
 
         var decision = what == "a new press that forgives the debt" ? h.ButtonDown(Back) : h.ButtonUp(Back);
 
-        Assert.Equal(asks, decision.RequestReconcile);
+        Assert.Equal(asks, decision.RequestMouseHookSync);
+        Assert.False(decision.RequestReconcile);
         Assert.Equal(0, h.Engine.OwedButtonReleases);
     }
 
@@ -187,15 +152,17 @@ public sealed class MouseButtonRound7Tests
         yield return typeof(HotkeyEngine).GetMethod("OnInput", Any)!;
         yield return typeof(NativeMethods).GetMethod("IsKeyLogicallyDown", Any)!;
         yield return typeof(HotkeyReconcileSignal).GetMethod(nameof(HotkeyReconcileSignal.Signal), Any)!;
+        yield return typeof(HotkeyReconcileSignal).GetMethod(nameof(HotkeyReconcileSignal.SignalMouseHookSync), Any)!;
+        yield return typeof(HotkeyReconcileSignal).GetMethod("Set", Any)!;
     }
 
-    private static IEnumerable<MethodBase> Callees(MethodInfo method) =>
+    internal static IEnumerable<MethodBase> Callees(MethodBase method) =>
         Instructions(method)
             .Where(instruction => instruction.Code == OpCodes.Call || instruction.Code == OpCodes.Callvirt)
             .Select(instruction => method.Module.ResolveMethod(instruction.Token)!);
 
     // The method's IL, one instruction at a time, with the 4-byte token of those that carry one (zero otherwise).
-    private static IEnumerable<(OpCode Code, int Token)> Instructions(MethodInfo method)
+    private static IEnumerable<(OpCode Code, int Token)> Instructions(MethodBase method)
     {
         var il = method.GetMethodBody()?.GetILAsByteArray() ?? [];
         for (var i = 0; i < il.Length;)

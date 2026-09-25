@@ -12,15 +12,21 @@ namespace Scribe.Core.Hotkeys;
 /// the affected side of the keyboard. This class detects exactly that state (system says down,
 /// the hook's physical view says released) and injects a synthetic key-up to unstick it.
 ///
+/// "The hook's view says released" is evidence only while that view is whole, so the service runs this only when a key
+/// or button release the bindings themselves swallowed asks for it, or a dictation's release does, and never while
+/// binding capture owns input (review round 8, A9). Capture tracks no key, and every state clear (capture's start and
+/// end, a desktop switch, new bindings, a reinstall) forgets the keys held across it; a mouse event that only settles a
+/// release owed from before such a clear asks for the mouse hook's sync alone. Asked for then, the check found a
+/// modifier the user was holding down in Windows and not in the view, and released it under the user's finger.
+///
 /// Keys only: a mouse button is never a candidate, and Scribe injects no mouse input of any kind. "The hook does not
 /// hold it" also means "the hook never saw it go down", as for a button held in another app since before the mouse hook
 /// existed, and a claim made on better evidence could still be overtaken by a new press before the injection, which then
 /// ended a drag the user was making. Nothing needs the repair either: a mouse button does not repeat, and on Windows 7 and
 /// later a hook that misses the deadline is removed rather than skipped, so a leaked press is one Windows received. Its
-/// release reaches the app too, unless the watchdog's renewal registers the hook again before it comes; then that
-/// release is judged when it is made, on Windows' own view, which shows the button down, so it goes through
-/// (<see cref="HotkeyEngine.OnMouseButtonEvent"/>), and the lost-hook recovery (<see cref="HotkeyEngine.OnMouseHookLost"/>)
-/// ends the recording that press started.
+/// release reaches the app too: before the watchdog's renewal no hook sees it, and the renewal that finds the hook gone
+/// drops every release the engine owed, so a release after it passes with no read
+/// (<see cref="HotkeyEngine.OnMouseHookLost"/>), which also ends the recording that press started.
 /// </summary>
 internal sealed class SuppressedKeyReconciler
 {

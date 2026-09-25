@@ -269,9 +269,13 @@ public sealed class HotkeyCaptureSessionTests
         Assert.Contains("press the key first", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("Ctrl, Shift, Alt, Win or the Narrator key", HotkeyCaptureSession.MouseButtonsHint);
         Assert.Contains("a game that reads the mouse directly may still see it", HotkeyCaptureSession.MouseButtonsHint);
+
+        // One clause for both cases a gap lets through (review round 8, G7): a click made while Windows is not passing
+        // input to Scribe, and the release of one held across that time.
         Assert.Contains(
-            "if Windows briefly stops passing the mouse to Scribe, a click made before Scribe reconnects gets through",
+            "if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets through",
             HotkeyCaptureSession.MouseButtonsHint);
+        Assert.DoesNotContain("reconnects", HotkeyCaptureSession.MouseButtonsHint);
     }
 
     // What a mouse's own software or firmware sends for a button beyond the fifth, which Windows does not deliver as a
