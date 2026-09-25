@@ -122,6 +122,7 @@ public sealed class LibraryOrderInvariantTests
         }
 
         text.AppendLine($"cleanup collisions: {cleanup.Collided}");
+        text.AppendLine("cleanup kept on: " + string.Join(",", cleanup.KeptOn.Select(k => $"{k.Id}|{k.BuiltIn}|{k.OverlappingTerms}")));
         return text.ToString();
     }
 }

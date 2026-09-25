@@ -79,11 +79,14 @@ public sealed class LibraryCompositionGoldenTests
     {
         // The finished-text sections run whole sentences through every shipped rule that is on, so a shipped rule for any
         // part of a sentence moves the golden, not only one for a spoken form the fixture defines ("fix" or "the pipeline"
-        // would). Judged by the real matcher, which is what writes the finished text.
+        // would). Judged by the real matcher, which is what writes the finished text: the rule, writing a character no
+        // sentence holds (so the guard against expanding a written form never holds a match back), leaves it in the text
+        // wherever it matches.
+        const char marker = '\uFFFF';
         var matches = BuiltInDictionaryLibraries.All
             .SelectMany(library => library.EnabledEntries
-                .Where(entry => TextPostProcessor.TryCompile(entry, out _) is { } rule &&
-                    LibraryFixture.Sentences.Any(sentence => rule.Matches(TextPostProcessor.NormalizeDictated(sentence))))
+                .Where(entry => LibraryFixture.Sentences.Any(sentence =>
+                    TextPostProcessor.ApplyRule(sentence, entry with { Replacement = marker.ToString() }).Contains(marker)))
                 .Select(entry => $"{library.Id}: {entry.Pattern.Trim()}"))
             .ToList();
 

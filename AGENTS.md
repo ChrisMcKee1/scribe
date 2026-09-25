@@ -804,20 +804,26 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   (`GlossaryHint`) and the cleanup scan their libraries through `LibraryPrecedence.Enabled`, and saves the enabled ids
   in precedence order, never in display order. `LibraryOrderInvariantTests` hands the Core calls display, reversed and
   random orders.
-- **The cleanup copy is judged by what dictation writes.** `LibrarySwitchOffCopy` decides which still-used terms the
-  dictionary cleanup copies into the dictionary before it switches their libraries off. It considers only a row
-  dictation compiles today, across every library that is on, and runs the real matcher
-  (`TextPostProcessor.ApplyDictionaryPass`, the dictionary sorted by `DictionaryRepository.PatternOrder`, SQLite's
-  byte order) over the term's spoken form and its case variants, today and after the switch, with and without the
-  copy. It copies unless leaving the term out keeps those results and either an identical rule stays on or the copy
-  itself would change them (a copy goes ahead of every library rule). Never treat two rules as equivalent because the
-  composer gives them one key: `OrdinalIgnoreCase` folds the Greek final sigma, which the matcher's invariant
-  case-insensitive regex does not, and does not fold the Kelvin sign or the capital sharp s, which the matcher does,
-  and rule order breaks ties between rules that match the same text. Which libraries are on before and after the switch
-  comes from the Libraries list's rows the way Save stores them, as ids, and the library service applies every loaded
-  library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of
-  the two while the other's row stays ticked switches nothing off, and unticking the last row with the id switches both
-  off. The window passes every row and every loaded library, and Core decides.
+- **The cleanup switches a library off only when that cannot change what dictation writes.** `LibrarySwitchOffCopy`
+  decides which libraries the dictionary cleanup switches off and which still-used terms it copies into the dictionary
+  first. A library that would go off is switched off only if none of its enabled rows, used or not, overlaps a rule
+  that stays in effect (an enabled dictionary row, or an enabled row of a library that stays on) or a copy from
+  another library, and none of its own copies folds to the same text as another; it then copies each kept row
+  dictation compiles today. Otherwise it is kept on, whole, with every library sharing its id, nothing of it is copied,
+  and the window names it in a notice (`DescribeKeptOn`: library names, never terms). Two spoken forms overlap when
+  one, folded by `SpokenFormFold`, equals or contains the other. The fold is read at run time from the matcher's own
+  regex equivalence (`TextPostProcessor.DictionaryMatchOptions`), `OrdinalIgnoreCase` and invariant case mapping, plus
+  dotted and dotless i, and must stay broader than every comparison dictation makes: invariant case mapping comes from
+  the operating system and lacks pairs the regex engine has (U+0264 with U+A7CB), and `OrdinalIgnoreCase` folds the
+  Greek final sigma and some characters outside the Basic Multilingual Plane, which the regex does not.
+  `SpokenFormFoldTests` checks it on every character. Never treat two rules as equivalent because the composer gives
+  them one key, and never judge a rule by running it over its own spoken form: a substring rule meets text inside
+  words, the guard against expanding a written form meets text already written, and rule order breaks ties between
+  rules that match the same text. Which libraries are on before and after the switch comes from the Libraries list's
+  rows the way Save stores them, as ids, and the library service applies every loaded library with a saved id: a
+  hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of the two while the other's
+  row stays ticked switches nothing off, and unticking the last row with the id switches both off. The window passes
+  every row and every loaded library, leaves the rows of libraries kept on ticked, and Core decides.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
