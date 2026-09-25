@@ -141,6 +141,61 @@ public sealed class LibraryAdoptionTests
         Assert.Equal(H2, adoption.State.AcceptedContent["github"]);
     }
 
+    [Theory]
+    [InlineData(true, true)]     // on, permitted by choice
+    [InlineData(true, null)]     // on, permitted by the kind default
+    [InlineData(false, true)]    // off, permitted by choice
+    [InlineData(true, false)]    // on, refused by choice: only the stale entry changes
+    public void A_built_in_whose_edits_document_disappeared_is_content_replaced_and_its_stale_entry_dropped(bool enabled, bool? permitted)
+    {
+        // Round 2, part 2 (Grok G1, Astra A1): the state accepts H1 for github's edits document, which is gone; the
+        // catalog holds github available with no document. The custom library beside it must come through untouched.
+        var gone = Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub")));
+        var team = Committed(CustomLibrary("team", Custom("kube", "K8s")), H2);
+        var state = State(
+            enabled: enabled ? ["github", "team"] : ["team"],
+            ai: permitted is { } choice ? [("github", choice), ("team", true)] : [("team", true)],
+            accepted: [("github", H1), ("team", H2)]);
+
+        var adoption = LibraryComposer.Instance.PlanAdoption(Catalog(state, gone, team), Later);
+
+        Assert.NotNull(adoption);
+        Assert.Equal(LibraryAdoptionReasons.ContentReplaced, adoption.Reasons);
+        Assert.Equal(1, adoption.LibrariesAdopted);
+        Assert.Equal(0, adoption.MarkersAdded);
+        var adopted = adoption.State;
+        Assert.False(adopted.AiPermissions["github"]);
+        Assert.False(adopted.AcceptedContent.ContainsKey("github"));
+        Assert.Equal(enabled, adopted.EnabledIds.Contains("github"));
+        Assert.False(AiVocabularyPolicy.IsPermitted(adopted, "github", builtIn: true, content: null));
+        Assert.True(adopted.AiPermissions["team"]);
+        Assert.Equal(H2, adopted.AcceptedContent["team"]);
+        Assert.Contains("team", adopted.EnabledIds);
+        Assert.False(adopted.AiPermissionsLost);
+
+        // Settled: the next load has nothing more to record.
+        Assert.Null(LibraryComposer.Instance.PlanAdoption(Catalog(adopted, gone, team), Later));
+    }
+
+    [Fact]
+    public void A_disappeared_edits_document_and_a_discovered_file_are_adopted_together()
+    {
+        var gone = Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub")));
+        var placed = Committed(CustomLibrary("placed", Custom("helm", "Helm")), H2);
+        var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
+
+        var adoption = LibraryComposer.Instance.PlanAdoption(Catalog(state, gone, placed), Later);
+
+        Assert.NotNull(adoption);
+        Assert.Equal(LibraryAdoptionReasons.ContentReplaced | LibraryAdoptionReasons.Discovered, adoption.Reasons);
+        Assert.Equal(2, adoption.LibrariesAdopted);
+        Assert.False(adoption.State.AiPermissions["github"]);
+        Assert.False(adoption.State.AcceptedContent.ContainsKey("github"));
+        Assert.Contains("github", adoption.State.EnabledIds);
+        Assert.False(adoption.State.AiPermissions["placed"]);
+        Assert.Equal(H2, adoption.State.AcceptedContent["placed"]);
+    }
+
     [Fact]
     public void A_lost_state_is_adopted_as_a_denial_that_outlives_the_start_and_permits_nothing_unchosen()
     {

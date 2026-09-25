@@ -373,6 +373,78 @@ public sealed class AiVocabularyPolicyTests
         }
     }
 
+    [Fact]
+    public void The_scope_pairs_each_permitted_library_with_the_hash_the_catalog_holds_not_a_stale_accepted_one()
+    {
+        // Round 2, part 2 (Grok G1): github is on and permitted with its edits document H1 accepted; the document is then
+        // gone (available, no content hash) while the state still accepts H1. 3.3.3 lets the shipped rows pass the content
+        // check, so the binding is the scope's: github is paired with null, the hash in force, never with H1.
+        var state = State(enabled: ["github", "team"], ai: [("github", true), ("team", true)], accepted: [("github", H1), ("team", H2)]);
+        var team = Committed(CustomLibrary("team", Custom("kube", "K8s")), H2);
+        var withDocument = Catalog(1, state, Committed(BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub")), H1), team);
+        var withoutDocument = Catalog(2, state, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))), team);
+
+        var admitted = AiVocabularyPolicy.ScopeOf(withDocument);
+        Assert.Equal(H1, admitted.PermittedContent["github"]);
+        Assert.Equal(H2, admitted.PermittedContent["team"]);
+
+        Assert.True(AiVocabularyPolicy.IsPermitted(state, "github", builtIn: true, content: null));
+        var current = AiVocabularyPolicy.ScopeOf(withoutDocument);
+        Assert.True(current.PermittedContent.ContainsKey("github"));
+        Assert.Null(current.PermittedContent["github"]);
+        Assert.Equal(H2, current.PermittedContent["team"]);
+        Assert.False(current.Covers(admitted));
+        Assert.True(AiVocabularyPolicy.HasNarrowed(admitted, current));
+
+        // What is admitted now carries what is there now; the custom library's pairing, its accepted hash, still holds.
+        Assert.False(AiVocabularyPolicy.HasNarrowed(current, AiVocabularyPolicy.ScopeOf(withoutDocument)));
+        Assert.False(AiVocabularyPolicy.HasNarrowed(new AiVocabularyScope(1, [new("team", H2)]), current));
+    }
+
+    [Fact]
+    public void An_edits_document_deleted_outside_Scribe_stops_covering_earlier_admissions_until_the_user_permits_again()
+    {
+        // Round 2, part 2 (Grok G1, the coordinator's end-to-end case), through J's load path (3.1.1): each load plans an
+        // adoption and commits it, then composes and publishes. A request admitted with the edits is never handed over
+        // again, and github carries nothing to AI cleanup until the user permits it again.
+        var edited = BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"), Shipped("octo cat", "Octocat"));
+        var shippedOnly = BuiltInLibrary("github", Shipped("get hub", "GitHub"), Shipped("octo cat", "Octocat"));
+        var context = new LibraryStateContext(false, false, true, true);
+        var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
+        var source = new FakeVocabularySource(LibraryComposer.Instance.ComposeVocabulary(Catalog(1, state, Committed(edited, H1))));
+        var admitted = source.Current.AiScope;
+        Assert.Contains(source.Current.AiEntries, entry => entry.Replacement == "Nightjar Hub");
+        var sent = new List<string>();
+
+        // Deleted outside Scribe: from that moment no scope of the catalog covers the admission (3.3.3).
+        var reloaded = Catalog(2, state, Committed(shippedOnly));
+        Assert.True(AiVocabularyPolicy.HasNarrowed(admitted, AiVocabularyPolicy.ScopeOf(reloaded)));
+
+        // The load adopts the disappearance and publishes: github is still on for dictation, and permitted for nothing.
+        var adoption = LibraryComposer.Instance.PlanAdoption(reloaded, context);
+        Assert.NotNull(adoption);
+        Assert.Equal(LibraryAdoptionReasons.ContentReplaced, adoption.Reasons);
+        var adopted = Catalog(3, adoption.State, Committed(shippedOnly));
+        source.Publish(LibraryComposer.Instance.ComposeVocabulary(adopted));
+        Assert.False(source.Current.AiScope.PermittedContent.ContainsKey("github"));
+        Assert.Empty(source.Current.AiEntries);
+        Assert.Contains(source.Current.Entries, entry => entry.Replacement == "GitHub");
+        Assert.False(source.TryHandOff(admitted, () => sent.Add("admitted before the deletion")));
+        Assert.Null(LibraryComposer.Instance.PlanAdoption(adopted, context));
+
+        // The user permits it again: a Save records the choice, with no accepted entry for a built-in with no document.
+        source.Publish(LibraryComposer.Instance.ComposeVocabulary(
+            Catalog(4, State(enabled: ["github"], ai: [("github", true)]), Committed(shippedOnly))));
+        var readmitted = source.Current.AiScope;
+        Assert.True(readmitted.PermittedContent.ContainsKey("github"));
+        Assert.Null(readmitted.PermittedContent["github"]);
+        Assert.False(source.TryHandOff(admitted, () => sent.Add("admitted before the deletion, retried")));
+        Assert.True(source.TryHandOff(readmitted, () => sent.Add("admitted after permitting again")));
+        Assert.Equal(["admitted after permitting again"], sent);
+        Assert.Contains(source.Current.AiEntries, entry => entry.Replacement == "GitHub");
+        Assert.DoesNotContain(source.Current.AiEntries, entry => entry.Replacement == "Nightjar Hub");
+    }
+
     private static HistoryEntry Entry(long id, string text) =>
         new(id, Now.AddHours(-id), text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: "notepad");
 

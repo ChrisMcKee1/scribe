@@ -116,6 +116,24 @@ public sealed class LibraryLocalStateCodecTests
     }
 
     [Fact]
+    public void A_newer_states_document_list_keeps_its_ids_as_a_set_in_the_order_every_encoding_uses()
+    {
+        // Grok's question 1 (round 2, part 2): over a newer state the encoding keeps exactly the ids the document listed,
+        // as a set (2.5, decision 47), in the order 3.3.4 gives every encoding: the libraries' legacy ids in precedence
+        // order, then the retained ids sorted. No commit writes it (a newer state is read-only and plans no adoption), and
+        // no older build reads the list's order: 0.4.2 to 0.4.4 read it into a case-insensitive set.
+        string[] document = ["zulu-gone", "team-terms", "Alpha-gone", "private", "github"];
+        var read = LibraryComposer.Instance.ReadLocalState(document, "{\"version\":2}", Libraries, Stored);
+        Assert.Equal(LocalStateHealth.Newer, read.Health);
+
+        var encoded = LibraryComposer.Instance.EncodeLocalState(read, null, Libraries, Libraries);
+
+        Assert.Null(encoded.StateValue);
+        Assert.Equal(["github", "private", "team-terms", "Alpha-gone", "zulu-gone"], encoded.EnabledLibraryIds);
+        Assert.True(encoded.EnabledLibraryIds.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(document));
+    }
+
+    [Fact]
     public void Optional_members_read_as_empty_unknown_members_are_ignored_and_empty_markers_are_dropped()
     {
         const string value =
