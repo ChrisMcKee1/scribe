@@ -695,10 +695,15 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 
 ## Hotkey hook threading (read before touching the hook)
 
-- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard hook that
-  answers too slowly. The callback takes no lock, logs nothing, queues nothing to the thread pool and
-  uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
-  those can take a lock shared with another thread. One hook thread owns all key state.
+- **Nothing on the hook path may block, lock or log.** Windows removes a low-level keyboard or mouse hook
+  that answers too slowly. The callbacks take no lock, log nothing, queue nothing to the thread pool and
+  use no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
+  those can take a lock shared with another thread. One hook thread owns all key and button state. The
+  only allocations on the callbacks' path are the node `LockFreeInbox` pushes for a transition (a press or
+  release that starts or ends a dictation, or a state clear a command makes) and a new machine when a
+  command adds a dictation-only binding; a move, a wheel, an unbound button or a key no binding uses
+  allocates nothing (`MouseButtonHotkeyTests` measures it). The chord machine tests modifiers with bit
+  tests, because `Enum.HasFlag` boxes both enums whenever the JIT does not optimize it (a Debug build).
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
   during a reinstall never shares key state, or the desktop-switch activation epoch, with its
   replacement. A replaced engine is retired: it passes every key through, requests no leak check,
@@ -740,7 +745,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   no event falls between them; a hook Windows removed is back within one period, and a renewal that
   finds the old registration already gone is logged. Nothing is injected and nothing is added to any
   event. The leaked-input check releases a bound button Windows still holds with a marked button-up
-  (`NativeMethods.MarkedMouseButtonUp`), as it releases a key.
+  (`NativeMethods.MarkedMouseButtonUp`), as it releases a key. **Windows hands a low-level mouse hook only
+  the low 32 bits of `MOUSEINPUT.dwExtraInfo`** (measured on both CI runners: a 64-bit value arrived with
+  its high half zeroed), so the mouse hook recognizes Scribe's own input by the low half of
+  `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows
+  also adds a `WM_MOUSEMOVE` of its own, carrying the same extra information, around injected button
+  events now and then, which the injection tests allow for.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
@@ -764,9 +774,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   own desktop, so a release on the lock screen or the secure desktop (Win+L, Ctrl+Alt+Del, a UAC
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
   a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`, the one native
-  query the keyboard callback makes besides `CallNextHookEx`: only on such a press, never on a bare
-  one, and never about the key the callback is for, whose async state Windows updates only after the
-  callback returns.
+  query the hook callbacks make besides `CallNextHookEx`: only on such a press, never on a bare
+  one, and never about the key or button the callback is for, whose async state Windows updates only
+  after the callback returns.
 - **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
   its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
