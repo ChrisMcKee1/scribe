@@ -98,6 +98,36 @@ public partial class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_keeps_a_swallowed_button_press_out_of_windows_own_view()
+    {
+        // The measurement the lost-hook recovery rests on (MouseButtonRound4Tests): a press the mouse hook swallows never
+        // reaches Windows' own view of the button. Back's press, which the service swallows, then an unbound F20, which
+        // reaches Windows, in one SendInput, which Windows processes in order: once it reports F20 down it has processed
+        // Back's press too, and would report Back down had the swallow reached its view.
+        if (!InputInjectionAllowed())
+        {
+            return;
+        }
+
+        const uint F20 = 0x83;
+        using var guard = new InjectedMouseGuard();
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        service.Start();
+
+        Inject(ButtonDown(MouseButtons.Back), Key(F20, up: false));
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => NativeMethods.IsKeyLogicallyDown(F20), HookTimeout), "F20 never reached Windows.");
+            Assert.False(NativeMethods.IsKeyLogicallyDown(MouseButtons.Back), "Windows shows the swallowed Back press as down.");
+            Assert.Equal(false, NativeMethods.MouseButtonStateInWindows(MouseButtons.Back));
+        }
+        finally
+        {
+            Inject(Key(F20, up: true), ButtonUp(MouseButtons.Back));
+        }
+    }
+
+    [Fact]
     public void Start_hands_a_mouse_hook_found_gone_to_the_engine_once()
     {
         // The renewal that finds the registration gone tells the engine, on the hook thread and before the renewal counts,

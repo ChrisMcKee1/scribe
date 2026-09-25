@@ -66,6 +66,7 @@ internal sealed class HotkeyEngine
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
     private readonly Func<uint, bool>? _isLogicallyDown;
+    private readonly Func<uint, bool?>? _buttonHeldInWindows;
     private readonly ChordStateMachine _standard;
     private ChordStateMachine? _dictationOnly;
     private bool _captureMode;
@@ -102,6 +103,11 @@ internal sealed class HotkeyEngine
     /// (<see cref="OwedButtonReleases"/>), so a reinstall, whose state otherwise starts over, still keeps them from the
     /// app. Zero for none.
     /// </param>
+    /// <param name="buttonHeldInWindows">
+    /// Windows' own view of a mouse button, null for a button it cannot tell about, which the recovery from a lost mouse
+    /// hook asks about every release still owed (<see cref="ReleasesWindowsDoesNotHold"/>). Null for the whole function
+    /// keeps every owed release, as the tests that do not script Windows expect.
+    /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnlyBinding,
@@ -110,10 +116,12 @@ internal sealed class HotkeyEngine
         long generation,
         HotkeyTransitionQueue transitions,
         Func<uint, bool>? isLogicallyDown = null,
-        int owedButtonReleases = 0)
+        int owedButtonReleases = 0,
+        Func<uint, bool?>? buttonHeldInWindows = null)
     {
         _transitions = transitions;
         _isLogicallyDown = isLogicallyDown;
+        _buttonHeldInWindows = buttonHeldInWindows;
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
@@ -135,6 +143,50 @@ internal sealed class HotkeyEngine
     /// hook for it even once no binding presses a mouse button.
     /// </summary>
     public bool OwesButtonRelease => OwedButtonReleases != 0;
+
+    /// <summary>
+    /// The recovery decision for owed releases, made between messages when the hook's view can no longer be trusted (a
+    /// lost mouse hook, a reinstall): of <paramref name="owedButtonReleases"/>, only the buttons Windows reports up stay
+    /// owed. A press the hook swallowed never reaches Windows, so Windows holding the button means it received a press
+    /// the hook did not swallow (a callback that missed its deadline passes its message on, or a press made while no hook
+    /// existed), and that press's release must reach the app, or the app keeps the button down and every later swallowed
+    /// click keeps it so. A button Windows cannot tell about (null) is dropped too: at worst that lets one release through,
+    /// never strands a press. Windows reporting up holds nothing a swallowed release could strand. Without a view at all
+    /// (a null function) everything stays owed.
+    /// </summary>
+    internal static int ReleasesWindowsDoesNotHold(int owedButtonReleases, Func<uint, bool?>? buttonHeldInWindows)
+    {
+        var owed = owedButtonReleases & ButtonDebts;
+        if (buttonHeldInWindows is null)
+        {
+            return owed;
+        }
+
+        foreach (var button in new[] { MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward })
+        {
+            var bit = 1 << (int)button;
+            if ((owed & bit) != 0 && buttonHeldInWindows(button) != false)
+            {
+                owed &= ~bit;
+            }
+        }
+
+        return owed;
+    }
+
+    // Owner thread, between messages: forgives the releases Windows does not show as swallowed (ReleasesWindowsDoesNotHold).
+    private void ForgiveReleasesWindowsHolds()
+    {
+        var owed = OwedButtonReleases;
+        var forgiven = owed & ~ReleasesWindowsDoesNotHold(owed, _buttonHeldInWindows);
+        foreach (var button in new[] { MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward })
+        {
+            if ((forgiven & (1 << (int)button)) != 0)
+            {
+                _ = SettleRelease(button);
+            }
+        }
+    }
 
     // Owner thread, for a press the machines swallow: commits the debt of its release unless the retirement sealed the
     // debts first, which is the one way this returns false.
@@ -215,14 +267,16 @@ internal sealed class HotkeyEngine
     /// is removed silently, with no way for the application to know). Until the renewal no hook saw the mouse, so a
     /// button the machines hold may have been released unseen, and a toggle's second click may have gone to the app.
     /// The Core transition that follows keeps every guarantee the other state clears keep: commands requested before it
-    /// apply first; the machines forget their mouse buttons, and a binding that presses one gives up its latch
-    /// (<see cref="ChordStateMachine.ForgetMouseButtons"/>); and if the
+    /// apply first; a release still owed stays owed only while Windows reports that button up, since Windows holding it
+    /// means it received a press the hook did not swallow, whose release must reach the app
+    /// (<see cref="ReleasesWindowsDoesNotHold"/>); the machines forget their mouse buttons, and a binding that presses
+    /// one gives up its latch (<see cref="ChordStateMachine.ForgetMouseButtons"/>); and if the
     /// arbiter's owner is a binding that presses a mouse button, this engine's activation epoch advances first, so its
     /// Activated still waiting for the dispatcher can never open the microphone, and then the owner is released and its
     /// dictation ended, reported as <see cref="HotkeyDeactivation.MouseHookLost"/>. A keyboard binding's dictation, its
-    /// queued Activated included, is left alone: the keyboard hook saw everything. A release still owed to a swallowed
-    /// press stays owed, so a button still held reaches no app when it is let go. A retired engine does nothing, as for
-    /// a desktop switch.
+    /// queued Activated included, is left alone: the keyboard hook saw everything. A release owed to a press Windows
+    /// never saw stays owed, so a swallowed button still held reaches no app when it is let go. A retired engine does
+    /// nothing, as for a desktop switch.
     /// </summary>
     public void OnMouseHookLost()
     {
@@ -233,6 +287,7 @@ internal sealed class HotkeyEngine
 
         ApplyPendingCommands();
         Interlocked.Increment(ref _mouseHookLossesHandled);
+        ForgiveReleasesWindowsHolds();
         _standard.ForgetMouseButtons();
         _dictationOnly?.ForgetMouseButtons();
 
