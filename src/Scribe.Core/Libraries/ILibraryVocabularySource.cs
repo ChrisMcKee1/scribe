@@ -18,18 +18,21 @@ public interface ILibraryVocabularySource
     LibraryVocabulary Current { get; }
 
     /// <summary>
-    /// The one admission point that orders revocation against outbound AI requests (review question 1). When every
-    /// library <paramref name="admitted"/> permitted is still permitted, runs <paramref name="handOff"/> under the
-    /// permission gate and returns true; otherwise runs nothing and returns false, and the request must not be sent.
+    /// The one admission point that orders revocation against outbound AI requests (review question 1). When the
+    /// published scope still <see cref="AiVocabularyScope.Covers"/> <paramref name="admitted"/> (every library it
+    /// permitted is still permitted, for the same content, A12), runs <paramref name="handOff"/> under the permission
+    /// gate and returns true; otherwise runs nothing and returns false, and the request must not be sent.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Every narrowing of AI permission is published under the same gate, at the latest when it commits: when a Save
     /// that narrows it is prepared (fail closed, before its commit and before its files are in place), when that Save
-    /// completes, and when a Save that did not commit puts the committed scope back. A widening waits for the commit. So
-    /// every request either was handed over before a revocation took the gate, and went with the permission it was
-    /// admitted under, or sees the revocation and is not sent; nothing can be handed over after the gate has published
-    /// the narrower scope.
+    /// completes, when a Save that did not commit puts the committed scope back, and when content changes outside Scribe
+    /// are adopted. A widening waits for the commit. A change of a library's content narrows too, because the scope pairs
+    /// each library with the content its permission covers, so a request admitted for the old content is not sent once
+    /// the new content is published, even if the new content is permitted (A12). So every request either was handed over
+    /// before a revocation took the gate, and went with the permission it was admitted under, or sees the revocation and
+    /// is not sent; nothing can be handed over after the gate has published the narrower scope.
     /// </para>
     /// <para>
     /// <paramref name="handOff"/> must be the last step before the request leaves the pipeline's control: for an HTTP

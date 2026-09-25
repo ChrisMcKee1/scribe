@@ -796,9 +796,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   share and which terms fill a default install's 80 on-device glossary slots, so never reorder it. Append a new
   built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`, which the macOS port reads;
   `LibraryPrecedenceTests` fails until every shipped id appears exactly once and the two lists agree.
-- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
-  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
-  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Custom libraries compare as file names**, not bare ids: their physical file name (`DictionaryLibrary.FileName`,
+  which is `id + ".csv"` for every custom library except a hand-placed file whose logical id was remapped away from a
+  built-in id, which keeps ranking by its own name). The loader has always read them in file-name order, and '-' sorts
+  before '.', so "team-terms-2.csv", the file a second import of the same library gets, comes before "team-terms.csv";
+  comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges) and `AnalyzeEnabledLibraries` (the Save
   prompt) apply it to whatever order they are given. The window hands the glossary hint (`GlossaryHint`) and the

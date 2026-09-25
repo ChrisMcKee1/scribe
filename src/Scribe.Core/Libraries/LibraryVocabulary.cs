@@ -4,21 +4,42 @@ using Scribe.Core.Models;
 namespace Scribe.Core.Libraries;
 
 /// <summary>
-/// The library ids whose terms one vocabulary may carry to AI cleanup: every enabled, available library whose AI
-/// permission is on (Decision 2). A dictation keeps the scope it was admitted with, and every outbound cleanup request
-/// (each chunk, a retry, the Chat Completions fallback, a probe, the usage insight) is handed over only through
-/// <see cref="ILibraryVocabularySource.TryHandOff"/> with that scope; if permission has narrowed since, the request is
-/// not sent and local rules finish the dictation.
+/// The library content one vocabulary may carry to AI cleanup: every enabled, available library whose AI permission is
+/// on (Decision 2), each with the content that permission was granted for. A dictation keeps the scope it was admitted
+/// with, and every outbound cleanup request (each chunk, a retry, the Chat Completions fallback, a probe, the usage
+/// insight) is handed over only through <see cref="ILibraryVocabularySource.TryHandOff"/> with that scope; if the
+/// current scope no longer <see cref="Covers"/> it, the request is not sent and local rules finish the dictation.
 /// </summary>
-/// <remarks>Only composition builds one (the constructor is internal to Core). Ids compare case-insensitively.</remarks>
+/// <remarks>
+/// <para>
+/// Consent is bound to content (review finding A4), so the scope is too (A12): it pairs each permitted library id with
+/// the hash of the content permission covers, its <see cref="LibraryLocalState.AcceptedContent"/> (a custom library's
+/// CSV, a built-in's edits document, or null for a built-in with no document, whose shipped rows cannot change while
+/// the process runs). A request admitted for "team" at content H1 is therefore refused after that file was replaced
+/// by H2 outside Scribe, even once the user has permitted H2, and so is one admitted before a Save that changed the
+/// library's content: local rules finish that dictation.
+/// </para>
+/// <para>Only composition builds one (the constructor is internal to Core). Ids compare case-insensitively.</para>
+/// </remarks>
 public sealed class AiVocabularyScope
 {
-    internal AiVocabularyScope(long generation, IEnumerable<string> permittedLibraryIds)
+    internal AiVocabularyScope(long generation, IEnumerable<KeyValuePair<string, LibraryContentHash?>> permittedContent)
     {
-        ArgumentNullException.ThrowIfNull(permittedLibraryIds);
+        ArgumentNullException.ThrowIfNull(permittedContent);
         ArgumentOutOfRangeException.ThrowIfNegative(generation);
+
+        var permitted = new Dictionary<string, LibraryContentHash?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, content) in permittedContent)
+        {
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                permitted[id.Trim()] = content;
+            }
+        }
+
         Generation = generation;
-        PermittedLibraryIds = permittedLibraryIds.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+        PermittedContent = permitted.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+        PermittedLibraryIds = PermittedContent.Keys.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>A scope that permits no library, for a service with nothing loaded yet.</summary>
@@ -27,8 +48,30 @@ public sealed class AiVocabularyScope
     /// <summary>The committed generation the scope was computed from.</summary>
     public long Generation { get; }
 
-    /// <summary>The libraries whose terms may be sent.</summary>
+    /// <summary>The libraries whose terms may be sent: the keys of <see cref="PermittedContent"/>.</summary>
     public IReadOnlySet<string> PermittedLibraryIds { get; }
+
+    /// <summary>Each permitted library with the content its permission covers (null for a built-in with no edits document).</summary>
+    public IReadOnlyDictionary<string, LibraryContentHash?> PermittedContent { get; }
+
+    /// <summary>
+    /// Whether this scope still permits everything <paramref name="admitted"/> did: every library it names, with the
+    /// same content. False as soon as one of them has lost permission or now holds other content, which is what makes a
+    /// request carrying <paramref name="admitted"/>'s vocabulary unsendable. Libraries this scope adds do not matter.
+    /// </summary>
+    public bool Covers(AiVocabularyScope admitted)
+    {
+        ArgumentNullException.ThrowIfNull(admitted);
+        foreach (var (id, content) in admitted.PermittedContent)
+        {
+            if (!PermittedContent.TryGetValue(id, out var current) || current != content)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 /// <summary>

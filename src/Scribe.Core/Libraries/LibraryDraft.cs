@@ -6,12 +6,19 @@ namespace Scribe.Core.Libraries;
 /// <param name="State">The file state the committed catalog reported (<see cref="LibraryFileState.Available"/> for a new library).</param>
 /// <param name="PendingDelete">Deleted in the draft; moves to Recently deleted when the draft is saved.</param>
 /// <param name="Unsaved">Differs from the committed catalog in content, metadata, enabled state or AI permission.</param>
+/// <param name="FileName">
+/// A custom library's physical file name, which is what it ranks by (review finding A16): the committed file's name
+/// (<see cref="CatalogLibrary.FileName"/>, <c>github.csv</c> for a remapped <c>custom-github</c>), or for a library not
+/// written yet the name it will be written as, <c>Id + ".csv"</c>. Null for a built-in, and null for a custom library
+/// means <c>Id + ".csv"</c>.
+/// </param>
 public sealed record DraftLibrary(
     LibraryContent Content,
     LibraryOrigin Origin,
     LibraryFileState State,
     bool PendingDelete = false,
-    bool Unsaved = false);
+    bool Unsaved = false,
+    string? FileName = null);
 
 /// <summary>
 /// The editor's view of every library at one revision: what the Libraries page shows and previews against, never what
