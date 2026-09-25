@@ -24,7 +24,8 @@ namespace Scribe.Core.Libraries;
 /// In a built-in row's edit (<see cref="BuiltInTermEdit"/>), authorship is per field (plan 3.3): each of the four values
 /// of an edited row is inherited, where the user's value equals the base (the shipped value applies, and an upgrade
 /// brings the new one), or authored, where it differs. An edit changes the user's values only in the fields the user
-/// changed relative to the row shown, so a field left alone stays inherited (<see cref="IBuiltInLibraryOverlay.Edit"/>).
+/// changed relative to the row shown, so a field left alone stays inherited, and a field it changes is based on the
+/// shipped value in use at that time (<see cref="IBuiltInLibraryOverlay.Edit"/>).
 /// </para>
 /// </remarks>
 public sealed record TermValues(string Spoken, string Written, bool WholeWord = true, bool Enabled = true)

@@ -42,15 +42,20 @@ public enum BuiltInTermIntent
 /// <param name="Base">
 /// The shipped values the edit was made against. The per-field upgrade merge compares the new shipped values with it:
 /// a field the user left equal to the base takes the new shipped value, a field the new version left equal to the base
-/// keeps the user's, and a field both changed keeps the user's and asks (<see cref="TermReview"/>).
+/// keeps the user's, and a field both changed keeps the user's and asks (<see cref="TermReview"/>). In an edited entry
+/// each field's base is the shipped value in use when the user last changed that field (a field never changed keeps the
+/// base of the entry's first edit), so a later version asks about a field only when it changes that field again; an
+/// edited entry made from an off one has a base whose Enabled is on, the value the row was turned off from, unless that
+/// edit turned the row on, so the off stays authored. A pinned entry's base moves only with Use updated values.
 /// </param>
 /// <param name="Value">
 /// The user's values (U). For an edited row, authorship is per field (plan 3.3): a field of U equal to <see cref="Base"/>
 /// is inherited (the shipped value applies), and a field that differs is authored; an edit changes U only in the fields
-/// the user changed (<see cref="IBuiltInLibraryOverlay.Edit"/>).
+/// the user changed, each against the shipped value in use as its base (<see cref="IBuiltInLibraryOverlay.Edit"/>).
 /// </param>
 /// <param name="Acknowledged">
 /// The shipped values the user last reviewed with Keep my changes, so the same shipped change asks once; null until then.
+/// An edit of a pinned entry also acknowledges the shipped value in use for each field it changes.
 /// </param>
 public sealed record BuiltInTermEdit(
     LibraryTermKey Key,

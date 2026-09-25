@@ -22,10 +22,12 @@ public interface IBuiltInLibraryOverlay
     BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes);
 
     /// <summary>
-    /// The version 1 document for <paramref name="edits"/>, which <see cref="ReadEdits"/> reads back unchanged. Throws
-    /// <see cref="ArgumentException"/> when the library id, a key or any value string is not well-formed UTF-16 (an
-    /// unpaired surrogate), which the editor refuses first: it refuses rather than replacing the character, so nothing
-    /// is written with a character it cannot hold.
+    /// The version 1 document for <paramref name="edits"/>, which <see cref="ReadEdits"/> reads back unchanged. Refuses,
+    /// with <see cref="ArgumentException"/>, any document that would not: a blank library id, an empty or repeated key, an
+    /// entry without the values its intent needs (<see cref="BuiltInTermEdit"/>), a null value string, or a library id,
+    /// key or value string that is not well-formed UTF-16 (an unpaired surrogate), which the editor refuses first. It
+    /// refuses rather than replacing a character, so nothing is written that cannot be read back; each case is a bug
+    /// upstream, and writing it would pause the library at the next start.
     /// </summary>
     byte[] WriteEdits(BuiltInLibraryEdits edits);
 
@@ -42,23 +44,43 @@ public interface IBuiltInLibraryOverlay
     IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits);
 
     /// <summary>
-    /// The row after the user's edit, authored from now on; the key never changes. Authorship is per field (plan 3.3):
-    /// the user's values (<see cref="BuiltInTermEdit.Value"/>, U) change only in the fields where
-    /// <paramref name="values"/> differs from the row shown (<see cref="LibraryRow.Values"/>), and every other field keeps
-    /// the U it had, so an inherited field stays inherited, U equal to the base (<see cref="BuiltInTermEdit.Base"/>, B),
-    /// and the shipped value keeps applying to it, upgrades included. Editing a shipped row creates the entry with B the
-    /// shipped values and U equal to B except in the changed fields. The whole of U is never replaced by the values
-    /// shown, which would pin every inherited field to today's shipped value.
+    /// The row after the user's edit, authored from now on; the key never changes. An edit that changes nothing returns
+    /// the row as it is (a shipped row does not become authored), and one that changes only
+    /// <see cref="TermValues.Enabled"/> is <see cref="SetEnabled"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Authorship is per field (plan 3.3): the user's values (<see cref="BuiltInTermEdit.Value"/>, U) change only in the
+    /// fields where <paramref name="values"/> differs from the row shown (<see cref="LibraryRow.Values"/>), and every other
+    /// field keeps the U and the base (<see cref="BuiltInTermEdit.Base"/>, B) it had, so an inherited field stays
+    /// inherited, U equal to B, and the shipped value keeps applying to it, upgrades included. The whole of U is never
+    /// replaced by the values shown, which would pin every inherited field to today's shipped value.
+    /// </para>
+    /// <para>
+    /// A field the edit changes takes the typed value as U and, in an edited entry, the shipped value in use now as B: the
+    /// row returned shows exactly <paramref name="values"/>, nothing asks about that field until a later version changes
+    /// it again, and a field typed back to the shipped value inherits again. A pinned entry keeps its B, which only Use
+    /// updated values moves, and acknowledges the shipped value in use for the changed fields instead
+    /// (<see cref="BuiltInTermEdit.Acknowledged"/>). Editing a shipped row creates the entry with B the shipped values and
+    /// U equal to B except in the changed fields.
+    /// </para>
+    /// <para>
+    /// Editing a turned-off row keeps the off authored: the edited entry it becomes has Enabled false against a base that
+    /// is on, the value the row was turned off from, never the shipped value in use when that is off too, unless the edit
+    /// itself turns the row on (its base is then the shipped values in use). So a later version that ships the row on
+    /// does not turn it back on.
+    /// </para>
+    /// </remarks>
     LibraryRow Edit(LibraryRow row, TermValues values);
 
     /// <summary>
-    /// Turn off term or Turn on term. Turning a shipped row off records an <see cref="BuiltInTermIntent.Off"/> entry.
-    /// Turning an off row on removes its entry only when the shipped row is enabled, so the row is shipped again; when
-    /// the shipped row is itself disabled at that moment, Turn on is the user's own choice against it and records an
-    /// authored <see cref="BuiltInTermIntent.Edited"/> entry whose user value turns <see cref="TermValues.Enabled"/> on,
-    /// as it does for a shipped row that ships disabled. On any other row the flag is changed like the other three
-    /// values, per field (<see cref="Edit"/>).
+    /// Turn off term or Turn on term. Turning a shipped row off records an <see cref="BuiltInTermIntent.Off"/> entry,
+    /// based on the shipped values. Turning an off row on removes its entry only when the shipped row is enabled, so the
+    /// row is shipped again; when the shipped row is itself disabled at that moment, Turn on is the user's own choice
+    /// against it and records an authored <see cref="BuiltInTermIntent.Edited"/> entry, based on the shipped values in
+    /// use, whose user value turns <see cref="TermValues.Enabled"/> on and inherits every other field, as it does for a
+    /// shipped row that ships disabled. On any other row the flag is changed like the other three values, per field
+    /// (<see cref="Edit"/>).
     /// </summary>
     LibraryRow SetEnabled(LibraryRow row, bool enabled);
 
