@@ -18,7 +18,9 @@ namespace Scribe.Core.Tests;
 /// had picked and never saved, so the Add moved AI cleanup, with every later dictation's text and vocabulary, to a
 /// provider no save had chosen. It now applies the settings as stored, and when none can be used it applies no settings
 /// and only reloads the vocabulary. The window's side is pinned in
-/// <see cref="CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it"/>; these tests drive a
+/// <see cref="CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it"/>, and what that
+/// vocabulary-only reload does, with a library selection an unreadable document must not replace, in
+/// <see cref="LibrarySelectionInUseTests"/>; these tests drive a
 /// real settings repository through a real failed save and a real cleanup service through fake providers. Nothing
 /// leaves the process.
 /// </summary>
@@ -161,7 +163,8 @@ public sealed class StoredSettingsReapplyTests : IDisposable
     // DictationController.BuildCleanupOptions and BuildGlossary map them, from the dictionary and libraries as stored.
     private CleanupOptions OptionsFor(AppSettings settings)
     {
-        var vocabulary = CleanupPrompt.ComposeVocabulary(_dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries());
+        var vocabulary = CleanupPrompt.ComposeVocabulary(
+            _dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries(settings.EnabledDictionaryLibraryIds));
         var glossary = CleanupPrompt.BuildGlossary(
             vocabulary, CleanupPrompt.GlossaryTermBudget(settings.AiCleanupPromptStyle, settings.AiCleanupProvider));
         return new CleanupOptions(

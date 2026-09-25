@@ -72,6 +72,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action _reloadVocabulary;
+    // The library selection of the settings dictation runs on, for the usage report: after a failed Save _settings holds
+    // unsaved library switches, and a fresh read of the stored document may find it unreadable.
+    private readonly Func<IReadOnlyList<string>> _enabledLibrariesInUse;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -177,6 +180,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action reloadVocabulary,
+        Func<IReadOnlyList<string>> enabledLibrariesInUse,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -197,6 +201,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
+        _enabledLibrariesInUse = enabledLibrariesInUse;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -6093,9 +6098,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 var request = work;
                 var now = DateTimeOffset.UtcNow;
+                var libraryIds = _enabledLibrariesInUse();
                 result = await Task.Run(
                     () => UsageReport.Build(
-                        _history, _dictionary, _libraries, request.Value.Days, now, request.Cancellation),
+                        _history, _dictionary, _libraries, libraryIds, request.Value.Days, now, request.Cancellation),
                     request.Cancellation);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested)

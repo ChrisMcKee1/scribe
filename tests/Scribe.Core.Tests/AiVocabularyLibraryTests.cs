@@ -34,6 +34,7 @@ public sealed class AiVocabularyLibraryTests
     {
         public IReadOnlyList<DictionaryLibrary> GetLibraries() => [];
         public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries() => entries;
+        public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries(IReadOnlyCollection<string> enabledIds) => entries;
         public DictionaryLibrary Import(string csv, string? suggestedName) => throw new NotSupportedException();
         public void Remove(string id) => throw new NotSupportedException();
     }

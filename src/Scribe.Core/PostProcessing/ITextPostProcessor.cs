@@ -16,8 +16,21 @@ public interface ITextPostProcessor
     /// </summary>
     TextPostProcessingResult ProcessDetailed(string text, string? sourceText = null);
 
-    /// <summary>Rebuilds the compiled substitution rules from the dictionary repository.</summary>
+    /// <summary>
+    /// Rebuilds the compiled substitution rules from the dictionary repository and the libraries the last
+    /// <see cref="Reload(IReadOnlyCollection{string})"/> named, so a caller that changed only the dictionary keeps the
+    /// library selection dictation runs on. Before any selection was given, it uses the libraries the stored settings
+    /// switch on (<see cref="IDictionaryLibraryService.GetEnabledLibraryEntries()"/>), and never the defaults standing in
+    /// for settings that cannot be used.
+    /// </summary>
     void Reload();
+
+    /// <summary>
+    /// Rebuilds the compiled substitution rules from the dictionary repository and the libraries
+    /// <paramref name="enabledLibraryIds"/> names: the enabled ids of the settings dictation runs on, which later
+    /// <see cref="Reload()"/> calls keep. The dictionary library program replaces this seam with a vocabulary source.
+    /// </summary>
+    void Reload(IReadOnlyCollection<string> enabledLibraryIds);
 }
 
 public sealed record TextPostProcessingResult(

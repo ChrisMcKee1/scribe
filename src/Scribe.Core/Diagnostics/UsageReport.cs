@@ -18,19 +18,22 @@ public static class UsageReport
     public sealed record Result(UsageAnalyzer.Snapshot Snapshot, bool PeriodCapped);
 
     /// <summary>
-    /// Reads retained history and the enabled dictionary and libraries, then computes the snapshot
-    /// for the last <paramref name="periodDays"/> days, or for all retained history when null.
+    /// Reads retained history, the enabled dictionary, and the libraries <paramref name="enabledLibraryIds"/> names,
+    /// then computes the snapshot for the last <paramref name="periodDays"/> days, or for all retained history when
+    /// null.
     /// </summary>
     /// <remarks>
     /// Cancellation is checked between the steps rather than inside them: Microsoft.Data.Sqlite runs
     /// its calls synchronously and <see cref="UsageAnalyzer.Compute"/> takes no token, so neither can
-    /// be interrupted once started. Coverage uses the saved dictionary and the saved library choice,
-    /// the same vocabulary dictation uses, not unsaved edits in an open Settings window.
+    /// be interrupted once started. Coverage uses the saved dictionary and the library selection of the settings
+    /// dictation runs on, the same vocabulary dictation uses: not unsaved edits in an open Settings window, and not a
+    /// fresh read of a stored document that may have turned unreadable.
     /// </remarks>
     public static Result Build(
         IHistoryRepository history,
         IDictionaryRepository dictionary,
         IDictionaryLibraryService libraries,
+        IReadOnlyCollection<string> enabledLibraryIds,
         int? periodDays,
         DateTimeOffset nowUtc,
         CancellationToken cancellationToken = default)
@@ -38,11 +41,12 @@ public static class UsageReport
         ArgumentNullException.ThrowIfNull(history);
         ArgumentNullException.ThrowIfNull(dictionary);
         ArgumentNullException.ThrowIfNull(libraries);
+        ArgumentNullException.ThrowIfNull(enabledLibraryIds);
 
         return Build(
             history.GetRecent,
             dictionary.GetEnabled,
-            libraries.GetEnabledLibraryEntries,
+            () => libraries.GetEnabledLibraryEntries(enabledLibraryIds),
             periodDays,
             nowUtc,
             cancellationToken);

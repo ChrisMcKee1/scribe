@@ -1215,6 +1215,7 @@ public partial class App : Application
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
                 },
                 () => _controller!.ReloadVocabulary(),
+                () => [.. _controller!.CurrentSettings.EnabledDictionaryLibraryIds],
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
                 services.GetRequiredService<SessionDiagnostics>());
@@ -1494,11 +1495,15 @@ public partial class App : Application
                     // Compose in the enabled libraries. The popup shows finished text, so the term a
                     // user reaches for is often a shipped library's output; without these the
                     // single-pass conflict check misses the very case that is easiest to walk into.
+                    // The selection dictation runs on, not a fresh read of the stored document.
                     try
                     {
-                        return DictionaryLibraryComposer.Merge(
-                            baseEntries,
-                            services.GetRequiredService<IDictionaryLibraryService>().GetEnabledLibraryEntries());
+                        return _controller is { } controller
+                            ? DictionaryLibraryComposer.Merge(
+                                baseEntries,
+                                services.GetRequiredService<IDictionaryLibraryService>()
+                                    .GetEnabledLibraryEntries(controller.CurrentSettings.EnabledDictionaryLibraryIds))
+                            : baseEntries;
                     }
                     catch
                     {

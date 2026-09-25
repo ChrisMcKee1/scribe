@@ -18,6 +18,10 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     private SnippetRule[] _snippetRules = [];
     private bool _loaded;
 
+    // The library selection of the settings dictation runs on, as the last Reload(ids) named it. Null until an owner
+    // names one. Read and written under _gate.
+    private string[]? _libraryIds;
+
     public TextPostProcessor(
         IDictionaryRepository dictionary,
         ILogger<TextPostProcessor> logger,
@@ -134,6 +138,19 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         }
     }
 
+    public void Reload(IReadOnlyCollection<string> enabledLibraryIds)
+    {
+        ArgumentNullException.ThrowIfNull(enabledLibraryIds);
+        lock (_gate)
+        {
+            // A copy, so a caller changing its own list later cannot change the selection the rules were built from.
+            _libraryIds = [.. enabledLibraryIds];
+            _rules = BuildRules();
+            _snippetRules = BuildSnippets();
+            _loaded = true;
+        }
+    }
+
     private void EnsureLoaded()
     {
         if (Volatile.Read(ref _loaded)) return;
@@ -148,7 +165,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     // The effective rule set = the user's base dictionary plus any enabled libraries, de-duplicated
     // with the base winning on conflict. Libraries are optional and best-effort: a failure to load
-    // them must never cost the user their base dictionary.
+    // them must never cost the user their base dictionary. Caller holds _gate.
     private CompiledRule[] BuildRules()
     {
         var baseEntries = _dictionary.GetEnabled();
@@ -159,6 +176,8 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         return Build(effective);
     }
 
+    // The selection dictation named, never a fresh read of the stored document once one was named: that document may
+    // have turned unreadable, and the defaults standing in for it are not the user's selection. Caller holds _gate.
     private IReadOnlyList<DictionaryEntry> SafeLibraryEntries()
     {
         if (_libraries is null)
@@ -168,7 +187,9 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
         try
         {
-            return _libraries.GetEnabledLibraryEntries();
+            return _libraryIds is { } ids
+                ? _libraries.GetEnabledLibraryEntries(ids)
+                : _libraries.GetEnabledLibraryEntries();
         }
         catch (Exception ex)
         {

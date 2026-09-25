@@ -188,7 +188,9 @@ anything was dictated.
 
 - **Every cleanup request carries the glossary**: every enabled dictionary and library term, merged
   personal first (`DictationController.BuildGlossary`), up to 5,000 terms and 24,000 characters (80
-  terms under the Local prompt style), whether or not the dictation mentions them. A template (a written
+  terms under the Local prompt style), whether or not the dictation mentions them. The libraries are those
+  the settings in use enable, the selection the post-processor was given, never a fresh read of the stored
+  document (see "The library selection is the one in use" below). A template (a written
   form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
   by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
   (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
@@ -892,12 +894,23 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
   window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
   stored, or, while `LastLoadFailed`, applies none and has the controller reload only the vocabulary
-  (`DictationController.ReloadVocabulary`), because the defaults standing in are no more the user's
-  choice. The Usage page's Add used to apply `_settings` to reload the post-processor, which after a
-  failed Save moved AI cleanup, and every later dictation, to the provider nobody saved.
+  (`DictationController.ReloadVocabulary`), on the settings in use, library selection included, because the
+  defaults standing in are no more the user's choice. The Usage page's Add used to apply `_settings` to
+  reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to the
+  provider nobody saved.
   `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
   service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
   window.
+- **The library selection is the one in use.** The post-processor (`ITextPostProcessor.Reload(ids)`), the AI
+  glossary (`DictationController.BuildGlossary`), the usage report and quick add's conflict check each pass the
+  enabled library ids of the settings dictation runs on to `IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`,
+  never a fresh read of the stored document: a document that turns unreadable mid-session reads as the defaults,
+  which switched the user's libraries off and the default AI libraries on and sent their terms to a remote provider.
+  A parameterless `Reload()` (quick add, learning from history) keeps the last selection; the parameterless
+  `GetEnabledLibraryEntries()` returns none while `LastLoadFailed`, and only a post-processor no owner has given a
+  selection falls back to it. `LibrarySelectionInUseTests` pins both consumers through the real library service and
+  post-processor, and the callers by source. This is the seam the dictionary library program replaces with a
+  vocabulary source.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
