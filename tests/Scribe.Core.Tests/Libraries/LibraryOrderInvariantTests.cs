@@ -86,7 +86,8 @@ public sealed class LibraryOrderInvariantTests
         // listing them in whatever order they arrive here.
         var cleanup = LibrarySwitchOffCopy.Plan(
             personal.Select(e => new LibrarySwitchOffCopy.Row(e.Pattern, e.Replacement, e.WholeWord, e.Enabled)),
-            libraries.Where(l => enabled.Contains(l.Id)),
+            libraries,
+            libraries.Select(l => new LibrarySwitchOffCopy.LibraryRow(l.Id, l.BuiltIn, enabled.Contains(l.Id))),
             libraries
                 .Where(l => enabled.Contains(l.Id) && !l.BuiltIn)
                 .Select(l => new LibraryUsage(l.Id, l.Name, [.. l.EnabledEntries], UnusedCount: 1, l.BuiltIn)));

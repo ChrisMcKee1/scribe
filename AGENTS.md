@@ -813,7 +813,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   itself would change them (a copy goes ahead of every library rule). Never treat two rules as equivalent because the
   composer gives them one key: `OrdinalIgnoreCase` folds the Greek final sigma, which the matcher's invariant
   case-insensitive regex does not, and does not fold the Kelvin sign or the capital sharp s, which the matcher does,
-  and rule order breaks ties between rules that match the same text.
+  and rule order breaks ties between rules that match the same text. Which libraries are on before and after the switch
+  comes from the Libraries list's rows the way Save stores them, as ids, and the library service applies every loaded
+  library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of
+  the two while the other's row stays ticked switches nothing off, and unticking the last row with the id switches both
+  off. The window passes every row and every loaded library, and Core decides.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
