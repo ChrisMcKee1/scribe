@@ -79,6 +79,7 @@ internal sealed class HotkeyEngine
     private bool _retired;
     private bool _usesMouseButtons;
     private long _generation;
+    private long _appliedCaptureGeneration;
     private long _activationEpoch;
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
@@ -111,6 +112,10 @@ internal sealed class HotkeyEngine
     /// exists, by whoever builds the router, and the callback only invokes it. Null for the tests that do not script
     /// Windows, where the engine's own state decides: the release is swallowed.
     /// </param>
+    /// <param name="appliedCaptureGeneration">
+    /// The generation of the latest capture request, which <paramref name="captureMode"/> already reflects
+    /// (<see cref="AppliedCaptureGeneration"/>).
+    /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnlyBinding,
@@ -119,7 +124,8 @@ internal sealed class HotkeyEngine
         long generation,
         HotkeyTransitionQueue transitions,
         Func<uint, bool>? isLogicallyDown = null,
-        Func<uint, bool>? buttonDownInWindows = null)
+        Func<uint, bool>? buttonDownInWindows = null,
+        long appliedCaptureGeneration = 0)
     {
         _transitions = transitions;
         _isLogicallyDown = isLogicallyDown;
@@ -127,6 +133,7 @@ internal sealed class HotkeyEngine
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
+        _appliedCaptureGeneration = appliedCaptureGeneration;
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
         _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
@@ -225,11 +232,18 @@ internal sealed class HotkeyEngine
     public bool IsRetired => Volatile.Read(ref _retired);
 
     /// <summary>
-    /// Any thread. Whether this engine is applying binding capture, from the moment the owner applied its start to the
-    /// moment it applied its end. Capture tracks no key, so while this holds the engine's view of the keyboard is empty
-    /// and the leaked-key repair must not trust it (<see cref="HotkeyCommandRouter.CaptureOwnsInput"/>).
+    /// Any thread. The generation of the latest capture request (<see cref="HotkeyCommand.CaptureMode"/>) this engine has
+    /// applied with both its machines, published only once the second has, so until then the router counts capture as
+    /// owning input (<see cref="HotkeyCommandRouter.CaptureOwnsInput"/>): at capture's end both machines' views are
+    /// empty, and the one that has left capture tracks keys again only from there.
     /// </summary>
-    public bool CapturesInput => Volatile.Read(ref _captureMode);
+    public long AppliedCaptureGeneration => Volatile.Read(ref _appliedCaptureGeneration);
+
+    /// <summary>
+    /// Test seam, null in production: run by the owner between the two machines' capture changes, where a test pauses
+    /// the change it is applying.
+    /// </summary>
+    internal Action? BetweenCaptureMachinesForTests { get; set; }
 
     /// <summary>
     /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>). It is
@@ -595,6 +609,10 @@ internal sealed class HotkeyEngine
                 break;
             case HotkeyCommandKind.SetCaptureMode:
                 ApplyCaptureMode(command.Enabled);
+
+                // Published only now, once both machines have applied the request (review round 9, A11): until then the
+                // router counts capture as owning input, at its start and at its end.
+                Volatile.Write(ref _appliedCaptureGeneration, command.Generation);
                 break;
             case HotkeyCommandKind.SetPaused:
                 ApplyPaused(command.Enabled);
@@ -662,9 +680,9 @@ internal sealed class HotkeyEngine
 
     private void ApplyCaptureMode(bool enabled)
     {
-        // Published: the leaked-key repair, on a pool thread, never runs while this engine is still capturing.
-        Volatile.Write(ref _captureMode, enabled);
+        _captureMode = enabled;
         var (transition, _) = _standard.SetCaptureMode(enabled);
+        BetweenCaptureMachinesForTests?.Invoke();
         var secondary = _dictationOnly?.SetCaptureMode(enabled);
         if (transition != HotkeyTransition.None)
         {

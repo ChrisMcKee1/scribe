@@ -894,15 +894,47 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   forgives the debt) asks for the mouse hook's sync alone, and a renewal that finds the hook gone asks
   for nothing (it removes a drain-only hook itself). Round 6 had a release swallowed only for such a
   debt ask for the repair as well; that is the same harm (the chord held through a UAC prompt, then
-  Back released while Ctrl is still held), so it asks for the sync alone too. And whatever asked, a
-  pass skips the repair while binding capture owns input, from Set's request until the engine has
-  applied capture's end (`HotkeyCommandRouter.CaptureOwnsInput`, the router's request or the current
-  engine's `CapturesInput`), because a repair asked for just before Set could otherwise run inside
-  capture: the pass waits 25 ms for the input queue to settle. A capture that begins between that check
-  and the repair's own reads, a few calls later but with no bound on the time (the pool thread can be
-  preempted between them), is not covered. `MouseButtonRound8Tests`,
-  the two `Start_releases_no_key` service tests and
-  `Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key` pin it.
+  Back released while Ctrl is still held), so it asks for the sync alone too. Round 8 added
+  `MouseButtonRound8Tests`, the two `Start_releases_no_key` service tests and
+  `Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key`.
+- **The key repair is excluded from binding capture, not just checked against it** (review round 9,
+  A11). A check alone could be overtaken: a legitimate repair pass (Left Ctrl and Back bound, Back
+  released while Ctrl is held) read "capture does not own input", then Set was chosen and the engine
+  applied capture, clearing its key view, and the pass went on to find Left Ctrl down in Windows and
+  absent from the engine and sent a Ctrl-up during the capture; and capture's end was published before
+  both machines had applied it. Now capture's start and the repair's key-ups are serialized on one
+  gate that only the requesting threads use (`HotkeyService._repairGate`): the repair
+  (`SuppressedKeyReconciler`) judges and sends one key at a time inside it, and checks inside it,
+  before the key's reads and again after them, before the key-up (`HotkeyService.KeyViewIsWhole`),
+  that no capture start is being admitted, capture does not own input and a hook runs at all.
+  `HotkeyService.AdmitCapture`, on the UI thread, first raises an admission count (which stops the
+  repair at its next check), then takes the gate (which waits for the one key-up that may already be
+  on its way) and publishes and posts the request inside it, so every key-up is sent before capture is
+  requested or not at all, and the engine clears its view only after. Capture owns input from that
+  request until the current engine has applied the latest capture request with both machines
+  (`HotkeyEngine.AppliedCaptureGeneration`, published after the second machine;
+  `HotkeyCommandRouter.CaptureOwnsInput` compares it with the router's latest capture generation, so a
+  request not yet applied, start or end, counts too, and a replacement engine starts with the latest
+  already applied). The wait for the gate is bounded, 250 ms: a key-up lasts as long as the low-level
+  hooks Windows passes it through (for injected input the context "switches back to the process that
+  installed the hook", then "back to the application that generated the event", LowLevelKeyboardProc;
+  Scribe's own keyboard callback passes a marked key-up on at once; each other hook has up to
+  LowLevelHooksTimeout, at most 1 second since Windows 10 1709, and is removed if it takes longer), and
+  the UI thread must not wait on them unboundedly. Past the bound capture starts anyway and logs a
+  warning: the key-up still on its way was decided on reads made before the request, of a view capture
+  had not touched, and the second check stops every key whose reads came later, so that one key-up is
+  the only one that can arrive after capture has started. No deadlock: the hook thread never takes the
+  gate or any lock (an IL test pins it), so a key-up the gate's holder is sending never waits on a thread
+  that waits for the gate; the UI thread holds the gate only while it publishes and posts the request
+  (the router's lock, held by requesters for in-memory updates only, and PostThreadMessage, which does
+  not wait for the hook thread); the gate is taken before the router's lock and never after it; nothing
+  is logged under it; and the UI thread's wait ends at the bound even if another program's hook were
+  waiting on it. **A pass that capture stops is not run again when capture ends**: the keys held for the capture
+  are missing from the engine's view then, so a replay would send key-ups for keys the user still holds;
+  a real leak is repaired at the next trigger (a key release the bindings swallow, or a dictation's
+  release). A pass that outlives the hooks (scheduled just before Stop) judges nothing: there is no view.
+  `MouseButtonRound9Tests` (barriers inside the scripted Windows view and key-up) and
+  `Start_runs_no_repair_again_when_capture_ends` pin it.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new

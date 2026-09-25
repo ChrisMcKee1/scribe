@@ -23,6 +23,7 @@ internal sealed class HotkeyCommandRouter
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
+    private long _captureGeneration;
     private bool _paused;
     private long _latestPauseRequest;
     private long _generation;
@@ -110,19 +111,37 @@ internal sealed class HotkeyCommandRouter
     {
         lock (_gate)
         {
-            // Published at the request, for CaptureOwnsInput, which reads it without the gate.
+            // Published at the request, before the command exists, for CaptureOwnsInput, which reads both without the
+            // gate: the generation first, so a reader that sees the new mode also sees its generation.
+            var generation = AdvanceGeneration();
+            Volatile.Write(ref _captureGeneration, generation);
             Volatile.Write(ref _captureMode, enabled);
-            return Post(HotkeyCommand.CaptureMode(enabled, AdvanceGeneration()));
+            return Post(HotkeyCommand.CaptureMode(enabled, generation));
         }
     }
 
     /// <summary>
-    /// Any thread, without the gate. Whether binding capture owns input: from the moment Settings asks for it until the
-    /// current engine has applied its end (<see cref="HotkeyEngine.CapturesInput"/>). Capture tracks no key and each of
-    /// its edges clears the engine's key view, so the leaked-key repair skips a pass while this holds: every key the user
-    /// holds for the chord would otherwise look leaked (review round 8, A9).
+    /// Any thread, without the gate. Whether binding capture owns input: from Settings' request for it until the current
+    /// engine has applied the latest capture request with both its machines
+    /// (<see cref="HotkeyEngine.AppliedCaptureGeneration"/>), which for capture's end is the moment both machines have
+    /// left it. Capture tracks no key and each of its edges clears the engine's key view, so the leaked-key repair judges
+    /// no key while this holds (review rounds 8 and 9, A9 and A11); the service also serializes capture's start with the
+    /// repair's key-ups (<c>HotkeyService.AdmitCapture</c>). A request the current engine has not applied yet, start or
+    /// end, counts as owning input: before an engine applies the start, its view is about to be cleared.
     /// </summary>
-    public bool CaptureOwnsInput => Volatile.Read(ref _captureMode) || CurrentEngine?.CapturesInput == true;
+    public bool CaptureOwnsInput
+    {
+        get
+        {
+            if (Volatile.Read(ref _captureMode))
+            {
+                return true;
+            }
+
+            var requested = Volatile.Read(ref _captureGeneration);
+            return CurrentEngine is { } engine && engine.AppliedCaptureGeneration != requested;
+        }
+    }
 
     /// <summary>Returns whether the pause state changed, and the engine to wake.</summary>
     public (bool Changed, HotkeyEngine? Wake) SetPaused(bool paused)
@@ -202,9 +221,12 @@ internal sealed class HotkeyCommandRouter
         {
             var previous = _engine;
             var interrupted = previous?.Retire();
+
+            // The new engine starts in the published capture mode, so it has in effect applied the latest capture request
+            // already, with both machines.
             var engine = new HotkeyEngine(
                 _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
-                _buttonDownInWindows);
+                _buttonDownInWindows, _captureGeneration);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }
