@@ -15,12 +15,14 @@ namespace Scribe.Core.Libraries;
 /// change is a new instance.
 /// </para>
 /// <para>
-/// Stored as <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/> (the list 0.4.3 reads) plus the auxiliary
-/// settings row <see cref="LibrarySettingKeys.State"/>, whose format belongs to composition. The document's list is a
-/// downgrade-safe projection: an enabled library an older build would send or apply beyond what the user chose (its AI
-/// permission is off, or an older build would load a hand-placed twin under the same id that is not both on and
-/// permitted, review finding A15) is kept out of the document's list and in the auxiliary row instead; this build reads
-/// both.
+/// Stored as the auxiliary settings row <see cref="LibrarySettingKeys.State"/>, whose format belongs to composition and
+/// which is this build's source of truth for which libraries are on, by logical id (review finding A17), plus
+/// <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>, the list 0.4.3 reads, which is only a downgrade-safe
+/// projection of it by legacy id: an enabled library an older build would send or apply beyond what the user chose (its
+/// AI permission is off, or it shares its legacy id with a library that is not both on and permitted, before or after the
+/// commit's physical changes, review findings A15 and A18) is left out of it. The row also stores the projection this
+/// build last wrote, so a change an older build made to the document's list since is noticed and applied, conservatively,
+/// when the state is read.
 /// </para>
 /// <para>
 /// Consent is bound to content (review finding A4): <see cref="AcceptedContent"/> holds, per library, the hash of the
@@ -57,12 +59,18 @@ public sealed class LibraryLocalState
         Create(enabledIds: null, legacyEnabledIds: null, aiPermissions: null, legacyMarkers: null, aiUpgradeNotice: null,
             LocalStateHealth.Absent);
 
-    /// <summary>Every library this build treats as on: the document's list and the auxiliary list together.</summary>
+    /// <summary>
+    /// Every library this build treats as on, by logical id: the auxiliary row's list, with any change an older build made
+    /// to the document's list since this build last wrote it applied through the libraries' legacy ids (review finding
+    /// A17). With no readable row, the document's list read the same way.
+    /// </summary>
     public IReadOnlySet<string> EnabledIds { get; }
 
     /// <summary>
     /// The ids the document's <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/> held when this state was
-    /// read, so an id the encoder cannot place (a library that is not there right now) stays in the list it came from.
+    /// read (the projection, as an older build may have changed it), or, when no readable document held the list (a
+    /// session on defaults), the projection the auxiliary row stored; so an id the encoder cannot place (a library that is
+    /// not there right now) stays in the list it came from.
     /// </summary>
     public IReadOnlySet<string> LegacyEnabledIds { get; }
 
@@ -191,9 +199,9 @@ public readonly record struct LegacyMarker(string LibraryId, LibraryTermKey Key)
 public enum LocalStateHealth
 {
     /// <summary>
-    /// No row, and nothing says one was lost: no stored generation, no repair at this start, no session on defaults,
-    /// and no witness file of an earlier commit in the libraries folder. The first start of this version. Libraries
-    /// without an explicit choice take the policy default for their kind.
+    /// No row, and nothing says one was lost: no stored generation, no repair record, no session on defaults, and no
+    /// witness file of an earlier commit in the libraries folder. The first start of this version. Libraries without an
+    /// explicit choice take the policy default for their kind.
     /// </summary>
     Absent,
 
@@ -217,11 +225,13 @@ public enum LocalStateHealth
 /// <summary>A library state encoded for the settings store.</summary>
 /// <param name="EnabledLibraryIds">
 /// The list for <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>, in precedence order: the downgrade-safe
-/// projection of the enabled libraries, by the ids older builds load them as (review finding A15).
+/// projection of the enabled libraries, by the ids older builds load them as, safe both before and after the commit's
+/// physical changes (review findings A15 and A18).
 /// </param>
 /// <param name="StateValue">
-/// The value of the auxiliary row <see cref="LibrarySettingKeys.State"/>, or null to leave the stored row as it is:
-/// a state from a newer version (<see cref="LocalStateHealth.Newer"/>) is never written by this one.
+/// The value of the auxiliary row <see cref="LibrarySettingKeys.State"/>, which carries every enabled library by logical
+/// id and this same projection (A17), or null to leave the stored row as it is: a state from a newer version
+/// (<see cref="LocalStateHealth.Newer"/>) is never written by this one.
 /// </param>
 public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryIds, string? StateValue);
 
@@ -235,18 +245,24 @@ public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryId
 /// automatically then: no adoption, no marker, no denial, no Recently deleted or journal clean-up. The user's own Save,
 /// which ends that state, commits the library changes with the settings.
 /// </param>
-/// <param name="DatabaseRepaired">A repair rebuilt the database at this start, so an absent row may be a lost one.</param>
+/// <param name="DatabaseRepaired">
+/// A repair's record that settings rows may have been lost is present (round 4, review finding A3): the repair writes it
+/// inside database initialization, before it recovers a row, whether or not the settings document survived; it outlives
+/// restarts; and only the library service clears it, once its witness, or its denial, is durable. So an absent row may
+/// be a lost one even at a later start that saw no repair itself.
+/// </param>
 /// <param name="GenerationStored">
 /// <see cref="LibrarySettingKeys.Generation"/> is stored. Every commit writes the state row with it, so a stored
 /// generation beside an absent state row means the row was lost, not that this is the first start.
 /// </param>
 /// <param name="CommitWitnessed">
 /// The libraries folder holds the witness file (review finding A3). The journal writes it, flushed to disk, before any
-/// library commit of this version can happen (the first adoption, the user's first Save, a wrapper) and at a start that
-/// detects a loss, before anything else; it is monotonic: Scribe creates it and never deletes, truncates or replaces it.
-/// It lives outside the database, so it still says a state may have existed on the start after a repair that lost both
-/// library rows, when nothing in the database does. Written before the commit, it also turns an interrupted first
-/// adoption into a lost state the user confirms next time, which is the fail-closed direction.
+/// library commit of this version can happen (the first adoption, the user's first Save, a wrapper), at a start that
+/// detects a loss, before anything else, and before it acknowledges a repair record; it is monotonic: Scribe creates it
+/// and never deletes, truncates or replaces it. It lives outside the database, so it still says a state may have existed
+/// after a repair that lost both library rows, including one made by an older build, which writes no repair record.
+/// Written before the commit, it also turns an interrupted first adoption into a lost state the user confirms next time,
+/// which is the fail-closed direction.
 /// </param>
 public readonly record struct LibraryStateContext(
     bool RunningOnDefaults, bool DatabaseRepaired, bool GenerationStored, bool CommitWitnessed = false);
@@ -274,8 +290,9 @@ public enum LibraryAdoptionReasons
 
     /// <summary>
     /// The stored state was lost or unreadable: a fresh state is committed with
-    /// <see cref="LibraryLocalState.AiPermissionsLost"/> set, the document's enabled list as read, markers recomputed
-    /// as at the upgrade and the current content accepted.
+    /// <see cref="LibraryLocalState.AiPermissionsLost"/> set, the libraries the document's enabled list stands for on
+    /// (each legacy id for every library an older build loads under it), markers recomputed as at the upgrade and the
+    /// current content accepted.
     /// </summary>
     StateLost = 8,
 }
