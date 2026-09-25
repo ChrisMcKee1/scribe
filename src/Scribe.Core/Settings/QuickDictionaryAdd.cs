@@ -379,12 +379,12 @@ public sealed record QuickAddVocabulary(
         return new QuickAddVocabulary(personalList, new HashSet<string>(pendingSpokenForms.Select(p => p.Trim()), StringComparer.OrdinalIgnoreCase), packs);
     }
 
-    public DictionaryEntry? FindPersonal(string spoken) => Personal.FirstOrDefault(e => string.Equals(e.Pattern.Trim(), spoken, StringComparison.OrdinalIgnoreCase));
-    public PackTerm? FindPack(string spoken) => Packs.FirstOrDefault(e => string.Equals(e.Entry.Pattern.Trim(), spoken, StringComparison.OrdinalIgnoreCase));
-    public PackTerm? FindPackProducer(string written) => Packs.FirstOrDefault(e => string.Equals(e.Entry.Replacement.Trim(), written, StringComparison.OrdinalIgnoreCase) && !string.Equals(e.Entry.Pattern.Trim(), written, StringComparison.OrdinalIgnoreCase));
+    public DictionaryEntry? FindPersonal(string spoken) => Personal.FirstOrDefault(e => string.Equals(e.Pattern.Trim(), spoken.Trim(), StringComparison.OrdinalIgnoreCase));
+    public PackTerm? FindPack(string spoken) => Packs.FirstOrDefault(e => string.Equals(e.Entry.Pattern.Trim(), spoken.Trim(), StringComparison.OrdinalIgnoreCase));
+    public PackTerm? FindPackProducer(string written) => Packs.FirstOrDefault(e => string.Equals(e.Entry.Replacement.Trim(), written.Trim(), StringComparison.OrdinalIgnoreCase) && !string.Equals(e.Entry.Pattern.Trim(), written.Trim(), StringComparison.OrdinalIgnoreCase));
     public (DictionaryEntry Entry, string? PackName)? FindProducer(string written)
     {
-        var personal = Personal.FirstOrDefault(e => e.Enabled && string.Equals(e.Replacement.Trim(), written, StringComparison.OrdinalIgnoreCase) && !string.Equals(e.Pattern.Trim(), written, StringComparison.OrdinalIgnoreCase));
+        var personal = Personal.FirstOrDefault(e => e.Enabled && string.Equals(e.Replacement.Trim(), written.Trim(), StringComparison.OrdinalIgnoreCase) && !string.Equals(e.Pattern.Trim(), written.Trim(), StringComparison.OrdinalIgnoreCase));
         if (personal is not null) return (personal, null);
         var pack = FindPackProducer(written);
         return pack is null ? null : (pack.Entry, pack.PackName);

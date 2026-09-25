@@ -22,7 +22,7 @@ public enum DictationProblem
     FallbackMicrophone,
 }
 
-public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, string? PillText);
+public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, string? PillText, TrayNoticeAction Action = TrayNoticeAction.None);
 
 public static class DictationProblemText
 {
@@ -64,14 +64,24 @@ public static class DictationProblemText
             DictationProblem.MicrophoneDisconnected => new("Microphone disconnected", "Your microphone stopped during the dictation. Check that it's connected, then try again.", TrayNoticeKind.Warning, null),
             DictationProblem.DurationLimit => new($"Dictation stopped at {minutes} minutes", $"Scribe stops recording after {minutes} minutes and types what it heard. You can change this in Settings, Advanced.", TrayNoticeKind.Warning, null),
             DictationProblem.NothingRecognized => new("No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning, null),
-            DictationProblem.FocusChanged => new("Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null),
-            DictationProblem.TypingIncomplete => new("Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null),
-            DictationProblem.NoSpeechModel => new("No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, null),
-            DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, null),
-            DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, null),
-            DictationProblem.FallbackMicrophone => new("Using another microphone", $"{Quote(string.IsNullOrWhiteSpace(chosenDevice) ? "Your chosen microphone" : chosenDevice)} isn't available, so Scribe is recording from {Quote(string.IsNullOrWhiteSpace(usedDevice) ? "the Windows default microphone" : usedDevice)}, the Windows default. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, "Using default mic"),
+            DictationProblem.FocusChanged => new("Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null, TrayNoticeAction.CopyLastDictation),
+            DictationProblem.TypingIncomplete => new("Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, null, TrayNoticeAction.CopyLastDictation),
+            DictationProblem.NoSpeechModel => new("No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, null, TrayNoticeAction.OpenSettings),
+            DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, null, TrayNoticeAction.OpenSettingsDiagnostics),
+            DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, null, TrayNoticeAction.OpenSettingsDiagnostics),
+            DictationProblem.FallbackMicrophone => new("Using another microphone", FallbackMicrophoneBody(chosenDevice, usedDevice), TrayNoticeKind.RecordingWarning, "Using default mic"),
             _ => new("Dictation didn't finish", "Try again.", TrayNoticeKind.Warning, null),
         };
+    }
+
+    private static string FallbackMicrophoneBody(string? chosenDevice, string? usedDevice)
+    {
+        if (string.IsNullOrWhiteSpace(chosenDevice) || string.IsNullOrWhiteSpace(usedDevice))
+        {
+            return "Your chosen microphone isn't available, so Scribe is recording from the Windows default microphone. To choose another, right-click the Scribe icon and choose Microphone.";
+        }
+
+        return $"{Quote(Shorten(chosenDevice, 40))} isn't available, so Scribe is recording from {Quote(Shorten(usedDevice, 40))}, the Windows default. To choose another, right-click the Scribe icon and choose Microphone.";
     }
 
     private static string Quote(string value) => $"\"{value}\"";

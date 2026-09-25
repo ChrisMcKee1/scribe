@@ -307,4 +307,43 @@ public sealed class LastTranscriptStoreTests
         Assert.False(store.Update("Aspire is great", "Aspire is great!"));
         Assert.True(store.Update("aspire is great", "Aspire is great"));
         Assert.Equal("Aspire is great", store.Get());
-    }}
+    }
+
+    [Fact]
+    public void Clear_empties_the_ring()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("one");
+        store.Set("two");
+
+        store.Clear();
+
+        Assert.Empty(store.GetRecent());
+        Assert.Null(store.Get());
+    }
+
+    [Fact]
+    public void Forget_removes_every_copy_of_the_text()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("repeat");
+        store.Set("other");
+        store.Set("repeat");
+
+        Assert.True(store.Forget("repeat"));
+
+        Assert.Equal(["other"], store.GetRecent());
+    }
+
+    [Fact]
+    public void Forget_of_unknown_text_changes_nothing()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("one");
+
+        Assert.False(store.Forget("missing"));
+        Assert.False(store.Forget(null));
+        Assert.Equal(["one"], store.GetRecent());
+    }
+
+}
