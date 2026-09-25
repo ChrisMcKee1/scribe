@@ -25,7 +25,7 @@ public static class TrayToolTip
 
     public static string Compose(TrayState state, string? shortcutName, HotkeyMode mode, TrayCondition condition = TrayCondition.None, string? version = null)
     {
-        var shortcut = Shorten(string.IsNullOrWhiteSpace(shortcutName) ? "your shortcut" : shortcutName.Trim(), 40);
+        var shortcut = string.IsNullOrWhiteSpace(shortcutName) ? "your shortcut" : shortcutName.Trim();
         var first = state switch
         {
             TrayState.Ready when mode == HotkeyMode.Toggle => $"Scribe: ready. Press {shortcut} to start and stop.",
@@ -36,7 +36,8 @@ public static class TrayToolTip
             _ => "Scribe: ready.",
         };
         var line = ConditionLine(condition, version);
-        return Shorten(line is null ? first : first + Environment.NewLine + line, MaxLength);
+        var combined = line is null ? first : first + Environment.NewLine + line;
+        return combined.Length <= MaxLength ? combined : Shorten(first, MaxLength);
     }
 
     private static string? ConditionLine(TrayCondition condition, string? version) => condition switch
@@ -48,5 +49,19 @@ public static class TrayToolTip
         _ => null,
     };
 
-    private static string Shorten(string value, int max) => value.Length <= max ? value : value[..Math.Max(0, max - 1)] + "…";
+    private static string Shorten(string value, int max)
+    {
+        if (value.Length <= max)
+        {
+            return value;
+        }
+
+        var cut = Math.Max(0, max - 1);
+        if (cut > 0 && char.IsHighSurrogate(value[cut - 1]))
+        {
+            cut--;
+        }
+
+        return value[..cut] + "…";
+    }
 }

@@ -50,7 +50,6 @@ public sealed class TrayCoreRedesignT0Tests
         var tooltip = TrayToolTip.Compose(TrayState.Ready, new string('x', 100), HotkeyMode.Toggle, TrayCondition.UpdateReady, "0.4.5");
 
         Assert.StartsWith("Scribe: ready. Press ", tooltip);
-        Assert.Contains("start and stop", tooltip);
         Assert.True(tooltip.Length <= TrayToolTip.MaxLength);
         Assert.Equal("Scribe: listening...", TrayToolTip.Compose(TrayState.Recording, "Page Down", HotkeyMode.Hold));
     }

@@ -346,4 +346,29 @@ public sealed class LastTranscriptStoreTests
         Assert.Equal(["one"], store.GetRecent());
     }
 
+
+    [Fact]
+    public void Forget_removes_a_corrected_copy_by_original_text()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("cloud pilot");
+        Assert.True(store.Update("cloud pilot", "Copilot"));
+
+        Assert.True(store.Forget("cloud pilot"));
+
+        Assert.Empty(store.GetRecent());
+    }
+
+    [Fact]
+    public void Forget_removes_a_copy_after_successive_corrections_by_original_text()
+    {
+        var store = new LastTranscriptStore();
+        store.Set("cloud pilot");
+        Assert.True(store.Update("cloud pilot", "Copilot"));
+        Assert.True(store.Update("Copilot", "GitHub Copilot"));
+
+        Assert.True(store.Forget("cloud pilot"));
+
+        Assert.Empty(store.GetRecent());
+    }
 }

@@ -139,8 +139,65 @@ public static class QuickDictionaryAdd
         return trimmed.Length == 0 ? raw : trimmed;
     }
 
-    public static Plan Build(string? pattern, string? replacement, bool wholeWord, IReadOnlyList<DictionaryEntry> existing) =>
-        Build(new QuickAddRequest(pattern, replacement, Remove: false, wholeWord), QuickAddVocabulary.Compose(existing, [], [], []));
+    public static Plan Build(string? pattern, string? replacement, bool wholeWord, IReadOnlyList<DictionaryEntry> existing)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+
+        var spoken = (pattern ?? string.Empty).Trim();
+        if (spoken.Length == 0)
+        {
+            return new Plan(PlanKind.Invalid, null, "Pick a word above, or type what Scribe wrote.");
+        }
+
+        if (spoken.Contains('\n') || spoken.Contains('\r'))
+        {
+            return new Plan(PlanKind.Invalid, null, "Pick words from a single line. A rule can't stretch across a line break.");
+        }
+
+        var written = (replacement ?? string.Empty).Trim();
+        if (string.Equals(spoken, written, StringComparison.Ordinal))
+        {
+            return new Plan(PlanKind.Invalid, null, "That is already what Scribe writes, so nothing would change.");
+        }
+
+        var producer = existing.FirstOrDefault(e =>
+            e.Enabled
+            && string.Equals(e.Replacement.Trim(), spoken, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(e.Pattern.Trim(), spoken, StringComparison.OrdinalIgnoreCase));
+        if (producer is not null)
+        {
+            return new Plan(
+                PlanKind.Invalid,
+                null,
+                $"\"{producer.Pattern.Trim()}\" is already turned into \"{spoken}\" by another rule, and rules " +
+                $"only run once, so this would never apply. Change that rule's replacement instead.");
+        }
+
+        var match = existing.FirstOrDefault(e => string.Equals(e.Pattern.Trim(), spoken, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+        {
+            if (string.Equals(match.Replacement.Trim(), written, StringComparison.Ordinal)
+                && match.WholeWord == wholeWord
+                && match.Enabled)
+            {
+                return new Plan(PlanKind.NoChange, match, $"\"{spoken}\" already becomes \"{LegacyDescribe(written)}\".");
+            }
+
+            var updated = new DictionaryEntry(match.Id, spoken, written, wholeWord, Enabled: true);
+            return new Plan(
+                PlanKind.Update,
+                updated,
+                $"Replaces the existing rule: \"{spoken}\" becomes \"{LegacyDescribe(written)}\" instead of \"{LegacyDescribe(match.Replacement.Trim())}\".");
+        }
+
+        var created = new DictionaryEntry(0, spoken, written, wholeWord, Enabled: true);
+        return new Plan(
+            PlanKind.Create,
+            created,
+            written.Length == 0
+                ? $"Scribe will leave \"{spoken}\" out of what you dictate."
+                : $"Scribe will write \"{spoken}\" as \"{written}\".");
+    }
 
     public static Plan Build(QuickAddRequest request, QuickAddVocabulary vocabulary)
     {
@@ -223,6 +280,8 @@ public static class QuickDictionaryAdd
     public static Plan SaveFailed() => new(PlanKind.SaveFailed, null, "Couldn't save this word. Try again, or add it in Settings.", PlanSeverity.Error, PlanAction.AddItInSettings);
     public static Plan CopySucceeded() => new(PlanKind.CopySucceeded, null, "Copied. Press Ctrl+V to paste it.", PlanSeverity.Success);
     public static Plan CopyFailed() => new(PlanKind.CopyFailed, null, "Couldn't copy. Another app may be using the clipboard. Try again.", PlanSeverity.Error);
+
+    private static string LegacyDescribe(string written) => written.Length == 0 ? "nothing" : written;
 
     private static Plan PlanForPersonal(QuickAddRequest request, DictionaryEntry match, string heard, string written)
     {

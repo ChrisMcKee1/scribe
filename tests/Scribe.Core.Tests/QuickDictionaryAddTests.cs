@@ -97,7 +97,7 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build(selected, "anything", wholeWord: true, Empty);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.LineBreak, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Invalid, plan.Kind);
         Assert.Contains("line break", plan.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -126,8 +126,8 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build("Microsoft Teams", "Teams", wholeWord: true, existing);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.ProducedByYourWord, plan.Kind);
-        Assert.Contains("fix", plan.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Invalid, plan.Kind);
+        Assert.Contains("never apply", plan.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("teams", plan.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -156,7 +156,7 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build("GitHub", "GitHub Enterprise", wholeWord: true, existing);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.UpdateReplacement, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Update, plan.Kind);
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public sealed class QuickDictionaryAddTests
     {
         var plan = QuickDictionaryAdd.Build("   ", "Copilot", wholeWord: true, Empty);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.Empty, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Invalid, plan.Kind);
         Assert.False(plan.CanSave);
         Assert.Null(plan.Entry);
     }
@@ -205,7 +205,7 @@ public sealed class QuickDictionaryAddTests
     {
         var plan = QuickDictionaryAdd.Build("Copilot", " Copilot ", wholeWord: true, Empty);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.SameText, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Invalid, plan.Kind);
     }
 
     /// <summary>
@@ -235,18 +235,16 @@ public sealed class QuickDictionaryAddTests
     }
 
     [Fact]
-    public void An_empty_replacement_is_pending_until_remove_is_explicit()
+    public void Compatibility_overload_keeps_empty_replacement_as_a_savable_removal()
     {
-        var pending = QuickDictionaryAdd.Build("um", "", wholeWord: true, Empty);
-        var removal = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("um", "", Remove: true, WholeWord: true), QuickAddVocabulary.Compose(Empty, [], [], []));
+        var legacy = QuickDictionaryAdd.Build("um", "", wholeWord: true, Empty);
+        var redesigned = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("um", "", Remove: false, WholeWord: true), QuickAddVocabulary.Compose(Empty, [], [], []));
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.Pending, pending.Kind);
-        Assert.False(pending.CanSave);
-        Assert.Equal(QuickDictionaryAdd.PlanKind.CreateRemoval, removal.Kind);
-        Assert.Equal(string.Empty, removal.Entry!.Replacement);
-        Assert.Contains("remove \"um\"", removal.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("delete", removal.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("saved", removal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Create, legacy.Kind);
+        Assert.True(legacy.CanSave);
+        Assert.Equal(string.Empty, legacy.Entry!.Replacement);
+        Assert.Equal("Scribe will leave \"um\" out of what you dictate.", legacy.Message);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Pending, redesigned.Kind);
     }
 
     [Fact]
@@ -257,7 +255,7 @@ public sealed class QuickDictionaryAddTests
             "cloud pilot", "Copilot", wholeWord: true, [new DictionaryEntry(1, "cloud pilot", "CoPilot")]);
 
         Assert.Equal(QuickDictionaryAdd.PlanKind.Create, create.Kind);
-        Assert.Equal(QuickDictionaryAdd.PlanKind.UpdateReplacement, update.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Update, update.Kind);
         Assert.DoesNotContain("saved", create.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("saved", update.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -273,7 +271,7 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build("cloud pilot", "GitHub Copilot", wholeWord: true, existing);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.UpdateReplacement, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Update, plan.Kind);
         Assert.Equal(7, plan.Entry!.Id);
         Assert.Equal("cloud pilot", plan.Entry.Pattern);
         Assert.Equal("GitHub Copilot", plan.Entry.Replacement);
@@ -286,7 +284,7 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build("cloud pilot", "Copilot", wholeWord: true, existing);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.UpdateTurnOn, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Update, plan.Kind);
         Assert.True(plan.Entry!.Enabled);
     }
 
@@ -308,7 +306,7 @@ public sealed class QuickDictionaryAddTests
 
         var plan = QuickDictionaryAdd.Build("cloud pilot", "Copilot", wholeWord: false, existing);
 
-        Assert.Equal(QuickDictionaryAdd.PlanKind.UpdateWholeWord, plan.Kind);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Update, plan.Kind);
         Assert.False(plan.Entry!.WholeWord);
     }
 

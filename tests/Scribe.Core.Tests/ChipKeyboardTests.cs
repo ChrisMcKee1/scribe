@@ -79,4 +79,29 @@ public sealed class ChipKeyboardTests
     }
 
     private static ChipKeyboardState State(int focus = 0, int anchor = 0, QuickDictionaryAdd.WordRange? selection = null, IReadOnlyList<int>? rows = null) => new(focus, anchor, selection ?? QuickDictionaryAdd.WordRange.None, rows);
+
+
+    [Fact]
+    public void Space_keeps_anchor_on_stable_end_when_growing_left()
+    {
+        var selected = ChipKeyboard.Apply(State(focus: 2), ChipKey.Space, false, 4).State;
+        var grownLeft = ChipKeyboard.Apply(selected with { FocusIndex = 1 }, ChipKey.Space, false, 4).State;
+        var extended = ChipKeyboard.Apply(grownLeft, ChipKey.Left, true, 4).State;
+
+        Assert.Equal(new QuickDictionaryAdd.WordRange(1, 2), grownLeft.Selection);
+        Assert.Equal(2, grownLeft.AnchorIndex);
+        Assert.Equal(new QuickDictionaryAdd.WordRange(0, 2), extended.Selection);
+    }
+
+    [Fact]
+    public void Space_keeps_anchor_on_stable_end_when_growing_right()
+    {
+        var selected = ChipKeyboard.Apply(State(focus: 1), ChipKey.Space, false, 4).State;
+        var grownRight = ChipKeyboard.Apply(selected with { FocusIndex = 2 }, ChipKey.Space, false, 4).State;
+        var extended = ChipKeyboard.Apply(grownRight, ChipKey.Right, true, 4).State;
+
+        Assert.Equal(new QuickDictionaryAdd.WordRange(1, 2), grownRight.Selection);
+        Assert.Equal(1, grownRight.AnchorIndex);
+        Assert.Equal(new QuickDictionaryAdd.WordRange(1, 3), extended.Selection);
+    }
 }

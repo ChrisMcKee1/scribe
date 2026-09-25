@@ -46,4 +46,29 @@ public sealed class TrayToolTipTests
             Assert.DoesNotContain('\u2014', text);
         }
     }
+
+
+    [Fact]
+    public void Drops_condition_before_shortening_state_line()
+    {
+        var shortcut = new string('x', 140);
+        var text = TrayToolTip.Compose(TrayState.Ready, shortcut, HotkeyMode.Toggle, TrayCondition.SpeechModelFailed);
+
+        Assert.DoesNotContain(Environment.NewLine, text);
+        Assert.DoesNotContain("speech model", text, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith("Scribe: ready. Press ", text);
+        Assert.True(text.Length <= TrayToolTip.MaxLength, text);
+    }
+
+    [Fact]
+    public void Shortening_never_splits_a_surrogate_pair()
+    {
+        var shortcut = new string('a', 102) + "\U0001F9D1" + new string('b', 20);
+
+        var text = TrayToolTip.Compose(TrayState.Ready, shortcut, HotkeyMode.Hold);
+
+        Assert.True(text.Length <= TrayToolTip.MaxLength, text);
+        Assert.EndsWith("…", text, StringComparison.Ordinal);
+        Assert.False(char.IsHighSurrogate(text[^2]));
+    }
 }

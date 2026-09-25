@@ -8,32 +8,44 @@ public static class DictionaryDraftDiff
     {
         ArgumentNullException.ThrowIfNull(loaded);
         ArgumentNullException.ThrowIfNull(staged);
+        var loadedGroups = Groups(loaded);
+        var stagedGroups = Groups(staged);
+        var keys = loadedGroups.Keys.Concat(stagedGroups.Keys).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var loadedByKey = loaded.Where(e => !string.IsNullOrWhiteSpace(e.Pattern)).ToDictionary(e => Key(e.Pattern), e => e, StringComparer.OrdinalIgnoreCase);
-        var stagedByKey = staged.Where(e => !string.IsNullOrWhiteSpace(e.Pattern)).ToDictionary(e => Key(e.Pattern), e => e, StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, entry) in loadedByKey)
+        foreach (var key in keys)
         {
-            if (!stagedByKey.TryGetValue(key, out var stagedEntry))
+            loadedGroups.TryGetValue(key, out var loadedRows);
+            stagedGroups.TryGetValue(key, out var stagedRows);
+            if (!SameGroup(loadedRows ?? [], stagedRows ?? []))
             {
-                result.Add(entry.Pattern.Trim());
-                continue;
+                result.Add(DisplayKey(stagedRows ?? loadedRows ?? [], key));
             }
-
-            if (!string.Equals(entry.Replacement.Trim(), stagedEntry.Replacement.Trim(), StringComparison.Ordinal)
-                || entry.WholeWord != stagedEntry.WholeWord
-                || entry.Enabled != stagedEntry.Enabled)
-            {
-                result.Add(stagedEntry.Pattern.Trim());
-            }
-        }
-
-        foreach (var (key, entry) in stagedByKey)
-        {
-            if (!loadedByKey.ContainsKey(key)) result.Add(entry.Pattern.Trim());
         }
 
         return result;
     }
+
+    private static Dictionary<string, List<DictionaryEntry>> Groups(IEnumerable<DictionaryEntry> rows) => rows
+        .Where(e => !string.IsNullOrWhiteSpace(e.Pattern))
+        .GroupBy(e => Key(e.Pattern), StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.OrdinalIgnoreCase);
+
+    private static bool SameGroup(IReadOnlyList<DictionaryEntry> left, IReadOnlyList<DictionaryEntry> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        var leftShapes = left.Select(Shape).Order(StringComparer.Ordinal).ToArray();
+        var rightShapes = right.Select(Shape).Order(StringComparer.Ordinal).ToArray();
+        return leftShapes.SequenceEqual(rightShapes, StringComparer.Ordinal);
+    }
+
+    private static string Shape(DictionaryEntry entry) => string.Join("\u001f", entry.Replacement.Trim(), entry.WholeWord, entry.Enabled);
+
+    private static string DisplayKey(IReadOnlyList<DictionaryEntry> rows, string fallback) =>
+        rows.FirstOrDefault()?.Pattern.Trim() is { Length: > 0 } value ? value : fallback;
 
     private static string Key(string value) => value.Trim();
 }

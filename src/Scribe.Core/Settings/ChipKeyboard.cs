@@ -52,8 +52,9 @@ public static class ChipKeyboard
                 focus = MoveVertical(focus, 1, state.RowByIndex);
                 break;
             case ChipKey.Space:
+                var previous = selection;
                 selection = QuickDictionaryAdd.Toggle(selection, focus);
-                anchor = selection.IsEmpty ? focus : selection.First;
+                anchor = AnchorAfterToggle(previous, selection, focus);
                 return new ChipKeyboardResult(new ChipKeyboardState(focus, anchor, selection, state.RowByIndex), ChipKeyboardOutcome.StayInWords);
             case ChipKey.Enter:
                 return new ChipKeyboardResult(new ChipKeyboardState(focus, anchor, selection, state.RowByIndex), selection.IsEmpty ? ChipKeyboardOutcome.StayInWords : ChipKeyboardOutcome.MoveToWrites);
@@ -71,6 +72,21 @@ public static class ChipKeyboard
         }
 
         return new ChipKeyboardResult(new ChipKeyboardState(focus, anchor, selection, state.RowByIndex), ChipKeyboardOutcome.StayInWords);
+    }
+
+    private static int AnchorAfterToggle(QuickDictionaryAdd.WordRange previous, QuickDictionaryAdd.WordRange next, int focus)
+    {
+        if (next.IsEmpty)
+        {
+            return focus;
+        }
+
+        if (previous.IsEmpty)
+        {
+            return focus;
+        }
+
+        return next.First == previous.First ? next.First : next.Last;
     }
 
     private static int FirstFocus(QuickDictionaryAdd.WordRange selection) => selection.IsEmpty ? 0 : selection.First;
