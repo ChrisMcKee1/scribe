@@ -153,12 +153,7 @@ internal sealed class ClipboardBorrower
     /// and cross-device cloud sync. See
     /// <see href="https://learn.microsoft.com/windows/win32/dataxchg/clipboard-formats"/>.
     /// </summary>
-    internal static readonly string[] PrivacyMarkerFormats =
-    [
-        "ExcludeClipboardContentFromMonitorProcessing",
-        "CanIncludeInClipboardHistory",
-        "CanUploadToCloudClipboard",
-    ];
+    internal static readonly string[] PrivacyMarkerFormats = [.. ClipboardPrivacyFormats.Names];
 
     // Everything Scribe adds to its own writes, discounted when judging what a restore would lose.
     private static readonly string[] OwnFormats = [.. PrivacyMarkerFormats, ReceiptFormatName];

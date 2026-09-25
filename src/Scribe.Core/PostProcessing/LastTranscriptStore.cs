@@ -17,8 +17,10 @@ public sealed class LastTranscriptStore
 
     private readonly object _gate = new();
 
+    private sealed record Slot(string Original, string Current);
+
     // Most recent first. A plain list is fine at this size: inserts shift at most Capacity items.
-    private readonly List<string> _entries = new(Capacity);
+    private readonly List<Slot> _entries = new(Capacity);
 
     public void Set(string text)
     {
@@ -32,12 +34,12 @@ public sealed class LastTranscriptStore
             // Re-dictating identical text must not burn ring slots on adjacent duplicates: the
             // transcript is already recoverable at the top of the list, so keep it there and
             // preserve the older, distinct entries beneath it.
-            if (_entries.Count > 0 && string.Equals(_entries[0], text, StringComparison.Ordinal))
+            if (_entries.Count > 0 && string.Equals(_entries[0].Current, text, StringComparison.Ordinal))
             {
                 return;
             }
 
-            _entries.Insert(0, text);
+            _entries.Insert(0, new Slot(text, text));
             if (_entries.Count > Capacity)
             {
                 _entries.RemoveAt(_entries.Count - 1);
@@ -78,9 +80,9 @@ public sealed class LastTranscriptStore
             var changed = false;
             for (var i = 0; i < _entries.Count; i++)
             {
-                if (string.Equals(_entries[i], original, StringComparison.Ordinal))
+                if (string.Equals(_entries[i].Current, original, StringComparison.Ordinal))
                 {
-                    _entries[i] = updated;
+                    _entries[i] = _entries[i] with { Current = updated };
                     changed = true;
                 }
             }
@@ -118,7 +120,7 @@ public sealed class LastTranscriptStore
                     continue;
                 }
 
-                _entries.Add(text);
+                _entries.Add(new Slot(text, text));
             }
         }
     }
@@ -129,13 +131,37 @@ public sealed class LastTranscriptStore
         {
             if (_entries.Count > 0)
             {
-                return _entries[0];
+                return _entries[0].Current;
             }
         }
 
         return fallbackHistory?
             .Select(entry => entry.Text)
             .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
+    }
+
+
+    /// <summary>Removes every retained transcript.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _entries.Clear();
+        }
+    }
+
+    /// <summary>Removes every retained copy of one transcript.</summary>
+    public bool Forget(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return _entries.RemoveAll(entry => string.Equals(entry.Current, text, StringComparison.Ordinal) || string.Equals(entry.Original, text, StringComparison.Ordinal)) > 0;
+        }
     }
 
     /// <summary>
@@ -146,7 +172,7 @@ public sealed class LastTranscriptStore
     {
         lock (_gate)
         {
-            return _entries.ToArray();
+            return _entries.Select(entry => entry.Current).ToArray();
         }
     }
 

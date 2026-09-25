@@ -18,7 +18,7 @@ public class CleanupActivationMessageTests
     public void ForReady_names_the_on_device_model()
     {
         Assert.Equal(
-            "AI cleanup is running on this device with qwen3-1.7b.",
+            "AI cleanup is on. Scribe uses qwen3-1.7b on this PC. Your text stays on this PC.",
             CleanupActivationMessage.ForReady(Local("qwen3-1.7b")));
     }
 
@@ -26,7 +26,7 @@ public class CleanupActivationMessageTests
     public void ForReady_names_the_azure_deployment()
     {
         Assert.Equal(
-            "AI cleanup is running on Microsoft Foundry with gpt-5.6-terra.",
+            "AI cleanup is on. Scribe uses gpt-5.6-terra in Microsoft Foundry. Your text goes to your Azure resource.",
             CleanupActivationMessage.ForReady(Azure("https://example.services.ai.azure.com", "gpt-5.6-terra")));
     }
 
@@ -37,7 +37,7 @@ public class CleanupActivationMessageTests
     public void ForReady_recognises_well_known_local_servers(string endpoint, string expected)
     {
         Assert.Equal(
-            $"AI cleanup is running on {expected} with llama3.",
+            $"AI cleanup is on. Scribe uses llama3 in {expected}. Your text stays on this PC.",
             CleanupActivationMessage.ForReady(Custom(endpoint, "llama3")));
     }
 
@@ -45,7 +45,7 @@ public class CleanupActivationMessageTests
     public void ForReady_falls_back_to_the_port_for_an_unknown_local_server()
     {
         Assert.Equal(
-            "AI cleanup is running on your local server on port 8080 with llama3.",
+            "AI cleanup is on. Scribe uses llama3 in a server on this PC (port 8080). Your text stays on this PC.",
             CleanupActivationMessage.ForReady(Custom("http://localhost:8080/v1", "llama3")));
     }
 
@@ -53,7 +53,7 @@ public class CleanupActivationMessageTests
     public void ForReady_uses_the_host_for_a_remote_endpoint()
     {
         Assert.Equal(
-            "AI cleanup is running on openrouter.ai with llama3.",
+            "AI cleanup is on. Scribe uses llama3 at openrouter.ai. Your text goes to openrouter.ai.",
             CleanupActivationMessage.ForReady(Custom("https://openrouter.ai/api/v1", "llama3")));
     }
 
@@ -61,7 +61,7 @@ public class CleanupActivationMessageTests
     public void ForReady_echoes_an_unparsable_endpoint_rather_than_inventing_a_name()
     {
         Assert.Equal(
-            "AI cleanup is running on not a url with llama3.",
+            "AI cleanup is on. Scribe uses llama3 at not a url. Your text goes to not a url.",
             CleanupActivationMessage.ForReady(Custom("not a url", "llama3")));
     }
 
@@ -82,10 +82,19 @@ public class CleanupActivationMessageTests
     }
 
     [Fact]
+    public void Copilot_is_announced()
+    {
+        var options = new CleanupOptions(true, CleanupProvider.GitHubCopilot, "unused", null, null, CopilotModel: "gpt-5.4");
+
+        Assert.Equal("AI cleanup is on. Scribe uses GitHub Copilot with gpt-5.4. Your text goes to GitHub.", CleanupActivationMessage.ForReady(options));
+        Assert.Equal("AI cleanup is on. Scribe uses GitHub Copilot. Your text goes to GitHub.", CleanupActivationMessage.ForReady(options with { CopilotModel = null }));
+    }
+
+    [Fact]
     public void ForDisabled_announces_only_a_disabled_configuration()
     {
         Assert.Equal(
-            "AI cleanup is off. Dictations are inserted as transcribed.",
+            "AI cleanup is off. Scribe types what it hears, with your dictionary and snippets.",
             CleanupActivationMessage.ForDisabled(CleanupOptions.Disabled));
         Assert.Null(CleanupActivationMessage.ForDisabled(Local("qwen3-1.7b")));
         Assert.Null(CleanupActivationMessage.ForDisabled(null));

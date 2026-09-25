@@ -9,21 +9,21 @@ public sealed class DatabaseRepairNoticeTests
     {
         var (text, isError) = DatabaseRepairNotice.Compose(settingsLost: false, dictionaryLost: false);
 
-        Assert.Equal("Scribe repaired its database. Settings and dictionary were recovered; some history may be missing.", text);
+        Assert.Equal("Your settings and dictionary were recovered. Some older dictations may be missing.", text);
         Assert.False(isError);
     }
 
     [Theory]
-    [InlineData(true, false, "your settings could not be recovered and were reset")]
-    [InlineData(false, true, "Your settings were recovered, but your dictionary could not be.")]
-    [InlineData(true, true, "your settings and dictionary could not be recovered and were reset")]
+    [InlineData(true, false, "Your settings couldn't be recovered, so Scribe is using defaults.")]
+    [InlineData(false, true, "Your settings were recovered, but your dictionary couldn't be.")]
+    [InlineData(true, true, "Your settings and dictionary couldn't be recovered, so Scribe is using defaults.")]
     public void A_repair_that_lost_something_never_claims_it_came_back(bool settingsLost, bool dictionaryLost, string expected)
     {
         var (text, isError) = DatabaseRepairNotice.Compose(settingsLost, dictionaryLost);
 
         Assert.True(isError);
         Assert.Contains(expected, text);
-        Assert.Contains("The damaged file was kept next to the database for manual recovery.", text);
+        Assert.Contains("Scribe kept a copy of the damaged file.", text);
         Assert.DoesNotContain("Settings and dictionary were recovered", text);
         if (settingsLost)
         {

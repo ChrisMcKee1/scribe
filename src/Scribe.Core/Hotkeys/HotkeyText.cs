@@ -48,6 +48,18 @@ public static class HotkeyText
         return string.Join("+", parts);
     }
 
+
+    /// <summary>Describes a shortcut inside a sentence, including mouse buttons with an article.</summary>
+    public static string SentenceName(HotkeyBinding binding, Func<uint, string?>? layoutName = null)
+    {
+        var described = Describe(binding, layoutName);
+        return described.Equals("Middle mouse button", StringComparison.OrdinalIgnoreCase)
+            || described.Equals("Back mouse button", StringComparison.OrdinalIgnoreCase)
+            || described.Equals("Forward mouse button", StringComparison.OrdinalIgnoreCase)
+            ? "the " + char.ToLowerInvariant(described[0]) + described[1..]
+            : described;
+    }
+
     /// <summary>
     /// What the welcome says about the push-to-talk gesture, for the keys this session actually uses and how they are
     /// pressed. Null settings (not loaded yet) gives wording that names no key rather than guessing one.
@@ -57,18 +69,18 @@ public static class HotkeyText
         if (settings?.Hotkey is not { } dictation)
         {
             return (
-                "Hold, speak, release",
-                "Hold your push-to-talk key and start talking. Release when you are done, and the text appears wherever your cursor is.");
+                "Hold, speak, let go",
+                "Hold your shortcut and start talking. Let go when you're done, and your words appear wherever your cursor is.");
         }
 
         var key = Describe(dictation, layoutName);
         var (title, body) = dictation.Mode == HotkeyMode.Toggle
             ? ("Press, speak, press again",
-               $"Press {key} and start talking. Press it again when you are done, and the text appears wherever your cursor is.")
-            : ("Hold, speak, release",
-               $"Hold {key} and start talking. Release when you are done, and the text appears wherever your cursor is.");
+               $"Press {key} and start talking. Press it again when you're done, and your words appear wherever your cursor is.")
+            : ("Hold, speak, let go",
+               $"Hold {key} and start talking. Let go when you're done, and your words appear wherever your cursor is.");
 
-        if (settings.DictationOnlyHotkey is { } dictationOnly)
+        if (settings.EnableAiCleanup && settings.DictationOnlyHotkey is { } dictationOnly)
         {
             body += $" {Verb(dictationOnly.Mode)} {Describe(dictationOnly, layoutName)} instead to dictate without AI cleanup.";
         }
