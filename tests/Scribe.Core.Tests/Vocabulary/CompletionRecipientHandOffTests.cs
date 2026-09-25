@@ -23,6 +23,9 @@ public sealed class CompletionRecipientHandOffTests
     private const string LibraryId = "harbourline-team";
     private const string Summary = "Dictations: 3\nWords: 40\nActive days: 2\nRecurring terms:\n- " + Canary + ": 3 dictations";
 
+    // A dictation whose request finds the on-device model evicted.
+    private const string Evicted = "please ask about the harbour lanterns today";
+
     private static readonly LibraryVocabulary Permitted = Of(1, new Library(LibraryId, H1, true, Entry("lan tern quay", Canary)));
 
     public static TheoryData<string> Changes() => ["provider", "off"];
@@ -131,6 +134,46 @@ public sealed class CompletionRecipientHandOffTests
         // Either way the service is not serving the insight's recipient at the send: it is setting up the other model, or
         // it is off.
         Assert.Equal(ScopedCompletionOutcome.NotReady, result.Outcome);
+    }
+
+    [Fact]
+    public async Task A_later_attempt_while_cleanup_is_unavailable_for_the_same_recipient_is_not_sent()
+    {
+        // Readiness, not only the recipient: the configuration stays the same, but a dictation found the on-device model
+        // evicted and could not load it back, so cleanup is Unavailable with its client still in place. The completion's
+        // retry, due then, is not sent to a recipient that is not ready.
+        var source = new TestVocabularySource(Permitted);
+        await using var harness = new VocabularyCleanupHarness(source);
+        var retries = new GatedRetryPolicy(maxRetries: 3);
+        harness.RetryPolicy = retries;
+        await harness.ConfigureAndWaitAsync(CleanupHarness.FoundryOn());
+        var recipient = harness.Service.Recipient!;
+        var completionAttempts = 0;
+        harness.Network.Respond = (request, _) => Task.FromResult(
+            request.Carries(Canary) && Interlocked.Increment(ref completionAttempts) == 1
+                ? CanaryNetwork.Json(HttpStatusCode.ServiceUnavailable, "{\"error\":{\"message\":\"busy\"}}")
+                : request.Carries(Canary)
+                    ? CanaryNetwork.Chat("You dictate about the harbour.")
+                    : request.TranscriptOf() == Evicted
+                        ? CanaryNetwork.Json(
+                            HttpStatusCode.BadRequest,
+                            "{\"error\":{\"message\":\"Model '" + CleanupHarness.FoundryVariant + "' is not loaded. Please load the model before getting a ChatClient.\"}}")
+                        : CanaryNetwork.Echo(request));
+
+        var waiting = retries.Waiting.Task;
+        var completing = harness.Service.CompleteAsync(UsageInsight.SystemPrompt, Summary, recipient, Permitted.AiScope);
+        var release = await waiting.WaitAsync(Bound);
+
+        harness.Qwen.LoadFailure = new InvalidOperationException("The model file is damaged.");
+        await harness.Service.CleanAsync(Evicted).WaitAsync(Bound);
+        Assert.Equal(CleanupStatus.Unavailable, harness.Service.Status);
+
+        release.SetResult();
+        var result = await completing.WaitAsync(Bound);
+
+        Assert.Single(harness.Network.Sent, request => request.Carries(Canary));
+        Assert.Equal(ScopedCompletionOutcome.NotReady, result.Outcome);
+        Assert.Equal(1, result.RequestsHandedOver);
     }
 
     [Fact]
