@@ -158,21 +158,42 @@ public sealed class LibraryWrapperTests : IDisposable
     [Fact]
     public void The_slug_fixture_agrees_when_it_is_present()
     {
-        // tests/fixtures/libraries/slugs.json is the deciders' file; once it lands, J's copy of the rule reads it too.
+        // tests/fixtures/libraries/slugs.json is the deciders' file, an object of three sections (slugs, newCustomIds and
+        // remapIds); J's copy of the rule reads every vector of each, so a section it could not read fails here rather
+        // than passing with nothing checked.
         var path = Path.Combine(RepositoryRoot(), "tests", "fixtures", "libraries", "slugs.json");
-        if (!File.Exists(path))
-        {
-            return;
-        }
+        Assert.True(File.Exists(path), "the deciders' slug fixture is in the tree since their merge");
 
         using var document = JsonDocument.Parse(File.ReadAllText(path));
-        foreach (var vector in document.RootElement.EnumerateArray())
+        var root = document.RootElement;
+        var checkedVectors = 0;
+        foreach (var vector in root.GetProperty("slugs").EnumerateArray())
         {
-            if (vector.TryGetProperty("name", out var name) && vector.TryGetProperty("slug", out var slug))
-            {
-                Assert.Equal(slug.GetString(), InterimLibraryNaming.Slug(name.GetString()!));
-            }
+            Assert.Equal(vector.GetProperty("slug").GetString(), InterimLibraryNaming.Slug(vector.GetProperty("name").GetString()!));
+            checkedVectors++;
         }
+
+        foreach (var vector in root.GetProperty("newCustomIds").EnumerateArray())
+        {
+            var taken = Taken(vector);
+            Assert.Equal(
+                vector.GetProperty("id").GetString(),
+                InterimLibraryNaming.NewCustomId(vector.GetProperty("name").GetString()!, taken.Contains));
+            checkedVectors++;
+        }
+
+        foreach (var vector in root.GetProperty("remapIds").EnumerateArray())
+        {
+            Assert.Equal(
+                vector.GetProperty("id").GetString(),
+                CustomLibraryStore.RemapId(vector.GetProperty("stem").GetString()!, Taken(vector)));
+            checkedVectors++;
+        }
+
+        Assert.True(checkedVectors >= 17, $"only {checkedVectors} slug fixture vectors were read");
+
+        static HashSet<string> Taken(JsonElement vector) =>
+            new(vector.GetProperty("taken").EnumerateArray().Select(id => id.GetString()!), StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]
