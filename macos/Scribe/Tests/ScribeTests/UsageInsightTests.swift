@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class UsageInsightTests: XCTestCase {
@@ -10,7 +11,9 @@ final class UsageInsightTests: XCTestCase {
             speechSeconds: 30,
             averageWords: 14,
             topApps: [UsageAnalyzer.AppUsage(name: "Editor", dictations: 2, words: 30)],
-            trend: [UsageAnalyzer.TrendPoint(start: LocalDate(year: 2026, month: 6, day: 15), dictations: 3, words: 42)],
+            trend: [
+                UsageAnalyzer.TrendPoint(start: LocalDate(year: 2026, month: 6, day: 15), dictations: 3, words: 42)
+            ],
             terms: [UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)],
             granularity: .daily)
 
@@ -84,10 +87,35 @@ final class UsageInsightTests: XCTestCase {
         XCTAssertEqual(UsageInsight.parse("abc\u{1F600}def", maxChars: 4), "abc")
         XCTAssertEqual(UsageInsight.parse("abc\u{1F600}def", maxChars: 5), "abc\u{1F600}")
     }
+
+    /// A dictionary-covered label that is a template-like replacement, such as a signature block, stays on the Mac, as
+    /// it does when a dictation is sent for cleanup.
+    func testBuildSummaryLeavesOutATemplateLikeReplacement() {
+        let snapshot = UsageAnalyzer.Snapshot(
+            dictations: 2,
+            words: 12,
+            activeDays: 1,
+            speechSeconds: 10,
+            averageWords: 6,
+            topApps: [],
+            trend: [],
+            terms: [
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true),
+                UsageAnalyzer.TermUsage(
+                    text: "Pat Doe\nSupport lead", dictations: 2, occurrences: 2, covered: true, isTemplateLike: true),
+            ],
+            granularity: .daily)
+
+        let summary = UsageInsight.buildSummary(snapshot)
+
+        XCTAssertTrue(summary.contains("Next.js: 2 dictations"))
+        XCTAssertFalse(summary.contains("Pat Doe"))
+        XCTAssertFalse(summary.contains("Support lead"))
+    }
 }
 
-private extension String {
-    func trimmingTrailingWhitespaceForTest() -> String {
+extension String {
+    fileprivate func trimmingTrailingWhitespaceForTest() -> String {
         var result = Substring(self)
         while let last = result.last, last.isWhitespace {
             result.removeLast()

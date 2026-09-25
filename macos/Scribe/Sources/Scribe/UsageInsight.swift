@@ -11,7 +11,9 @@ enum UsageInsight {
 
     /// Builds the payload sent to the user's configured AI endpoint. Guarantee: only terms with
     /// `covered == true` (dictionary-canonical labels) are ever included; novel mined tokens are
-    /// verbatim words from the user's dictations and never enter the payload.
+    /// verbatim words from the user's dictations and never enter the payload. Nor does a label that
+    /// is a template-like replacement (`TermUsage.isTemplateLike`), which the dictation path never
+    /// sends to a provider either.
     static func buildSummary(_ snapshot: UsageAnalyzer.Snapshot, maxChars: Int = 4_000) -> String {
         guard maxChars > 0 else { return "" }
 
@@ -22,12 +24,15 @@ enum UsageInsight {
         lines.append("Recurring terms:")
         for term in snapshot.terms {
             // Uncovered terms are raw tokens mined from dictation text (surnames, project
-            // codenames); only dictionary-canonical labels may leave the machine.
-            guard term.covered else { continue }
+            // codenames); only dictionary-canonical labels may leave the machine, and of those only
+            // the ones a dictation may send: a signature block or other template-like replacement
+            // stays on the Mac.
+            guard term.covered, !term.isTemplateLike else { continue }
             lines.append("- \(term.text): \(term.dictations) dictations")
         }
 
-        return truncate(lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), maxChars: maxChars)
+        return truncate(
+            lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), maxChars: maxChars)
     }
 
     static func parse(_ response: String?, maxChars: Int = 1_200) -> String? {
@@ -57,8 +62,9 @@ enum UsageInsight {
         // invalid UTF-16 and can break downstream encoding of the request or the UI text.
         var cut = maxChars
         if cut > 0, cut < nsValue.length,
-           CFStringIsSurrogateHighCharacter(nsValue.character(at: cut - 1)),
-           CFStringIsSurrogateLowCharacter(nsValue.character(at: cut)) {
+            CFStringIsSurrogateHighCharacter(nsValue.character(at: cut - 1)),
+            CFStringIsSurrogateLowCharacter(nsValue.character(at: cut))
+        {
             cut -= 1
         }
 
@@ -66,10 +72,10 @@ enum UsageInsight {
     }
 }
 
-private extension String {
+extension String {
     /// Right-trim only (mirrors C#'s `string.TrimEnd()`), used after truncation so a cut that
     /// lands mid-word doesn't also strip meaningful leading content.
-    func trimmingTrailingWhitespace() -> String {
+    fileprivate func trimmingTrailingWhitespace() -> String {
         var result = Substring(self)
         while let last = result.last, last.isWhitespace {
             result.removeLast()

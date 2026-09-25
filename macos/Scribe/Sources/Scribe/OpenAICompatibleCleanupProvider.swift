@@ -1,153 +1,243 @@
 import Foundation
-import OSLog
 
-/// A cleanup provider that talks to any OpenAI-compatible `/v1/chat/completions` endpoint. This
-/// is the shared transport used by Foundry Local, managed Ollama, LM Studio, OpenRouter, and any
-/// other compatible server; concrete providers configure the base URL, model, optional API key,
-/// and how they discover the endpoint (see FoundryLocalCleanupProvider / ManagedOllamaCleanupProvider).
+/// A cleanup provider for any OpenAI-compatible `/v1/chat/completions` endpoint the user brings: LM Studio,
+/// OpenRouter, a self-hosted server, or Ollama addressed by hand. The managed providers (Foundry Local, Ollama) and
+/// Microsoft Foundry share its transport (`ChatCompletionsTransport`) and wire format.
 final class OpenAICompatibleCleanupProvider: CleanupProvider {
     let id: String
     let displayName: String
-
-    private let baseURLProvider: () async -> URL?
-    private let model: String
+    let model: String
+    /// `{base}/v1/chat/completions`, from `OpenAICompatibleEndpoint.chatCompletionsURL(for:)`.
+    let completionsURL: URL
     private let apiKey: String?
     private let timeout: TimeInterval
-    private let session: URLSession
-    private let logger: Logger
+    private let transport: ChatCompletionsTransport
 
-    /// - Parameters:
-    ///   - baseURLProvider: resolves the endpoint's base URL (e.g. `http://127.0.0.1:11434`) each
-    ///     call, since Foundry Local's port is dynamic and Ollama's daemon may not be running yet.
     init(
-        id: String,
-        displayName: String,
+        id: String = "openai-compatible",
+        displayName: String = "OpenAI-compatible endpoint",
         model: String,
         apiKey: String? = nil,
+        completionsURL: URL,
         timeout: TimeInterval = 30,
-        session: URLSession = .shared,
-        baseURLProvider: @escaping () async -> URL?
+        session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
         self.id = id
         self.displayName = displayName
         self.model = model
         self.apiKey = apiKey
+        self.completionsURL = completionsURL
         self.timeout = timeout
-        self.session = session
-        self.baseURLProvider = baseURLProvider
-        self.logger = Logger(subsystem: "com.scribe.macos", category: "Cleanup.\(id)")
+        self.transport = ChatCompletionsTransport(session: session)
     }
 
-    func healthSnapshot() async -> CleanupHealthSnapshot {
-        guard let baseURL = await baseURLProvider() else {
-            return CleanupHealthSnapshot(providerID: id, reachable: false, detail: "Endpoint not reachable")
-        }
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        // No temperature: a bring-your-own endpoint can serve a reasoning model, which rejects or ignores one.
+        let completion = try await transport.complete(
+            request, at: completionsURL, model: model, bearerToken: apiKey, temperature: nil,
+            defaultTimeout: timeout, provider: .openAICompatible)
+        return CleanupResponse(
+            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+    }
+}
 
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/models"))
-        request.timeoutInterval = 5
-        applyAuthHeader(to: &request)
-
-        do {
-            let (_, response) = try await session.data(for: request)
-            let ok = (response as? HTTPURLResponse)?.statusCode == 200
-            return CleanupHealthSnapshot(
-                providerID: id,
-                reachable: ok,
-                detail: ok ? "Reachable at \(baseURL.absoluteString)" : "Unexpected response from \(baseURL.absoluteString)")
-        } catch {
-            return CleanupHealthSnapshot(providerID: id, reachable: false, detail: error.localizedDescription)
+/// Where an OpenAI-compatible server takes chat completions.
+enum OpenAICompatibleEndpoint {
+    /// `{base}/v1/chat/completions` for a base URL given with or without its `/v1` segment (OpenRouter documents
+    /// `https://openrouter.ai/api/v1`, LM Studio `http://localhost:1234`), so neither shape becomes `/v1/v1`. `nil`
+    /// unless the base is an http or https URL with a host.
+    static func chatCompletionsURL(for base: URL) -> URL? {
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+            let host = components.host, !host.isEmpty
+        else {
+            return nil
         }
+        var path = components.percentEncodedPath
+        while path.hasSuffix("/") {
+            path.removeLast()
+        }
+        if path.lowercased().hasSuffix("/v1") {
+            path.removeLast(3)
+        }
+        components.scheme = scheme
+        components.percentEncodedPath = path + "/v1/chat/completions"
+        components.fragment = nil
+        return components.url
+    }
+}
+
+/// One chat completions request and its answer, shared by every provider.
+///
+/// The body is `model`, the system and user messages, `stream: false`, for on-device models only `temperature`, and,
+/// for Test Connection only, `max_completion_tokens`.
+/// It never has a `store` field: Chat Completions keep nothing unless asked to with `store: true`, and some
+/// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). A Responses route, if one is
+/// ever added, has to send `store: false` and prove it with a wire test.
+struct ChatCompletionsTransport: Sendable {
+    struct Completion: Sendable {
+        let text: String
+        let latency: TimeInterval
     }
 
-    func clean(_ cleanupRequest: CleanupRequest) async throws -> CleanupResponse {
-        guard let baseURL = await baseURLProvider() else {
-            throw CleanupProviderError.notConfigured("\(displayName) endpoint is not reachable")
-        }
+    let session: URLSession
 
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+    func complete(
+        _ cleanupRequest: CleanupRequest,
+        at url: URL,
+        model: String,
+        bearerToken: String?,
+        temperature: Double?,
+        defaultTimeout: TimeInterval,
+        provider: CleanupProviderKind
+    ) async throws -> Completion {
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = timeout
+        request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyAuthHeader(to: &request)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
+        request.httpBody = try JSONEncoder().encode(
+            ChatCompletionRequest(
+                model: model,
+                messages: [
+                    ChatCompletionRequest.Message(role: "system", content: cleanupRequest.writingStylePrompt),
+                    ChatCompletionRequest.Message(role: "user", content: cleanupRequest.transcript),
+                ],
+                temperature: temperature,
+                maxCompletionTokens: cleanupRequest.maxOutputTokens,
+                stream: false))
 
-        let body = ChatCompletionRequest(
-            model: model,
-            messages: [
-                .init(role: "system", content: cleanupRequest.writingStylePrompt),
-                .init(role: "user", content: cleanupRequest.transcript)
-            ],
-            temperature: 0.2,
-            stream: false)
-        request.httpBody = try JSONEncoder().encode(body)
-
-        let started = Date()
-        let (data, response): (Data, URLResponse)
+        let started = ContinuousClock.now
+        let data: Data
+        let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
-        } catch let urlError as URLError where urlError.code == .timedOut {
-            throw CleanupProviderError.timedOut
         } catch {
-            throw CleanupProviderError.requestFailed(error.localizedDescription)
+            throw Self.transportFailure(error)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
-            throw CleanupProviderError.invalidResponse("No HTTP response")
+            throw CleanupProviderError.invalidResponse(.notHTTP)
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<undecodable body>"
-            throw CleanupProviderError.requestFailed("HTTP \(httpResponse.statusCode): \(bodyText)")
+            throw CleanupProviderError.rejected(
+                status: httpResponse.statusCode, provider: provider, reply: CleanupServiceReply(errorBody: data))
+        }
+        guard let decoded = try? JSONDecoder().decode(ChatCompletionResponse.self, from: data) else {
+            throw CleanupProviderError.invalidResponse(.undecodable)
+        }
+        let choice = decoded.choices.first
+        let text = CleanupPrompt.stripTranscriptTags(choice?.message.content ?? "")
+        guard !text.isEmpty else {
+            // `length` with nothing visible: the output limit ran out before any text, which a reasoning model does
+            // when a request caps its output tightly. Kept apart from an empty answer so Test Connection, which sends
+            // such a cap, knows to ask once more without one; for a dictation either one is no text.
+            throw CleanupProviderError.invalidResponse(
+                choice?.finishReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
         }
 
-        let decoded: ChatCompletionResponse
-        do {
-            decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
-        } catch {
-            throw CleanupProviderError.invalidResponse("Could not decode chat completion: \(error.localizedDescription)")
-        }
-
-        guard let text = decoded.choices.first?.message.content, !text.isEmpty else {
-            throw CleanupProviderError.invalidResponse("Empty completion from \(displayName)")
-        }
-
-        let latency = Date().timeIntervalSince(started)
-        logger.debug("Cleanup via \(self.model, privacy: .public) completed in \(latency, format: .fixed(precision: 3))s")
-
-        return CleanupResponse(
-            cleanedText: CleanupPrompt.stripTranscriptTags(text),
-            latency: latency,
-            providerID: id,
-            modelID: model)
+        let elapsed = started.duration(to: .now)
+        ScribeLog.debug(
+            .cleanup, "Cleanup request finished", .name("provider", provider), .duration("elapsed", elapsed),
+            .count("characters", text.count))
+        return Completion(text: text, latency: Self.seconds(elapsed))
     }
 
-    private func applyAuthHeader(to request: inout URLRequest) {
-        guard let apiKey, !apiKey.isEmpty else { return }
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+    /// A failed `URLSession` call as a cleanup failure. A cancelled task stays a `CancellationError`, so a caller can
+    /// tell a shutdown from a failure, and a URL error keeps only its code, never the failing URL its user info holds.
+    static func transportFailure(_ error: any Error) -> any Error {
+        if error is CancellationError {
+            return error
+        }
+        guard let urlError = error as? URLError else {
+            return Task.isCancelled ? CancellationError() : CleanupProviderError.transport(URLError(.unknown))
+        }
+        if urlError.code == .cancelled, Task.isCancelled {
+            return CancellationError()
+        }
+        if urlError.code == .timedOut {
+            return CleanupProviderError.timedOut
+        }
+        return CleanupProviderError.transport(URLError(urlError.code))
+    }
+
+    static func seconds(_ duration: Duration) -> TimeInterval {
+        let (seconds, attoseconds) = duration.components
+        return TimeInterval(seconds) + TimeInterval(attoseconds) / 1_000_000_000_000_000_000
     }
 }
 
 // MARK: - Wire format
-//
-// Shared with MicrosoftFoundryCleanupProvider, which targets Azure's OpenAI-compatible chat
-// completions endpoint and reuses this same JSON shape rather than duplicating it.
 
-struct ChatCompletionRequest: Encodable {
-    struct Message: Encodable {
+struct ChatCompletionRequest: Encodable, Sendable {
+    struct Message: Encodable, Sendable {
         let role: String
         let content: String
     }
 
     let model: String
     let messages: [Message]
-    let temperature: Double
+    /// Left out of the body when `nil`.
+    let temperature: Double?
+    /// Left out of the body when `nil`. `max_completion_tokens` rather than the older `max_tokens`, which reasoning
+    /// deployments refuse; it is the field Windows' OpenAI client sends for the same limit.
+    let maxCompletionTokens: Int?
     let stream: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case messages
+        case temperature
+        case maxCompletionTokens = "max_completion_tokens"
+        case stream
+    }
 }
 
 struct ChatCompletionResponse: Decodable {
     struct Choice: Decodable {
         struct Message: Decodable {
-            let content: String
+            let content: String?
         }
         let message: Message
+        /// Why the model stopped: `stop`, `length` when the output limit ran out, or another value some servers send.
+        let finishReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message
+            case finishReason = "finish_reason"
+        }
     }
     let choices: [Choice]
+}
+
+extension CleanupServiceReply {
+    /// The error an OpenAI-style endpoint puts in its body: `{"error": {"code", "type", "message"}}` (OpenAI, Azure,
+    /// LM Studio), `{"error": "text"}` (Ollama) or `{"code", "message"}`. Anything else, such as a proxy's HTML error
+    /// page, yields no code and no message; the body itself is never kept.
+    init(errorBody data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            self.init(code: nil, message: nil)
+            return
+        }
+        if let error = object["error"] as? [String: Any] {
+            self.init(code: Self.code(in: error) ?? (error["type"] as? String), message: error["message"] as? String)
+        } else if let text = object["error"] as? String {
+            self.init(code: nil, message: text)
+        } else {
+            self.init(code: Self.code(in: object), message: object["message"] as? String)
+        }
+    }
+
+    private static func code(in object: [String: Any]) -> String? {
+        if let text = object["code"] as? String {
+            return text
+        }
+        if let number = object["code"] as? Int {
+            return String(number)
+        }
+        return nil
+    }
 }

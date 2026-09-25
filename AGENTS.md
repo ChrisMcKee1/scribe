@@ -52,39 +52,86 @@ model auto‑handles whatever is spoken. (Whisper takes a language hint; this do
 
 `macos/Scribe` is a real, hand-maintained macOS reimplementation, not a shared-code port of
 `Scribe.Core`. It is a separate Swift Package Manager app: `macos/Scribe/Package.swift` declares
-package `ScribeMac`, executable target `Scribe`, and test target `ScribeTests`. No macOS build
-path references any C# project in this repo. If you change Windows-side behavior in `Scribe.Core`,
-such as dictionary matching, snippets, cleanup prompt composition, diagnostics percentile math,
-usage-insight aggregation, or CSV import/export, assume a parallel Swift copy under
-`macos/Scribe/Sources/Scribe/` and `macos/Scribe/Tests/ScribeTests/` may need the same edit, then
-check `macos/PORTING-PLAN.md` before you claim parity still holds.
+package `ScribeMac` (Swift tools 6.0, so Swift 6 language mode with strict concurrency checking,
+macOS 13 or later), the executable target `Scribe`, and two test targets: `ScribeTests`, the unit
+tests, many ported 1:1 from the C# xUnit suites, and `ScribeScenarioTests`, headless scenarios on the
+committed speech fixtures in `tests/fixtures/speech`. No macOS build path references any C# project in
+this repo. If you change Windows-side behavior in `Scribe.Core`, such as dictionary matching,
+snippets, cleanup prompt composition, diagnostics percentile math, usage-insight aggregation, or CSV
+import/export, assume a parallel Swift copy under `macos/Scribe/Sources/Scribe/` and its tests may
+need the same edit, then check `macos/PORTING-PLAN.md` before you claim parity still holds.
 
-Where the macOS port lives: `macos/Scribe/Sources/Scribe/` currently contains 59 tracked source
-files on `main`; `macos/Scribe/Tests/ScribeTests/` contains 27 tracked XCTest files, many
-ported 1:1 from the C# xUnit suites where applicable. Packaging scripts live in
-`macos/Scribe/scripts/` (`build-app.sh`, `make-dmg.sh`, `notarize.sh`, `setup-dev-signing.sh`).
-The top-level docs are `macos/README.md`, the user-facing build/run guide and current feature list;
-`macos/PORTING-PLAN.md`, the authoritative row-by-row Windows-feature-parity checklist and
-implementation notebook, currently starting from `Status: Feature parity complete`; and
+Where the macOS port lives: sources in `macos/Scribe/Sources/Scribe/`, tests in
+`macos/Scribe/Tests/ScribeTests/` and `macos/Scribe/Tests/ScribeScenarioTests/`, packaging scripts in
+`macos/Scribe/scripts/` (`build-app.sh`, `make-dmg.sh`, `notarize.sh`, `setup-dev-signing.sh`). Count
+files and tests rather than trusting a number written down. The docs are `macos/README.md`, the
+build, run and test guide and the current feature list; `macos/PORTING-PLAN.md`, whose "Parity at a
+glance" table says area by area what is present, partial, missing or not applicable, and whose
+row-by-row checklist says how each feature is built and what of it is verified only by tests; and
 `macos/CLEANUP-MODEL-BENCHMARK.md` plus `macos/benchmark_cleanup.py`, the separate macOS local-model
 cleanup benchmark whose heuristic scores are explicitly not directly comparable to Windows'
 `docs/model-leaderboard.md`.
 
-Key macOS architecture facts before you edit it: on-device ASR uses Foundry Local
-`parakeet-tdt-0.6b-v2`, with the dynamic port resolved from `foundry status -o json`; managed
-Ollama is the alternative local provider. Unlike Windows, the macOS app does not bundle an ASR
-runtime or model, users install Foundry Local or Ollama themselves. Silence auto-stop is currently
-`SilenceAutoStopDetector`, an energy-threshold RMS detector marked as a stopgap rather than a
-trained Silero VAD. AI cleanup mirrors the Windows provider categories, Foundry Local, managed
-Ollama, any OpenAI-compatible endpoint, and Microsoft Foundry cloud via `AzureCredential.swift`
-plus `KeychainStore.swift`; verify the current configuration surface in `macos/PORTING-PLAN.md`
-and `macos/README.md` before editing setup guidance, because that area is moving quickly. The
-overlay pill is in-process: `OverlayPanelController` hosts a borderless, non-activating `NSPanel`
-with SwiftUI content, no separate overlay process or IPC. Persistence is a separate SQLite store in
-`PersistenceStore`, not Windows' `scribe.db`, with its own non-destructive probe-then-`ALTER TABLE`
-migrations. Packaging today is still dev-focused: `build-app.sh` produces an ad-hoc `.app`, and
-`macos/README.md` remains the source of truth for the current gaps around notarization and
-auto-update.
+Key macOS architecture facts before you edit it:
+
+- **Lifecycle.** `main.swift` is a thin entry point. `DictationController`, on the main actor, owns
+  every recording, the pipeline, what the tray and the pill show, and shutdown, and reaches
+  everything else through the protocols in `DictationServices.swift`, so its tests run on fakes and
+  gates. Quit answers `.terminateLater` (`ApplicationTermination`) and replies only once a paste in
+  progress has put the pasteboard back, recognizers and `az` or `foundry` children have been stopped
+  and reaped, and history has drained within its bound.
+- **Pipeline.** With AI cleanup off: snippets, then the dictionary and libraries, as on Windows. With
+  cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it
+  (`TextPostProcessor.correctVocabulary`): the vocabulary rules' replacements (one line of at most 100
+  characters, no em or en dash, already in the reply's normal form, which keeps a space before ".NET") are made
+  in the text the provider is sent and its reply is checked against, and the snippets' and every template-like
+  replacement are held back and made on the reply where it kept the words that set them off and had not written
+  the whole replacement around them already (`finishAfterCleanup`). No rule is ever matched against the model's
+  text, so a model that returns what it was sent gets exactly the cleanup-off text from the rules
+  (`TextPostProcessorPropertyTests`; the response guard still rewrites dashes in the reply). No glossary is sent
+  (porting Windows' is an open decision). Never let a snippet body or a template-like replacement reach a
+  provider. The rules are compiled off the main actor (`DictationRuleSnapshot`) and installed in one step.
+- **Speech recognition.** Foundry Local `parakeet-tdt-0.6b-v2` (English only), its port found with
+  `foundry status -o json`. The app bundles no runtime or model: users install Foundry Local, and
+  Ollama if they want it for cleanup.
+- **Silence auto-stop.** `SilenceAutoStopTracker`, a port of Windows' adaptive tracker, applied per
+  recording through `CaptureStopPolicy`: the tray's test dictation always, Caps Lock (the default key,
+  a toggle) only when the user opts in (off by default, as on Windows), a held key never. Every
+  recording also stops at ten minutes. Scribe only listens to Caps Lock and never changes its lock
+  state: a Caps Lock recording starts only when the lock turns on and ends at its next change, so a light
+  left on with nothing recording comes back in step after one tap.
+- **Child processes.** Every `az` and `foundry` run goes through `ProcessRunner` (`posix_spawn` into a
+  process group of its own, a deadline, cancellation that terminates, escalates and reaps the group).
+  Do not start a child process any other way.
+- **Logging.** Only through `ScribeLog`, which is shape-only by construction: a message is a
+  `StaticString` and values are typed fields (counts, integers, durations, enum case names, flags, and
+  `.failure(error)`, which logs a `FailureShape`); `.sensitive` is only for a device or profile name
+  or a path, and is redacted. Never log a transcript, rule, snippet, prompt, endpoint or key. Events go
+  to the unified log (subsystem `com.scribe.macos`) and, above debug, standard error; there is no log
+  file. Tests pin this with `recordScribeLog` and `PrivacyCanary`.
+- **Persistence and secrets.** A SQLite store of its own, `scribe.db` in
+  `~/Library/Application Support/Scribe/` in WAL mode (`PersistenceStore`), not Windows' database, with
+  non-destructive probe-then-`ALTER TABLE` migrations; API keys and client secrets in the Keychain.
+  AI cleanup mirrors the Windows provider categories: Foundry Local, managed Ollama, any
+  OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service principal). Verify the
+  current configuration surface in `macos/PORTING-PLAN.md` and `macos/README.md` before editing setup
+  guidance.
+- **Overlay.** In-process: `OverlayPanelController` hosts a borderless, non-activating `NSPanel` with
+  SwiftUI content, no separate overlay process or IPC.
+- **Packaging.** Still dev-focused: `build-app.sh` produces an ad-hoc signed `.app`, and
+  `macos/README.md` is the source of truth for the gaps around notarization and auto-update.
+
+Building and testing: there is no Swift toolchain on a Windows dev box, so
+`.github/workflows/macos.yml` is the compiler and test runner. A push to `macos/**` builds debug and
+release on macOS 15 and 26 and fails on any compiler warning, builds `Scribe.app` with `build-app.sh`
+and checks its Info.plist, signature and bundled libraries, runs `swift test --parallel` over both
+test targets, runs the thread and address sanitizer jobs, fails on
+an em or en dash under `macos/`, and lints with `swift format lint --strict` using the Swift 6.1
+formatter (Xcode 16.4) and `macos/Scribe/.swift-format` (4-space indent, 120 columns), where any
+finding fails the job. On a Mac, `swift test --package-path macos/Scribe --parallel` runs the same
+tests. The runners cannot grant Microphone, Accessibility or Input Monitoring access and have no
+screen to look at, so the event tap, a real microphone, insertion into real apps, the overlay and
+login item approval still need a real Mac.
 
 If your Windows PR changes behavior that the Swift port mirrors, call out in your PR description or
 commit message that the matching row in `macos/PORTING-PLAN.md` may now be stale. There is no
@@ -1726,18 +1773,18 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
 - In this checkout `origin` is the maintainer's repository, `https://github.com/ChrisMcKee1/scribe.git`,
   which is also the review and merge target. Run `git remote -v` before pushing anything: a
   contributor's fork checkout is laid out differently.
-- **Contributor path (a fork).** John (`x3nc0n`) works from a fork. There `origin` is
-  `https://github.com/x3nc0n/scribe.git`, the only remote that working tree pushes to, and `upstream`
-  is the maintainer's repository. Push branches to the fork and open pull requests from them to
-  `upstream:main`; never push directly to `upstream`. To update an existing upstream pull request,
-  push more commits to the exact same fork branch the pull request already uses as its head branch.
+- **John (`x3nc0n`) was added as a direct collaborator (write access) on 2026-09-25** and now works
+  straight against `origin`, no fork hop: branch off `main`, push the branch to `origin`, open a PR
+  against `origin:main`. To update an existing PR, push more commits to that same branch. His prior
+  fork, `https://github.com/x3nc0n/scribe.git`, is kept as the `fork` remote purely for reference
+  (its history up to PR #61 lives there) and is no longer part of the normal contribution flow.
+- **Contributor-without-write-access path (a fork), for anyone else.** `origin` would be the
+  contributor's own fork, the only remote that working tree pushes to, and `upstream` the
+  maintainer's repository. Push branches to the fork and open pull requests from them to
+  `upstream:main`; never push directly to `upstream`.
 - John's ongoing split on this repo is: primary maintainer for the native macOS port under
   `macos/Scribe/`, secondary contributor for Windows bug fixes under `src/Scribe.*`,
   `tests/Scribe.Core.Tests/`, and related docs.
-- Current example: upstream PR #61 is `x3nc0n/scribe:main` into `ChrisMcKee1/scribe:main` and
-  carries the native macOS port. Because unrelated Windows work can land on the maintainer's `main` at
-  any time, the fork's `main` must periodically catch up from `upstream/main` and be pushed back to the
-  fork so PR #61 stays mergeable.
 - Commit message: what changed **and why**. Always append this trailer (per house rule):
 
 ```

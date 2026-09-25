@@ -1,53 +1,62 @@
 import XCTest
+
 @testable import Scribe
 
-/// Exercises `AudioDeviceStore`'s persistence layer against the real `UserDefaults.standard`
-/// (no dependency-injected store, matching `HotkeySettingsStoreTests`). Device enumeration itself
-/// depends on live CoreAudio hardware and is not exercised here; `AudioCaptureEngine`'s manual
-/// verification path (running the packaged app) is what proves that end, the same tradeoff already
-/// made for `HotkeyManager`'s CGEventTap.
+/// Exercises `AudioDeviceStore`'s saved selection against a suite of its own (`SettingsTestDefaults`), never
+/// `UserDefaults.standard`. Device enumeration depends on live CoreAudio hardware and is not exercised here;
+/// running the packaged app is what proves that end, the same tradeoff made for `HotkeyManager`'s event tap.
 final class AudioDeviceStoreTests: XCTestCase {
-    private var originalUID: String?
-    private var originalName: String?
+    private var suite: SettingsTestDefaults!
+    private var store: AudioDeviceStore!
 
-    override func setUp() {
-        super.setUp()
-        originalUID = AudioDeviceStore.selectedDeviceUID
-        originalName = AudioDeviceStore.selectedDeviceName
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        suite = try SettingsTestDefaults()
+        store = AudioDeviceStore(defaults: suite.defaults)
     }
 
     override func tearDown() {
-        AudioDeviceStore.selectedDeviceUID = originalUID
-        AudioDeviceStore.selectedDeviceName = originalName
+        suite.remove()
+        suite = nil
+        store = nil
         super.tearDown()
     }
 
     func testDefaultsToSystemDefaultWhenNothingStored() {
-        UserDefaults.standard.removeObject(forKey: "ScribeInputDeviceUID")
-        UserDefaults.standard.removeObject(forKey: "ScribeInputDeviceName")
-        XCTAssertNil(AudioDeviceStore.selectedDeviceUID)
-        XCTAssertNil(AudioDeviceStore.selectedDeviceName)
-        XCTAssertNil(AudioDeviceStore.resolveSelectedDeviceID())
+        XCTAssertNil(store.selectedDeviceUID)
+        XCTAssertNil(store.selectedDeviceName)
+        XCTAssertNil(store.resolveSelectedDeviceID())
     }
 
     func testSelectingADevicePersistsUIDAndName() {
         let device = AudioInputDevice(uid: "com.example.bluetooth-headset", name: "AirPods Pro", isDefault: false)
-        AudioDeviceStore.select(device)
+        store.select(device)
 
-        XCTAssertEqual(AudioDeviceStore.selectedDeviceUID, device.uid)
-        XCTAssertEqual(AudioDeviceStore.selectedDeviceName, device.name)
+        XCTAssertEqual(store.selectedDeviceUID, device.uid)
+        XCTAssertEqual(store.selectedDeviceName, device.name)
+        let reopened = AudioDeviceStore(defaults: suite.defaults)
+        XCTAssertEqual(reopened.selectedDeviceUID, device.uid)
     }
 
     func testSelectingNilClearsBackToSystemDefault() {
-        AudioDeviceStore.select(AudioInputDevice(uid: "some-uid", name: "Some Mic", isDefault: false))
-        AudioDeviceStore.select(nil)
+        store.select(AudioInputDevice(uid: "some-uid", name: "Some Mic", isDefault: false))
+        store.select(nil)
 
-        XCTAssertNil(AudioDeviceStore.selectedDeviceUID)
-        XCTAssertNil(AudioDeviceStore.selectedDeviceName)
+        XCTAssertNil(store.selectedDeviceUID)
+        XCTAssertNil(store.selectedDeviceName)
     }
 
     func testResolveSelectedDeviceIDReturnsNilForAnUnknownUID() {
-        AudioDeviceStore.selectedDeviceUID = "a-uid-that-cannot-possibly-be-connected"
-        XCTAssertNil(AudioDeviceStore.resolveSelectedDeviceID())
+        store.selectedDeviceUID = "a-uid-that-cannot-possibly-be-connected"
+        XCTAssertNil(store.resolveSelectedDeviceID())
+    }
+
+    func testWritesOnlyToItsOwnSuite() throws {
+        let other = try SettingsTestDefaults()
+        defer { other.remove() }
+
+        store.select(AudioInputDevice(uid: "some-uid", name: "Some Mic", isDefault: false))
+
+        XCTAssertNil(AudioDeviceStore(defaults: other.defaults).selectedDeviceUID)
     }
 }

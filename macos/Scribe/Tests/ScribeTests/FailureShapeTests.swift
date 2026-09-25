@@ -1,0 +1,240 @@
+import Foundation
+import XCTest
+
+@testable import Scribe
+
+final class FailureShapeTests: XCTestCase {
+    /// Carries a privacy canary in every place an error can hold text: its payload, its description,
+    /// its domain, its user info and the error it wraps.
+    private enum LeakingError: Error, LocalizedError, CustomNSError, CustomStringConvertible, FailureShapeDetailing {
+        case leaked(secret: String, path: String, url: URL, status: Int32)
+
+        static var errorDomain: String { PrivacyCanary.url }
+        var errorCode: Int { 7 }
+        var errorUserInfo: [String: Any] {
+            [
+                NSLocalizedDescriptionKey: PrivacyCanary.secret,
+                NSLocalizedFailureReasonErrorKey: PrivacyCanary.transcript,
+                NSFilePathErrorKey: PrivacyCanary.path,
+                NSURLErrorKey: URL(string: PrivacyCanary.url)!,
+                NSUnderlyingErrorKey: NSError(
+                    domain: PrivacyCanary.path, code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: PrivacyCanary.transcript]),
+            ]
+        }
+        var errorDescription: String? { "\(PrivacyCanary.secret) at \(PrivacyCanary.path) via \(PrivacyCanary.url)" }
+        var failureReason: String? { PrivacyCanary.transcript }
+        var description: String { errorDescription ?? "" }
+        var failureHTTPStatus: Int? { 403 }
+        var failureServiceCode: String? { PrivacyCanary.url }
+    }
+
+    private enum PlainError: Error {
+        case bare
+        case wrapping(any Error)
+    }
+
+    private enum DescribedError: Error, CustomStringConvertible {
+        case bare
+        var description: String { PrivacyCanary.secret }
+    }
+
+    private struct ServiceFailure: FailureShapeDetailing {
+        let failureHTTPStatus: Int?
+        let failureServiceCode: String?
+    }
+
+    func testAnErrorCarryingCanariesEverywhereYieldsAShapeWithNoneOfThem() {
+        let error = LeakingError.leaked(
+            secret: PrivacyCanary.secret, path: PrivacyCanary.path, url: URL(string: PrivacyCanary.url)!,
+            status: -25299)
+
+        let shape = FailureShape(error)
+
+        XCTAssertEqual(
+            shape.description,
+            "LeakingError.leaked(other 7) values=-25299 http=403 service=other inner=NSError(other 2)")
+        PrivacyCanary.assertAbsent(from: shape.description)
+        PrivacyCanary.assertAbsent(from: String(describing: shape))
+    }
+
+    /// Foundation's error structs (`URLError`, `POSIXError`, `CocoaError`) travel inside `any Error` as
+    /// the `NSError` they wrap, so they read as `NSError` with their domain.
+    func testAURLErrorKeepsItsDiagnosisAndLosesTheURL() {
+        let underlying = NSError(
+            domain: "kCFErrorDomainCFNetwork", code: -1001,
+            userInfo: [NSLocalizedDescriptionKey: PrivacyCanary.url])
+        let error = URLError(
+            .timedOut,
+            userInfo: [
+                NSURLErrorFailingURLErrorKey: URL(string: PrivacyCanary.url)!,
+                NSURLErrorFailingURLStringErrorKey: PrivacyCanary.url,
+                NSLocalizedDescriptionKey: "The request to \(PrivacyCanary.url) timed out.",
+                NSUnderlyingErrorKey: underlying,
+            ])
+
+        let shape = FailureShape(error)
+
+        XCTAssertEqual(
+            shape.description,
+            "NSError(NSURLErrorDomain -1001) url=timedOut inner=NSError(kCFErrorDomainCFNetwork -1001)")
+        XCTAssertEqual(shape.urlErrorCode, -1001)
+        PrivacyCanary.assertAbsent(from: shape.description)
+    }
+
+    func testFrameworkErrorsKeepTheirDomainAndCode() {
+        let status = NSError(
+            domain: NSOSStatusErrorDomain, code: -25299, userInfo: [NSFilePathErrorKey: PrivacyCanary.path])
+        let appleDomain = NSError(domain: "com.apple.coreaudio.avfaudio", code: -10868)
+        let posix = POSIXError(.EACCES, userInfo: [NSFilePathErrorKey: PrivacyCanary.path])
+
+        XCTAssertEqual(FailureShape(status).description, "NSError(NSOSStatusErrorDomain -25299)")
+        XCTAssertEqual(FailureShape(appleDomain).description, "NSError(com.apple.coreaudio.avfaudio -10868)")
+        XCTAssertEqual(FailureShape(posix).description, "NSError(NSPOSIXErrorDomain 13)")
+    }
+
+    func testEveryListedFrameworkDomainIsWrittenAsItself() {
+        for domain in FailureShape.frameworkDomains {
+            // A URL error also carries its code as the url field, which is what makes URL failures searchable.
+            let expected = domain == NSURLErrorDomain ? "NSError(\(domain) 1) url=1" : "NSError(\(domain) 1)"
+            XCTAssertEqual(FailureShape(NSError(domain: domain, code: 1)).description, expected)
+        }
+    }
+
+    /// A domain is a free-form string, so looking like an identifier or an Apple reverse-DNS name proves
+    /// nothing about where it came from.
+    func testADomainScribeDoesNotListIsWrittenAsOther() {
+        let domains = [
+            "canary_private_dictation", "com.apple.canary", "contoso-ai.openai.azure.com", "contoso.openai.azure.com",
+            PrivacyCanary.path, PrivacyCanary.secret, "two words",
+        ]
+        for domain in domains {
+            let shape = FailureShape(NSError(domain: domain, code: 1))
+            XCTAssertEqual(shape.description, "NSError(other 1)", domain)
+            PrivacyCanary.assertAbsent(from: shape.description)
+        }
+    }
+
+    func testSwiftErrorsAreNamedByTheirCaseAndCarriedIntegers() {
+        XCTAssertEqual(
+            FailureShape(TranscriptionError.backendMissing(.foundryCliNotFound)).description,
+            "TranscriptionError.backendMissing")
+        XCTAssertEqual(FailureShape(TranscriptionError.exitCode(3)).description, "TranscriptionError.exitCode values=3")
+        XCTAssertEqual(
+            FailureShape(KeychainStore.KeychainError.unhandled(-25299)).description,
+            "KeychainError.unhandled values=-25299")
+        XCTAssertEqual(
+            FailureShape(ProcessRunnerError.launchFailed(errno: ENOENT)).description,
+            "ProcessRunnerError.launchFailed values=2")
+        XCTAssertEqual(FailureShape(CancellationError()).description, "CancellationError")
+        XCTAssertEqual(FailureShape(PlainError.bare).description, "PlainError.bare")
+    }
+
+    func testACustomDescriptionIsNeverUsedToNameACase() {
+        let shape = FailureShape(DescribedError.bare)
+
+        XCTAssertEqual(shape.description, "DescribedError")
+        PrivacyCanary.assertAbsent(from: shape.description)
+    }
+
+    func testErrorsCarriedInAPayloadJoinTheChain() {
+        let error = PlainError.wrapping(POSIXError(.ENOENT, userInfo: [NSFilePathErrorKey: PrivacyCanary.path]))
+
+        XCTAssertEqual(FailureShape(error).description, "PlainError.wrapping inner=NSError(NSPOSIXErrorDomain 2)")
+    }
+
+    func testADecodingErrorDoesNotRepeatTheBodyItFailedOn() throws {
+        let body = Data(#"{"secret": \#(PrivacyCanary.secret), "note": "\#(PrivacyCanary.transcript)"#.utf8)
+
+        let error: any Error
+        do {
+            _ = try JSONDecoder().decode([String: String].self, from: body)
+            return XCTFail("Expected the body to be rejected")
+        } catch let decodingError {
+            error = decodingError
+        }
+
+        let shape = FailureShape(error)
+        XCTAssertEqual(shape.typeName, "DecodingError.dataCorrupted")
+        PrivacyCanary.assertAbsent(from: shape.description)
+    }
+
+    /// A code comes from a response body, so looking like an identifier proves nothing: the fixture's API
+    /// key does, and so does a phrase written in snake case.
+    func testAServiceCodeIsWrittenOnlyWhenScribeListsIt() {
+        let listed = [
+            "invalid_api_key", "DeploymentNotFound", "content_filter", "invalid_client", "interaction_required",
+            "AADSTS7000215", "AADSTS7000218", "AADSTS50076", "AADSTS700016", "AADSTS530035",
+        ]
+        for code in listed {
+            let shape = FailureShape(ServiceFailure(failureHTTPStatus: 401, failureServiceCode: code))
+            XCTAssertEqual(shape.description, "ServiceFailure http=401 service=\(code)")
+        }
+
+        let unlisted = [
+            PrivacyCanary.secret, "canary_private_dictation", "content-filter", "not a code", "https://example.invalid",
+            "contoso.openai.azure.com", "7starts-with-a-digit", "AADSTS", "AADSTS7000215x", "aadsts7000215",
+            "AADSTS-7000215", "AADSTS 7000215", String(repeating: "a", count: 65),
+        ]
+        for code in unlisted {
+            let shape = FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: code))
+            XCTAssertEqual(shape.serviceCode, "other", code)
+            XCTAssertEqual(shape.description, "ServiceFailure service=other", code)
+            PrivacyCanary.assertAbsent(from: shape.description)
+        }
+
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: "")).serviceCode)
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: nil, failureServiceCode: nil)).serviceCode)
+    }
+
+    /// The digits after `AADSTS` can be a phone number or an identifier as easily as a code, and writing
+    /// them back from their value would change nothing about that. An Entra code Scribe does not list keeps
+    /// only the prefix, which still says where the failure came from.
+    func testAnEntraCodeScribeDoesNotListKeepsOnlyItsPrefix() {
+        let unlisted = [
+            "AADSTS5550123", "AADSTS123456789", "AADSTS000000000", "AADSTS07000215", "AADSTS70002150", "AADSTS12",
+            "AADSTS12345678901234567890",
+        ]
+        for code in unlisted {
+            let shape = FailureShape(ServiceFailure(failureHTTPStatus: 401, failureServiceCode: code))
+            XCTAssertEqual(shape.serviceCode, "AADSTS", code)
+            XCTAssertEqual(shape.description, "ServiceFailure http=401 service=AADSTS", code)
+        }
+    }
+
+    /// Each listed Entra code is written as Microsoft does, `AADSTS` and a number without a leading zero,
+    /// so a typo in the list cannot turn it into a pattern that matches nothing.
+    func testEveryListedEntraCodeIsWellFormed() {
+        let entraCodes = FailureShape.knownServiceCodes.filter { $0.hasPrefix("AADSTS") }
+        XCTAssertFalse(entraCodes.isEmpty)
+        for code in entraCodes {
+            let digits = code.dropFirst("AADSTS".count)
+            XCTAssertTrue((5...7).contains(digits.count), code)
+            XCTAssertTrue(digits.allSatisfy { $0.isASCII && $0.isNumber }, code)
+            XCTAssertNotEqual(digits.first, "0", code)
+        }
+    }
+
+    func testAnHTTPStatusOutsideTheValidRangeIsDropped() {
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 0, failureServiceCode: nil)).httpStatus)
+        XCTAssertNil(FailureShape(ServiceFailure(failureHTTPStatus: 1000, failureServiceCode: nil)).httpStatus)
+        XCTAssertEqual(FailureShape(ServiceFailure(failureHTTPStatus: 599, failureServiceCode: nil)).httpStatus, 599)
+    }
+
+    func testADeepChainIsBounded() {
+        var error = NSError(domain: NSPOSIXErrorDomain, code: 0)
+        for depth in 1...200 {
+            error = NSError(domain: NSPOSIXErrorDomain, code: depth, userInfo: [NSUnderlyingErrorKey: error])
+        }
+
+        let shape = FailureShape(error)
+
+        XCTAssertEqual(shape.underlying.count, 8)
+        XCTAssertEqual(shape.underlying.first, "NSError(NSPOSIXErrorDomain 199)")
+    }
+
+    func testDescribeSaysNoneWithoutAnError() {
+        XCTAssertEqual(FailureShape.describe(nil), "none")
+        XCTAssertEqual(FailureShape.describe(CancellationError()), "CancellationError")
+    }
+}

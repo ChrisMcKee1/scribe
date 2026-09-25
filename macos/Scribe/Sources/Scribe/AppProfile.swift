@@ -12,7 +12,7 @@ enum NewlineInjectionMode: String, Equatable {
     case keepNewlines
 }
 
-/// A per-app dictation profile: when the focused app at the end of a capture matches one of
+/// A per-app dictation profile: when the app that had focus as the recording started matches one of
 /// `bundleIdentifiers`/`processNames`, the profile's overrides apply: a different AI writing style
 /// and/or line-break handling. Nil overrides fall back to the global setting. Mirrors Windows'
 /// `AppProfile` (Models/AppProfile.cs), but keys on bundle identifier first (the stable macOS
@@ -47,7 +47,7 @@ enum AppProfileMatcher {
         "com.github.wez.wezterm",
         "net.kovidgoyal.kitty",
         "co.zeit.hyper",
-        "com.mitchellh.ghostty"
+        "com.mitchellh.ghostty",
     ]
 
     /// Returns the first profile matching `bundleIdentifier`/`processName` (case-insensitive),
@@ -58,7 +58,9 @@ enum AppProfileMatcher {
 
         if let bundleIdentifier, !bundleIdentifier.isEmpty {
             for profile in profiles {
-                if profile.bundleIdentifiers.contains(where: { $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame }) {
+                if profile.bundleIdentifiers.contains(where: {
+                    $0.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+                }) {
                     return profile
                 }
             }
@@ -88,16 +90,20 @@ enum AppProfileMatcher {
 
     /// Applies a resolved newline mode to text about to be injected.
     static func applyNewlineMode(_ mode: NewlineInjectionMode, to text: String, bundleIdentifier: String?) -> String {
+        flattensNewlines(mode, bundleIdentifier: bundleIdentifier) ? flatten(text) : text
+    }
+
+    /// Whether `mode` flattens line breaks for this target. The dictation pipeline also asks AI cleanup for a single
+    /// line whenever it does, so the model's paragraphs are not run together afterwards.
+    static func flattensNewlines(_ mode: NewlineInjectionMode, bundleIdentifier: String?) -> Bool {
         switch mode {
         case .keepNewlines:
-            return text
+            return false
         case .alwaysFlatten:
-            return flatten(text)
+            return true
         case .smartFlatten:
-            guard let bundleIdentifier, knownTerminalBundleIdentifiers.contains(bundleIdentifier) else {
-                return text
-            }
-            return flatten(text)
+            guard let bundleIdentifier else { return false }
+            return knownTerminalBundleIdentifiers.contains(bundleIdentifier)
         }
     }
 

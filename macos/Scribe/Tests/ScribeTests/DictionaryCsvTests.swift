@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class DictionaryCsvTests: XCTestCase {
@@ -55,7 +56,7 @@ final class DictionaryCsvTests: XCTestCase {
         XCTAssertTrue(result.errors.isEmpty)
         XCTAssertEqual(result.entries.count, 1)
         XCTAssertEqual(result.entries[0].pattern, "azure")
-        XCTAssertTrue(result.entries[0].wholeWord) // optional column defaults
+        XCTAssertTrue(result.entries[0].wholeWord)  // optional column defaults
         XCTAssertTrue(result.entries[0].enabled)
     }
 
@@ -93,7 +94,7 @@ final class DictionaryCsvTests: XCTestCase {
 
         let result = DictionaryCsv.parse(csv)
 
-        XCTAssertEqual(result.entries.count, 2) // azure + rebac survive
+        XCTAssertEqual(result.entries.count, 2)  // azure + rebac survive
         XCTAssertEqual(result.errors.count, 3)
         XCTAssertTrue(result.errors.contains { $0.hasPrefix("Line 2:") })
         XCTAssertTrue(result.errors.contains { $0.hasPrefix("Line 3:") })

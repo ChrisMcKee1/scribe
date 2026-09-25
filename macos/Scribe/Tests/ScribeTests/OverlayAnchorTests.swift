@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+
 @testable import Scribe
 
 final class OverlayAnchorTests: XCTestCase {
@@ -9,19 +10,19 @@ final class OverlayAnchorTests: XCTestCase {
     func testTopLeftOrigin() {
         let origin = OverlayAnchor.topLeft.origin(for: pillSize, in: screen, margin: 10)
         XCTAssertEqual(origin.x, 10, accuracy: 0.01)
-        XCTAssertEqual(origin.y, 750, accuracy: 0.01) // 800 - 40 - 10
+        XCTAssertEqual(origin.y, 750, accuracy: 0.01)  // 800 - 40 - 10
     }
 
     func testBottomRightOrigin() {
         let origin = OverlayAnchor.bottomRight.origin(for: pillSize, in: screen, margin: 10)
-        XCTAssertEqual(origin.x, 790, accuracy: 0.01) // 1000 - 200 - 10
+        XCTAssertEqual(origin.x, 790, accuracy: 0.01)  // 1000 - 200 - 10
         XCTAssertEqual(origin.y, 10, accuracy: 0.01)
     }
 
     func testCenterOrigin() {
         let origin = OverlayAnchor.center.origin(for: pillSize, in: screen, margin: 10)
-        XCTAssertEqual(origin.x, 400, accuracy: 0.01) // (1000 - 200) / 2
-        XCTAssertEqual(origin.y, 380, accuracy: 0.01) // (800 - 40) / 2
+        XCTAssertEqual(origin.x, 400, accuracy: 0.01)  // (1000 - 200) / 2
+        XCTAssertEqual(origin.y, 380, accuracy: 0.01)  // (800 - 40) / 2
     }
 
     func testBottomCenterOrigin() {

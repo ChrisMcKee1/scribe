@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 /// Guards the boundary that keeps auto-learning honest: a generated pattern must be something the

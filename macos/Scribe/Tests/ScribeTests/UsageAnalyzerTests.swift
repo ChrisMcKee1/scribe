@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import Scribe
 
 final class UsageAnalyzerTests: XCTestCase {
@@ -36,10 +37,12 @@ final class UsageAnalyzerTests: XCTestCase {
         XCTAssertEqual(snapshot.activeDays, 3)
         XCTAssertEqual(snapshot.speechSeconds, 6, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageWords, 2, accuracy: 0.001)
-        XCTAssertEqual(snapshot.topApps, [
-            UsageAnalyzer.AppUsage(name: "Terminal", dictations: 2, words: 3),
-            UsageAnalyzer.AppUsage(name: "Visual Studio Code", dictations: 1, words: 3),
-        ])
+        XCTAssertEqual(
+            snapshot.topApps,
+            [
+                UsageAnalyzer.AppUsage(name: "Terminal", dictations: 2, words: 3),
+                UsageAnalyzer.AppUsage(name: "Visual Studio Code", dictations: 1, words: 3),
+            ])
         XCTAssertEqual(snapshot.trend.count, 31)
         XCTAssertEqual(snapshot.trend.reduce(0) { $0 + $1.dictations }, 3)
     }
@@ -72,8 +75,64 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 2, occurrences: 2, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 2, occurrences: 2, covered: true)))
+    }
+
+    /// A covered term that is a template-like rule's replacement is marked so, and a spelling is not, so the AI
+    /// summary can leave the first out: the dictation path never sends such a replacement to a provider either.
+    func testATermThatIsATemplateLikeReplacementIsMarkedSo() {
+        let signature = "Pat Doe\nSupport lead"
+        let text = "Deploy with Next.js. Thanks, \(signature)"
+        let entries = [entry(text: text, audioMilliseconds: 1_000, targetApp: nil)]
+        let terms = [
+            DictionaryEntry(pattern: "next js", replacement: "Next.js"),
+            DictionaryEntry(pattern: "my sign off", replacement: signature),
+        ]
+
+        let snapshot = UsageAnalyzer.compute(
+            entries: entries, knownTerms: terms,
+            sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        let expected = [
+            UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true),
+            UsageAnalyzer.TermUsage(
+                text: signature, dictations: 1, occurrences: 1, covered: true, isTemplateLike: true),
+        ]
+        XCTAssertEqual(snapshot.terms.filter(\.covered).sorted { $0.text < $1.text }, expected)
+        let summary = UsageInsight.buildSummary(snapshot)
+        XCTAssertTrue(summary.contains("Next.js: 1 dictations"), summary)
+        XCTAssertFalse(summary.contains("Pat Doe"), summary)
+    }
+
+    /// A replacement is judged as it is stored, before its label is trimmed: a line break at its edge or padding makes
+    /// it template-like, as the dictation path judges it, though the label it is counted under is the one line
+    /// "Pat Doe". The tab still lists the term; only the summary leaves it out.
+    func testATermIsJudgedByItsReplacementBeforeTheLabelIsTrimmed() {
+        for replacement in ["Pat Doe\n", "\nPat Doe", "  Pat Doe", "Pat Doe "] {
+            let entries = [entry(text: "Signed Pat Doe with Next.js", audioMilliseconds: 1_000, targetApp: nil)]
+            let terms = [
+                DictionaryEntry(pattern: "my name", replacement: replacement),
+                DictionaryEntry(pattern: "next js", replacement: "Next.js"),
+            ]
+
+            let snapshot = UsageAnalyzer.compute(
+                entries: entries, knownTerms: terms,
+                sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
+                timeZone: TimeZone(identifier: "UTC")!)
+
+            let label = snapshot.terms.first { $0.text == "Pat Doe" }
+            XCTAssertEqual(label?.covered, true, replacement.debugDescription)
+            XCTAssertEqual(label?.isTemplateLike, true, replacement.debugDescription)
+            let summary = UsageInsight.buildSummary(snapshot)
+            XCTAssertFalse(summary.contains("Pat Doe"), replacement.debugDescription)
+            XCTAssertTrue(summary.contains("Next.js: 1 dictations"), replacement.debugDescription)
+        }
     }
 
     func testComputeSuggestsOnlyRecurringJargonShapes() {
@@ -88,7 +147,9 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertEqual(snapshot.terms, [UsageAnalyzer.TermUsage(text: "CloudThing", dictations: 2, occurrences: 2, covered: false)])
+        XCTAssertEqual(
+            snapshot.terms, [UsageAnalyzer.TermUsage(text: "CloudThing", dictations: 2, occurrences: 2, covered: false)]
+        )
     }
 
     func testComputeUsesWeekBucketsForLongPeriodsAndFillsGaps() {
@@ -145,8 +206,12 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: ".NET", dictations: 2, occurrences: 2, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(UsageAnalyzer.TermUsage(text: ".NET", dictations: 2, occurrences: 2, covered: true))
+        )
     }
 
     func testComputeDoesNotMatchFormsInsideLargerWords() {
@@ -179,8 +244,12 @@ final class UsageAnalyzerTests: XCTestCase {
             sinceUtc: Self.now.addingTimeInterval(-86_400), nowUtc: Self.now,
             timeZone: TimeZone(identifier: "UTC")!)
 
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 1, occurrences: 1, covered: true)))
-        XCTAssertTrue(snapshot.terms.contains(UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Tailwind CSS", dictations: 1, occurrences: 1, covered: true)))
+        XCTAssertTrue(
+            snapshot.terms.contains(
+                UsageAnalyzer.TermUsage(text: "Next.js", dictations: 1, occurrences: 1, covered: true)))
     }
 
     func testComputePreservesNonOverlappingCountsForSingleTokenForms() {
@@ -192,5 +261,50 @@ final class UsageAnalyzerTests: XCTestCase {
 
         let covered = snapshot.terms.filter { $0.covered }
         XCTAssertEqual(covered, [UsageAnalyzer.TermUsage(text: "A-A", dictations: 1, occurrences: 1, covered: true)])
+    }
+
+    // MARK: - Read cap
+
+    private func historyRecord(secondsAgo: Double, app: String) -> DictationHistoryRecord {
+        DictationHistoryRecord(
+            startedAt: Self.now.addingTimeInterval(-secondsAgo),
+            durationSeconds: 1,
+            sampleCount: 16_000,
+            transcriptText: "word",
+            targetApp: app)
+    }
+
+    func testReportUsesOnlyTheNewestHistoryLimitAndSaysThePeriodWasCapped() {
+        // Oldest first, as the store returns them; one row past the cap.
+        var records = [historyRecord(secondsAgo: 20_000, app: "Oldest")]
+        records += (0..<UsageAnalyzer.historyLimit).map {
+            historyRecord(secondsAgo: Double(UsageAnalyzer.historyLimit - $0), app: "Recent")
+        }
+
+        let report = UsageAnalyzer.report(
+            records: records,
+            knownTerms: [],
+            sinceUtc: Self.now.addingTimeInterval(-86_400),
+            nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        XCTAssertTrue(report.periodCapped)
+        XCTAssertEqual(report.snapshot.dictations, UsageAnalyzer.historyLimit)
+        XCTAssertEqual(report.snapshot.topApps.map(\.name), ["Recent"])
+    }
+
+    func testReportUnderTheCapUsesEveryRecord() {
+        let records = [historyRecord(secondsAgo: 30, app: "A"), historyRecord(secondsAgo: 10, app: "B")]
+
+        let report = UsageAnalyzer.report(
+            records: records,
+            knownTerms: [],
+            sinceUtc: Self.now.addingTimeInterval(-86_400),
+            nowUtc: Self.now,
+            timeZone: TimeZone(identifier: "UTC")!)
+
+        XCTAssertFalse(report.periodCapped)
+        XCTAssertEqual(report.snapshot.dictations, 2)
+        XCTAssertEqual(report.snapshot.words, 2)
     }
 }

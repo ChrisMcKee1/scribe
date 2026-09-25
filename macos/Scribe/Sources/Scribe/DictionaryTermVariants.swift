@@ -56,7 +56,7 @@ enum DictionaryTermVariants {
             body.removeFirst()
         }
         guard (2...8).contains(body.count),
-              body.allSatisfy({ ($0.isASCII && $0.isUppercase && $0.isLetter) || $0.isNumber })
+            body.allSatisfy({ ($0.isASCII && $0.isUppercase && $0.isLetter) || $0.isNumber })
         else {
             return nil
         }
