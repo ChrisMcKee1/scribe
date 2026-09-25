@@ -111,6 +111,28 @@ public sealed class InterimLibraryVocabularySourceTests : IDisposable
         }
     }
 
+    [Fact]
+    public void The_stand_in_is_registered_after_the_core_services_so_it_overrides_the_library_service_until_the_integration()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Scribe.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+
+        // The library service registers itself as the vocabulary source in Core, and the container resolves the last
+        // registration, so the stand-in keeps 0.4.4's selection only while the app registers it after AddScribeCore.
+        var core = File.ReadAllText(Path.Combine(root.FullName, "src", "Scribe.Core", "DependencyInjection", "CoreServiceCollectionExtensions.cs"));
+        Assert.Contains("services.AddSingleton<ILibraryVocabularySource>(", core, StringComparison.Ordinal);
+        var app = File.ReadAllText(Path.Combine(root.FullName, "src", "Scribe.App", "App.xaml.cs"));
+        var coreServices = app.IndexOf("builder.Services.AddScribeCore();", StringComparison.Ordinal);
+        var standIn = app.IndexOf("builder.Services.AddSingleton<ILibraryVocabularySource>(sp => new InterimLibraryVocabularySource(", StringComparison.Ordinal);
+        Assert.True(coreServices >= 0, "The app no longer calls AddScribeCore where this test looks for it.");
+        Assert.True(standIn > coreServices, "The stand-in must be registered after AddScribeCore, or the library service's own registration wins.");
+    }
+
     private static List<string> Describe(IEnumerable<DictionaryEntry> entries) =>
         [.. entries.Select(entry => $"{entry.Pattern}|{entry.Replacement}|{entry.WholeWord}|{entry.Enabled}")];
 }

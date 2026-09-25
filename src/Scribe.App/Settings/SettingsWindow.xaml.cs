@@ -6086,11 +6086,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 result = await Task.Run(
                     () =>
                     {
-                        // Once the library service is the vocabulary source (the W1b integration), the report takes its
-                        // library entries and its shareable labels from one Current snapshot and ignores these ids
-                        // (contract 3.3.6). Until then it reads the libraries by id, as release 0.4.4 did, and shares no
-                        // library label (UsageReport's fail-closed path): the ids of the committed vocabulary, which are
-                        // the libraries the settings in use enable, never the window's unsaved switches.
+                        // The library service is a vocabulary source, so the report takes its library entries and its
+                        // shareable labels from one Current snapshot of that service and ignores these ids (contract
+                        // 3.3.6). The ids, those of the committed vocabulary dictation runs on (the libraries the settings
+                        // in use enable, never the window's unsaved switches), are what UsageReport reads a service that
+                        // is not a source by, as release 0.4.4 read the libraries, sharing no library label.
                         var vocabulary = _libraryVocabulary.Current;
                         return UsageReport.Build(
                             _history,

@@ -4,11 +4,12 @@ using Scribe.Core.PostProcessing;
 namespace Scribe.Core.Vocabulary;
 
 /// <summary>
-/// Stream W-V's stand-in for the library vocabulary source until the W1b integration commit, which deletes this file:
-/// there the library service (<c>DictionaryLibraryService</c>, stream J) becomes the one
-/// <see cref="ILibraryVocabularySource"/>, and the app's composition root registers it instead of this. Until then it
-/// adapts release 0.4.4's library-selection seam, so dictation, AI cleanup, quick add and the usage report behave
-/// exactly as in 0.4.4.
+/// Stream W-V's stand-in for the library vocabulary source until the W1b integration, which deletes this file and its one
+/// registration in the app's composition root. The library service (<c>DictionaryLibraryService</c>, stream J) already
+/// registers itself as the <see cref="ILibraryVocabularySource"/> in Core, and the app's later registration of this one
+/// overrides it until then, so dictation, AI cleanup and quick add keep release 0.4.4's library selection, driven by the
+/// settings dictation runs on. The usage report is the exception: <c>UsageReport</c> reads a library service that is a
+/// vocabulary source through that service's own snapshot.
 /// </summary>
 /// <remarks>
 /// <para>

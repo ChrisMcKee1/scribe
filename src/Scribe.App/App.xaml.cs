@@ -153,9 +153,10 @@ public partial class App : Application
         builder.Services.AddSingleton<StartupRegistration>();
         builder.Services.AddSingleton<SessionDiagnostics>();
 
-        // The library vocabulary's source and admission point. Until the W1b integration commit this is stream W-V's
-        // stand-in over release 0.4.4's selection seam, with the libraries the settings dictation runs on; the
-        // integration deletes it and registers the library service (DictionaryLibraryService) as the source instead.
+        // The library vocabulary's source and admission point. Until the W1b integration this is stream W-V's stand-in
+        // over release 0.4.4's selection seam, with the libraries the settings dictation runs on; registered after
+        // AddScribeCore, it overrides the library service's own registration as the source (DictionaryLibraryService),
+        // which serves once the integration deletes these lines and the stand-in.
         // AI cleanup takes it through its constructor, and the publisher builds every dictation's vocabulary from it.
         builder.Services.AddSingleton<ILibraryVocabularySource>(sp => new InterimLibraryVocabularySource(
             sp.GetRequiredService<IDictionaryLibraryService>(),
