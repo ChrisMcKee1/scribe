@@ -745,8 +745,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
   keep command order and epoch order in step. Other threads read published state lock-free.
   Transitions leave through a lock-free queue woken by a kernel event, and the leaked-key check runs
-  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`, after one
-  interlocked write that says whether that pass should repair keys (`HotkeyReconcileSignal`).
+  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`, after
+  interlocked writes that count the request and say which key view the pass should repair keys in, if
+  any (`HotkeyReconcileSignal`, one per hook installation).
 - **The hook thread creates its message queue first** (`NativeMethods.EnsureMessageQueue`, the
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
@@ -944,7 +945,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   no engine at all. A mouse hook found gone (`OnMouseHookLost`) forgets buttons, never keys, which the
   repair never judges, so it takes none. A repair request carries the epoch its trigger was seen at
   (the hook callbacks pass their engine's through `HotkeyReconcileSignal.Signal`, and a dictation's
-  release carries it in its `QueuedTransition`), and `KeyViewIsWhole` checks, before the key's reads
+  release carries it in its `QueuedTransition`). Each hook installation has its own signal (review
+  round 11, A14): the signal's one word keeps the latest request, so a callback of a replaced
+  installation, whose thread can outlive the reinstall's 2 s join, would otherwise replace the
+  replacement's pending request with its own, which the pass then refuses, leaving a real leak for the
+  next trigger. The installation makes its signal and its hook thread disposes it once its hooks are
+  gone. `KeyViewIsWhole` checks, before the key's reads
   and again immediately before the key-up, together with the capture checks and a fresh read of
   whether the hook now holds the key, that the current engine's view still has that epoch. Any change
   stops the rest of the pass, and nothing replays it. That also covers a clear between the trigger and
@@ -953,8 +959,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   so reads that saw a cleared key make the check after them see the new epoch. What no check can
   close is the time between the last check and the SendInput itself: a key-up already past that check
   was decided on a view that was whole, and it is still sent if the view is cleared in that time, or if
-  the user presses that very key again in that time (then it releases a key the user holds, until
-  autorepeat sends it down again). That is also the one key-up that can arrive after capture's start
+  the user presses that very key again in that time. Then it releases a key the user holds, and
+  Windows sees the key down again only when another down event for it reaches Windows: for a
+  modifier such as Ctrl that can mean releasing the key and pressing it again, since a modifier does
+  not dependably autorepeat into a fresh down, and a bound key's repeats stay swallowed
+  (`ChordStateMachine.Process` keeps a swallowed keystroke swallowed through its repeats) (review round
+  11, A15). That is also the one key-up that can arrive after capture's start
   when capture stops waiting for the gate. **A pass that is stopped is not run again**, at capture's
   end or after any other clear: the keys held across the clear are missing from the engine's view then,
   so a replay would send key-ups for keys the user still holds; a real leak is repaired at the next
@@ -962,9 +972,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   after Stop has no engine and releases nothing; a key-up already past its last check when Stop runs
   is still sent. `MouseButtonRound9Tests` and `MouseButtonRound10Tests` (barriers inside the scripted
   Windows view, after the reads, and inside the key-up) pin it, and so does
-  `Start_runs_no_repair_again_when_capture_ends`, which counts every scheduled repair in one place,
-  takes the hook thread's renewal as the acknowledgment that capture's end is applied, and drains the
-  signal with a sync-only request before it checks that none was asked for: no sleep.
+  `Start_runs_no_repair_again_when_capture_ends`, which counts repair requests where they are made,
+  on the asking thread (the signal counts each it is asked for, the transition queue each Deactivated
+  that will ask the consumer, the service each pass it schedules), and takes the hook thread's renewal as
+  the acknowledgment that capture's end is applied: no sleep, and no drain through the pool, whose
+  registered wait re-arms before its callback runs, so a later pass proves nothing about an earlier
+  callback (review round 11, A13). `Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for`
+  pins A14.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new

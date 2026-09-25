@@ -16,7 +16,14 @@ internal sealed class HotkeyTransitionQueue : IDisposable
     private readonly AutoResetEvent _work = new(false);
     private volatile bool _completed;
 
+    // Every queued transition that will ask the consumer for a leaked-key repair (a key transition's Deactivated), counted
+    // on the queuing thread as it is queued; for tests.
+    private long _repairRequests;
+
     public bool IsCompleted => _completed;
+
+    /// <summary>Any thread: how many queued transitions ask the consumer for a repair; for tests.</summary>
+    internal long RepairRequests => Interlocked.Read(ref _repairRequests);
 
     /// <summary>
     /// Any thread. Returns false once shutdown has begun: a final keyboard message can still be in
@@ -28,6 +35,11 @@ internal sealed class HotkeyTransitionQueue : IDisposable
         if (_completed)
         {
             return false;
+        }
+
+        if (transition.AllowReconcile && transition.Transition == HotkeyTransition.Deactivated)
+        {
+            Interlocked.Increment(ref _repairRequests);
         }
 
         _items.Push(transition);

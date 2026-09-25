@@ -423,13 +423,13 @@ public partial class HotkeyServiceTests
 
     // Round 9 (A11): a repair that capture stopped is not run again when capture ends, through the real hook thread and
     // signal. The Left Ctrl the user holds from the capture gesture is not in the engine's view then, so a replay would
-    // send its key-up while it is held; a real leak is repaired at the next trigger instead. Round 10 (A13) observes it
-    // with no sleep: every repair is scheduled through one counted place (RepairPassesScheduledForTests); capture's end is
-    // acknowledged by the hook thread's renewal after it; and a sync-only request sent through the same signal then drains
-    // the pool's wait, so a repair the end asked for (the hook thread through the signal, or the requesting thread) has
-    // been scheduled, and counted, by the time that request's pass has run. A repair the end asked for through the
-    // consumer would need a key transition queued at capture's end, which the engine never queues
-    // (MouseButtonRound10Tests pins that).
+    // send its key-up while it is held; a real leak is repaired at the next trigger instead. Round 11 (A13) observes it
+    // where requests are made, not where the pool schedules them: the signal counts each repair it is asked for on the
+    // asking thread, the transition queue each Deactivated that will ask the consumer for one, and the service each pass it
+    // schedules on the thread that asks. Capture's end is acknowledged by the hook thread's renewal after it, which it
+    // processes after the end's own command; a request the end made, on the hook thread or the requesting thread, is
+    // counted by then. (Round 10 drained the pool's wait with a later request instead, which proves nothing about an
+    // earlier callback that took its request and had not yet scheduled it: the wait re-arms before its callback runs.)
     [Fact]
     public void Start_runs_no_repair_again_when_capture_ends()
     {
@@ -447,17 +447,60 @@ public partial class HotkeyServiceTests
         var passes = service.ReconcilePassesRun;
         service.ReconcileSignalForTests!.Signal(service.CurrentEngineForTests!.KeyViewEpoch); // asked for during the capture
         Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The repair never ran.");
+        var asked = service.RepairRequestsAskedForTests;
         var scheduled = service.RepairPassesScheduledForTests;
 
         service.SetCaptureMode(false);
         AwaitRenewal(service); // acknowledged: the hook thread has applied capture's end
         Assert.True(service.KeyRepairAllowedForTests); // capture no longer owns input
-        passes = service.ReconcilePassesRun;
-        service.ReconcileSignalForTests!.SignalMouseHookSync();
-        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The drain never ran.");
 
+        Assert.Equal(asked, service.RepairRequestsAskedForTests);
         Assert.Equal(scheduled, service.RepairPassesScheduledForTests);
         Assert.Empty(injected);
+    }
+
+    // Round 11 (A14): a hook thread that outlived a reinstall must never replace the replacement's pending repair. Each
+    // installation has its own signal, so an obsolete callback that resumes after the reinstall writes only into its own,
+    // which is disposed once its hooks are gone (and whose requests, if a pass still takes one, are refused: their key view
+    // is not the current engine's). With the consumer held back, the current installation's request is published first
+    // and the obsolete one after it, as Astra ordered them; the current one must still be served. At 011bde4 both went into
+    // one shared word, the obsolete epoch replaced the current one, the pass refused it, and the leak stayed.
+    [Fact]
+    public void Start_serves_the_current_installation_s_repair_whatever_an_obsolete_one_asks_for()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        var injected = new ConcurrentQueue<uint>();
+        using var service = ScriptedKeysService(
+            ChordOf(LeftCtrlKey, MouseButtons.Back), windowsHoldsBack: false, desktopReceivesInput: true, injected);
+        service.Start();
+        var obsoleteSignal = service.ReconcileSignalForTests!;
+        var obsoleteEpoch = service.CurrentEngineForTests!.KeyViewEpoch;
+
+        service.ReinstallHookNow();
+        var currentSignal = service.ReconcileSignalForTests!;
+        var currentEpoch = service.CurrentEngineForTests!.KeyViewEpoch; // Windows holds Left Ctrl; this engine never saw it
+        using var hold = new ManualResetEventSlim(false);
+        currentSignal.HoldBeforeTakingForTests = hold;
+        obsoleteSignal.HoldBeforeTakingForTests = hold;
+        try
+        {
+            currentSignal.Signal(currentEpoch); // the replacement's callback: a genuine leak, in the current view
+            obsoleteSignal.Signal(obsoleteEpoch); // the obsolete callback, resuming after the reinstall
+        }
+        finally
+        {
+            currentSignal.HoldBeforeTakingForTests = null;
+            obsoleteSignal.HoldBeforeTakingForTests = null;
+            hold.Set();
+        }
+
+        Assert.True(
+            SpinWait.SpinUntil(() => !injected.IsEmpty, HookTimeout), "The current installation's repair was never served.");
+        Assert.Equal(new[] { LeftCtrlKey }, injected);
     }
 
     // A service whose leak repair sees a scripted Windows holding Left Ctrl and records the key-ups it would send, over a

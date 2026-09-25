@@ -70,7 +70,6 @@ public sealed class HotkeyService : IHotkeyService
         long KeyViewEpoch = 0);
 
     private HotkeyTransitionQueue? _transitions;
-    private HotkeyReconcileSignal? _reconcileSignal;
     private HookInstallation? _installation;
     private Thread? _consumerThread;
     private Timer? _watchdog;
@@ -210,8 +209,8 @@ public sealed class HotkeyService : IHotkeyService
     internal HotkeyEngine? CurrentEngineForTests => _router.CurrentEngine;
 
     /// <summary>
-    /// The reconcile signal the current installation's hook callbacks raise, or null while stopped; for tests that play a
-    /// hook callback between the hook thread's messages.
+    /// The reconcile signal the current installation's hook callbacks raise (each installation has its own), or null while
+    /// stopped; for tests that play a hook callback between the hook thread's messages.
     /// </summary>
     internal HotkeyReconcileSignal? ReconcileSignalForTests
     {
@@ -219,7 +218,7 @@ public sealed class HotkeyService : IHotkeyService
         {
             lock (_sync)
             {
-                return _reconcileSignal;
+                return _installation?.ReconcileSignal;
             }
         }
     }
@@ -283,6 +282,22 @@ public sealed class HotkeyService : IHotkeyService
     /// <summary>How many passes asking for the leaked-key repair have been scheduled, from any source; for tests.</summary>
     internal long RepairPassesScheduledForTests => Interlocked.Read(ref _repairPassesScheduled);
 
+    /// <summary>
+    /// How many leaked-key repairs the hook side has asked for, counted where each is asked, on the asking thread: the
+    /// current installation's signal and every Deactivated queued for the consumer. For tests that must see a request
+    /// without waiting for the pool to schedule it.
+    /// </summary>
+    internal long RepairRequestsAskedForTests
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return (_installation?.ReconcileSignal.RepairRequests ?? 0) + (_transitions?.RepairRequests ?? 0);
+            }
+        }
+    }
+
     /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
     internal void MaintainMouseHookNow()
     {
@@ -337,22 +352,19 @@ public sealed class HotkeyService : IHotkeyService
             // A fresh engine in a fresh epoch, built from the published configuration: no consumer
             // exists yet, so nothing from a previous run can leak into this one.
             var transitions = new HotkeyTransitionQueue();
-            var reconcileSignal = new HotkeyReconcileSignal(ScheduleReconcile);
             var (engine, _) = _router.BeginEngine(transitions);
-            var installation = new HookInstallation(this, engine, reconcileSignal);
+            var installation = new HookInstallation(this, engine);
 
             if (!installation.Install(InstallTimeout))
             {
                 _router.EndEngine(engine);
                 transitions.Complete();
                 transitions.Dispose();
-                reconcileSignal.Dispose();
                 throw new InvalidOperationException(
                     "Failed to install the global keyboard hook.", installation.InstallError);
             }
 
             _transitions = transitions;
-            _reconcileSignal = reconcileSignal;
             _installation = installation;
             _consumerThread = new Thread(() => ConsumeTransitions(transitions))
             {
@@ -395,7 +407,6 @@ public sealed class HotkeyService : IHotkeyService
         HookInstallation? installation;
         Thread? consumerThread;
         HotkeyTransitionQueue? transitions;
-        HotkeyReconcileSignal? reconcileSignal;
 
         lock (_sync)
         {
@@ -410,11 +421,9 @@ public sealed class HotkeyService : IHotkeyService
             installation = _installation;
             consumerThread = _consumerThread;
             transitions = _transitions;
-            reconcileSignal = _reconcileSignal;
             _installation = null;
             _consumerThread = null;
             _transitions = null;
-            _reconcileSignal = null;
 
             // From here on, requests only update the published configuration; the next Start
             // builds its engine from it.
@@ -426,7 +435,6 @@ public sealed class HotkeyService : IHotkeyService
         installation?.Join(JoinTimeout);
         consumerThread?.Join(JoinTimeout);
         transitions?.Dispose();
-        reconcileSignal?.Dispose();
 
         _logger.LogInformation("Hotkey hook removed.");
     }
@@ -904,12 +912,12 @@ public sealed class HotkeyService : IHotkeyService
     }
 
     // Tears down only the hook thread and spins a fresh one; the consumer thread, queue and
-    // watchdog survive, while key state starts over in a new engine. Callers hold _sync.
+    // watchdog survive, while key state starts over in a new engine, and the new installation
+    // makes its own reconcile signal (review round 11, A14). Callers hold _sync.
     private void ReinstallHookLocked()
     {
         var transitions = _transitions;
-        var reconcileSignal = _reconcileSignal;
-        if (transitions is null || reconcileSignal is null)
+        if (transitions is null)
         {
             return;
         }
@@ -938,7 +946,7 @@ public sealed class HotkeyService : IHotkeyService
                 HotkeyTransition.Deactivated, trigger, _router.CurrentGeneration, AllowReconcile: false));
         }
 
-        var installation = new HookInstallation(this, engine, reconcileSignal);
+        var installation = new HookInstallation(this, engine);
         _installation = installation;
         if (!installation.Install(InstallTimeout))
         {
@@ -979,6 +987,11 @@ public sealed class HotkeyService : IHotkeyService
     {
         private readonly HotkeyService _service;
         private readonly HotkeyEngine _engine;
+
+        // This installation's own, never shared with its replacement (review round 11, A14): a callback of this
+        // installation that is still running after a reinstall (its thread can outlive the 2 s join) writes its repair
+        // request here, where it cannot replace the replacement's pending one. Its requests are refused anyway, since
+        // their key view is not the current engine's. The hook thread disposes it once its hooks are gone.
         private readonly HotkeyReconcileSignal _reconcileSignal;
 
         // Rooted here for as long as the hook can call it: a collected delegate behind a live
@@ -1012,11 +1025,11 @@ public sealed class HotkeyService : IHotkeyService
         private long _mouseHookRegistrations;
         private long _mouseHookLosses;
 
-        public HookInstallation(HotkeyService service, HotkeyEngine engine, HotkeyReconcileSignal reconcileSignal)
+        public HookInstallation(HotkeyService service, HotkeyEngine engine)
         {
             _service = service;
             _engine = engine;
-            _reconcileSignal = reconcileSignal;
+            _reconcileSignal = new HotkeyReconcileSignal(service.ScheduleReconcile);
             _desktopReceivesInput = service._desktopReceivesInput;
             _proc = HookCallback;
             _mouseProc = MouseHookCallback;
@@ -1030,6 +1043,9 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         public Exception? InstallError => _installError;
+
+        /// <summary>The reconcile signal this installation's hook callbacks raise; its own, for tests.</summary>
+        public HotkeyReconcileSignal ReconcileSignal => _reconcileSignal;
 
         /// <summary>The engine this installation's thread drives.</summary>
         public HotkeyEngine Engine => _engine;
@@ -1178,6 +1194,7 @@ public sealed class HotkeyService : IHotkeyService
 
             if (hookId == 0)
             {
+                _reconcileSignal.Dispose();
                 return;
             }
 
@@ -1216,6 +1233,10 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             NativeMethods.UnhookWindowsHookEx(hookId);
+
+            // No callback of this installation can run from here: its hooks are gone, and callbacks run only on this
+            // thread, which ends now. A pass this signal already started still runs, and refuses its request.
+            _reconcileSignal.Dispose();
         }
 
         // Hook thread only, between messages, never inside a hook callback. Installs the mouse hook while a binding presses
