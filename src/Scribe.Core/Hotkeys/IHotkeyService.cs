@@ -33,13 +33,14 @@ public interface IHotkeyService : IDisposable
     void UpdateBindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding);
 
     /// <summary>
-    /// Releases the latch of the press that started a dictation the app has just ended itself (the silence auto-stop, a
-    /// microphone fault, a pause, the duration ceiling), without raising events, so the next press starts a new dictation
-    /// instead of being swallowed as the missing toggle-off. <paramref name="activation"/> is the
-    /// <see cref="HotkeyTriggerEventArgs.Activation"/> of the Activated that started it. Only that press is released, and
-    /// only while it still owns the dictation: a newer press keeps its latch, so its own release or second press still
-    /// ends the dictation it starts. A latch that owns no dictation (a press refused while another owned one) is
-    /// forgotten too. Call it only once the stop has actually ended that dictation, never for a stop that was turned away.
+    /// Releases the latch of one press, without raising events: the press that started a dictation the app has just
+    /// ended itself (the silence auto-stop, a microphone fault, a pause, the duration ceiling), or a press the app turned
+    /// away because the previous dictation was still processing. Either way the next press starts a new dictation
+    /// instead of being swallowed as the missing toggle-off. <paramref name="activation"/> is that press's
+    /// <see cref="HotkeyTriggerEventArgs.Activation"/>. Only that press is released, and only while it still owns the
+    /// dictation: a newer press keeps its latch, so its own release or second press still ends the dictation it starts.
+    /// A latch that owns no dictation (a press refused while another owned one) is forgotten too. Call it only for a stop
+    /// the app actually admitted, never for one it turned away.
     /// </summary>
     void CancelToggle(long activation);
 

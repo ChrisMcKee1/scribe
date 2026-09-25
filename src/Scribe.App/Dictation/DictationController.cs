@@ -584,18 +584,23 @@ internal sealed class DictationController : IDisposable
     private void OnActivated(object? sender, HotkeyTriggerEventArgs e)
     {
         // Resolved before the lifecycle's gate is taken; the factory below only reads cheap platform state under it,
-        // so the target window it records is the one focused at the exact moment the recording began.
+        // so the target window it records is the one focused at the exact moment the recording began. A press turned away
+        // because the previous dictation is still processing releases its own latch (see DictationStartPolicy), so a
+        // toggle's next tap starts a dictation instead of ending one that never began.
         var current = CurrentSettings;
-        var activation = _lifecycle.TryBeginRecording(() =>
-        {
-            var targetWindow = GetForegroundWindow();
-            return new CaptureContext(
-                DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
-                targetWindow,
-                ProcessNameForWindow(targetWindow),
-                Stopwatch.GetTimestamp(),
-                e.Activation);
-        });
+        var activation = DictationStartPolicy.BeginRecording(
+            _lifecycle,
+            () =>
+            {
+                var targetWindow = GetForegroundWindow();
+                return new CaptureContext(
+                    DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
+                    targetWindow,
+                    ProcessNameForWindow(targetWindow),
+                    Stopwatch.GetTimestamp(),
+                    e.Activation);
+            },
+            () => _hotkeys.CancelToggle(e.Activation));
 
         if (activation.Capture is not { } capture)
         {

@@ -598,8 +598,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   recording it starts is still ended by its own release; releasing whatever the hook held, before the
   admission, cleared that latch and left the microphone recording. A stop the lifecycle turns away
   releases nothing. The two stops the hook sends itself, a release or second press and a desktop switch,
-  release nothing either: the hook ended or reset that latch before sending them. A new
-  `DictationStopReason` releases by default and must be classified in `DictationStopPolicyTests`;
+  release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
+  turns away because the previous dictation is still processing releases its own latch the same way
+  (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
+  release had just made that tap a new start, a latch left on cost the user a third tap. The other
+  refusals keep the latch: a pause clears it in the hook, and while a recording is live the press the
+  hook took is what can still end it. A new `DictationStopReason` releases by default and must be
+  classified in `DictationStopPolicyTests`, and a new `ActivationDecision` in `DictationStartPolicyTests`;
   `HotkeyStopReleaseTests` drives the hotkey and the lifecycle together through these orderings.
 - **`ClosableTimer` records each schedule's due time.** A tick with nothing armed is dropped, an early
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after

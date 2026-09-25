@@ -8,10 +8,12 @@ namespace Scribe.Core.Tests;
 /// <summary>
 /// The hotkey and the dictation lifecycle together, wired as the controller wires them (the controller itself has no
 /// tests): the hook's transitions reach a real <see cref="DictationLifecycle{TCapture}"/> through the service's real
-/// consumer step, each recording keeps the press that started it, and every stop goes through
-/// <see cref="DictationStopPolicy.BeginStop"/>, the controller's own first step. A stop Scribe makes itself releases only
-/// the press that started the recording it ended, and only once the stop is admitted, so a press the user made meanwhile,
-/// still queued behind a slow consumer, starts a recording whose release the hook still reports.
+/// consumer step, each recording keeps the press that started it, every stop goes through
+/// <see cref="DictationStopPolicy.BeginStop"/> and every start through <see cref="DictationStartPolicy.BeginRecording"/>,
+/// the controller's own first steps. A stop Scribe makes itself releases only the press that started the recording it
+/// ended, and only once the stop is admitted, so a press the user made meanwhile, still queued behind a slow consumer,
+/// starts a recording whose release the hook still reports; and a press turned away while that dictation processes
+/// releases its own latch, so the next tap starts the next dictation.
 /// </summary>
 public sealed class HotkeyStopReleaseTests
 {
@@ -288,6 +290,68 @@ public sealed class HotkeyStopReleaseTests
             loop.Stops.ToArray());
     }
 
+    [Theory]
+    [InlineData(DictationStopReason.SilenceAutoStop)]
+    [InlineData(DictationStopReason.MicrophoneFault)]
+    [InlineData(DictationStopReason.DurationLimit)]
+    [InlineData(DictationStopReason.Paused)]
+    public void A_tap_turned_away_while_the_stopped_dictation_processes_does_not_cost_the_next_tap(DictationStopReason reason)
+    {
+        // A toggle recording Scribe ended itself is still processing when the user taps. The stop already released the
+        // press that started it, so the tap is a new start, and the lifecycle turns it away (still processing). It must
+        // release the latch it just set: kept, the next tap was taken as the toggle-off of a dictation that never started,
+        // and only a third tap started one.
+        using var loop = new Loop(PageDownToggle);
+        loop.Tap(PageDown);
+        loop.Dispatch();
+        loop.Recording(1);
+
+        StopAsScribe(loop, reason);
+        loop.HookWakes();
+        if (reason == DictationStopReason.Paused)
+        {
+            loop.SetPaused(false); // resumed while the paused dictation is still processing
+            loop.HookWakes();
+        }
+
+        loop.Tap(PageDown);
+        loop.Dispatch();
+        Assert.Equal(DictationPhase.Processing, loop.Lifecycle.Phase); // turned away
+        loop.FinishProcessing();
+
+        loop.Tap(PageDown);
+        loop.Dispatch();
+        loop.Recording(2);
+        loop.Tap(PageDown);
+        loop.Dispatch();
+        Assert.Equal(new[] { (reason, 1L), (DictationStopReason.HotkeyReleased, 2L) }, loop.Stops.ToArray());
+    }
+
+    [Fact]
+    public void A_hold_pressed_while_the_stopped_dictation_processes_starts_nothing_and_sends_nothing()
+    {
+        // The same turn-away for a hold: nothing starts while the key is held, its release sends no stop, and the next
+        // press after the processing starts a dictation.
+        using var loop = new Loop(HotkeyBinding.DefaultDictation);
+        loop.Hook.Down(PageDown);
+        loop.Dispatch();
+        loop.Recording(1);
+
+        StopAsScribe(loop, DictationStopReason.MicrophoneFault);
+        loop.HookWakes();
+        loop.Hook.Up(PageDown);
+        loop.Hook.Down(PageDown);
+        loop.Dispatch();
+        Assert.Equal(DictationPhase.Processing, loop.Lifecycle.Phase); // turned away
+        Assert.True(loop.Hook.Up(PageDown).Suppress);
+        Assert.Empty(loop.Dispatch());
+        loop.FinishProcessing();
+
+        loop.Hook.Down(PageDown);
+        loop.Dispatch();
+        loop.Recording(2);
+    }
+
     [Fact]
     public void A_late_stop_for_an_earlier_recording_is_turned_away_and_releases_nothing()
     {
@@ -317,6 +381,32 @@ public sealed class HotkeyStopReleaseTests
 
     private sealed record Press(HotkeyTrigger Trigger, long Activation);
 
+    // The stops Scribe makes itself, each as the controller makes it for the live recording.
+    private static void StopAsScribe(Loop loop, DictationStopReason reason)
+    {
+        switch (reason)
+        {
+            case DictationStopReason.Paused:
+                loop.SetPaused(true);
+                break;
+
+            case DictationStopReason.DurationLimit:
+                loop.Lifecycle.ArmDurationLimit(loop.Lifecycle.CurrentDictationId, TimeSpan.FromMinutes(10));
+                loop.Clock.Advance(TimeSpan.FromMinutes(10));
+                var id = Assert.IsType<long>(loop.Lifecycle.TryAcceptDurationLimit());
+                Assert.NotNull(loop.Stop(reason, id).Admission);
+                break;
+
+            case DictationStopReason.SilenceAutoStop:
+                Assert.NotNull(loop.Stop(reason, loop.Lifecycle.CurrentDictationId).Admission);
+                break;
+
+            default:
+                Assert.NotNull(loop.Stop(reason).Admission);
+                break;
+        }
+    }
+
     // The controller's side, less the microphone and the speech pipeline: the hotkey's events drive the lifecycle, and
     // every stop takes the controller's first step.
     private sealed class Loop : IDisposable
@@ -328,8 +418,10 @@ public sealed class HotkeyStopReleaseTests
             Hook = new HotkeyEngineHarness(binding, dictationOnly);
             Lifecycle = new DictationLifecycle<Press>(() => { }, () => { }, Clock);
 
-            // OnActivated and OnDeactivated: the recording keeps the press that started it.
-            Hook.Service.Activated += (_, e) => Lifecycle.TryBeginRecording(() => new Press(e.Trigger, e.Activation));
+            // OnActivated and OnDeactivated: the recording keeps the press that started it, and a press turned away as
+            // still processing releases its own latch.
+            Hook.Service.Activated += (_, e) => DictationStartPolicy.BeginRecording(
+                Lifecycle, () => new Press(e.Trigger, e.Activation), () => Hook.Service.CancelToggle(e.Activation));
             Hook.Service.Deactivated += (_, e) => Stop(
                 e.Deactivation == HotkeyDeactivation.DesktopSwitch
                     ? DictationStopReason.DesktopSwitch
