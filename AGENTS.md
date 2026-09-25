@@ -920,21 +920,51 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   installed the hook", then "back to the application that generated the event", LowLevelKeyboardProc;
   Scribe's own keyboard callback passes a marked key-up on at once; each other hook has up to
   LowLevelHooksTimeout, at most 1 second since Windows 10 1709, and is removed if it takes longer), and
-  the UI thread must not wait on them unboundedly. Past the bound capture starts anyway and logs a
-  warning: the key-up still on its way was decided on reads made before the request, of a view capture
-  had not touched, and the second check stops every key whose reads came later, so that one key-up is
-  the only one that can arrive after capture has started. No deadlock: the hook thread never takes the
-  gate or any lock (an IL test pins it), so a key-up the gate's holder is sending never waits on a thread
+  the UI thread must not wait on them unboundedly. The bound is the gate's only: the rest of the call
+  (the router's lock, posting the command, the log call for the timeout's warning) is not in it. Past
+  the bound capture starts anyway and logs a warning. No deadlock: the hook thread never takes the gate
+  or any lock (an IL test pins it), so a key-up the gate's holder is sending never waits on a thread
   that waits for the gate; the UI thread holds the gate only while it publishes and posts the request
   (the router's lock, held by requesters for in-memory updates only, and PostThreadMessage, which does
   not wait for the hook thread); the gate is taken before the router's lock and never after it; nothing
   is logged under it; and the UI thread's wait ends at the bound even if another program's hook were
-  waiting on it. **A pass that capture stops is not run again when capture ends**: the keys held for the capture
-  are missing from the engine's view then, so a replay would send key-ups for keys the user still holds;
-  a real leak is repaired at the next trigger (a key release the bindings swallow, or a dictation's
-  release). A pass that outlives the hooks (scheduled just before Stop) judges nothing: there is no view.
-  `MouseButtonRound9Tests` (barriers inside the scripted Windows view and key-up) and
-  `Start_runs_no_repair_again_when_capture_ends` pin it.
+  waiting on it.
+- **Every key-up the repair sends is conditional on the key view it judged** (review round 10, A12).
+  The capture checks alone left an ordering: a legitimate pass held up before its reads (or behind an
+  earlier key's slow SendInput, which another program's hook can stretch to its timeout, so the gate
+  can be held past 250 ms), Set timing out and publishing capture, the hook applying it, the user
+  cancelling and the end applied, then the pass finding Left Ctrl down in Windows and absent from the
+  cleared view with no admission pending and the generations equal, and sending a Ctrl-up. So the key
+  view has an epoch (`HotkeyEngine.KeyViewEpoch`): the owner takes a new one, with one interlocked add
+  on a counter shared by every engine and one volatile write, no lock and no allocation, immediately
+  before its machines clear or replace their keys, at every site that does: new bindings
+  (`ApplyBindings`, which clears the standard machine and updates, resets, creates or removes the
+  dictation-only one), capture's start and end (`ApplyCaptureMode`) and a desktop reset
+  (`ApplyDesktopSwitch`); a new engine starts with one of its own (a reinstall), and `EndEngine` leaves
+  no engine at all. A mouse hook found gone (`OnMouseHookLost`) forgets buttons, never keys, which the
+  repair never judges, so it takes none. A repair request carries the epoch its trigger was seen at
+  (the hook callbacks pass their engine's through `HotkeyReconcileSignal.Signal`, and a dictation's
+  release carries it in its `QueuedTransition`), and `KeyViewIsWhole` checks, before the key's reads
+  and again immediately before the key-up, together with the capture checks and a fresh read of
+  whether the hook now holds the key, that the current engine's view still has that epoch. Any change
+  stops the rest of the pass, and nothing replays it. That also covers a clear between the trigger and
+  the pass (it waits 25 ms, longer on a busy pool) and closes the desktop reset and the reinstall that
+  were not excluded the way capture is. The engine takes the new epoch before the first key is cleared,
+  so reads that saw a cleared key make the check after them see the new epoch. What no check can
+  close is the time between the last check and the SendInput itself: a key-up already past that check
+  was decided on a view that was whole, and it is still sent if the view is cleared in that time, or if
+  the user presses that very key again in that time (then it releases a key the user holds, until
+  autorepeat sends it down again). That is also the one key-up that can arrive after capture's start
+  when capture stops waiting for the gate. **A pass that is stopped is not run again**, at capture's
+  end or after any other clear: the keys held across the clear are missing from the engine's view then,
+  so a replay would send key-ups for keys the user still holds; a real leak is repaired at the next
+  trigger (a key release the bindings swallow, or a dictation's release). A pass that reaches its check
+  after Stop has no engine and releases nothing; a key-up already past its last check when Stop runs
+  is still sent. `MouseButtonRound9Tests` and `MouseButtonRound10Tests` (barriers inside the scripted
+  Windows view, after the reads, and inside the key-up) pin it, and so does
+  `Start_runs_no_repair_again_when_capture_ends`, which counts every scheduled repair in one place,
+  takes the hook thread's renewal as the acknowledgment that capture's end is applied, and drains the
+  signal with a sync-only request before it checks that none was asked for: no sleep.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new

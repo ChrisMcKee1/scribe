@@ -423,7 +423,13 @@ public partial class HotkeyServiceTests
 
     // Round 9 (A11): a repair that capture stopped is not run again when capture ends, through the real hook thread and
     // signal. The Left Ctrl the user holds from the capture gesture is not in the engine's view then, so a replay would
-    // send its key-up while it is held; a real leak is repaired at the next trigger instead.
+    // send its key-up while it is held; a real leak is repaired at the next trigger instead. Round 10 (A13) observes it
+    // with no sleep: every repair is scheduled through one counted place (RepairPassesScheduledForTests); capture's end is
+    // acknowledged by the hook thread's renewal after it; and a sync-only request sent through the same signal then drains
+    // the pool's wait, so a repair the end asked for (the hook thread through the signal, or the requesting thread) has
+    // been scheduled, and counted, by the time that request's pass has run. A repair the end asked for through the
+    // consumer would need a key transition queued at capture's end, which the engine never queues
+    // (MouseButtonRound10Tests pins that).
     [Fact]
     public void Start_runs_no_repair_again_when_capture_ends()
     {
@@ -439,14 +445,18 @@ public partial class HotkeyServiceTests
         service.SetCaptureMode(true);
         AwaitRenewal(service); // the hook thread has applied capture
         var passes = service.ReconcilePassesRun;
-        service.ReconcileSignalForTests!.Signal(); // a repair asked for during the capture
+        service.ReconcileSignalForTests!.Signal(service.CurrentEngineForTests!.KeyViewEpoch); // asked for during the capture
         Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The repair never ran.");
+        var scheduled = service.RepairPassesScheduledForTests;
 
         service.SetCaptureMode(false);
-        AwaitRenewal(service); // the hook thread has applied capture's end
-        Thread.Sleep(250); // ten times the pass's settling delay: a replay would have run by now
+        AwaitRenewal(service); // acknowledged: the hook thread has applied capture's end
+        Assert.True(service.KeyRepairAllowedForTests); // capture no longer owns input
+        passes = service.ReconcilePassesRun;
+        service.ReconcileSignalForTests!.SignalMouseHookSync();
+        Assert.True(SpinWait.SpinUntil(() => service.ReconcilePassesRun > passes, HookTimeout), "The drain never ran.");
 
-        Assert.Equal(passes + 1, service.ReconcilePassesRun);
+        Assert.Equal(scheduled, service.RepairPassesScheduledForTests);
         Assert.Empty(injected);
     }
 

@@ -20,11 +20,15 @@ namespace Scribe.Core.Hotkeys;
 /// modifier the user was holding down in Windows and not in the view, and released it under the user's finger.
 ///
 /// The exclusion is <c>gate</c> and <c>mayJudge</c>: each key is judged and released inside the gate, which the service's
-/// capture start also takes, and <c>mayJudge</c> (false while capture is being admitted or owns input, or no hook runs)
-/// is checked inside it twice, before the key's reads and again after them, before the key-up. So a key-up is sent only
-/// on reads made while capture did not own input, and, while capture's start holds the gate, none is sent; capture's
-/// start waits for the gate a bounded time, and if a key-up outlasts that wait, the second check still stops every key
-/// whose reads came after capture was requested (see <c>HotkeyService.AdmitCapture</c>).
+/// capture start also takes, and <c>mayJudge</c> is checked inside it twice, before the key's reads and again after them,
+/// immediately before the key-up, together with a fresh read of whether the hook now holds the key. <c>mayJudge</c> is
+/// false while capture is being admitted or owns input, while no hook runs, and once the engine's key view is not the one
+/// the request was made in (its epoch changed: the view was cleared or the engine replaced; review round 10, A12). Any
+/// of those stops the rest of the check, and nothing replays it. So a key-up is sent only on reads of the view the
+/// request judged, re-confirmed after the reads; capture's start waits for the gate a bounded time, and a key-up that
+/// outlasts that wait was already past its last check, decided on a view that was whole (see
+/// <c>HotkeyService.AdmitCapture</c>). What no check can close is the time between the last check and the SendInput
+/// itself: a clear of the view there, or the user pressing that very key again there, still gets the key-up.
 ///
 /// Keys only: a mouse button is never a candidate, and Scribe injects no mouse input of any kind. "The hook does not
 /// hold it" also means "the hook never saw it go down", as for a button held in another app since before the mouse hook
@@ -56,7 +60,13 @@ internal sealed class SuppressedKeyReconciler
     private readonly Func<uint, bool> _isPhysicallyPressed;
     private readonly Func<uint, bool> _releaseKey;
     private readonly object _gate;
-    private readonly Func<bool> _mayJudge;
+    private readonly Func<long, bool> _mayJudge;
+
+    /// <summary>
+    /// Test seam, null in production: run inside the gate once a key's reads have decided to release it, before the
+    /// check that precedes its key-up, where a test pauses the pass.
+    /// </summary>
+    internal Action<uint>? AfterReadsForTests { get; set; }
 
     /// <param name="isLogicallyDown">The system's view (GetAsyncKeyState high bit).</param>
     /// <param name="isPhysicallyPressed">The hook's view (ChordStateMachine.IsPressed).</param>
@@ -68,7 +78,7 @@ internal sealed class SuppressedKeyReconciler
         Func<uint, bool> isLogicallyDown,
         Func<uint, bool> isPhysicallyPressed,
         Func<uint, bool> releaseKey)
-        : this(isLogicallyDown, isPhysicallyPressed, releaseKey, new object(), static () => true)
+        : this(isLogicallyDown, isPhysicallyPressed, releaseKey, new object(), static _ => true)
     {
     }
 
@@ -79,13 +89,16 @@ internal sealed class SuppressedKeyReconciler
     /// Held while one key is judged and released; whoever must exclude a key-up (the service's capture start) takes it
     /// too. Never the hook thread's.
     /// </param>
-    /// <param name="mayJudge">Whether the hook's view may be trusted right now; checked inside the gate.</param>
+    /// <param name="mayJudge">
+    /// Whether the hook's view may be trusted right now for a request made in the view with the given epoch; checked
+    /// inside the gate.
+    /// </param>
     public SuppressedKeyReconciler(
         Func<uint, bool> isLogicallyDown,
         Func<uint, bool> isPhysicallyPressed,
         Func<uint, bool> releaseKey,
         object gate,
-        Func<bool> mayJudge)
+        Func<long, bool> mayJudge)
     {
         _isLogicallyDown = isLogicallyDown;
         _isPhysicallyPressed = isPhysicallyPressed;
@@ -100,7 +113,13 @@ internal sealed class SuppressedKeyReconciler
     /// (hook agrees it is down) is never touched, so a real modifier held for a shortcut
     /// survives reconciliation. Stops, reporting <see cref="Result.Interrupted"/>, at the first key it may not judge.
     /// </summary>
-    public Result ReleaseLeakedKeys(HotkeyBinding binding)
+    public Result ReleaseLeakedKeys(HotkeyBinding binding) => ReleaseLeakedKeys(binding, requestedAt: 0);
+
+    /// <summary>
+    /// <see cref="ReleaseLeakedKeys(HotkeyBinding)"/> for a request made while the engine's key view had the epoch
+    /// <paramref name="requestedAt"/> (<see cref="HotkeyEngine.KeyViewEpoch"/>), which <c>mayJudge</c> compares.
+    /// </summary>
+    public Result ReleaseLeakedKeys(HotkeyBinding binding, long requestedAt)
     {
         if (!binding.Suppress)
         {
@@ -114,7 +133,7 @@ internal sealed class SuppressedKeyReconciler
             // One key at a time, so capture's start waits for at most one key's reads and key-up.
             lock (_gate)
             {
-                if (!_mayJudge())
+                if (!_mayJudge(requestedAt))
                 {
                     return Finish(released, failed, interrupted: true);
                 }
@@ -124,12 +143,21 @@ internal sealed class SuppressedKeyReconciler
                     continue;
                 }
 
-                // Again after the reads, which the fence keeps before it: capture requested since by a start that could
-                // not wait for this gate means they may have seen a view capture had cleared, and the key-up is not sent.
+                AfterReadsForTests?.Invoke(key);
+
+                // Immediately before the key-up, after the reads, which the fence keeps before it: the view must still be
+                // the one the request judged (its epoch unchanged, no capture being admitted or owning input), or the
+                // reads may have seen a view that was cleared since; and the hook must still not hold the key, or the
+                // user pressed it again after the reads.
                 Interlocked.MemoryBarrier();
-                if (!_mayJudge())
+                if (!_mayJudge(requestedAt))
                 {
                     return Finish(released, failed, interrupted: true);
+                }
+
+                if (_isPhysicallyPressed(key))
+                {
+                    continue;
                 }
 
                 if (_releaseKey(key))

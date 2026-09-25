@@ -110,7 +110,7 @@ internal static class MouseHookFilter
         var decision = engine.OnMouseButtonEvent(button, IsDown(message));
         if (decision.RequestReconcile)
         {
-            reconcileSignal?.Signal();
+            reconcileSignal?.Signal(engine.KeyViewEpoch);
         }
         else if (decision.RequestMouseHookSync)
         {

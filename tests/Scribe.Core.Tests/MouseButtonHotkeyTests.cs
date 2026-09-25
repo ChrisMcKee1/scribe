@@ -669,9 +669,9 @@ public sealed class MouseButtonHotkeyTests
         using var h = new HotkeyEngineHarness(Bare(Middle));
         using var hook = new HookMessage();
         using var checkRan = new ManualResetEventSlim(false);
-        using var signal = new HotkeyReconcileSignal(repairKeys =>
+        using var signal = new HotkeyReconcileSignal(repairAt =>
         {
-            if (repairKeys)
+            if (repairAt == h.Engine.KeyViewEpoch)
             {
                 checkRan.Set();
             }
