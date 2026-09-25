@@ -625,9 +625,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   uses no `BlockingCollection`, `ConcurrentQueue`, `SemaphoreSlim` or `ManualResetEventSlim`: each of
   those can take a lock shared with another thread. One hook thread owns all key state.
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
-  during a reinstall never shares key state with its replacement. A replaced engine is retired: it
-  passes every key through, requests no leak check, applies no queued command, and exactly one side
-  sends the stop for a trigger it interrupted.
+  during a reinstall never shares key state, or the desktop-switch activation epoch, with its
+  replacement. A replaced engine is retired: it passes every key through, requests no leak check,
+  applies no queued command, and exactly one side sends the stop for a trigger it interrupted. A
+  call its thread was already inside when the retirement came (a key event, or a desktop switch,
+  which applies the pending commands first) still runs to its end, but against the retired engine's
+  own state: whatever it queues was decided before the retirement, a stop the retirement then does
+  not repeat or an Activated the replacement's generation rejects.
 - **Configuration reaches the hook through `HotkeyCommandRouter`.** `UpdateBindings`, `SetCaptureMode`,
   `CancelToggle` and `SetPaused` go into a lock-free inbox applied at the start of the next key event,
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
@@ -681,11 +685,14 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   lock rather than at unlock): the
   audio is processed, and insertion, which usually fails while the PC is locked, falls back to the
   recovery notice as for any failed insertion. An Activated still waiting for the consumer never
-  starts a recording after the switch: before anything it queues for the switch, the hook thread
-  advances the transition queue's activation epoch (one interlocked add; the requesters' generation
-  and the router's lock are never touched from the hook), every queued Activated carries the epoch it
-  was computed in, and the consumer drops one that is older (`HotkeyService.ShouldDispatch`); stops
-  always go out. Without all this a key held through Win+L or a UAC prompt
+  starts a recording after the switch: before anything it queues for the switch, the engine advances
+  its own activation epoch (one interlocked add; the requesters' generation and the router's lock are
+  never touched from the hook), every queued Activated carries its engine and the epoch it was
+  computed in, and the consumer drops one whose engine has moved past that epoch
+  (`HotkeyService.ShouldDispatch`); stops always go out. The epoch is per installation, never shared
+  through the queue: a retired engine's hook thread can still be finishing a switch it noticed just
+  before a reinstall, and a shared epoch let that late switch discard the replacement's first genuine
+  press. Without all this a key held through Win+L or a UAC prompt
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
   as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from

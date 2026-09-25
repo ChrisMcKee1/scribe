@@ -429,25 +429,66 @@ public sealed class HotkeyDesktopSwitchTests
     }
 
     [Fact]
-    public void The_consumer_raises_no_activation_queued_before_a_desktop_switch()
+    public void The_consumer_raises_no_activation_its_engine_queued_before_a_desktop_switch()
     {
-        // The real consumer step: an Activated whose activation epoch is older than the queue's is dropped, one that is
-        // current is raised, and stops are raised whatever their epoch.
-        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
-        using var queue = new HotkeyTransitionQueue();
+        // The real consumer step: an Activated its engine queued before applying a switch is dropped, the switch's stop is
+        // raised with its reason, and a press after the switch starts.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
         var raised = new List<string>();
-        service.Activated += (_, e) => raised.Add("start " + e.Trigger);
-        service.Deactivated += (_, e) => raised.Add("stop " + e.Trigger);
-        queue.AdvanceActivationEpoch(); // the switch
+        h.Service.Activated += (_, e) => raised.Add("start " + e.Trigger);
+        h.Service.Deactivated += (_, e) => raised.Add("stop " + e.Trigger + " " + e.Deactivation);
 
-        service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Activated, HotkeyTrigger.Standard, 0, AllowReconcile: true, ActivationEpoch: 0), queue);
-        service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 0, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch), queue);
-        service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Activated, HotkeyTrigger.DictationOnly, 0, AllowReconcile: true, ActivationEpoch: 1), queue);
+        h.Down(PageDown); // queued while the consumer is behind
+        h.Engine.OnDesktopSwitch(); // Win+L
+        h.Down(PageUp); // pressed after unlocking
+        h.DispatchAll();
 
-        Assert.Equal(new[] { "stop Standard", "start DictationOnly" }, raised.ToArray());
+        Assert.Equal(new[] { "stop Standard DesktopSwitch", "start DictationOnly" }, raised.ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_retired_engine_finishing_a_desktop_switch_cannot_discard_its_replacements_press(bool heldAsItLocked)
+    {
+        // The old hook thread passed its owner and retirement checks and asked whether its desktop still receives input.
+        // Before it acts on the answer (the lock screen had the input), the input comes back, the watchdog reinstalls the
+        // hook, and the user presses Page Down on the replacement. The late switch lands on the retired engine alone: the
+        // replacement's press still starts and ends on its own release. With Page Down held as Windows locked, the
+        // reinstall reports that dictation and the late switch sends no second stop.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        var raised = new List<string>();
+        h.Service.Activated += (_, e) => raised.Add("start " + e.Trigger);
+        h.Service.Deactivated += (_, e) => raised.Add("stop " + e.Trigger + " " + e.Deactivation);
+        if (heldAsItLocked)
+        {
+            Assert.True(h.Down(PageDown).Suppress);
+            h.DispatchAll();
+            raised.Clear();
+        }
+
+        HotkeyEngine? replacement = null;
+        HotkeyTrigger? interrupted = null;
+        h.Engine.OnDesktopSwitchNotice(() =>
+        {
+            (replacement, interrupted) = h.Router.BeginEngine(h.Transitions);
+            Assert.True(replacement.OnKeyEvent(PageDown, isDown: true).Suppress);
+            return false;
+        });
+
+        Assert.True(h.Engine.IsRetired);
+        Assert.Equal(1, h.Engine.DesktopSwitches); // the late switch ran to its end, on the retired engine's own state
+        Assert.Equal(heldAsItLocked ? HotkeyTrigger.Standard : (HotkeyTrigger?)null, interrupted);
+        var start = Assert.Single(h.TakeTransitions()); // the retired engine queued no stop of its own
+        Assert.Equal(HotkeyTransition.Activated, start.Transition);
+        Assert.Same(replacement, start.Engine);
+        Assert.True(h.WouldDispatch(start));
+
+        h.Service.DispatchTransition(start);
+        Assert.True(replacement!.OnKeyEvent(PageDown, isDown: true).Suppress); // an autorepeat stays a repeat
+        Assert.True(replacement.OnKeyEvent(PageDown, isDown: false).Suppress);
+        h.DispatchAll();
+        Assert.Equal(new[] { "start Standard", "stop Standard Released" }, raised.ToArray());
     }
 
     [Fact]
@@ -460,11 +501,9 @@ public sealed class HotkeyDesktopSwitchTests
         service.Deactivated += (_, e) => seen.Add((e.Trigger, e.Deactivation));
 
         service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly, 1, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch),
-            new HotkeyTransitionQueue());
+            HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly, 1, AllowReconcile: false, HotkeyDeactivation.DesktopSwitch));
         service.DispatchTransition(new HotkeyService.QueuedTransition(
-            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 1, AllowReconcile: false),
-            new HotkeyTransitionQueue());
+            HotkeyTransition.Deactivated, HotkeyTrigger.Standard, 1, AllowReconcile: false));
 
         Assert.Equal(
             new[]

@@ -15,22 +15,8 @@ internal sealed class HotkeyTransitionQueue : IDisposable
     private readonly LockFreeInbox<HotkeyService.QueuedTransition> _items = new();
     private readonly AutoResetEvent _work = new(false);
     private volatile bool _completed;
-    private long _activationEpoch;
 
     public bool IsCompleted => _completed;
-
-    /// <summary>
-    /// Any thread. The epoch every Activated carries when it is queued, which the dispatcher compares with the current
-    /// one. It lives here because the queue outlives each hook installation's engine.
-    /// </summary>
-    public long ActivationEpoch => Interlocked.Read(ref _activationEpoch);
-
-    /// <summary>
-    /// Hook thread only, when the input desktop switches: every Activated still waiting for the dispatcher was computed
-    /// before the switch and must not open the microphone after it. A single interlocked add, so the hook callback never
-    /// waits here, and it takes nothing the requesting threads hold.
-    /// </summary>
-    public void AdvanceActivationEpoch() => Interlocked.Increment(ref _activationEpoch);
 
     /// <summary>
     /// Any thread. Returns false once shutdown has begun: a final keyboard message can still be in

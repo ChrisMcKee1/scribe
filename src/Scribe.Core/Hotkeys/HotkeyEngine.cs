@@ -65,6 +65,7 @@ internal sealed class HotkeyEngine
     private bool _paused;
     private bool _retired;
     private long _generation;
+    private long _activationEpoch;
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
     private int _wakePending;
@@ -109,6 +110,15 @@ internal sealed class HotkeyEngine
     public long DesktopSwitches => Interlocked.Read(ref _desktopSwitches);
 
     /// <summary>
+    /// Any thread. The epoch this engine's own queued activations are judged by (see <see cref="HotkeyService.ShouldDispatch"/>):
+    /// the owner advances it when it applies a desktop switch, before anything it queues for the switch. It belongs to this
+    /// installation alone. A retired engine's hook thread can still be finishing a switch it noticed before the reinstall;
+    /// with one epoch shared by every installation, that late switch discarded the replacement's genuine press. Now it
+    /// moves only this engine's epoch, which judges only activations its retirement had already made stale.
+    /// </summary>
+    public long ActivationEpoch => Interlocked.Read(ref _activationEpoch);
+
+    /// <summary>
     /// Any thread. How many desktop-switch notices reached the owner, applied or not, for a test of the service's wiring.
     /// </summary>
     public long DesktopSwitchNotices => Interlocked.Read(ref _desktopSwitchNotices);
@@ -146,11 +156,11 @@ internal sealed class HotkeyEngine
     /// released on the lock screen) nor swallow the next press as if it were an autorepeat; and the dictation the arbiter
     /// says this engine started, if any, is ended the way its release or second press would have ended it, reported as
     /// <see cref="HotkeyDeactivation.DesktopSwitch"/>, so the microphone does not keep recording while the PC is locked.
-    /// An Activated still waiting for the dispatcher is invalidated first, through the queue's activation epoch, so it
-    /// cannot open the microphone after the lock. A switch with nothing recording starts and stops nothing. The service
-    /// reaches this through <see cref="OnDesktopSwitchNotice"/>, from the WinEvent callback that runs on the thread that
-    /// set the hook, which is the owner; a call from any other thread once an owner is attached is ignored rather than
-    /// allowed to race the keyboard callback.
+    /// An Activated this engine queued that is still waiting for the dispatcher is invalidated first, through this engine's
+    /// activation epoch (<see cref="ActivationEpoch"/>), so it cannot open the microphone after the lock. A switch with
+    /// nothing recording starts and stops nothing. The service reaches this through <see cref="OnDesktopSwitchNotice"/>,
+    /// from the WinEvent callback that runs on the thread that set the hook, which is the owner; a call from any other
+    /// thread once an owner is attached is ignored rather than allowed to race the keyboard callback.
     /// </summary>
     public void OnDesktopSwitch()
     {
@@ -169,9 +179,11 @@ internal sealed class HotkeyEngine
 
     private void ApplyDesktopSwitch()
     {
-        // Commands requested before the switch took effect before it, as for a key event.
+        // Commands requested before the switch took effect before it, as for a key event. Only this engine's epoch moves:
+        // this can run on a retired engine whose hook thread noticed the switch before a reinstall, and the replacement's
+        // activations are judged by the replacement's own epoch.
         ApplyPendingCommands();
-        _transitions.AdvanceActivationEpoch();
+        Interlocked.Increment(ref _activationEpoch);
 
         // Both machines are reset whatever they report: one can still hold a press the arbiter refused, or a toggle it
         // ignored, after the dictation it lost to has ended. Only the arbiter's real owner, if there is one, is stopped.
@@ -403,10 +415,11 @@ internal sealed class HotkeyEngine
             return;
         }
 
-        // The activation epoch is read here on the owner thread, the only one that advances it, so an Activated computed
-        // after a desktop switch always carries the new one.
+        // The activation epoch is this engine's, read here on the owner thread, the only one that advances it, so an
+        // Activated computed after a desktop switch always carries the new one; the item names this engine, whose epoch
+        // the consumer judges it by.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _transitions.ActivationEpoch));
+            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.

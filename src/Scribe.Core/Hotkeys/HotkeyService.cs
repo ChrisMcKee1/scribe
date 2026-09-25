@@ -41,11 +41,13 @@ public sealed class HotkeyService : IHotkeyService
     /// lets the dispatcher drop an Activated that was computed before a state-clearing request
     /// (capture mode, binding update, pause, hook reinstall); without it a recording could start
     /// while capture mode is armed. The activation epoch does the same for a desktop switch, which
-    /// the hook thread itself notices, so it cannot advance the requesters' generation. Deactivations
-    /// always dispatch (a redundant stop is harmless, a missed stop is not). AllowReconcile is false
-    /// for transitions born from a state clear: right after a clear the reconciler cannot distinguish
-    /// a genuinely held key from a leaked one and could release a key the user is holding.
-    /// Deactivation says why a Deactivated happened.
+    /// the hook thread itself notices, so it cannot advance the requesters' generation; it is the
+    /// epoch of <see cref="Engine"/>, the installation that queued the transition, and an
+    /// Activated is judged by that engine's epoch alone. Deactivations always dispatch (a redundant
+    /// stop is harmless, a missed stop is not). AllowReconcile is false for transitions born from a
+    /// state clear: right after a clear the reconciler cannot distinguish a genuinely held key from
+    /// a leaked one and could release a key the user is holding. Deactivation says why a
+    /// Deactivated happened.
     /// </summary>
     internal readonly record struct QueuedTransition(
         HotkeyTransition Transition,
@@ -53,7 +55,8 @@ public sealed class HotkeyService : IHotkeyService
         long Generation,
         bool AllowReconcile,
         HotkeyDeactivation Deactivation = HotkeyDeactivation.Released,
-        long ActivationEpoch = 0);
+        long ActivationEpoch = 0,
+        HotkeyEngine? Engine = null);
 
     private HotkeyTransitionQueue? _transitions;
     private HotkeyReconcileSignal? _reconcileSignal;
@@ -78,18 +81,30 @@ public sealed class HotkeyService : IHotkeyService
     /// null when that cannot be told (see <see cref="HotkeyEngine.OnDesktopSwitchNotice"/>). Tests replace the real query.
     /// </param>
     internal HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding, Func<bool?> desktopReceivesInput)
+        : this(logger, CreateRouter(binding), desktopReceivesInput)
+    {
+    }
+
+    /// <param name="router">
+    /// The configuration side and the engines it builds: the service's own, except in a test that plays the hook thread
+    /// itself and passes the router it drives, so this service's requests and its consumer step
+    /// (<see cref="DispatchTransition"/>) reach the engine that test drives.
+    /// </param>
+    /// <param name="desktopReceivesInput">As for the other constructors.</param>
+    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyCommandRouter router, Func<bool?> desktopReceivesInput)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
-
-        // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding
-        // while the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
-        _router = new HotkeyCommandRouter(binding, NativeMethods.IsKeyLogicallyDown);
+        _router = router;
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,
             _router.IsPressed,
             key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
     }
+
+    // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding while
+    // the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
+    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding) => new(binding, NativeMethods.IsKeyLogicallyDown);
 
     public bool IsRunning { get; private set; }
 
@@ -293,7 +308,7 @@ public sealed class HotkeyService : IHotkeyService
             {
                 foreach (var transition in queue.TakeAll())
                 {
-                    DispatchTransition(transition, queue);
+                    DispatchTransition(transition);
                 }
             }
         }
@@ -309,21 +324,23 @@ public sealed class HotkeyService : IHotkeyService
     /// one is not). An Activated computed before a state-clearing request (capture mode, binding update, pause,
     /// reinstall) must not start a recording; the request's own Deactivated may already sit behind it in the queue. The
     /// epoch advances when the request is made, so this holds even while the hook thread has yet to apply it. Nor may an
-    /// Activated queued before a desktop switch, which would open the microphone after Windows locked: the hook thread
-    /// advances the queue's activation epoch at the switch, before anything it queues for it.
+    /// Activated queued before its engine applied a desktop switch, which would open the microphone after Windows locked:
+    /// the engine advances its own activation epoch at the switch, before anything it queues for it. The epoch is the
+    /// queuing engine's alone, so a switch a retired engine's hook thread finishes after a reinstall moves nothing the
+    /// replacement's activations are judged by (the generation already rejects the retired engine's own).
     /// </summary>
-    internal static bool ShouldDispatch(QueuedTransition item, HotkeyCommandRouter router, HotkeyTransitionQueue queue) =>
+    internal static bool ShouldDispatch(QueuedTransition item, HotkeyCommandRouter router) =>
         item.Transition != HotkeyTransition.Activated ||
-        (router.IsCurrent(item.Generation) && item.ActivationEpoch == queue.ActivationEpoch);
+        (router.IsCurrent(item.Generation) && item.Engine is { } engine && item.ActivationEpoch == engine.ActivationEpoch);
 
     // The consumer thread's step for one transition; internal so a test can dispatch one without a hook.
-    internal void DispatchTransition(QueuedTransition item, HotkeyTransitionQueue queue)
+    internal void DispatchTransition(QueuedTransition item)
     {
         try
         {
             if (item.Transition == HotkeyTransition.Activated)
             {
-                if (!ShouldDispatch(item, _router, queue))
+                if (!ShouldDispatch(item, _router))
                 {
                     // Shape only: which rule dropped it.
                     if (_router.IsCurrent(item.Generation))
