@@ -51,8 +51,10 @@ public interface IDictionaryLibraryService
     /// generation of its own, switched off and kept from AI cleanup. Throws
     /// <see cref="InvalidOperationException"/> if the CSV has invalid rows or no usable entries, while
     /// another library change is still being saved or its outcome is unresolved, while the session runs
-    /// on defaults because the saved settings could not be used, and while the libraries were changed by
-    /// a newer Scribe.
+    /// on defaults because the saved settings could not be used, while the libraries were changed by
+    /// a newer Scribe, and when this change's own commit cannot be confirmed because the stored
+    /// generation could not be read after it: never reported as a change that failed, it is finished,
+    /// or dropped if it never committed, by the next read of the generation that works.
     /// </summary>
     DictionaryLibrary Import(string csv, string? suggestedName);
 
