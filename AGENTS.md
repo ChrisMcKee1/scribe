@@ -948,9 +948,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
   appears exactly once, every other listed id is retired, the catalog follows the order with the retired ids left
   out, and the C# lists agree with the fixture.
-- **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
-  file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
-  comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
+- **Custom libraries compare as file names**, not bare ids: their physical file name (`DictionaryLibrary.FileName`,
+  which is `id + ".csv"` for every custom library except a hand-placed file whose logical id was remapped away from a
+  built-in id, which keeps ranking by its own name). The loader has always read them in file-name order, and '-' sorts
+  before '.', so "team-terms-2.csv", the file a second import of the same library gets, comes before "team-terms.csv";
+  comparing bare ids would swap which of the two wins.
 - **Every consumer orders for itself.** `GetLibraries()` returns precedence order, and `ComposeLibraries`,
   `DictionaryLibraryOverlapAnalyzer.Coverage` (the Dictionary page's badges), `AnalyzeEnabledLibraries` (the Save
   prompt) and `LibrarySwitchOffCopy` apply it to whatever order they are given. The glossary hint (`GlossaryHint`)

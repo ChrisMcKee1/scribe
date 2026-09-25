@@ -232,7 +232,7 @@ public sealed class LibraryContractTests
         Assert.Empty(LibraryVocabulary.Empty.AiEntries);
         Assert.Empty(LibraryVocabulary.Empty.AiScope.PermittedLibraryIds);
         Assert.Same(AiVocabularyScope.None, LibraryVocabulary.Empty.AiScope);
-        Assert.Contains("github", new AiVocabularyScope(2, ["GitHub"]).PermittedLibraryIds);
+        Assert.Contains("github", new AiVocabularyScope(2, [new("GitHub", null)]).PermittedLibraryIds);
     }
 
     [Fact]
@@ -243,7 +243,7 @@ public sealed class LibraryContractTests
             new(Library("team-terms", builtIn: false), LibraryFileState.Available, "team-terms.csv", null),
         };
         var entries = new List<DictionaryEntry> { DictionaryEntry.New("kube", "Kubernetes") };
-        var permitted = new List<string> { "team-terms" };
+        var permitted = new List<KeyValuePair<string, LibraryContentHash?>> { new("team-terms", new LibraryContentHash(new string('c', 64))) };
         var catalog = new LibraryCatalog(1, libraries, LibraryLocalState.Absent, [], [], filesAwaitingRelease: 0);
         var vocabulary = new LibraryVocabulary(1, entries, entries, new AiVocabularyScope(1, permitted));
 

@@ -23,15 +23,20 @@ public interface ILibraryComposer
     LibraryLocalState ReadLocalState(IReadOnlyList<string>? enabledLibraryIds, string? storedState, LibraryStateContext context);
 
     /// <summary>
-    /// <paramref name="state"/> encoded for the settings store. An enabled library whose AI permission is off goes to the
-    /// auxiliary list, not the document's, so an older build never sends it; <paramref name="isBuiltIn"/> answers a
-    /// library's kind, or null for an id no library has right now (an unreadable file still counts as a library), which
-    /// stays in the document's list if it was there and is dropped from the stored library state. A
-    /// <see cref="LocalStateHealth.Newer"/> state encodes with a null <see cref="LibraryStateEncoding.StateValue"/> and
+    /// <paramref name="state"/> encoded for the settings store, for the libraries <paramref name="libraries"/> names (the
+    /// set the commit leaves: the catalog's, minus deletions, plus creations and restores; an unreadable file still
+    /// counts). The settings document's list is what 0.4.3 and 0.4.2 read, and it is a downgrade-safe projection of the
+    /// enabled libraries (review finding A15): libraries are grouped by <see cref="LibraryIdentity.LegacyId"/>, the id an
+    /// older build loads them as, and a group's legacy id enters the document's list only when every library in the
+    /// group is enabled and permitted for AI with its accepted content, because an older build turns the whole group on
+    /// and sends it all. Every other enabled library is withheld from the document's list and kept in the auxiliary row
+    /// instead, where this build reads it; an older build then runs with it off, which loses nothing private. An id no
+    /// library has right now stays in the document's list if it was there and is dropped from the stored library state.
+    /// A <see cref="LocalStateHealth.Newer"/> state encodes with a null <see cref="LibraryStateEncoding.StateValue"/> and
     /// the document's list as it was read. <see cref="LibraryLocalState.AiPermissionsLost"/> is always encoded, so every
     /// commit carries a denial until the user confirms the choices.
     /// </summary>
-    LibraryStateEncoding EncodeLocalState(LibraryLocalState state, Func<string, bool?> isBuiltIn);
+    LibraryStateEncoding EncodeLocalState(LibraryLocalState state, IReadOnlyList<LibraryIdentity> libraries);
 
     /// <summary>
     /// The state to commit because the stored state has not recorded what the catalog shows
@@ -49,16 +54,20 @@ public interface ILibraryComposer
     LibraryVocabulary ComposeVocabulary(LibraryCatalog catalog);
 
     /// <summary>
-    /// Whether AI permission has narrowed since <paramref name="admitted"/>: a library it permitted that
-    /// <paramref name="current"/> does not. A cleanup request carrying the admitted vocabulary must not be sent then.
+    /// Whether AI permission has narrowed since <paramref name="admitted"/>: exactly
+    /// <c>!current.Covers(admitted)</c> (<see cref="AiVocabularyScope.Covers"/>), so a library it permitted that
+    /// <paramref name="current"/> does not, or permits for other content, has narrowed it (review finding A12). A cleanup
+    /// request carrying the admitted vocabulary must not be sent then.
     /// </summary>
     bool HasNarrowed(AiVocabularyScope admitted, AiVocabularyScope current);
 
     /// <summary>
     /// The scope that holds from the moment <paramref name="changes"/> is prepared until its Save completes: the scope of
-    /// <paramref name="committed"/> minus every library the change set turns off, deletes, takes AI permission from, or
-    /// writes new content for that it does not also grant permission to. Nothing the change set grants is in it; a
-    /// widening waits for the commit, so revocation is immediate and fails closed (review finding Astra N5).
+    /// <paramref name="committed"/>, with the committed content of each library, minus every library the change set
+    /// turns off, deletes or takes AI permission from. Nothing the change set grants is in it, and a library the change
+    /// set writes new content for keeps its committed content here; completion then publishes the new content, which no
+    /// longer covers requests admitted for the old. A widening waits for the commit, so revocation is immediate and fails
+    /// closed (review finding Astra N5).
     /// </summary>
     AiVocabularyScope ScopeWhileSaving(LibraryCatalog committed, LibraryChangeSet changes);
 }

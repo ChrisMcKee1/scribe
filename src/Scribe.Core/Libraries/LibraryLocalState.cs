@@ -16,9 +16,11 @@ namespace Scribe.Core.Libraries;
 /// </para>
 /// <para>
 /// Stored as <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/> (the list 0.4.3 reads) plus the auxiliary
-/// settings row <see cref="LibrarySettingKeys.State"/>, whose format belongs to composition. An enabled library whose
-/// AI permission is off is kept out of the document's list, which older builds would send whole to AI cleanup, and
-/// in the auxiliary row instead; this build reads both.
+/// settings row <see cref="LibrarySettingKeys.State"/>, whose format belongs to composition. The document's list is a
+/// downgrade-safe projection: an enabled library an older build would send or apply beyond what the user chose (its AI
+/// permission is off, or an older build would load a hand-placed twin under the same id that is not both on and
+/// permitted, review finding A15) is kept out of the document's list and in the auxiliary row instead; this build reads
+/// both.
 /// </para>
 /// <para>
 /// Consent is bound to content (review finding A4): <see cref="AcceptedContent"/> holds, per library, the hash of the
@@ -213,7 +215,10 @@ public enum LocalStateHealth
 }
 
 /// <summary>A library state encoded for the settings store.</summary>
-/// <param name="EnabledLibraryIds">The list for <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>, in precedence order.</param>
+/// <param name="EnabledLibraryIds">
+/// The list for <see cref="Models.AppSettings.EnabledDictionaryLibraryIds"/>, in precedence order: the downgrade-safe
+/// projection of the enabled libraries, by the ids older builds load them as (review finding A15).
+/// </param>
 /// <param name="StateValue">
 /// The value of the auxiliary row <see cref="LibrarySettingKeys.State"/>, or null to leave the stored row as it is:
 /// a state from a newer version (<see cref="LocalStateHealth.Newer"/>) is never written by this one.
@@ -236,9 +241,12 @@ public sealed record LibraryStateEncoding(IReadOnlyList<string> EnabledLibraryId
 /// generation beside an absent state row means the row was lost, not that this is the first start.
 /// </param>
 /// <param name="CommitWitnessed">
-/// The libraries folder holds the witness file the journal writes after every successful commit. It lives outside the
-/// database, so it still says a state existed on the start after a repair that lost both library rows, when nothing in
-/// the database does (review finding A3).
+/// The libraries folder holds the witness file (review finding A3). The journal writes it, flushed to disk, before any
+/// library commit of this version can happen (the first adoption, the user's first Save, a wrapper) and at a start that
+/// detects a loss, before anything else; it is monotonic: Scribe creates it and never deletes, truncates or replaces it.
+/// It lives outside the database, so it still says a state may have existed on the start after a repair that lost both
+/// library rows, when nothing in the database does. Written before the commit, it also turns an interrupted first
+/// adoption into a lost state the user confirms next time, which is the fail-closed direction.
 /// </param>
 public readonly record struct LibraryStateContext(
     bool RunningOnDefaults, bool DatabaseRepaired, bool GenerationStored, bool CommitWitnessed = false);
