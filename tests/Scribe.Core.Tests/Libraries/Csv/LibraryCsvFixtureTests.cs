@@ -103,6 +103,9 @@ public sealed class LibraryCsvFixtureTests
         new("empty", "A library with no rows and no description.", Content("Empty", "Custom", null, null, [])),
         new("duplicate", "A duplicate, which records the library it was copied from.", Content("GitHub - Copy", "Microsoft", "GitHub product names", "github",
             [new("get hub", "GitHub")])),
+        new("astral", "Characters outside the Basic Multilingual Plane (surrogate pairs in UTF-16) in every field: written as four-byte UTF-8, read back whole.", Content(
+            "Team \uD83D\uDE00", "Music \uD834\uDD1E", "Faces \uD83D\uDE00, clefs \uD834\uDD1E", "team-\uD83D\uDE00",
+            [new("smile \uD83D\uDE00", "\uD83D\uDE00"), new("\uD834\uDD1E", "G clef \uD834\uDD1E", WholeWord: false), new("#\uD83D\uDE00", "=\uD834\uDD1E")])),
     ];
 
     [Fact]

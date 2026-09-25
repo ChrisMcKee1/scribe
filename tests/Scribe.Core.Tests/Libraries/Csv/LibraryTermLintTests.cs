@@ -98,6 +98,51 @@ public sealed class LibraryTermLintTests
     }
 
     [Fact]
+    public void Surrogate_pairs_count_toward_the_cap_and_never_hide_a_line_break()
+    {
+        // The glossary's cap counts UTF-16 units, so a character outside the Basic Multilingual Plane counts two; a pair that
+        // straddles the end of the first probing window is kept whole, and the line break after it is still seen.
+        const string emoji = "\uD83D\uDE00";
+        var sixty = string.Concat(Enumerable.Repeat(emoji, 60));
+        var fifty = string.Concat(Enumerable.Repeat(emoji, 50));
+        var straddling = new string('a', CleanupPrompt.MaxGlossaryTermChars - 2) + emoji + "\n";
+
+        Assert.Equal(TermHints.LongForGlossary, LibraryTermLint.Check(new TermValues("sig", sixty)));
+        Assert.Equal(TermHints.None, LibraryTermLint.Check(new TermValues("sig", fifty)));
+        Assert.Equal(TermHints.LongForGlossary | TermHints.MultiLine, LibraryTermLint.Check(new TermValues("sig", straddling)));
+    }
+
+    [Fact]
+    public void The_line_break_probe_never_cuts_a_surrogate_pair()
+    {
+        // Held to a glossary rule that also refused an unpaired surrogate, a long run of emoji is still not multi-line:
+        // a probe window that ended between the halves of a pair would hand the rule a lone high surrogate.
+        static bool refusingUnpaired(string text) => CleanupPrompt.IsVocabularyReplacement(text) && IsWellFormed(text);
+        var emoji = string.Concat(Enumerable.Repeat("\uD83D\uDE00", 120));
+
+        Assert.False(LibraryTermLint.SpansLines(emoji, refusingUnpaired));
+        Assert.True(LibraryTermLint.SpansLines(emoji + "\n" + emoji, refusingUnpaired));
+        Assert.False(LibraryTermLint.SpansLines(emoji, CleanupPrompt.IsVocabularyReplacement));
+    }
+
+    private static bool IsWellFormed(string value)
+    {
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsHighSurrogate(value[i]) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+            {
+                i++;
+            }
+            else if (char.IsSurrogate(value[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [Fact]
     public void The_word_lists_are_the_ones_the_shipped_data_is_held_to()
     {
         Assert.Contains("il", LibraryTermLint.CommonWords);

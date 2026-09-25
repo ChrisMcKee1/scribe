@@ -31,6 +31,12 @@ namespace Scribe.Core.Libraries;
 /// reads back as written. An export writes each metadata line as one CSV field, quoted when it holds a comma, a quote or
 /// a line break, and an import rejoins a metadata record's fields and drops a spreadsheet's padding.
 /// </para>
+/// <para>
+/// Every string is well-formed UTF-16 (contract 2.2): the writers encode strictly and throw
+/// <see cref="ArgumentException"/> (an <see cref="EncoderFallbackException"/>) for a value or metadata string holding an
+/// unpaired surrogate, never writing U+FFFD for one, and the readers cannot produce one, because every decoding replaces
+/// an invalid sequence with U+FFFD and the parsing only ever splits text at ASCII characters.
+/// </para>
 /// </remarks>
 public sealed class LibraryCsvCodec : ILibraryCsvCodec
 {
@@ -38,7 +44,10 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
     private const string FormatVersion = "2";
     private const int WesternAnsiCodePage = 1252;
 
-    private static readonly UTF8Encoding Utf8WithoutBom = new(encoderShouldEmitUTF8Identifier: false);
+    // Strict: an unpaired surrogate in any value or metadata string throws EncoderFallbackException (an
+    // ArgumentException) instead of being written as U+FFFD, so a file never holds a character its content did not
+    // (contract 2.2 and 3.4.2, well-formed UTF-16). The editor refuses such a string first; this is the last line.
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
     private static readonly string[] HeaderColumns = ["pattern", "replacement", "whole_word", "enabled"];
 
@@ -98,7 +107,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
         text.Append("# scribe-format: ").Append(FormatVersion).Append(NewLine);
         AppendRows(text, content, guard: false);
-        return Utf8WithoutBom.GetBytes(text.ToString());
+        return StrictUtf8.GetBytes(text.ToString());
     }
 
     /// <inheritdoc/>
@@ -144,7 +153,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
         text.Append("# formula-guard: ").Append(LibraryFormulaGuard.Version.ToString(CultureInfo.InvariantCulture)).Append(NewLine);
         AppendRows(text, content, guard: true);
-        return [.. Utf8Bom, .. Utf8WithoutBom.GetBytes(text.ToString())];
+        return [.. Utf8Bom, .. StrictUtf8.GetBytes(text.ToString())];
     }
 
     /// <summary>

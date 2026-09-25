@@ -118,7 +118,7 @@ public static class LibraryTermLint
                 hints |= TermHints.LongForGlossary;
             }
 
-            if (SpansLines(written))
+            if (SpansLines(written, CleanupPrompt.IsVocabularyReplacement))
             {
                 hints |= TermHints.MultiLine;
             }
@@ -156,14 +156,23 @@ public static class LibraryTermLint
     }
 
     // CleanupPrompt keeps its set of line breaks to itself, so ask its predicate: a window of the text with a
-    // non-blank character in front and no more characters than the glossary's cap fails it only for a line break.
-    private static bool SpansLines(string written)
+    // non-blank character in front and no more characters than the glossary's cap fails it only for a line break. A
+    // window never ends between the two halves of a surrogate pair, so the probe is well-formed whenever the value is,
+    // and a pair cut in two can never be what fails it, whatever the predicate one day says about surrogates. The
+    // predicate is a parameter only so a test can hold the probe to that.
+    internal static bool SpansLines(string written, Func<string, bool> isVocabularyReplacement)
     {
         var window = CleanupPrompt.MaxGlossaryTermChars - 1;
-        for (var start = 0; start < written.Length; start += window)
+        var length = 0;
+        for (var start = 0; start < written.Length; start += length)
         {
-            var length = Math.Min(window, written.Length - start);
-            if (!CleanupPrompt.IsVocabularyReplacement(string.Concat("x", written.AsSpan(start, length))))
+            length = Math.Min(window, written.Length - start);
+            if (length == window && char.IsHighSurrogate(written[start + length - 1]))
+            {
+                length--;
+            }
+
+            if (!isVocabularyReplacement(string.Concat("x", written.AsSpan(start, length))))
             {
                 return true;
             }

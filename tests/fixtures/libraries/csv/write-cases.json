@@ -213,6 +213,38 @@
       },
       "managed": "write/duplicate.managed.csv",
       "export": "write/duplicate.export.csv"
+    },
+    {
+      "name": "astral",
+      "about": "Characters outside the Basic Multilingual Plane (surrogate pairs in UTF-16) in every field: written as four-byte UTF-8, read back whole.",
+      "content": {
+        "name": "Team \uD83D\uDE00",
+        "category": "Music \uD834\uDD1E",
+        "description": "Faces \uD83D\uDE00, clefs \uD834\uDD1E",
+        "basedOn": "team-\uD83D\uDE00",
+        "rows": [
+          {
+            "spoken": "smile \uD83D\uDE00",
+            "written": "\uD83D\uDE00",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "\uD834\uDD1E",
+            "written": "G clef \uD834\uDD1E",
+            "wholeWord": false,
+            "enabled": true
+          },
+          {
+            "spoken": "#\uD83D\uDE00",
+            "written": "=\uD834\uDD1E",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ]
+      },
+      "managed": "write/astral.managed.csv",
+      "export": "write/astral.export.csv"
     }
   ]
 }
