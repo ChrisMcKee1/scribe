@@ -97,8 +97,29 @@ public sealed class LibraryPrecedenceTests
     [Fact]
     public void The_shipped_catalog_is_returned_in_that_order()
     {
-        Assert.Equal(LibraryPrecedence.BuiltInOrder, BuiltInDictionaryLibraries.All.Select(l => l.Id));
+        AssertCatalogFollows(BuiltInDictionaryLibraries.All.Select(l => l.Id), LibraryPrecedence.BuiltInOrder, LibraryPrecedence.RetiredBuiltInIds);
     }
+
+    [Fact]
+    public void A_retirement_done_the_documented_way_leaves_the_catalog_in_that_order()
+    {
+        // Retire github as AGENTS.md says: its CSV stops shipping, and its id stays in BuiltInOrder and is listed as retired.
+        // BuiltInDictionaryLibraries.All is LibraryPrecedence.Order over the libraries that ship, so the same call over the
+        // ten that would still ship is the catalog that retirement produces.
+        string[] retired = ["github"];
+        var catalog = LibraryPrecedence.Order(BuiltInDictionaryLibraries.All.Where(l => !retired.Contains(l.Id))).Select(l => l.Id).ToList();
+
+        AssertCatalogFollows(catalog, LibraryPrecedence.BuiltInOrder, retired);
+
+        // Still an order check: the same ids in another order fail.
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+            () => AssertCatalogFollows(Enumerable.Reverse(catalog), LibraryPrecedence.BuiltInOrder, retired));
+    }
+
+    // The catalog is the frozen order with the retired ids left out, in the same order. Retirement is checked on its own
+    // (A_retired_built_in_keeps_its_place_and_is_retired_only_while_it_does_not_ship), so this only has to skip them.
+    private static void AssertCatalogFollows(IEnumerable<string> catalog, IReadOnlyList<string> order, IReadOnlyList<string> retired) =>
+        Assert.Equal(order.Where(id => !retired.Contains(id, StringComparer.OrdinalIgnoreCase)), catalog);
 
     [Fact]
     public void Renaming_or_recategorizing_a_built_in_never_moves_it()
