@@ -401,7 +401,7 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,16" MaxWidth="860" HorizontalAlignment="Left">
                             <TextBlock Text="General" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Your microphone, the push-to-talk key, and how Scribe starts."/>
+                                       Text="Your microphone, the push-to-talk keys, and how Scribe starts."/>
                         </StackPanel>
                         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="2,0,14,4">
                             <StackPanel MaxWidth="860" HorizontalAlignment="Stretch">
@@ -465,6 +465,14 @@
                                         </Grid>
                                         <TextBlock Style="{StaticResource SettingHint}"
                                                    Text="Optional second hotkey that always skips AI cleanup. The dictionary, snippets, profiles, and other local processing still apply."/>
+                                        <!-- Text comes from DefaultHotkeyRestore.Hint so it names the keys the button
+                                             actually restores, and what binding them costs in other apps. -->
+                                        <TextBlock x:Name="DefaultHotkeysHintText" Style="{StaticResource SettingHint}"
+                                                   Margin="0,16,0,0"/>
+                                        <ui:Button x:Name="RestoreHotkeysButton" Content="Restore default hotkeys"
+                                                   Margin="0,10,0,0" HorizontalAlignment="Left" Appearance="Secondary"
+                                                   AutomationProperties.HelpText="{Binding Text, ElementName=DefaultHotkeysHintText}"
+                                                   Click="RestoreHotkeysButton_Click"/>
                                     </StackPanel>
                                 </ui:Card>
 

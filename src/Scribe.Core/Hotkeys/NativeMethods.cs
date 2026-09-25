@@ -118,6 +118,58 @@ internal static partial class NativeMethods
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
+    internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
+    internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+
+    internal delegate void WinEventProc(
+        nint hWinEventHook, uint eventType, nint hwnd, int idObject, int idChild, uint idEventThread, uint dwmsEventTime);
+
+    // Out of context, the callback runs on the thread that set the hook, from its message loop, so on the hook thread it
+    // reaches the engine the way the keyboard hook does. Delegate marshalling uses classic DllImport, as for
+    // SetWindowsHookEx.
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint SetWinEventHook(
+        uint eventMin, uint eventMax, nint hmodWinEventProc, WinEventProc pfnWinEventProc, uint idProcess, uint idThread,
+        uint dwFlags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnhookWinEvent(nint hWinEventHook);
+
+    private const int UOI_IO = 6;
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial nint GetThreadDesktop(uint dwThreadId);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetUserObjectInformationW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetUserObjectInformationBool(
+        nint hObj, int nIndex, out int pvInfo, int nLength, out int lpnLengthNeeded);
+
+    /// <summary>
+    /// Whether the calling thread's desktop is the one receiving input: false while the lock screen or a secure desktop
+    /// has it, null when that cannot be told. Two quick calls that wait for nothing, safe on the hook thread; the handle
+    /// GetThreadDesktop returns needs no closing. This is the check Raymond Chen gives for a desktop-switch notice
+    /// ("How can I detect that the system is no longer showing a UAC prompt?", The Old New Thing, 2020).
+    /// </summary>
+    internal static bool? ThreadDesktopReceivesInput() => DesktopReceivesInput(GetThreadDesktop(GetCurrentThreadId()));
+
+    /// <summary>
+    /// Whether <paramref name="desktop"/> is the desktop receiving input, from GetUserObjectInformation with UOI_IO; null
+    /// for no handle, or when the query fails (it does for a handle that is not a desktop).
+    /// </summary>
+    internal static bool? DesktopReceivesInput(nint desktop)
+    {
+        if (desktop == 0)
+        {
+            return null;
+        }
+
+        return GetUserObjectInformationBool(desktop, UOI_IO, out var receivesInput, sizeof(int), out _)
+            ? receivesInput != 0
+            : null;
+    }
+
     private const uint DESKTOP_READOBJECTS = 0x0001;
 
     [LibraryImport("user32.dll", SetLastError = true)]

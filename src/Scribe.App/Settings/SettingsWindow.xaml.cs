@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using Scribe.Core.Feedback;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -129,6 +130,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private HotkeyBinding _pendingBinding;
     private HotkeyBinding? _pendingDictationOnlyBinding;
+
+    // The bindings the stored settings hold, as loaded or last saved, which Restore's notice compares with to say whether
+    // Save is still needed. Not _settings itself: a Save fills that in before it stores anything, so after a Save that
+    // failed it would hold keys that were never stored.
+    private HotkeyBinding _savedBinding;
+    private HotkeyBinding? _savedDictationOnlyBinding;
     private bool _capturingDictationOnly;
     private readonly List<Key> _capturedKeys = new(2);
     private readonly HashSet<Key> _pressedCaptureKeys = new();
@@ -194,6 +201,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             startup, enabled => StartupPreference.PersistAsync(settingsRepository, enabled), log);
         _pendingBinding = _settings.Hotkey;
         _pendingDictationOnlyBinding = _settings.DictationOnlyHotkey;
+        _savedBinding = _settings.Hotkey;
+        _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
 
         // Match the system light/dark theme + accent colour and enable the Mica backdrop.
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
@@ -989,12 +998,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         try
         {
             HotkeyBox.Text = HotkeyCapture.Describe(_pendingBinding);
-            ModeCombo.SelectedIndex = _pendingBinding.Mode == HotkeyMode.Toggle ? 1 : 0;
+            ModeCombo.SelectedIndex = ModeIndex(_pendingBinding.Mode);
             DictationOnlyHotkeyBox.Text = _pendingDictationOnlyBinding is null
                 ? string.Empty
                 : HotkeyCapture.Describe(_pendingDictationOnlyBinding);
-            DictationOnlyModeCombo.SelectedIndex =
-                _pendingDictationOnlyBinding?.Mode == HotkeyMode.Toggle ? 1 : 0;
+            DictationOnlyModeCombo.SelectedIndex = ModeIndex(_pendingDictationOnlyBinding?.Mode ?? HotkeyMode.Hold);
+            DefaultHotkeysHintText.Text = DefaultHotkeyRestore.Hint;
 
             OverlayCheck.IsChecked = _settings.ShowOverlay;
             LoadOverlayPosition(_settings.OverlayPosition);
@@ -2256,6 +2265,59 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         DictationOnlyHotkeyBox.Text = string.Empty;
     }
 
+    // Stages the shipped hotkeys like any other edit on this page: nothing is stored until Save, and Cancel discards
+    // it. No confirmation, because it deletes nothing and both rows show the result at once, where Set changes either
+    // key back. The mode boxes are set too, since Save reads each binding's mode from its box. The saved bindings
+    // decide whether the notice asks for a Save.
+    private void RestoreHotkeysButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_capturing)
+        {
+            CancelCapture();
+        }
+
+        var restored = DefaultHotkeyRestore.Restore(
+            _pendingBinding with { Mode = SelectedMode },
+            _pendingDictationOnlyBinding is null ? null : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode },
+            _savedBinding,
+            _savedDictationOnlyBinding);
+        _pendingBinding = restored.Dictation;
+        _pendingDictationOnlyBinding = restored.DictationOnly;
+        HotkeyBox.Text = HotkeyCapture.Describe(restored.Dictation);
+        ModeCombo.SelectedIndex = ModeIndex(restored.Dictation.Mode);
+        DictationOnlyHotkeyBox.Text = HotkeyCapture.Describe(restored.DictationOnly);
+        DictationOnlyModeCombo.SelectedIndex = ModeIndex(restored.DictationOnly.Mode);
+
+        // The default severity, as for the other "done, now Save" notices here: the bar floats over the page title, and
+        // WPF-UI fills the informational one almost transparently (#08FFFFFF in the dark theme), so the title would
+        // show through the message.
+        ShowInfo(restored.Message);
+        AnnounceFrom(RestoreHotkeysButton, restored.Message);
+    }
+
+    // The notification bar is not read out when it opens, so the outcome is also raised as a UI Automation
+    // notification from the control that caused it. A notification does not depend on keyboard focus, which matters
+    // here: a key capture in progress is cancelled first, and that clears focus.
+    private void AnnounceFrom(UIElement source, string message)
+    {
+        try
+        {
+            var peer = UIElementAutomationPeer.FromElement(source) ?? UIElementAutomationPeer.CreatePeerForElement(source);
+            peer?.RaiseNotificationEvent(
+                System.Windows.Automation.AutomationNotificationKind.ActionCompleted,
+                System.Windows.Automation.AutomationNotificationProcessing.ImportantMostRecent,
+                message,
+                "Scribe.SettingsNotice");
+        }
+        catch (Exception ex)
+        {
+            // The same words are on screen; a screen reader that cannot be told must not break the page.
+            TryLog(ex, "Could not announce a settings notice to assistive technology.");
+        }
+    }
+
+    private static int ModeIndex(HotkeyMode mode) => mode == HotkeyMode.Toggle ? 1 : 0;
+
     private void BeginCapture(bool dictationOnly)
     {
         _capturingDictationOnly = dictationOnly;
@@ -2295,7 +2357,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             else
             {
                 _capturedKeys.Add(key);
-                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(k => k.ToString())) +
+                ActiveHotkeyBox.Text = string.Join("+", _capturedKeys.Select(HotkeyCapture.KeyName)) +
                     (_capturedKeys.Count == 1 ? "  (add another key or release)" : "  (release to set)");
             }
         }
@@ -5084,6 +5146,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 snippets,
                 new ExternalIntents(_externalAiCleanup.NewestRevision, _externalMicrophone.NewestRevision));
             _settingsRecovered = false;
+            _savedBinding = _settings.Hotkey;
+            _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
             _externalAiCleanup.Saved();
             _externalMicrophone.Saved();
             if ((AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)

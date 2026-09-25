@@ -12,12 +12,12 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
 {
     private readonly Action _openSettings;
 
-    /// <param name="hotkeyDisplayName">
-    /// The user's configured push-to-talk key (e.g. "Right Ctrl"), shown so the gesture text
-    /// matches their actual binding rather than a hard-coded default.
+    /// <param name="gesture">
+    /// What to say about the push-to-talk gesture, composed from the user's actual bindings
+    /// (<see cref="Scribe.Core.Hotkeys.HotkeyText.Gesture"/>) rather than a hard-coded key.
     /// </param>
     /// <param name="openSettings">Invoked when the user clicks "Open settings".</param>
-    public WelcomeWindow(string hotkeyDisplayName, Action openSettings)
+    public WelcomeWindow((string Title, string Body) gesture, Action openSettings)
     {
         _openSettings = openSettings ?? throw new ArgumentNullException(nameof(openSettings));
 
@@ -25,9 +25,8 @@ public partial class WelcomeWindow : Wpf.Ui.Controls.FluentWindow
         Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
         InitializeComponent();
 
-        var key = string.IsNullOrWhiteSpace(hotkeyDisplayName) ? "Right Ctrl" : hotkeyDisplayName;
-        GestureHint.Text =
-            $"Hold {key} and start talking. Release when you are done, and the text appears wherever your cursor is.";
+        GestureTitle.Text = gesture.Title;
+        GestureHint.Text = gesture.Body;
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)

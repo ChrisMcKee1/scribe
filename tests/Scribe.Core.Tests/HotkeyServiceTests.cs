@@ -33,10 +33,86 @@ public class HotkeyServiceTests
     }
 
     [Fact]
+    public void Start_hands_desktop_switch_notices_to_the_engine()
+    {
+        // The hook thread also listens for EVENT_SYSTEM_DESKTOPSWITCH, so the engine can end a recording and reset its key
+        // state when the lock screen or a secure desktop appears. NotifyWinEvent raises exactly the kind of notice any
+        // process can raise, which the engine counts on its owner thread only, so this proves the callback runs on the
+        // hook thread; it then checks again and applies the switch only if this thread's desktop has lost input, so on a
+        // desktop that still receives input (an installed Scribe dictating beside this test included) nothing stops.
+        // Like the other Start_ tests it needs an interactive desktop, and the local desktop filter leaves it to CI.
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
+        service.Start();
+        var receivesInput = NativeMethods.ThreadDesktopReceivesInput(); // the hook thread shares this thread's desktop
+
+        // Two notices: callbacks run one at a time, so once the second is counted the first has finished.
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+
+        Assert.True(
+            SpinWait.SpinUntil(() => service.DesktopSwitchNoticesSeen >= 2, TimeSpan.FromSeconds(10)),
+            "The hook thread never received the desktop-switch notices.");
+        if (receivesInput == false)
+        {
+            // A desktop that is not the input desktop, such as one created for a test run and never switched to.
+            Assert.True(
+                SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == 2, TimeSpan.FromSeconds(10)),
+                "The hook thread did not apply a notice on a desktop that is not receiving input.");
+        }
+        else
+        {
+            Assert.Equal(0, service.DesktopSwitchesSeen);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)] // a stray notice, or the switch back: this desktop still has the input
+    [InlineData(null)] // the check itself failed
+    [InlineData(false)] // the lock screen, Ctrl+Alt+Del or a UAC prompt has the input
+    public void Start_applies_a_desktop_switch_notice_only_when_the_desktop_lost_input(bool? receivesInput)
+    {
+        // The same real hook and WinEvent path, with the input-desktop query replaced, so each answer is proved whatever
+        // desktop the test runs on. The query is asked on the hook thread, whose desktop it is about.
+        var askedOn = new System.Collections.Concurrent.ConcurrentQueue<string?>();
+        using var service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance,
+            HotkeyBinding.DefaultDictation,
+            () =>
+            {
+                askedOn.Enqueue(Thread.CurrentThread.Name);
+                return receivesInput;
+            });
+        service.Start();
+
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+        NotifyWinEvent(EventSystemDesktopSwitch, GetDesktopWindow(), ObjectIdWindow, ChildIdSelf);
+
+        Assert.True(
+            SpinWait.SpinUntil(() => askedOn.Count >= 2, TimeSpan.FromSeconds(10)),
+            "The hook thread never asked whether its desktop receives input.");
+        var expected = receivesInput == false ? 2 : 0;
+        Assert.True(
+            SpinWait.SpinUntil(() => service.DesktopSwitchesSeen == expected, TimeSpan.FromSeconds(10)),
+            $"Expected {expected} applied switch(es), saw {service.DesktopSwitchesSeen}.");
+        Assert.Equal(2, service.DesktopSwitchNoticesSeen);
+        Assert.All(askedOn, name => Assert.Equal("Scribe.HotkeyHook", name));
+    }
+
+    private const uint EventSystemDesktopSwitch = 0x0020;
+    private const int ObjectIdWindow = 0;
+    private const int ChildIdSelf = 0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern void NotifyWinEvent(uint eventId, nint hwnd, int idObject, int idChild);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint GetDesktopWindow();
+
+    [Fact]
     public void UpdateBinding_replaces_active_binding()
     {
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance);
-        Assert.Equal(HotkeyBinding.DefaultVirtualKey, service.Binding.VirtualKey);
+        Assert.Equal(HotkeyBinding.DefaultDictation.VirtualKey, service.Binding.VirtualKey);
 
         var toggle = new HotkeyBinding(0x20, KeyModifiers.Control, HotkeyMode.Toggle, Suppress: false, "Ctrl+Space");
         service.UpdateBinding(toggle);
@@ -76,11 +152,11 @@ public class HotkeyServiceTests
     {
         var arbiter = new HotkeyTriggerArbiter();
 
-        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard));
-        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 1));
+        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 2));
         Assert.False(arbiter.TryDeactivate(HotkeyTrigger.DictationOnly));
         Assert.True(arbiter.TryDeactivate(HotkeyTrigger.Standard));
-        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 3));
     }
 
     [Fact]
@@ -211,7 +287,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Capture_mode_passes_the_bound_key_through_without_activating_or_suppressing()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default); // Right Ctrl, suppressed
+        var state = new ChordStateMachine(HotkeyBinding.Legacy); // Right Ctrl, suppressed
 
         Assert.Equal(HotkeyTransition.None, state.SetCaptureMode(true).Transition);
 
@@ -226,7 +302,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Entering_capture_mode_mid_hold_deactivates_the_recording()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
         Assert.Equal(HotkeyTransition.Deactivated, state.SetCaptureMode(true).Transition);
@@ -235,7 +311,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Leaving_capture_mode_requires_a_fresh_press_to_activate()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
         state.SetCaptureMode(true);
 
         // Key held across the capture-mode boundary must not satisfy the chord on exit.
@@ -249,7 +325,7 @@ public class HotkeyServiceTests
     [Fact]
     public void State_clearing_operations_start_a_new_generation_so_stale_activations_are_detectable()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         // An Activated computed in the old epoch must be distinguishable after a clear: this is
         // what stops a racing hook callback from starting a recording during binding capture.
@@ -264,7 +340,7 @@ public class HotkeyServiceTests
     [Fact]
     public void Reset_reports_the_deactivation_of_an_interrupted_recording()
     {
-        var state = new ChordStateMachine(HotkeyBinding.Default);
+        var state = new ChordStateMachine(HotkeyBinding.Legacy);
 
         Assert.Equal(HotkeyTransition.Activated, state.Process(0xA3, isDown: true).Transition);
 
@@ -282,7 +358,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             leaked.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
-        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy);
 
         Assert.Equal([0xA3u], result.Released);
         Assert.Empty(result.Failed);
@@ -298,7 +374,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             systemDown.Contains, physicallyHeld.Contains, key => { released.Add(key); return true; });
 
-        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Default).Released);
+        Assert.Empty(reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy).Released);
         Assert.Empty(released);
     }
 
@@ -322,7 +398,7 @@ public class HotkeyServiceTests
         var reconciler = new SuppressedKeyReconciler(
             leaked.Contains, _ => false, _ => false); // SendInput rejected (e.g. UIPI)
 
-        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Default);
+        var result = reconciler.ReleaseLeakedKeys(HotkeyBinding.Legacy);
 
         Assert.Empty(result.Released);
         Assert.Equal([0xA3u], result.Failed);

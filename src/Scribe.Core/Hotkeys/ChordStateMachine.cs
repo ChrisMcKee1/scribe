@@ -25,12 +25,44 @@ internal readonly record struct ChordUpdate(HotkeyTransition Transition, bool Sh
 /// monitor shared with settings reads, rebinding and toggle resets made every key event wait behind
 /// whichever of them held it. Other threads change this state only through engine commands that
 /// the owner applies. <see cref="IsPressed"/> is the one member any thread may call.
+///
+/// Page Up or Page Down bound on its own (no modifier and no second key: the shipped defaults, or either
+/// key chosen in Settings) starts only when no modifier is held. Pressed with any Ctrl, Alt, Shift or
+/// Windows key, or with a Narrator key held (Caps Lock or Insert, or NonConvert, which a Japanese 106
+/// keyboard uses instead of Caps Lock), it is another command (Ctrl+Page Down switches tabs,
+/// Shift+Page Down selects a page, Narrator with Page Down changes views), so that keystroke reaches
+/// the app whole and starts nothing. The check is made only as the binding becomes satisfied: a
+/// modifier pressed during a dictation neither ends it nor stops the key being swallowed. Every other
+/// binding (F9, Ctrl+Shift+X, Right Ctrl, Ctrl+Page Down, a chord) matches exactly as it always has,
+/// whatever else is held: no binding but a bare Page Up or Page Down behaves differently, and an install
+/// that had already bound either key on its own (0.4.3 stored it exactly so) gets the pass-through too.
+///
+/// A Ctrl, Alt, Shift or Windows key counts as held only while Windows agrees it is down, when the
+/// machine is given Windows' view (<c>isLogicallyDown</c>, GetAsyncKeyState in the service). A hook is
+/// called only for input on its own desktop, so it never sees a release made on the lock screen or the
+/// secure desktop (Ctrl+Alt+Del, a UAC prompt), and after Win+L its own view would keep that modifier
+/// held and refuse every bare press until the key was pressed again. Windows' view is asked only when
+/// the hook's view shows such a modifier on the press that completes a bare Page Up or Page Down
+/// binding, and never about that press's own key, whose asynchronous state Windows updates only after
+/// the callback returns.
+///
+/// A Narrator key is judged by the hook's view alone. Narrator keeps its key from the rest of Windows
+/// (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook installed later
+/// runs first, so whenever Scribe installed its hook after Narrator did, Windows would report the key
+/// up while it is held and the press would no longer reach Narrator. Its release on another desktop is
+/// handled instead by the engine, which resets every machine (<see cref="Reset"/>) when the input
+/// desktop switches.
 /// </summary>
 internal sealed class ChordStateMachine
 {
     private const uint VkShift = 0x10;
     private const uint VkControl = 0x11;
     private const uint VkAlt = 0x12;
+    private const uint VkCapsLock = 0x14;
+    private const uint VkNonConvert = 0x1D;
+    private const uint VkPrior = 0x21; // Page Up
+    private const uint VkNext = 0x22; // Page Down
+    private const uint VkInsert = 0x2D;
     private const uint VkLeftShift = 0xA0;
     private const uint VkRightShift = 0xA1;
     private const uint VkLeftControl = 0xA2;
@@ -42,6 +74,7 @@ internal sealed class ChordStateMachine
 
     private readonly KeySet _pressed = new();
     private readonly KeySet _suppressed = new();
+    private readonly Func<uint, bool>? _isLogicallyDown;
     private HotkeyBinding _binding;
     private bool _satisfied;
     private bool _active;
@@ -49,7 +82,16 @@ internal sealed class ChordStateMachine
     private bool _paused;
     private long _generation;
 
-    public ChordStateMachine(HotkeyBinding binding) => _binding = binding;
+    /// <param name="binding">The binding to match.</param>
+    /// <param name="isLogicallyDown">
+    /// Windows' view of a key (the high bit of GetAsyncKeyState), asked only as described in the class summary. Null
+    /// trusts the hook's own view alone, as the deterministic tests do unless they script Windows' view.
+    /// </param>
+    public ChordStateMachine(HotkeyBinding binding, Func<uint, bool>? isLogicallyDown = null)
+    {
+        _binding = binding;
+        _isLogicallyDown = isLogicallyDown;
+    }
 
     /// <summary>The current state epoch; bumped by every state-clearing operation.</summary>
     public long Generation => _generation;
@@ -80,9 +122,12 @@ internal sealed class ChordStateMachine
         // Paused, the binding stands down: nothing activates and no new press is swallowed. Key
         // tracking carries on regardless, because the physical view has to stay true for the
         // leak reconciler, and because a chord still held when dictation resumes must wait for a
-        // fresh press rather than firing on the next autorepeat.
+        // fresh press rather than firing on the next autorepeat. A bare Page Up or Page Down
+        // pressed with a modifier held stands down the same way for that press (see the class
+        // summary); paused, there is nothing to refuse, so Windows is not asked.
         var satisfied = IsSatisfied(_binding);
-        var transition = _paused ? HotkeyTransition.None : NextTransition(satisfied);
+        var otherCommand = !_paused && !wasSatisfied && satisfied && IsAnotherCommand();
+        var transition = _paused || otherCommand ? HotkeyTransition.None : NextTransition(satisfied);
         _satisfied = satisfied;
 
         // A keystroke is swallowed or passed whole, paused or not: its autorepeats and its release
@@ -94,7 +139,7 @@ internal sealed class ChordStateMachine
         var shouldSuppress = false;
         if (isDown && _binding.Suppress && isBindingKey &&
             ((!repeated && !_paused && _binding.SuppressChordMembers && NeedsPreemptiveSuppression(virtualKey)) ||
-             (!_paused && !wasSatisfied && satisfied) ||
+             (!_paused && !otherCommand && !wasSatisfied && satisfied) ||
              (repeated && _suppressed.Contains(virtualKey))))
         {
             _suppressed.Add(virtualKey);
@@ -147,8 +192,9 @@ internal sealed class ChordStateMachine
 
     /// <summary>
     /// Clears all key state, reporting the deactivation the caller must dispatch when an
-    /// activation was in flight (e.g. a hook reinstall mid-recording must stop the recording,
-    /// because the held key's eventual release can no longer be matched to cleared state).
+    /// activation was in flight (e.g. a hook reinstall or a desktop switch mid-recording must stop
+    /// the recording, because the held key's eventual release can no longer be matched to cleared
+    /// state, and on the other desktop the hook would not see it at all).
     /// </summary>
     public (HotkeyTransition Transition, long Generation) Reset()
     {
@@ -169,6 +215,9 @@ internal sealed class ChordStateMachine
     }
 
     public void CancelToggle() => _active = false;
+
+    /// <summary>Owner thread: whether a hold is held or a toggle is on in this machine's view.</summary>
+    public bool IsLatched => _active;
 
     /// <summary>
     /// Enters or leaves pause. Pausing cancels a hold or toggle latch WITHOUT reporting a
@@ -228,6 +277,34 @@ internal sealed class ChordStateMachine
 
     private bool AnyPressed(uint generic, uint left, uint right) =>
         _pressed.Contains(generic) || _pressed.Contains(left) || _pressed.Contains(right);
+
+    // Whether this press of a bare Page Up or Page Down binding is another command because a modifier or a Narrator key
+    // is held (see the class summary). No other binding is judged, so each matches exactly as it did before the rule
+    // existed. A bare binding has no modifier of its own, and its key is neither a modifier nor a Narrator key, so the
+    // key this press is for is never one of those asked about.
+    private bool IsAnotherCommand() =>
+        IsBarePageKey(_binding) &&
+        (Held(VkControl, VkLeftControl, VkRightControl) ||
+         Held(VkAlt, VkLeftAlt, VkRightAlt) ||
+         Held(VkShift, VkLeftShift, VkRightShift) ||
+         Held(VkLeftWin) ||
+         Held(VkRightWin) ||
+         _pressed.Contains(VkCapsLock) ||
+         _pressed.Contains(VkInsert) ||
+         _pressed.Contains(VkNonConvert));
+
+    // Page Up or Page Down with no modifier and no second key: the shipped defaults, or either key bound in Settings.
+    private static bool IsBarePageKey(HotkeyBinding binding) =>
+        (binding.VirtualKey is VkPrior or VkNext) &&
+        binding.SecondaryVirtualKey is null &&
+        binding.Modifiers == KeyModifiers.None;
+
+    // Held in the hook's view and in Windows' (see the class summary). A generic code asks about either side at once:
+    // GetAsyncKeyState gives VK_CONTROL, VK_MENU and VK_SHIFT without telling left from right.
+    private bool Held(uint generic, uint left, uint right) =>
+        AnyPressed(generic, left, right) && (_isLogicallyDown is null || _isLogicallyDown(generic));
+
+    private bool Held(uint key) => _pressed.Contains(key) && (_isLogicallyDown is null || _isLogicallyDown(key));
 
     /// <summary>
     /// Whether a chord member has to be swallowed on its own key-down, before the second key

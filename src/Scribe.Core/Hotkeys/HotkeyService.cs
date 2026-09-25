@@ -31,6 +31,7 @@ public sealed class HotkeyService : IHotkeyService
     private static readonly TimeSpan JoinTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ILogger<HotkeyService> _logger;
+    private readonly Func<bool?> _desktopReceivesInput;
     private readonly object _sync = new();
     private readonly HotkeyCommandRouter _router;
     private readonly SuppressedKeyReconciler _reconciler;
@@ -39,13 +40,25 @@ public sealed class HotkeyService : IHotkeyService
     /// A transition in flight between the hook thread and the consumer thread. The generation
     /// lets the dispatcher drop an Activated that was computed before a state-clearing request
     /// (capture mode, binding update, pause, hook reinstall); without it a recording could start
-    /// while capture mode is armed. Deactivations always dispatch (a redundant stop is harmless, a
-    /// missed stop is not). AllowReconcile is false for transitions born from a state clear: right
-    /// after a clear the reconciler cannot distinguish a genuinely held key from a leaked one and
-    /// could release a key the user is holding.
+    /// while capture mode is armed. The activation epoch does the same for a desktop switch, which
+    /// the hook thread itself notices, so it cannot advance the requesters' generation; it is the
+    /// epoch of <see cref="Engine"/>, the installation that queued the transition, and an
+    /// Activated is judged by that engine's epoch alone. Deactivations always dispatch (a redundant
+    /// stop is harmless, a missed stop is not). AllowReconcile is false for transitions born from a
+    /// state clear: right after a clear the reconciler cannot distinguish a genuinely held key from
+    /// a leaked one and could release a key the user is holding. Deactivation says why a
+    /// Deactivated happened, and Activation numbers the press an Activated came from
+    /// (<see cref="HotkeyTriggerEventArgs.Activation"/>), zero otherwise.
     /// </summary>
     internal readonly record struct QueuedTransition(
-        HotkeyTransition Transition, HotkeyTrigger Trigger, long Generation, bool AllowReconcile);
+        HotkeyTransition Transition,
+        HotkeyTrigger Trigger,
+        long Generation,
+        bool AllowReconcile,
+        HotkeyDeactivation Deactivation = HotkeyDeactivation.Released,
+        long ActivationEpoch = 0,
+        HotkeyEngine? Engine = null,
+        long Activation = 0);
 
     private HotkeyTransitionQueue? _transitions;
     private HotkeyReconcileSignal? _reconcileSignal;
@@ -56,25 +69,59 @@ public sealed class HotkeyService : IHotkeyService
     private readonly HookLivenessProbe _livenessProbe = new();
 
     public HotkeyService(ILogger<HotkeyService> logger)
-        : this(logger, HotkeyBinding.Default)
+        : this(logger, HotkeyBinding.DefaultDictation)
     {
     }
 
     public HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding)
+        : this(logger, binding, NativeMethods.ThreadDesktopReceivesInput)
+    {
+    }
+
+    /// <param name="desktopReceivesInput">
+    /// Asked on the hook thread when a desktop-switch notice arrives: whether that thread's desktop is receiving input, or
+    /// null when that cannot be told (see <see cref="HotkeyEngine.OnDesktopSwitchNotice"/>). Tests replace the real query.
+    /// </param>
+    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyBinding binding, Func<bool?> desktopReceivesInput)
+        : this(logger, CreateRouter(binding), desktopReceivesInput)
+    {
+    }
+
+    /// <param name="router">
+    /// The configuration side and the engines it builds: the service's own, except in a test that plays the hook thread
+    /// itself and passes the router it drives, so this service's requests and its consumer step
+    /// (<see cref="DispatchTransition"/>) reach the engine that test drives.
+    /// </param>
+    /// <param name="desktopReceivesInput">As for the other constructors.</param>
+    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyCommandRouter router, Func<bool?> desktopReceivesInput)
     {
         _logger = logger;
-        _router = new HotkeyCommandRouter(binding);
+        _desktopReceivesInput = desktopReceivesInput;
+        _router = router;
         _reconciler = new SuppressedKeyReconciler(
             NativeMethods.IsKeyLogicallyDown,
             _router.IsPressed,
             key => NativeMethods.SendMarkedKeyEvent((ushort)key, keyUp: true));
     }
 
+    // GetAsyncKeyState on the hook path, rarely: only on a press that completes a bare Page Up or Page Down binding while
+    // the hook's view shows a modifier held, and only about that modifier (see ChordStateMachine).
+    private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding) => new(binding, NativeMethods.IsKeyLogicallyDown);
+
     public bool IsRunning { get; private set; }
 
     public HotkeyBinding Binding => _router.Binding;
 
     public HotkeyBinding? DictationOnlyBinding => _router.DictationOnlyBinding;
+
+    /// <summary>What the hook asks about a modifier its own view holds (see ChordStateMachine); for tests.</summary>
+    internal Func<uint, bool>? WindowsKeyState => _router.WindowsKeyState;
+
+    /// <summary>How many desktop switches the current hook's engine has applied.</summary>
+    internal long DesktopSwitchesSeen => _router.CurrentEngine?.DesktopSwitches ?? 0;
+
+    /// <summary>How many desktop-switch notices reached the current hook's engine on its own thread; for the wiring test.</summary>
+    internal long DesktopSwitchNoticesSeen => _router.CurrentEngine?.DesktopSwitchNotices ?? 0;
 
     public event EventHandler<HotkeyTriggerEventArgs>? Activated;
 
@@ -127,6 +174,20 @@ public sealed class HotkeyService : IHotkeyService
             var binding = Binding;
             _logger.LogInformation(
                 "Hotkey hook installed for {Binding} ({Mode}).", DescribeBinding(binding), binding.Mode);
+            LogMissingDesktopSwitchHook(installation);
+        }
+    }
+
+    // A warning, not a failure: without it the hook still works, but a switch goes unnoticed.
+    private void LogMissingDesktopSwitchHook(HookInstallation installation)
+    {
+        if (installation.DesktopSwitchHookError is { } error)
+        {
+            _logger.LogWarning(
+                "Desktop switch notifications are unavailable (Win32 error {Error}); a dictation whose key is held as " +
+                "the PC locks keeps recording until the key is pressed again, and a Narrator key released on the lock " +
+                "screen keeps blocking a bare Page Up or Page Down.",
+                error);
         }
     }
 
@@ -171,7 +232,7 @@ public sealed class HotkeyService : IHotkeyService
         _logger.LogInformation("Hotkey hook removed.");
     }
 
-    public void CancelToggle() => Wake(_router.CancelToggle());
+    public void CancelToggle(long activation) => Wake(_router.CancelToggle(activation));
 
     public void SetCaptureMode(bool enabled)
     {
@@ -260,28 +321,57 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    private void DispatchTransition(QueuedTransition item)
+    /// <summary>
+    /// Whether the consumer raises this transition. A Deactivated always goes out (a redundant stop is harmless, a missed
+    /// one is not). An Activated computed before a state-clearing request (capture mode, binding update, pause,
+    /// reinstall) must not start a recording; the request's own Deactivated may already sit behind it in the queue. The
+    /// epoch advances when the request is made, so this holds even while the hook thread has yet to apply it. Nor may an
+    /// Activated queued before its engine applied a desktop switch, which would open the microphone after Windows locked:
+    /// the engine advances its own activation epoch at the switch, before anything it queues for it. The epoch is the
+    /// queuing engine's alone, so a switch a retired engine's hook thread finishes after a reinstall moves nothing the
+    /// replacement's activations are judged by (the generation already rejects the retired engine's own).
+    /// </summary>
+    internal static bool ShouldDispatch(QueuedTransition item, HotkeyCommandRouter router) =>
+        item.Transition != HotkeyTransition.Activated ||
+        (router.IsCurrent(item.Generation) && item.Engine is { } engine && item.ActivationEpoch == engine.ActivationEpoch);
+
+    // The consumer thread's step for one transition; internal so a test can dispatch one without a hook.
+    internal void DispatchTransition(QueuedTransition item)
     {
         try
         {
             if (item.Transition == HotkeyTransition.Activated)
             {
-                // An Activated computed before a state-clearing request (capture mode, binding
-                // update, pause, reinstall) must not start a recording; the request's own
-                // Deactivated may already sit behind it in this queue. The epoch advances when
-                // the request is made, so this holds even while the hook thread has yet to
-                // apply it.
-                if (!_router.IsCurrent(item.Generation))
+                if (!ShouldDispatch(item, _router))
                 {
-                    _logger.LogInformation("Discarded a stale hotkey activation from a superseded state epoch.");
+                    // Shape only: which rule dropped it.
+                    if (_router.IsCurrent(item.Generation))
+                    {
+                        _logger.LogInformation("Discarded a hotkey activation queued before a desktop switch.");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Discarded a stale hotkey activation from a superseded state epoch.");
+                    }
+
                     return;
                 }
 
-                Activated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
+                Activated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, activation: item.Activation));
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
-                Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
+                // Shape only, and only Debug: the engine sends this whenever its arbiter names an owner, and that can be
+                // with nothing recording (an activation dropped above as queued before the switch is still followed by
+                // this stop, and a press the controller turned away as still processing owns the dictation until the
+                // release the controller then asks for reaches the hook). The controller's reason=DesktopSwitch line is
+                // the record of a recording actually ended.
+                if (item.Deactivation == HotkeyDeactivation.DesktopSwitch)
+                {
+                    _logger.LogDebug("Desktop switch: stop sent ({Trigger}).", item.Trigger);
+                }
+
+                Deactivated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, item.Deactivation));
 
                 // Every release is a cheap moment to verify no suppressed key leaked into the
                 // system's logical "down" state (a hook deadline miss lets single events through).
@@ -297,10 +387,10 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
-    // Runs the leak check off the hook and consumer threads: GetAsyncKeyState is meaningless
-    // inside the hook callback (async state updates after it returns), and the input queue needs
-    // a beat to settle after the final suppressed key-up. The hook callback never calls this
-    // itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
+    // Runs the leak check off the hook and consumer threads: GetAsyncKeyState cannot tell inside the
+    // hook callback whether the key being processed is down (its async state updates after the callback
+    // returns), and the input queue needs a beat to settle after the final suppressed key-up. The hook
+    // callback never calls this itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
     private void ScheduleReconcile() => Task.Run(async () =>
     {
         try
@@ -448,20 +538,12 @@ public sealed class HotkeyService : IHotkeyService
         else
         {
             _logger.LogInformation("Keyboard hook reinstalled.");
+            LogMissingDesktopSwitchHook(installation);
         }
     }
 
-    private static string DescribeBinding(HotkeyBinding binding)
-    {
-        if (!string.IsNullOrWhiteSpace(binding.DisplayName))
-        {
-            return binding.DisplayName!;
-        }
-
-        var modifiers = binding.Modifiers == KeyModifiers.None ? string.Empty : binding.Modifiers + "+";
-        var secondary = binding.SecondaryVirtualKey is { } second ? $"+0x{second:X2}" : string.Empty;
-        return $"{modifiers}0x{binding.VirtualKey:X2}{secondary}";
-    }
+    // Named from the virtual-key codes, as Settings names them: a stored name can be an alias such as "Next".
+    private static string DescribeBinding(HotkeyBinding binding) => HotkeyText.Describe(binding);
 
     public void Dispose() => Stop();
 
@@ -479,18 +561,31 @@ public sealed class HotkeyService : IHotkeyService
         // Rooted here for as long as the hook can call it: a collected delegate behind a live
         // hook crashes the process on the next key event.
         private readonly NativeMethods.LowLevelKeyboardProc _proc;
+
+        // Rooted for the same reason, for the desktop-switch notifications set up beside the hook.
+        private readonly NativeMethods.WinEventProc _desktopSwitchProc;
+
+        // The check a desktop-switch notice needs (see HotkeyEngine.OnDesktopSwitchNotice), one delegate for the whole
+        // installation, so a notice allocates nothing.
+        private readonly Func<bool?> _desktopReceivesInput;
         private readonly ManualResetEventSlim _installed = new(false);
         private readonly Thread _thread;
         private Exception? _installError;
         private nint _hookId;
         private int _abandoned;
 
+        // Written by the hook thread before it sets _installed, read after Install saw it set.
+        private bool _desktopSwitchHooked;
+        private int _desktopSwitchError;
+
         public HookInstallation(HotkeyService service, HotkeyEngine engine, HotkeyReconcileSignal reconcileSignal)
         {
             _service = service;
             _engine = engine;
             _reconcileSignal = reconcileSignal;
+            _desktopReceivesInput = service._desktopReceivesInput;
             _proc = HookCallback;
+            _desktopSwitchProc = DesktopSwitchCallback;
             _thread = new Thread(Run)
             {
                 Name = "Scribe.HotkeyHook",
@@ -500,6 +595,12 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         public Exception? InstallError => _installError;
+
+        /// <summary>
+        /// After <see cref="Install"/> succeeded: null when desktop switches are being reported, otherwise the Win32 error
+        /// SetWinEventHook left (0 when it left none).
+        /// </summary>
+        public int? DesktopSwitchHookError => _desktopSwitchHooked ? null : _desktopSwitchError;
 
         /// <summary>Starts the hook thread and waits for the hook; false when it failed or timed out.</summary>
         public bool Install(TimeSpan timeout)
@@ -536,6 +637,7 @@ public sealed class HotkeyService : IHotkeyService
             // (and got replaced by the watchdog) must unhook ITS hook on exit, never the
             // replacement's.
             nint hookId = 0;
+            nint desktopSwitchHook = 0;
             try
             {
                 // Before the hook exists, so no hook callback can run inside the peek (a peek also
@@ -555,6 +657,21 @@ public sealed class HotkeyService : IHotkeyService
                     // The queue already exists, so publishing the id makes every later wake and
                     // quit deliverable; commands queued before this point apply here.
                     _engine.AttachOwner(NativeMethods.GetCurrentThreadId());
+
+                    // Desktop-switch notices, delivered on this thread by its message loop. On one that finds this
+                    // desktop no longer receiving input, the engine resets its key state and ends a recording whose key
+                    // is released on the lock screen or a secure desktop, where the hook is not called. Optional: without
+                    // it the hook works as before and the service logs that it is missing.
+                    desktopSwitchHook = NativeMethods.SetWinEventHook(
+                        NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
+                        NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH,
+                        0,
+                        _desktopSwitchProc,
+                        0,
+                        0,
+                        NativeMethods.WINEVENT_OUTOFCONTEXT);
+                    _desktopSwitchHooked = desktopSwitchHook != 0;
+                    _desktopSwitchError = desktopSwitchHook == 0 ? Marshal.GetLastWin32Error() : 0;
                 }
             }
             catch (Exception ex)
@@ -596,12 +713,31 @@ public sealed class HotkeyService : IHotkeyService
             }
 
             _engine.DetachOwner();
+            if (desktopSwitchHook != 0)
+            {
+                NativeMethods.UnhookWinEvent(desktopSwitchHook);
+            }
+
             NativeMethods.UnhookWindowsHookEx(hookId);
+        }
+
+        // Runs on this installation's thread, from GetMessage, for every desktop-switch notice. Like the keyboard callback
+        // it never waits for another thread and never logs; the engine checks again whether this desktop has actually
+        // lost input before it ends anything. The real check is two user32 calls that wait for nothing and report a
+        // failure by their return value, which the engine takes as "do nothing".
+        private void DesktopSwitchCallback(
+            nint hook, uint eventType, nint hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
+        {
+            if (eventType == NativeMethods.EVENT_SYSTEM_DESKTOPSWITCH)
+            {
+                _engine.OnDesktopSwitchNotice(_desktopReceivesInput);
+            }
         }
 
         // Runs on this installation's thread, inside GetMessage, for every keyboard event on the
         // desktop. It never waits for another thread and never logs: the only shared state it
-        // touches is interlocked counters, lock-free queues and kernel events.
+        // touches is interlocked counters, lock-free queues and kernel events. Its one native query
+        // besides CallNextHookEx is GetAsyncKeyState, made only as ChordStateMachine describes.
         private nint HookCallback(int nCode, nint wParam, nint lParam)
         {
             // The watchdog's liveness signal. Incremented before any filtering so the synthetic
@@ -643,25 +779,34 @@ public sealed class HotkeyService : IHotkeyService
 }
 
 /// <summary>
-/// Lets at most one trigger own the dictation, arbitrated without a lock. The same word records
-/// retirement, so "which dictation did this engine leave running" and "this engine may no longer
-/// start or stop one" are settled by one atomic operation rather than a flag and a read that a
-/// concurrent owner thread could interleave.
+/// Lets at most one trigger own the dictation, arbitrated without a lock, and remembers which press owns it (the
+/// activation number its Activated carried). One word holds the owner, its press and retirement, so "which dictation did
+/// this engine leave running", "which press started it" and "this engine may no longer start or stop one" are settled
+/// by one atomic operation rather than flags and reads that a concurrent owner thread could interleave.
 /// </summary>
 internal sealed class HotkeyTriggerArbiter
 {
-    // Zero means no trigger is active; Retired is terminal.
-    private const int Retired = -1;
+    // Zero means no trigger owns a dictation, and Retired is terminal. Otherwise the word is the owning press's activation
+    // number above its trigger's code, so a press and its trigger are claimed, compared and released together.
+    private const long Retired = -1;
+    private const int CodeBits = 8;
+    private const long CodeMask = (1L << CodeBits) - 1;
 
-    private int _activeCode;
+    private long _word;
 
-    public bool TryActivate(HotkeyTrigger trigger) =>
-        Interlocked.CompareExchange(ref _activeCode, Code(trigger), 0) == 0;
+    /// <summary>Any thread: whether a press owns the dictation (false while nobody does, and once retired).</summary>
+    public bool HasOwner => IsOwned(Volatile.Read(ref _word));
 
+    /// <summary>Claims the dictation for this press, unless a trigger already owns one or the engine was retired.</summary>
+    public bool TryActivate(HotkeyTrigger trigger, long activation) =>
+        Interlocked.CompareExchange(ref _word, Encode(trigger, activation), 0) == 0;
+
+    /// <summary>Releases the dictation if <paramref name="trigger"/> owns it; false otherwise, and once retired.</summary>
     public bool TryDeactivate(HotkeyTrigger trigger)
     {
-        var code = Code(trigger);
-        return Interlocked.CompareExchange(ref _activeCode, 0, code) == code;
+        // Only the owner thread and a retirement write the word, so a failed exchange means the engine was retired.
+        var word = Volatile.Read(ref _word);
+        return IsOwned(word) && TriggerOf(word) == trigger && Interlocked.CompareExchange(ref _word, 0, word) == word;
     }
 
     /// <summary>
@@ -671,16 +816,16 @@ internal sealed class HotkeyTriggerArbiter
     /// </summary>
     public HotkeyTrigger? TryTake(HotkeyTrigger fallback)
     {
-        var code = Volatile.Read(ref _activeCode);
-        while (code != Retired)
+        var word = Volatile.Read(ref _word);
+        while (word != Retired)
         {
-            var observed = Interlocked.CompareExchange(ref _activeCode, 0, code);
-            if (observed == code)
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
             {
-                return code == 0 ? fallback : Trigger(code);
+                return word == 0 ? fallback : TriggerOf(word);
             }
 
-            code = observed;
+            word = observed;
         }
 
         return null;
@@ -690,17 +835,72 @@ internal sealed class HotkeyTriggerArbiter
     public void Reset() => _ = TryTake(HotkeyTrigger.Standard);
 
     /// <summary>
+    /// Clears the active trigger and returns it; null when no trigger owns a dictation, or once retired. Unlike
+    /// <see cref="TryTake"/>, whose fallback suits a state clear reporting a machine's own deactivation, this names only a
+    /// dictation this engine really started, which a desktop switch needs: a machine can still report itself active
+    /// after the arbiter refused it, or after the owner was released.
+    /// </summary>
+    public HotkeyTrigger? TryTakeActive()
+    {
+        var word = Volatile.Read(ref _word);
+        while (IsOwned(word))
+        {
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
+            {
+                return TriggerOf(word);
+            }
+
+            word = observed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Releases the dictation if the press <paramref name="activation"/> still owns it, and returns the trigger that owns
+    /// one afterwards: null when nobody does (that press was released here, or nothing owned one) or once retired, and
+    /// otherwise the trigger of the newer press that owns it, which keeps it.
+    /// </summary>
+    public HotkeyTrigger? ReleaseActivation(long activation)
+    {
+        var word = Volatile.Read(ref _word);
+        while (IsOwned(word))
+        {
+            if (ActivationOf(word) != activation)
+            {
+                return TriggerOf(word);
+            }
+
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
+            {
+                return null;
+            }
+
+            word = observed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Refuses everything from now on, and returns the trigger that was still active (a dictation
     /// that was started and never stopped), or null.
     /// </summary>
     public HotkeyTrigger? Retire()
     {
-        var code = Interlocked.Exchange(ref _activeCode, Retired);
-        return code is 0 or Retired ? null : Trigger(code);
+        var word = Interlocked.Exchange(ref _word, Retired);
+        return IsOwned(word) ? TriggerOf(word) : null;
     }
 
-    // Reserve zero for no active trigger so compare-exchange can arbitrate without a lock.
-    private static int Code(HotkeyTrigger trigger) => (int)trigger + 1;
+    // Zero is reserved for no owner and Retired is negative, so compare-exchange can arbitrate without a lock and an owned
+    // word is always positive.
+    private static bool IsOwned(long word) => word > 0;
 
-    private static HotkeyTrigger Trigger(int code) => (HotkeyTrigger)(code - 1);
+    private static long Encode(HotkeyTrigger trigger, long activation) => (activation << CodeBits) | ((long)trigger + 1);
+
+    private static HotkeyTrigger TriggerOf(long word) => (HotkeyTrigger)((word & CodeMask) - 1);
+
+    private static long ActivationOf(long word) => word >> CodeBits;
 }

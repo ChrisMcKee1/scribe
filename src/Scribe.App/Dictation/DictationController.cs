@@ -219,7 +219,7 @@ internal sealed class DictationController : IDisposable
         _started = true;
         _lifecycle.Start(IdleReleaseDelay(settings));
 
-        _log.LogInformation("Dictation controller started; binding = {Binding}.", settings.Hotkey.DisplayName);
+        _log.LogInformation("Dictation controller started; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>
@@ -368,7 +368,7 @@ internal sealed class DictationController : IDisposable
         _cleanup.Configure(next);
         AnnounceCleanupChange(previous, next);
         RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
-        _log.LogInformation("Applied updated settings; binding = {Binding}.", settings.Hotkey.DisplayName);
+        _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
     }
 
     /// <summary>
@@ -572,7 +572,6 @@ internal sealed class DictationController : IDisposable
 
         if (stopRecording)
         {
-            _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.Paused);
         }
         else if (change.Presentation is { } shown)
@@ -585,17 +584,23 @@ internal sealed class DictationController : IDisposable
     private void OnActivated(object? sender, HotkeyTriggerEventArgs e)
     {
         // Resolved before the lifecycle's gate is taken; the factory below only reads cheap platform state under it,
-        // so the target window it records is the one focused at the exact moment the recording began.
+        // so the target window it records is the one focused at the exact moment the recording began. A press turned away
+        // because the previous dictation is still processing releases its own latch (see DictationStartPolicy), so a
+        // toggle's next tap starts a dictation instead of ending one that never began.
         var current = CurrentSettings;
-        var activation = _lifecycle.TryBeginRecording(() =>
-        {
-            var targetWindow = GetForegroundWindow();
-            return new CaptureContext(
-                DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
-                targetWindow,
-                ProcessNameForWindow(targetWindow),
-                Stopwatch.GetTimestamp());
-        });
+        var activation = DictationStartPolicy.BeginRecording(
+            _lifecycle,
+            () =>
+            {
+                var targetWindow = GetForegroundWindow();
+                return new CaptureContext(
+                    DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
+                    targetWindow,
+                    ProcessNameForWindow(targetWindow),
+                    Stopwatch.GetTimestamp(),
+                    e.Activation);
+            },
+            () => _hotkeys.CancelToggle(e.Activation));
 
         if (activation.Capture is not { } capture)
         {
@@ -681,7 +686,7 @@ internal sealed class DictationController : IDisposable
                 id,
                 e.Trigger,
                 (object?)binding?.Mode ?? "unknown",
-                binding?.DisplayName ?? "custom",
+                binding is null ? "custom" : HotkeyText.Describe(binding),
                 _audio.LastDeviceName ?? "unknown",
                 capture.TargetApp ?? "unknown",
                 settings.AutoStopOnSilence,
@@ -777,8 +782,12 @@ internal sealed class DictationController : IDisposable
         }
     }
 
+    // A desktop switch ends a recording the way its binding would have (see HotkeyEngine.OnDesktopSwitch); it goes the
+    // same way as a release from here on, and only its logged reason differs.
     private void OnDeactivated(object? sender, HotkeyTriggerEventArgs e) =>
-        StopAndProcess(DictationStopReason.HotkeyReleased);
+        StopAndProcess(e.Deactivation == HotkeyDeactivation.DesktopSwitch
+            ? DictationStopReason.DesktopSwitch
+            : DictationStopReason.HotkeyReleased);
 
     private void OnCaptureFaulted(object? sender, Exception error)
     {
@@ -824,29 +833,9 @@ internal sealed class DictationController : IDisposable
                 tracker.NoiseFloor, tracker.VoiceThreshold);
         }
 
-        // Reset the hook's toggle flag so the next press starts a new dictation rather than being
-        // swallowed as the "toggle off" for the dictation we just ended ourselves.
-        _hotkeys.CancelToggle();
+        // The shared stop path releases the hook's toggle for this stop (see DictationStopPolicy), so the next press starts
+        // a new dictation rather than being swallowed as the toggle-off of this one.
         StopAndProcess(DictationStopReason.SilenceAutoStop, stop.DictationId);
-    }
-
-    /// <summary>Why a recording ended. Written to the log on every stop, without exception.</summary>
-    internal enum DictationStopReason
-    {
-        /// <summary>The user released the hold key, or pressed the toggle key a second time.</summary>
-        HotkeyReleased,
-
-        /// <summary>Toggle mode with auto-stop enabled decided the speaker had gone quiet.</summary>
-        SilenceAutoStop,
-
-        /// <summary>The capture stream faulted: device removed, format change, driver reset.</summary>
-        MicrophoneFault,
-
-        /// <summary>Dictation was paused from the tray while a recording was live.</summary>
-        Paused,
-
-        /// <summary>The recording reached the MaxDictationMinutes ceiling and was ended cleanly.</summary>
-        DurationLimit,
     }
 
     // Fired on a timer thread when a recording has run for the full MaxDictationMinutes. Ends the
@@ -873,7 +862,6 @@ internal sealed class DictationController : IDisposable
 
             RaiseWarning($"dictation hit the {minutes} minute limit and was transcribed", id, pillText: null);
 
-            _hotkeys.CancelToggle();
             StopAndProcess(DictationStopReason.DurationLimit, id);
         }
         catch (Exception ex)
@@ -885,17 +873,26 @@ internal sealed class DictationController : IDisposable
     }
 
     /// <summary>
-    /// Shared stop path for the hotkey release/toggle-off, the silence auto-stop, a capture fault
-    /// and pause. The reason is logged with the hold duration, because "it stopped after about ten
-    /// seconds" is the single most common way a dictation problem gets reported and the four causes
-    /// are indistinguishable from the outside.
+    /// Shared stop path for the hotkey release/toggle-off, the silence auto-stop, a capture fault,
+    /// pause, the duration ceiling and a desktop switch. The reason is logged with the hold
+    /// duration, because "it stopped after about ten seconds" is the single most common way a
+    /// dictation problem gets reported and the causes are indistinguishable from the outside.
+    /// Once a stop Scribe makes itself is admitted, it releases the hotkey latch of the press that
+    /// started this recording, and no other (see <see cref="DictationStopPolicy.BeginStop"/>), so the
+    /// next press starts a new dictation instead of being swallowed as the toggle-off of this one.
     /// </summary>
     /// <param name="expectedId">When set, only this dictation may be stopped; a stop meant for an earlier one is ignored.</param>
     private void StopAndProcess(DictationStopReason reason, long expectedId = 0)
     {
         // Only the stop that actually ends the live recording is admitted, and only that one disarms its duration
-        // ceiling, so a late or redundant stop can never cancel the ceiling of a recording that started after it.
-        var stop = _lifecycle.TryBeginProcessing(expectedId);
+        // ceiling, so a late or redundant stop can never cancel the ceiling of a recording that started after it. Nor can
+        // it touch the hotkey: only an admitted stop releases, and only the press this recording kept.
+        var stop = DictationStopPolicy.BeginStop(
+            _lifecycle,
+            reason,
+            expectedId,
+            admitted => _hotkeys.CancelToggle(admitted.HotkeyActivation),
+            out var releaseFailure);
         if (stop.Admission is not { } admission)
         {
             // A redundant stop (both the hook release and a fault racing to end the same
@@ -922,6 +919,12 @@ internal sealed class DictationController : IDisposable
             session.Id,
             Stopwatch.GetElapsedTime(session.StartedTimestamp).TotalSeconds,
             reason));
+
+        if (releaseFailure is { } failure)
+        {
+            TryLog(log => log.LogWarning(
+                "#{Id} releasing the hotkey for this stop failed ({Failure}).", session.Id, FailureShape.Describe(failure)));
+        }
 
         try
         {
@@ -1769,12 +1772,14 @@ internal sealed class DictationController : IDisposable
         DictationStopReason StopReason);
 
     // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
-    // atomically with the phase change. Settings already carry the per-trigger overrides.
+    // atomically with the phase change. Settings already carry the per-trigger overrides. HotkeyActivation is the press
+    // that started it, the only one a stop Scribe makes itself may release (see DictationStopPolicy.BeginStop).
     private sealed record CaptureContext(
         AppSettings Settings,
         nint TargetWindow,
         string? TargetApp,
-        long StartedTimestamp);
+        long StartedTimestamp,
+        long HotkeyActivation);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

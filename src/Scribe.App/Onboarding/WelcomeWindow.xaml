@@ -55,47 +55,61 @@
                            Margin="0,6,0,0"
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
 
-                <!-- The core gesture -->
+                <!-- The core gesture. Each card lays its icon and text out in a two-column grid rather than a
+                     horizontal StackPanel: a StackPanel measures its children at infinite width in the stacking
+                     direction, so a wrapping TextBlock inside one never wraps and runs past the card's edge. -->
                 <ui:Card Margin="0,20,0,0">
-                    <StackPanel Orientation="Horizontal">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
                         <ui:SymbolIcon Symbol="Keyboard24" FontSize="22"
                                        VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource TipTitle}" Text="Hold, speak, release"/>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock x:Name="GestureTitle" Style="{StaticResource TipTitle}" Text="Hold, speak, release"/>
                             <TextBlock x:Name="GestureHint" Style="{StaticResource TipBody}"/>
                         </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </ui:Card>
 
                 <!-- Privacy -->
                 <ui:Card Margin="0,10,0,0">
-                    <StackPanel Orientation="Horizontal">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
                         <ui:SymbolIcon Symbol="ShieldTask24" FontSize="22"
                                        VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
-                        <StackPanel>
+                        <StackPanel Grid.Column="1">
                             <TextBlock Style="{StaticResource TipTitle}" Text="Private by design"/>
                             <TextBlock Style="{StaticResource TipBody}"
                                        Text="Everything runs on your PC. Your audio never leaves the machine."/>
                         </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </ui:Card>
 
                 <!-- Tips -->
                 <ui:Card Margin="0,10,0,0">
-                    <StackPanel Orientation="Horizontal">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
                         <ui:SymbolIcon Symbol="Lightbulb24" FontSize="22"
                                        VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
-                        <StackPanel>
+                        <StackPanel Grid.Column="1">
                             <TextBlock Style="{StaticResource TipTitle}" Text="Good to know"/>
                             <TextBlock Style="{StaticResource TipBody}"
                                        Text="Scribe lives in your system tray. Right-click the microphone icon for settings and quick actions."/>
                             <TextBlock Style="{StaticResource TipBody}"
                                        Text="Turn on optional AI cleanup to polish grammar and punctuation as you dictate."/>
                         </StackPanel>
-                    </StackPanel>
+                    </Grid>
                 </ui:Card>
             </StackPanel>
         </Grid>

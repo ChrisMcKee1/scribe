@@ -11,8 +11,8 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class CaptureTriggerBindingTests
 {
-    private static readonly HotkeyBinding StandardHold = HotkeyBinding.Default;
-    private static readonly HotkeyBinding StandardToggle = HotkeyBinding.Default with { Mode = HotkeyMode.Toggle };
+    private static readonly HotkeyBinding StandardHold = HotkeyBinding.Legacy;
+    private static readonly HotkeyBinding StandardToggle = HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle };
     private static readonly HotkeyBinding DictationOnlyHold =
         new(0x7B, KeyModifiers.None, HotkeyMode.Hold, Suppress: true, "F12");
     private static readonly HotkeyBinding DictationOnlyToggle = DictationOnlyHold with { Mode = HotkeyMode.Toggle };

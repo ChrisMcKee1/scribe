@@ -44,9 +44,11 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
 - **🔒 Private by architecture, not by promise.** Audio is captured and transcribed locally, then
   discarded unless you explicitly enable local audio history, which keeps a compact copy for at
   most 7 days and 250 MB.
-- **⚡ Two keys, your choice.** Hold **Right Ctrl** (or any key), talk, release. Add an optional
-  second hotkey when you want dictation that always skips AI cleanup. Prefer hands-free? Toggle
-  mode ends the dictation by itself when you stop talking.
+- **⚡ Two keys, your choice.** Hold **Page Down** (or any key you pick), talk, release. **Page Up**
+  is set up too, for dictation that always skips AI cleanup. No Page Down key on your laptop? Most
+  put it on Fn with the Down arrow. Present with a clicker? Its buttons send those same two keys, so
+  pick other keys in Settings. Prefer hands-free? Toggle mode ends the dictation by itself when you
+  stop talking.
 - **🌍 Speaks your language.** The bundled model transcribes about 25 European languages out of the
   box, no setup: dictate in English, German, Spanish, French, Italian and more, and it just works.
 - **🧠 It understands how people actually talk.** Say *"send it Wednesday… I mean Thursday"* and,
@@ -197,10 +199,18 @@ Settings, System, About and read "System type", or just install from the Store, 
 > unsigned, so Windows may show an "Unknown publisher" or SmartScreen warning. The Microsoft Store
 > version is signed by Microsoft and is the recommended installation.
 
-Then **hold Right Ctrl, say a sentence, and let go.** The text lands wherever your cursor is.
+Then **hold Page Down, say a sentence, and let go.** The text lands wherever your cursor is. Hold
+Page Up instead for dictation that always skips AI cleanup.
 Right-click the tray icon for settings, one-click vocabulary learning, copying any of your last
 five dictations, and pausing or quitting. If a dictation ever fails to insert, Scribe notifies you
 and keeps the text ready to copy from the tray. Review history and local Usage from Settings.
+
+> **Upgrading?** Your hotkeys stay as they were (Right Ctrl, unless you changed it). To switch to
+> Page Down and Page Up, choose **Restore default hotkeys** in Settings, General, then Save. While
+> they are bound, Page Down and Page Up pressed on their own no longer page through documents in
+> other apps, and a presentation remote stops changing slides; with Ctrl, Shift, Alt or Win held
+> they work there as before. Pick any other key or chord in Settings if you would rather keep them,
+> or if you present.
 
 ## 🎛️ How it works
 
@@ -221,7 +231,7 @@ inserted.
 
 | Feature | What it does |
 |---|---|
-| Push-to-talk | Separate AI-capable and optional dictation-only hotkeys, each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind |
+| Push-to-talk | Separate AI-capable and dictation-only hotkeys (hold Page Down and hold Page Up on a new install), each hold or toggle on any key or two-key chord, with a capture UI that pauses dictation while you rebind and a one-click restore of the defaults |
 | Microphone choice | Follows the Windows default input device (the one Windows Settings shows under Sound, Input) from your next dictation, with no restart; or pick any microphone in Settings or from the tray's Microphone menu. A chosen microphone that is unplugged falls back to the Windows default, and Scribe tells you once |
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
