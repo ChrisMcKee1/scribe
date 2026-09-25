@@ -67,6 +67,7 @@ public sealed class HotkeyService : IHotkeyService
     private Thread? _consumerThread;
     private Timer? _watchdog;
     private long _hookCallbackCount;
+    private long _reconcilePasses;
     private readonly HookLivenessProbe _livenessProbe = new();
 
     // What the log last said about an installation's mouse hook (ReportMouseHookLocked). Guarded by _sync.
@@ -101,12 +102,26 @@ public sealed class HotkeyService : IHotkeyService
     /// (<see cref="DispatchTransition"/>) reach the engine that test drives.
     /// </param>
     /// <param name="desktopReceivesInput">As for the other constructors.</param>
-    internal HotkeyService(ILogger<HotkeyService> logger, HotkeyCommandRouter router, Func<bool?> desktopReceivesInput)
+    /// <param name="keyDownInWindows">
+    /// Windows' view of a key for the leaked-key repair (GetAsyncKeyState in production); a test scripts it.
+    /// </param>
+    /// <param name="releaseLeakedKey">The leaked-key repair's key-up (a marked SendInput in production); a test records it.</param>
+    internal HotkeyService(
+        ILogger<HotkeyService> logger,
+        HotkeyCommandRouter router,
+        Func<bool?> desktopReceivesInput,
+        Func<uint, bool>? keyDownInWindows = null,
+        Func<uint, bool>? releaseLeakedKey = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
         _router = router;
-        _reconciler = CreateReconciler(_router, NativeMethods.IsKeyLogicallyDown, ReleaseLeakedInput);
+        _reconciler = CreateReconciler(
+            _router, keyDownInWindows ?? NativeMethods.IsKeyLogicallyDown, releaseLeakedKey ?? ReleaseLeakedInput);
+
+        // Before either hook can exist: neither callback's first CallNextHookEx or GetAsyncKeyState does the runtime's
+        // one-time work for a P/Invoke inside Windows' deadline.
+        NativeMethods.PrelinkHookCalls();
     }
 
     /// <summary>
@@ -125,12 +140,10 @@ public sealed class HotkeyService : IHotkeyService
     // hook's view shows a modifier held, only about that modifier (see ChordStateMachine), and for the release of a mouse
     // button whose press the hook swallowed, only about that button (see HotkeyEngine.OnMouseButtonEvent). Both delegates
     // are made here, as the service is constructed and before either hook exists; the callbacks only invoke them. The
-    // runtime also allocates on the first call a process makes to any P/Invoke, so that first call is made here too, for
-    // a key nobody presses (VK_PROBE), rather than inside a hook callback.
+    // runtime's one-time work for the P/Invoke behind them is done by the constructor too (NativeMethods.PrelinkHookCalls).
     private static HotkeyCommandRouter CreateRouter(HotkeyBinding binding)
     {
         Func<uint, bool> keyDown = NativeMethods.IsKeyLogicallyDown;
-        _ = keyDown(NativeMethods.VK_PROBE);
         return new(binding, keyDown, keyDown);
     }
 
@@ -190,6 +203,12 @@ public sealed class HotkeyService : IHotkeyService
             }
         }
     }
+
+    /// <summary>How many reconcile passes have finished, whatever each one did; for tests that wait for one.</summary>
+    internal long ReconcilePassesRun => Interlocked.Read(ref _reconcilePasses);
+
+    /// <summary>One reconcile pass, run now on the calling thread without the settling delay; for tests.</summary>
+    internal void RunReconcilePassForTests(bool repairKeys) => RunReconcilePass(repairKeys);
 
     /// <summary>What the watchdog does for the mouse hook each period, done now; for tests.</summary>
     internal void MaintainMouseHookNow()
@@ -505,19 +524,42 @@ public sealed class HotkeyService : IHotkeyService
     // Runs the leak check off the hook and consumer threads: GetAsyncKeyState cannot tell inside the
     // hook callback whether the key being processed is down (its async state updates after the callback
     // returns), and the input queue needs a beat to settle after the final suppressed key-up. The hook
-    // callback never calls this itself; it signals HotkeyReconcileSignal, whose pool wait thread does.
-    private void ScheduleReconcile() => Task.Run(async () =>
+    // callbacks never call this themselves; they signal HotkeyReconcileSignal, whose pool wait thread does.
+    // The consumer asks for the repair on a dictation's release.
+    private void ScheduleReconcile() => ScheduleReconcile(repairKeys: true);
+
+    private void ScheduleReconcile(bool repairKeys) => Task.Run(async () =>
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
+        RunReconcilePass(repairKeys);
+    });
+
+    // One pass. First the mouse hook's sync, which every pass does: an event that settled a debt, swallowed, let through
+    // or forgiven by a new press, is the moment a drain-only mouse hook kept only for that debt stops being needed, and
+    // the hook thread removes it at the sync this asks for now. Then the leaked-key repair, only when a signal asked for
+    // it (a key or button release the bindings swallowed, or a dictation's release) and never while binding capture owns
+    // input, from Set's request until the engine has applied capture's end (HotkeyCommandRouter.CaptureOwnsInput):
+    // capture tracks no key, so every key the user holds for the chord would look leaked (review round 8, A9). A capture
+    // that begins after this check and before the repair's own reads, a few calls later but with no bound on the time
+    // (this pool thread can be preempted between them), is not covered.
+    private void RunReconcilePass(bool repairKeys)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(25)).ConfigureAwait(false);
-
-            // Any mouse event that settled a debt asks for this check (a release swallowed or let through, a press that
-            // forgave one), so it is also the moment a drain-only mouse hook, kept only for that debt, stops being needed:
-            // the hook thread removes it at its next sync, which this asks for now.
             if (CurrentInstallation is { MouseHookInstalled: true, MouseHookWanted: false } drained)
             {
                 drained.RequestMouseHookRefresh();
+            }
+
+            if (!repairKeys)
+            {
+                return;
+            }
+
+            if (_router.CaptureOwnsInput)
+            {
+                _logger.LogDebug("Leaked-key check skipped: binding capture owns input.");
+                return;
             }
 
             var result = _reconciler.ReleaseLeakedKeys(Binding);
@@ -548,7 +590,11 @@ public sealed class HotkeyService : IHotkeyService
         {
             _logger.LogWarning(ex, "Suppressed-key reconciliation failed; skipping this pass.");
         }
-    });
+        finally
+        {
+            Interlocked.Increment(ref _reconcilePasses);
+        }
+    }
 
     // Probe-based liveness for the keyboard hook, and upkeep for the mouse hook (see MaintainMouseHookLocked).
     private void WatchdogTick()
@@ -1113,9 +1159,12 @@ public sealed class HotkeyService : IHotkeyService
         }
 
         // Runs on this installation's thread, inside GetMessage, for every keyboard event on the
-        // desktop. It never waits for another thread and never logs: the only shared state it
-        // touches is interlocked counters, lock-free queues and kernel events. Its one native query
-        // besides CallNextHookEx is GetAsyncKeyState, made only as ChordStateMachine describes.
+        // desktop. It takes no lock and never logs: the only shared state it touches is interlocked
+        // counters, lock-free queues and kernel events. Its one native query besides CallNextHookEx is
+        // GetAsyncKeyState, made only as ChordStateMachine describes, and both are prelinked before the
+        // hook exists (NativeMethods.PrelinkHookCalls). CallNextHookEx is not a quick return: it "calls
+        // the next hook in the chain" and returns that hook's result (Learn), so how long it takes is up
+        // to that hook.
         private nint HookCallback(int nCode, nint wParam, nint lParam)
         {
             // The watchdog's liveness signal. Incremented before any filtering so the synthetic
@@ -1157,9 +1206,11 @@ public sealed class HotkeyService : IHotkeyService
         // Runs on this installation's thread, inside GetMessage, for every mouse event on the desktop while a binding
         // presses a mouse button, and the pointer waits for it. So the first thing it does, before reading any field or
         // touching the engine, is the one comparison that passes on every message but the middle and side buttons going
-        // down or up: moves, the wheels and the left and right buttons cost exactly that. The rest is MouseHookFilter's,
-        // which like the keyboard callback never waits, locks or logs. CallNextHookEx ignores its hook handle, so none is
-        // read here.
+        // down or up: moves, the wheels and the left and right buttons cost exactly that and CallNextHookEx, which calls
+        // the next hook in the chain and returns its result (Learn), as in the keyboard callback. The comparison and the
+        // first CallNextHookEx allocate nothing (MouseButtonRound8Tests measures both cold; Windows' entry into this
+        // callback cannot be measured there). The rest is MouseHookFilter's, which like the keyboard callback takes no
+        // lock and never logs. CallNextHookEx ignores its hook handle, so none is read here.
         private nint MouseHookCallback(int nCode, nint wParam, nint lParam)
         {
             var message = unchecked((int)wParam);

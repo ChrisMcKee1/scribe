@@ -19,7 +19,9 @@ internal sealed class HotkeyEngineHarness : IDisposable
         HotkeyBinding? dictationOnly = null,
         object? gate = null,
         Func<uint, bool>? isLogicallyDown = null,
-        Func<uint, bool>? buttonDownInWindows = null)
+        Func<uint, bool>? buttonDownInWindows = null,
+        Func<uint, bool>? keyDownInWindows = null,
+        Func<uint, bool>? releaseLeakedKey = null)
     {
         Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown, buttonDownInWindows);
         if (dictationOnly is not null)
@@ -28,7 +30,8 @@ internal sealed class HotkeyEngineHarness : IDisposable
         }
 
         (Engine, _) = Router.BeginEngine(Transitions);
-        Service = new HotkeyService(NullLogger<HotkeyService>.Instance, Router, () => true);
+        Service = new HotkeyService(
+            NullLogger<HotkeyService>.Instance, Router, () => true, keyDownInWindows, releaseLeakedKey);
     }
 
     public HotkeyTransitionQueue Transitions { get; } = new();

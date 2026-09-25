@@ -79,9 +79,12 @@ internal static class MouseHookFilter
     /// hook. Hook thread only. Anything but a button message returns false before <paramref name="lParam"/> is read, so
     /// a test can pass zero for it; a button message carrying <see cref="SyntheticInputMarker"/> is passed on as the
     /// keyboard hook passes Scribe's own input (Scribe injects no mouse input today; the check keeps any it ever does out
-    /// of the engine). Like the keyboard callback
-    /// this never waits, locks or logs; its only allocation is the one the engine makes when a press or release starts
-    /// or ends a dictation.
+    /// of the engine). A release the bindings swallowed asks for the leaked-key repair; an event that only settled a debt
+    /// asks for the mouse hook's sync alone (<see cref="HotkeyReconcileSignal"/>). Like the keyboard callback this takes
+    /// no lock, logs nothing and waits for no other thread. It allocates nothing for an unbound button or for the release
+    /// decision. What can allocate is the engine's, as on the keyboard path: a node for each transition it queues (a press
+    /// or release that starts or ends a dictation, or a state clear from a command it applies first) and a new machine
+    /// when a command it applies first adds a dictation-only binding.
     /// </summary>
     internal static bool Swallows(
         int nCode, int message, nint lParam, HotkeyEngine engine, HotkeyReconcileSignal? reconcileSignal)
@@ -108,6 +111,10 @@ internal static class MouseHookFilter
         if (decision.RequestReconcile)
         {
             reconcileSignal?.Signal();
+        }
+        else if (decision.RequestMouseHookSync)
+        {
+            reconcileSignal?.SignalMouseHookSync();
         }
 
         return decision.Suppress;

@@ -37,8 +37,13 @@ internal sealed record HotkeyCommand(
         new(HotkeyCommandKind.CancelToggle, generation, Activation: activation);
 }
 
-/// <summary>What the hook callback does with one key event.</summary>
-internal readonly record struct HookDecision(bool Suppress, bool RequestReconcile);
+/// <summary>
+/// What a hook callback does with one key or button event: whether to swallow it, whether to ask for the leaked-key
+/// repair (a key or button release the bindings swallowed, <see cref="RequestReconcile"/>), and, for the mouse hook
+/// alone, whether to ask only for the mouse hook's sync (an event that settled a release owed to a swallowed press,
+/// <see cref="RequestMouseHookSync"/>), which never repairs a key.
+/// </summary>
+internal readonly record struct HookDecision(bool Suppress, bool RequestReconcile, bool RequestMouseHookSync = false);
 
 /// <summary>
 /// Everything the low-level keyboard and mouse hook callbacks touch, owned by one hook thread for the lifetime of one
@@ -218,6 +223,13 @@ internal sealed class HotkeyEngine
 
     /// <summary>Any thread. True once a replacement took over the hook or the service stopped.</summary>
     public bool IsRetired => Volatile.Read(ref _retired);
+
+    /// <summary>
+    /// Any thread. Whether this engine is applying binding capture, from the moment the owner applied its start to the
+    /// moment it applied its end. Capture tracks no key, so while this holds the engine's view of the keyboard is empty
+    /// and the leaked-key repair must not trust it (<see cref="HotkeyCommandRouter.CaptureOwnsInput"/>).
+    /// </summary>
+    public bool CapturesInput => Volatile.Read(ref _captureMode);
 
     /// <summary>
     /// Any thread. Whether a binding this engine applies presses a mouse button (<see cref="MouseButtons.Uses"/>). It is
@@ -473,9 +485,13 @@ internal sealed class HotkeyEngine
     /// a press is swallowed only once that debt is committed, so a press the retirement overtakes reaches the app whole,
     /// with its release. The release of a press it swallowed is swallowed too unless Windows holds the button
     /// (<see cref="WindowsHoldsButton"/>); a time no hook saw the mouse drops such debts beforehand
-    /// (<see cref="OnMouseHookLost"/>, a reinstall), so those releases pass. Nothing here allocates, makes a delegate,
-    /// takes a lock of Scribe's or waits for another thread: two compare-exchanges at most, and for such a release one
-    /// GetAsyncKeyState, the only native call on this path.
+    /// (<see cref="OnMouseHookLost"/>, a reinstall), so those releases pass. The decision about a debt makes no delegate,
+    /// takes no lock of Scribe's, waits for no other thread and allocates nothing: two compare-exchanges at most, and for
+    /// such a release one GetAsyncKeyState, the only native call on this path, prelinked before either hook existed. What
+    /// can allocate here is what the keyboard path allocates too, in <see cref="OnInput"/>: a node for each transition it
+    /// queues (a press or release that starts or ends a dictation, or a state clear from a command it applies first) and
+    /// a new machine when a command it applies first adds a dictation-only binding. A release the bindings swallowed asks
+    /// for the leaked-key repair; an event that only settled a debt asks for the mouse hook's sync alone (see the end).
     /// </summary>
     public HookDecision OnMouseButtonEvent(uint button, bool isDown)
     {
@@ -505,11 +521,19 @@ internal sealed class HotkeyEngine
             suppress = !WindowsHoldsButton(button);
         }
 
-        // A swallowed release asks for the leak check, as a key's does; so does any event that settled a debt, passed or
-        // swallowed, a release that paid it or a new press that forgave it, because the check is also when a drain-only
-        // mouse hook kept for that debt is removed (HotkeyService.ScheduleReconcile), at once rather than at the next
-        // watchdog period, with every pointer move waiting for this thread meanwhile.
-        return new HookDecision(suppress, RequestReconcile: owed || (!isDown && suppress));
+        // Two requests, kept apart (review round 8, A9). A button release asks for the keyboard's leak repair only when the
+        // bindings themselves swallowed it (decision.Suppress, their pairing of it with a press they tracked since the last
+        // state clear, so their view of the chord's keys is whole) and it is still swallowed. A release swallowed only for
+        // a debt from before a state clear (capture, a desktop switch, new bindings) never asks: the clear forgot every
+        // key the user still holds, and capture tracks none, so the repair would find a held modifier down in Windows and
+        // not in the engine and send its key-up while the user holds it. Any event that settled a debt, a release that
+        // paid it, swallowed or let through, or a new press that forgave it, asks for the mouse hook's sync, which removes
+        // a drain-only hook kept for that debt at once rather than at the next watchdog period
+        // (HotkeyService.RunReconcilePass); on its own that sync repairs no key.
+        return new HookDecision(
+            suppress,
+            RequestReconcile: !isDown && suppress && decision.Suppress,
+            RequestMouseHookSync: owed);
     }
 
     private HookDecision OnInput(uint virtualKey, bool isDown)
@@ -638,7 +662,8 @@ internal sealed class HotkeyEngine
 
     private void ApplyCaptureMode(bool enabled)
     {
-        _captureMode = enabled;
+        // Published: the leaked-key repair, on a pool thread, never runs while this engine is still capturing.
+        Volatile.Write(ref _captureMode, enabled);
         var (transition, _) = _standard.SetCaptureMode(enabled);
         var secondary = _dictationOnly?.SetCaptureMode(enabled);
         if (transition != HotkeyTransition.None)

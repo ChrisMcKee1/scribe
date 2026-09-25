@@ -669,7 +669,13 @@ public sealed class MouseButtonHotkeyTests
         using var h = new HotkeyEngineHarness(Bare(Middle));
         using var hook = new HookMessage();
         using var checkRan = new ManualResetEventSlim(false);
-        using var signal = new HotkeyReconcileSignal(checkRan.Set);
+        using var signal = new HotkeyReconcileSignal(repairKeys =>
+        {
+            if (repairKeys)
+            {
+                checkRan.Set();
+            }
+        });
         hook.Set(0);
 
         Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));

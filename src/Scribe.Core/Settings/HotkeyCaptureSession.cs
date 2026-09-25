@@ -109,9 +109,10 @@ public sealed class HotkeyCaptureSession
     /// five mouse buttons to apps, the left, right, middle, Back and Forward, so a mouse's other buttons reach Scribe
     /// only as the keys its software or firmware sends for them. The promise is kept exact: nothing Microsoft documents
     /// says whether a press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured,
-    /// so the text says a game that reads the mouse directly may still see it; and while Windows has removed the mouse
-    /// hook (a missed deadline), until the next successful renewal, a click no hook sees reaches the app, which the text
-    /// says in plain words.
+    /// so the text says a game that reads the mouse directly may still see it; and while Scribe's hooks are not seeing
+    /// the mouse (after Windows removed the mouse hook for a missed deadline, until the next successful renewal, or while
+    /// both hooks are reinstalled after Windows removed the keyboard hook), a click made then reaches the app, and so
+    /// does the release of one held across that time, which the text says in one plain clause.
     /// </summary>
     public const string MouseButtonsHint =
         "Middle, Back and Forward mouse buttons bind directly: choose Set, then press the button with the pointer on this " +
@@ -119,7 +120,7 @@ public sealed class HotkeyCaptureSession
         "buttons, set the button to a key such as F13 in your mouse's software, then choose Set and press it here. Left " +
         "and right clicks can't be used. While Scribe runs, a bound button no longer does its usual job in other apps, so " +
         "Back stops going back in your browser, with two exceptions: a game that reads the mouse directly may still see " +
-        "it, and if Windows briefly stops passing the mouse to Scribe, a click made before Scribe reconnects gets through. " +
+        "it, and if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets through. " +
         "Pressed with Ctrl, Shift, Alt, Win or the Narrator key, a button bound on its own still does its usual job.";
 
     /// <summary>The inputs recorded so far, in the order they went down.</summary>

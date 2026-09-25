@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 
 namespace Scribe.Core.Hotkeys;
@@ -135,6 +136,33 @@ internal static partial class NativeMethods
     /// <summary>High bit of <see cref="GetAsyncKeyState"/>: the system's logical "key is down".</summary>
     internal static bool IsKeyLogicallyDown(uint virtualKey) =>
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
+
+    /// <summary>
+    /// Before either hook exists (the service's constructor): does the runtime's one-time work for the two P/Invokes the
+    /// hook callbacks call, CallNextHookEx in both and GetAsyncKeyState for the modifier rule and an owed button release.
+    /// <see cref="Marshal.Prelink"/> "executes one-time method setup tasks without calling the method", which Learn lists
+    /// as verifying the signature, locating and loading the DLL and locating the entry point, work each P/Invoke's first
+    /// call otherwise does, and which allocated on that call (48 bytes for each of these two, measured in the test host
+    /// before round 8), inside Windows' deadline. Found by the entry point the import names, so a generated wrapper around
+    /// an import is covered too. Returns the entry points it prelinked; for a test.
+    /// </summary>
+    internal static IReadOnlyList<string> PrelinkHookCalls()
+    {
+        var prelinked = new List<string>(2);
+        foreach (var method in typeof(NativeMethods).GetMethods(
+                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+        {
+            if ((method.Attributes & MethodAttributes.PinvokeImpl) != 0 &&
+                method.GetCustomAttribute<DllImportAttribute>()?.EntryPoint is { } entryPoint and
+                    ("CallNextHookEx" or "GetAsyncKeyState"))
+            {
+                Marshal.Prelink(method);
+                prelinked.Add(entryPoint);
+            }
+        }
+
+        return prelinked;
+    }
 
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;

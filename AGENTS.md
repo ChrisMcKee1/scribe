@@ -702,8 +702,17 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   those can take a lock shared with another thread. One hook thread owns all key and button state. The
   only allocations on the callbacks' path are the node `LockFreeInbox` pushes for a transition (a press or
   release that starts or ends a dictation, or a state clear a command makes) and a new machine when a
-  command adds a dictation-only binding; a move, a wheel, an unbound button or a key no binding uses
-  allocates nothing (`MouseButtonHotkeyTests` measures it). The chord machine tests modifiers with bit
+  command adds a dictation-only binding; the mouse callback's move and wheel fast path, an unbound
+  button, the owed-release decision and a key no binding uses allocate nothing (`MouseButtonHotkeyTests`
+  measures it warm, and `MouseButtonRound8Tests` measures the first call of each cold, in a load context
+  of its own with fresh copies of Scribe.Core and the tests, so no other test can have warmed it). The
+  runtime's one-time work for the two P/Invokes the callbacks call, `CallNextHookEx` and
+  `GetAsyncKeyState`, is done before either hook exists (`NativeMethods.PrelinkHookCalls`,
+  `Marshal.Prelink`: "Executes one-time method setup tasks without calling the method"); on a first
+  call inside a callback it allocated 48 bytes each. None of those calls is promised a time:
+  `CallNextHookEx` "calls the next hook in the chain" and returns that hook's result, so it lasts as
+  long as that hook does, and `GetAsyncKeyState` and `SetEvent` do not wait for another thread, but
+  Learn gives neither a time bound. The chord machine tests modifiers with bit
   tests, because `Enum.HasFlag` boxes both enums whenever the JIT does not optimize it (a Debug build).
 - **Each hook installation gets its own `HotkeyEngine`**, so a hook thread that outlives its 2 s join
   during a reinstall never shares key state, or the desktop-switch activation epoch, with its
@@ -718,7 +727,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   plus one coalesced `PostThreadMessage` wake. The router's lock is taken only by requesting threads, to
   keep command order and epoch order in step. Other threads read published state lock-free.
   Transitions leave through a lock-free queue woken by a kernel event, and the leaked-key check runs
-  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`.
+  through `ThreadPool.RegisterWaitForSingleObject`, so the hook thread only calls `SetEvent`, after one
+  interlocked write that says whether that pass should repair keys (`HotkeyReconcileSignal`).
 - **The hook thread creates its message queue first** (`NativeMethods.EnsureMessageQueue`, the
   `PM_NOREMOVE` peek the `PostThreadMessage` documentation prescribes) and installs the hook after:
   other threads can only post the router's wake to a thread that already has a queue, and the
@@ -735,9 +745,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
   judge that release and nothing else (no binding can use a button then), and it is removed as soon as
   the debt is gone: any event that settles it, its release swallowed or let through or a new press
-  that forgives it, asks for that sync at once (`HookDecision.RequestReconcile`, which
-  `HotkeyService.ScheduleReconcile` turns into the sync), and a renewal that finds the hook gone, which
-  drops the debt, removes it in that same renewal (Grok's G5, round 7). A debt whose release went up on
+  that forgives it, asks for that sync at once (`HookDecision.RequestMouseHookSync`, a pass of
+  `HotkeyService.RunReconcilePass` that syncs the mouse hook and repairs no key; review round 8, A9),
+  and a renewal that finds the hook gone, which drops the debt, removes it in that same renewal (Grok's
+  G5, round 7). A debt whose release went up on
   the lock screen or a secure desktop, where no hook could see it, keeps the drain-only hook until that
   button is pressed once more. Its callback's first act is the one comparison
   (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
@@ -784,12 +795,13 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   | Not owed, and no binding holds the button | Let through, as always |
 
   The read is `GetAsyncKeyState`'s high bit, through a delegate `HotkeyService.CreateRouter` makes
-  before either hook exists; `CreateRouter` also makes the process's first call to it, for a key
-  nobody presses, because the runtime allocates on the first call a process makes to any P/Invoke. It
-  is the only native call the decision makes; nothing on the mouse callback's path makes a delegate;
-  and no process, window or token is queried inside the hook's deadline (review round 7: opening a
-  process can run drivers' callbacks, which a callback Windows removes on timeout must not wait for).
-  `MouseButtonRound7Tests` pins the three, and that the first owed release after production
+  before either hook exists, and the service's constructor prelinks the P/Invoke behind it (the hook
+  threading bullet above; round 7 made a first call for a key nobody presses instead, which round 8
+  replaced with `Marshal.Prelink`). It is the only native call the decision makes; nothing on the
+  mouse callback's path makes a delegate; and no process, window or token is queried inside the
+  hook's deadline (review round 7: opening a process can run drivers' callbacks, which a callback
+  Windows removes on timeout must not wait for). `MouseButtonRound7Tests` pins the three, and
+  `MouseButtonRound8Tests` measures, cold, that the first owed release after production
   initialization allocates nothing. Why the read is current evidence: the callback runs before
   Windows applies the event it is called for (the keyboard hook's documentation: "the callback
   function is called before the asynchronous state of the key is updated"; for the mouse, a press
@@ -846,6 +858,33 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows
   also adds a `WM_MOUSEMOVE` of its own, carrying the same extra information, around injected button
   events now and then, which the injection tests allow for.
+- **A mouse debt never asks for the keyboard's leak repair, and the repair never runs during capture**
+  (review round 8, A9). The repair judges a key leaked when Windows holds it and the engine's view does
+  not, which is evidence only while that view is whole: capture tracks no key, and every state clear
+  (capture's start and end, a desktop switch, new bindings, a reinstall) forgets the keys held across
+  it. Round 7 had every event that settled a mouse debt ask for the repair, to remove a drain-only hook
+  promptly, and Astra's sequence showed the harm: with Left Ctrl and Back bound, the chord pressed and
+  released on the lock screen (the debt stays), then Set chosen and Left Ctrl held with Back pressed to
+  capture a chord, Back's press forgave the debt, the repair found Left Ctrl down in Windows and not in
+  the engine, and sent a Ctrl-up while the user held Ctrl. So the two requests are separate
+  (`HookDecision.RequestReconcile` and `HookDecision.RequestMouseHookSync`, one interlocked word in
+  `HotkeyReconcileSignal` that the pass takes): a key release the bindings swallowed and a dictation's
+  release ask for the repair, exactly as before the mouse feature, and so does a button release the
+  bindings themselves swallowed, their pairing of it with a press they tracked since the last state
+  clear, which keeps their view of the chord's keys whole. Every other event that settles a debt (a
+  release swallowed only for a debt from before a state clear, a release let through, a new press that
+  forgives the debt) asks for the mouse hook's sync alone, and a renewal that finds the hook gone asks
+  for nothing (it removes a drain-only hook itself). Round 6 had a release swallowed only for such a
+  debt ask for the repair as well; that is the same harm (the chord held through a UAC prompt, then
+  Back released while Ctrl is still held), so it asks for the sync alone too. And whatever asked, a
+  pass skips the repair while binding capture owns input, from Set's request until the engine has
+  applied capture's end (`HotkeyCommandRouter.CaptureOwnsInput`, the router's request or the current
+  engine's `CapturesInput`), because a repair asked for just before Set could otherwise run inside
+  capture: the pass waits 25 ms for the input queue to settle. A capture that begins between that check
+  and the repair's own reads, a few calls later but with no bound on the time (the pool thread can be
+  preempted between them), is not covered. `MouseButtonRound8Tests`,
+  the two `Start_releases_no_key` service tests and
+  `Start_removes_the_drain_only_mouse_hook_without_releasing_a_held_key` pin it.
 - **Pause lets the push-to-talk key through.** While paused a new press passes to the focused app and
   never activates; a key swallowed before the pause stays swallowed through autorepeat and release; a
   chord held across resume needs a fresh press; pausing cancels hold and toggle latches and starts a new
@@ -1134,7 +1173,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   go, which means a press reached Windows unseen and its release is due; a press or release made while Windows has
   removed the mouse hook, before the next successful renewal, can still reach the app, and so does the release of a
   button held across that time or across a reinstall (the gap dropped its debt: fail-open). The hint's second exception
-  says both in plain words: the click began before Scribe reconnected.
+  says both in one clause: if Windows briefly stops passing input to Scribe, a click made or held while that lasts gets
+  through (a reinstall follows Windows removing the keyboard hook, so it is such a time too).
   It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
   press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
   so the text promises no more than that. The same holds for a swallowed key.
