@@ -156,10 +156,17 @@ public sealed class LibraryWorkspace
     // holds the change set of a Save until the Save settles, a CommitUnknown included however many Save attempts the
     // store fences meanwhile (review finding A12), while a capture whose change set nobody holds is collected with it, so
     // what is kept for captures nobody can settle stays bounded. MarkSaved by revision finds a held one through
-    // _heldSets, weak references to the held change sets, pruned at every capture.
+    // _heldSets, weak references to the held change sets, which each capture prunes of those collected by then.
     private readonly Dictionary<long, Capture> _captures = [];
     private readonly ConditionalWeakTable<LibraryChangeSet, Capture> _held = new();
     private readonly List<WeakReference<LibraryChangeSet>> _heldSets = [];
+
+    // Every library id a capture held since the draft's history began, reserved for new libraries apart from how long the
+    // captures themselves are kept (review finding A13): a Save still unresolved may commit a library at any of them
+    // however many captures came after it, and a library made meanwhile at such an id would be taken for the one that
+    // Save wrote. Ids only, never a capture's state, so nothing a capture held outlives it; cleared with the history, the
+    // one point after which no capture taken before can be marked saved.
+    private readonly HashSet<string> _capturedIds = new(StringComparer.OrdinalIgnoreCase);
 
     private LibraryCatalog _committed;
     private State _base;
@@ -1471,7 +1478,9 @@ public sealed class LibraryWorkspace
 
     // Step 1. A library keeps its identity: a library of the live draft is the base library with its id, and a base
     // library is the catalog's library with its id, except one the store kept under another id because another app took
-    // its planned file (SavedUnderNewId), which is the kept library, in the base and in the live draft alike. A library
+    // its planned file (SavedUnderNewId), which is the kept library, in the base and in the live draft alike. The first
+    // rule rests on the reservation of every id a capture held (TakenIds, review finding A13): a library made after the
+    // capture never takes a base id, so a live library at one is the base's, carried on or brought back by Undo. A library
     // of the live draft with no base counterpart (made while the Save ran, or left out of the capture as untouched) never
     // shares an id with a different library: when the catalog, or a kept version, holds its id, it moves to a fresh one,
     // since the store invents a kept id at commit and TakenIds cannot know it. The renames are applied all at once, so no
@@ -1836,6 +1845,10 @@ public sealed class LibraryWorkspace
     // For tests: the weak references kept to change sets, which every capture prunes of the ones collected.
     internal int HeldReferences => _heldSets.Count;
 
+    // For tests: whether the capture of this revision is still one of the recent ones, which are kept whoever holds their
+    // change sets.
+    internal bool HasRecentCapture(long revision) => _captures.ContainsKey(revision);
+
     internal static int RecentCaptures => MaxCaptures;
 
     private (long Revision, int Count, int Index) _undoProbe = (-1, -1, -1);
@@ -1983,6 +1996,7 @@ public sealed class LibraryWorkspace
         _captures.Clear();
         _held.Clear();
         _heldSets.Clear();
+        _capturedIds.Clear();
     }
 
     // The top-most entry that would still change something, cached per revision and stack size because the shell asks
@@ -2081,12 +2095,16 @@ public sealed class LibraryWorkspace
             .Select(lib => lib.Header.Name);
 
     // Every id a new library must not take (3.5.4): built-in ids, shipped and retired; the catalog's and the draft's
-    // libraries; the stems of the files in the libraries folder (every CSV there is a catalog library); the libraries of a
-    // Save in flight, which its commit may bring back even after the user removed them from the draft; and, unless a
-    // restore is asking for its own old id, the original ids of Recently deleted entries. A Save in flight is one of the
-    // recent captures: a capture kept beyond them because its change set is still held reserves nothing, so the id a new
-    // library takes never depends on when a collection runs, and a library made meanwhile at an id such a Save then
-    // creates moves off it when the Save is marked saved (review finding G1).
+    // libraries; the stems of the files in the libraries folder (every CSV there is a catalog library); every library a
+    // capture held since the draft's history began, which the Save of that capture may still commit even after the user
+    // removed it from the draft; and, unless a restore is asking for its own old id, the original ids of Recently deleted
+    // entries. The captures' ids are kept whether or not their captures still are (review finding A13): a Save unresolved
+    // for longer than the recent captures last, its change set held, can still commit the library the user removed, and a
+    // library made meanwhile at that id would be taken for it when the Save is marked saved, so the user's removal would
+    // be lost and the next Save would write the new library over the saved one. They are kept deterministically, whoever
+    // holds the change sets and whenever a collection runs, so the id a new library takes never depends on either. An id
+    // the store invents at commit is unknown here until the catalog that ends the history brings it: the settlement then
+    // moves a library made meanwhile off it (review finding G1), and from then on it is one of the catalog's.
     private IEnumerable<string> TakenIds(bool includeRecentlyDeleted)
     {
         var ids = LibraryPrecedence.BuiltInOrder
@@ -2097,7 +2115,7 @@ public sealed class LibraryWorkspace
                 .Where(library => !string.IsNullOrEmpty(library.FileName))
                 .Select(library => Path.GetFileNameWithoutExtension(library.FileName!)))
             .Concat(_state.Libraries.Values.Select(lib => lib.Header.Id))
-            .Concat(_captures.Values.SelectMany(capture => capture.State.Libraries.Keys));
+            .Concat(_capturedIds);
         return includeRecentlyDeleted
             ? ids.Concat(_committed.RecentlyDeleted.Select(entry => entry.OriginalId))
             : ids;
@@ -2469,6 +2487,7 @@ public sealed class LibraryWorkspace
             _captures.Remove(old);
         }
 
+        _capturedIds.UnionWith(capture.State.Libraries.Keys);
         _held.AddOrUpdate(changes, capture);
         _heldSets.RemoveAll(weak => !weak.TryGetTarget(out _));
         _heldSets.Add(new WeakReference<LibraryChangeSet>(changes));

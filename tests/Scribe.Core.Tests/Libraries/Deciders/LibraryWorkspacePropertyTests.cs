@@ -13,7 +13,8 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 /// the page showed is lost or overwritten, every operation of the next change set names what the committed catalog holds,
 /// and something is unsaved exactly when the next Save would change something. A Save that leaves a reference repair
 /// pending is followed by W2's follow-up Save of the repairs alone, which writes exactly them and leaves every other change
-/// unsaved. Some Saves stay unresolved while the user goes on saving, each attempt fenced, before they are marked saved.
+/// unsaved. Some Saves stay unresolved while the user goes on saving, each attempt fenced, before they are marked saved,
+/// and no library made while a Save runs, resolved or not, takes an id that Save captured.
 /// Seeded, so a failure names the sequence.
 /// </summary>
 public sealed class LibraryWorkspacePropertyTests
@@ -55,6 +56,8 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.ForeignCopiesOfAKeptPlannedId > 15, $"copies another app made of its library at a planned id the store kept Scribe's away from {totals.ForeignCopiesOfAKeptPlannedId}");
         Assert.True(totals.UnresolvedSaves > 15, $"saves left unresolved while the user went on saving {totals.UnresolvedSaves}");
         Assert.True(totals.UnresolvedBeyondRecent > 15, $"unresolved saves whose capture was no longer among the recent ones {totals.UnresolvedBeyondRecent}");
+        Assert.True(totals.MadeAtAFreedIdBeyondRecent > 5, $"libraries aimed at an id an unresolved save captured, after its capture left the recent ones {totals.MadeAtAFreedIdBeyondRecent}");
+        Assert.True(totals.RemovedWhileSaving > 20, $"libraries a save creates or restores, removed while it ran {totals.RemovedWhileSaving}");
     }
 
     private sealed class Coverage
@@ -87,6 +90,10 @@ public sealed class LibraryWorkspacePropertyTests
         public int ForeignCopiesOfAKeptPlannedId;
         public int UnresolvedSaves;
         public int UnresolvedBeyondRecent;
+        public int DeletedWhileUnresolved;
+        public int MadeAtAFreedId;
+        public int MadeAtAFreedIdBeyondRecent;
+        public int RemovedWhileSaving;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -280,12 +287,17 @@ public sealed class LibraryWorkspacePropertyTests
         }
 
         var changes = CaptureOrFail(workspace, seed, step);
+
+        // The ids the Save captured: every library of the draft, untouched ones and pending deletions included. The Save may
+        // commit a library at any of them, so no library made while it runs, resolved or not, may take one (review finding
+        // A13).
+        var captured = Ids(workspace.Draft);
         totals.Count(changes);
         totals.MidSaves++;
         if (random.Next(2) == 0)
         {
             totals.InterleavedSaves++;
-            WorkWhileSaving(workspace, changes, store, random, totals, fresh);
+            WorkWhileSaving(workspace, changes, captured, store, random, totals, fresh, context);
         }
 
         // Sometimes the Save comes back CommitUnknown (contract 9.7): the page stays usable, and every Save the user presses
@@ -293,27 +305,23 @@ public sealed class LibraryWorkspacePropertyTests
         // captures, before a later load settles it as committed (review finding A12). Its change set is held here until
         // then, as W2 holds it, and a collection runs so that only what is held is found. Drawn from the stream of its own.
         var unresolved = aim.Next(8) == 0;
+        string? aimedAt = null;
         if (unresolved)
         {
-            totals.UnresolvedSaves++;
-            var fenced = 0;
-            for (var attempt = LibraryWorkspace.RecentCaptures + aim.Next(4); attempt > 0; attempt--)
-            {
-                Operate(workspace, aim.Next(19), aim, store, fresh);
-                if (workspace.CaptureChangeSet().ChangeSet is not null)
-                {
-                    fenced++;
-                }
-            }
-
-            if (fenced >= LibraryWorkspace.RecentCaptures)
-            {
-                totals.UnresolvedBeyondRecent++;
-            }
-
+            aimedAt = WhileUnresolved(workspace, changes, captured, store, aim, totals, fresh, context);
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
+
+        // The libraries the Save creates or restores that the user removed while it ran: once marked saved, each is a
+        // pending deletion of what the Save committed (review finding A2), never a library made meanwhile at its id (A13).
+        var removed = Planned(changes).Where(id => workspace.Draft.Find(id) is null).ToList();
+        if (aimedAt is not null && !removed.Contains(aimedAt, StringComparer.OrdinalIgnoreCase))
+        {
+            removed.Add(aimedAt);
+        }
+
+        totals.RemovedWhileSaving += removed.Count;
 
         var outcomes = Outcomes(workspace, catalog, changes, random, totals);
         var saved = Apply(catalog, changes, store, outcomes);
@@ -329,6 +337,7 @@ public sealed class LibraryWorkspacePropertyTests
 
         GC.KeepAlive(changes);
         var probe = AfterMarkSaved(workspace, shown, outcomes, saved, context, totals);
+        AssertRemovedStayDeleted(workspace, removed, outcomes, probe, context);
 
         // W2's rule after round 4: a Save that left reference repairs pending is completed by a follow-up Save of the
         // repairs alone, which the user may work through as well.
@@ -445,8 +454,10 @@ public sealed class LibraryWorkspacePropertyTests
         var interleaved = random.Next(3) == 0;
         if (interleaved)
         {
+            // What a repairs-only capture holds: the committed catalog with the repaired references.
             totals.InterleavedFollowUps++;
-            WorkWhileSaving(workspace, changes, store, random, totals, fresh);
+            var captured = catalog.Libraries.Select(library => library.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            WorkWhileSaving(workspace, changes, captured, store, random, totals, fresh, context);
         }
 
         var outcomes = Outcomes(workspace, catalog, changes, random, totals);
@@ -597,14 +608,17 @@ public sealed class LibraryWorkspacePropertyTests
         }
     }
 
-    // What the user does while a Save runs: one to three operations, some aimed at what the Save is doing.
+    // What the user does while a Save runs: one to three operations, some aimed at what the Save is doing. No library they
+    // make takes an id the Save captured (review finding A13).
     private static void WorkWhileSaving(
         LibraryWorkspace workspace,
         LibraryChangeSet changes,
+        IReadOnlySet<string> captured,
         Dictionary<string, RecentlyDeletedContent> store,
         Random random,
         Coverage totals,
-        Func<string, string> fresh)
+        Func<string, string> fresh,
+        string context)
     {
         var added = changes.Writes
             .Where(write => !write.BuiltIn && write.Origin != LibraryOrigin.Existing)
@@ -623,6 +637,8 @@ public sealed class LibraryWorkspacePropertyTests
             // Half the Saves that restore an entry see it restored again or deleted for good first (A8).
             var choice = first && restores.Count > 0 && random.Next(2) == 0 ? 2 : random.Next(7);
             first = false;
+            var before = Ids(workspace.Draft);
+            var bringsBack = choice is 3 or 4;
             switch (choice)
             {
                 case 0 when added.Count > 0:
@@ -689,8 +705,162 @@ public sealed class LibraryWorkspacePropertyTests
                     break;
 
                 default:
-                    Operate(workspace, random.Next(19), random, store, fresh);
+                    var operation = random.Next(19);
+                    bringsBack = operation is 15 or 16;
+                    Operate(workspace, operation, random, store, fresh);
                     break;
+            }
+
+            if (!bringsBack)
+            {
+                AssertNothingMadeAtACapturedId(workspace, before, captured, context);
+            }
+        }
+    }
+
+    // A Save that stays unresolved (CommitUnknown, contract 9.7) while the user goes on working, every Save they press
+    // captured and fenced by the store, until seven to eleven later revisions have been captured: from eight on, the
+    // Save's own capture has left the recent ones and only its held change set finds it (review finding A12). Counted from
+    // the distinct revisions captured after it, not from the attempts, since a capture at a revision that did not move
+    // takes the same place among the recent ones, and the workspace must agree. Three times in four a library the Save
+    // creates or restores is deleted first, and once the loop is done, whenever a deletion freed such an id, a library is
+    // made aimed at it: an import named so that its id would be that one, or the entry restored again, asking for its own
+    // old id. No library made meanwhile takes an id the Save captured, which the Save may still commit (A13): checked
+    // after every operation but Undo and Redo, which bring back a library the draft had, under its own id. Returns the id
+    // aimed at.
+    private static string? WhileUnresolved(
+        LibraryWorkspace workspace,
+        LibraryChangeSet changes,
+        IReadOnlySet<string> captured,
+        Dictionary<string, RecentlyDeletedContent> store,
+        Random aim,
+        Coverage totals,
+        Func<string, string> fresh,
+        string context)
+    {
+        totals.UnresolvedSaves++;
+        var planned = Planned(changes);
+        var live = planned.Where(id => workspace.Draft.Find(id) is { PendingDelete: false }).ToList();
+        if (live.Count > 0 && aim.Next(4) != 0)
+        {
+            workspace.DeleteLibrary(live[aim.Next(live.Count)]);
+            totals.DeletedWhileUnresolved++;
+        }
+
+        var later = new HashSet<long>();
+        var target = LibraryWorkspace.RecentCaptures - 1 + aim.Next(5);
+        for (var attempt = 0; later.Count < target && attempt < 4 * target; attempt++)
+        {
+            var operation = aim.Next(19);
+            var before = Ids(workspace.Draft);
+            Operate(workspace, operation, aim, store, fresh);
+            if (operation is not (15 or 16))
+            {
+                AssertNothingMadeAtACapturedId(workspace, before, captured, context);
+            }
+
+            if (workspace.CaptureChangeSet().ChangeSet is { } fenced && fenced.DraftRevision > changes.DraftRevision)
+            {
+                later.Add(fenced.DraftRevision);
+            }
+        }
+
+        var beyond = !workspace.HasRecentCapture(changes.DraftRevision);
+        Assert.True(
+            beyond == later.Count >= LibraryWorkspace.RecentCaptures,
+            $"{context}{later.Count} later revisions captured, yet the unresolved Save's capture is {(beyond ? "no longer" : "still")} among the recent ones");
+        if (beyond)
+        {
+            totals.UnresolvedBeyondRecent++;
+        }
+
+        var freed = planned.Where(id => workspace.Draft.Find(id) is null).ToList();
+        if (freed.Count == 0)
+        {
+            return null;
+        }
+
+        var aimedAt = freed[aim.Next(freed.Count)];
+        var entryName = changes.RecentlyDeletedActions
+            .FirstOrDefault(action => action.Kind == RecentlyDeletedActionKind.Restore
+                && string.Equals(action.RestoreAsId, aimedAt, StringComparison.OrdinalIgnoreCase))
+            ?.EntryName;
+        var ids = Ids(workspace.Draft);
+        if (entryName is not null && workspace.Draft.RecentlyDeleted.Any(entry => entry.EntryName == entryName))
+        {
+            workspace.RestoreDeleted(store[entryName]);
+        }
+        else
+        {
+            // "custom-release-notes-2" is where a library named "release notes 2" would go, when that id is free.
+            var stem = aimedAt.StartsWith("custom-", StringComparison.OrdinalIgnoreCase) ? aimedAt["custom-".Length..] : aimedAt;
+            var document = Document(stem.Replace('-', ' '), new TermValues(fresh("aimed"), fresh("Aimed")));
+            workspace.ApplyImport(
+                LibraryImportPlanner.Plan(document, new LibraryImportTarget.NewLibrary(null), workspace.Draft), ImportConflictChoice.KeepMine);
+        }
+
+        AssertNothingMadeAtACapturedId(workspace, ids, captured, context);
+        totals.MadeAtAFreedId++;
+        if (beyond)
+        {
+            totals.MadeAtAFreedIdBeyondRecent++;
+        }
+
+        return aimedAt;
+    }
+
+    // The libraries a change set creates or restores: new custom files, and the ids its restores bring entries back as.
+    private static List<string> Planned(LibraryChangeSet changes) =>
+        changes.Writes
+            .Where(write => !write.BuiltIn && write.ExpectedPreImage is null)
+            .Select(write => write.LibraryId)
+            .Concat(changes.RecentlyDeletedActions
+                .Where(action => action.Kind == RecentlyDeletedActionKind.Restore)
+                .Select(action => action.RestoreAsId!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private static HashSet<string> Ids(LibraryDraft draft) =>
+        draft.Libraries.Select(library => library.Content.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // No library an operation made while a Save runs holds an id the Save captured, which it may still commit (review
+    // finding A13): every library of the draft that was not there before the operation.
+    private static void AssertNothingMadeAtACapturedId(
+        LibraryWorkspace workspace, IReadOnlySet<string> before, IReadOnlySet<string> captured, string context)
+    {
+        foreach (var id in Ids(workspace.Draft))
+        {
+            Assert.True(
+                before.Contains(id) || !captured.Contains(id),
+                $"{context}a library made while the Save ran took {id}, an id the Save captured");
+        }
+    }
+
+    // After MarkSaved, each library the Save created or restored that the user removed while it ran is a pending deletion
+    // of what the Save committed, where the store kept it (review findings A2 and A13); the next change set deletes it;
+    // and Use this copy instead acts on nothing for a copy based on it, never on a library made meanwhile at its id.
+    private static void AssertRemovedStayDeleted(
+        LibraryWorkspace workspace, IReadOnlyList<string> removed, IReadOnlyList<StoreOutcome> outcomes, LibraryChangeSet? next, string context)
+    {
+        foreach (var id in removed)
+        {
+            var keptAt = outcomes.OfType<StoreOutcome.SavedUnderNewId>()
+                .FirstOrDefault(kept => string.Equals(kept.PlannedId, id, StringComparison.OrdinalIgnoreCase))?.KeptAsId ?? id;
+            Assert.True(
+                workspace.Draft.Find(keptAt) is { PendingDelete: true },
+                $"{context}{id}, removed while its Save ran, is not a pending deletion of the saved {keptAt} once marked saved");
+            Assert.True(
+                next is null || next.Deletions.Any(deletion => string.Equals(deletion.LibraryId, keptAt, StringComparison.OrdinalIgnoreCase)),
+                $"{context}the next Save does not delete {keptAt}, removed while its Save ran");
+            foreach (var copy in workspace.Draft.Libraries.Where(library =>
+                !library.Content.BuiltIn
+                && !library.PendingDelete
+                && (string.Equals(library.Content.BasedOn, id, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(library.Content.BasedOn, keptAt, StringComparison.OrdinalIgnoreCase))))
+            {
+                Assert.True(
+                    workspace.CopyOriginal(copy.Content.Id) is null,
+                    $"{context}Use this copy instead for {copy.Content.Id} would act on {workspace.CopyOriginal(copy.Content.Id)}, though its original was removed");
             }
         }
     }
