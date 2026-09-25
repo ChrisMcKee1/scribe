@@ -482,6 +482,8 @@ final class StorageMaintenanceTests: XCTestCase {
     }
 
     /// The checkpoint a rule's deletion owes waits while a dictation holds a lease, and runs on a retry once it ends.
+    /// Every retry is a pass that only checkpoints, so a dictation during an edit never runs the retention sweep or
+    /// reclamation.
     func testTheCheckpointARuleDeletionOwesWaitsForADictation() async throws {
         let store = try makeStore()
         let text = "entry-\(UUID().uuidString)"
@@ -499,18 +501,102 @@ final class StorageMaintenanceTests: XCTestCase {
 
         let lease = activity.begin()
         try await store.removeDictionaryEntry(id: id)
-        XCTAssertEqual(passes.next()?.checkpoint, .deferredForActivity)
+        let first = passes.next()
+        XCTAssertEqual(first?.checkpoint, .deferredForActivity)
         XCTAssertTrue(try databaseFileContains(text), "the checkpoint ran during the dictation")
         lease.end()
 
         // Retries that fell before the lease ended were deferred again; the first after it completes.
-        var outcome = passes.next()?.checkpoint
-        while outcome == .deferredForActivity {
-            outcome = passes.next()?.checkpoint
-        }
-        XCTAssertEqual(outcome, .completed)
+        var reports = [first]
+        repeat {
+            reports.append(passes.next())
+        } while reports.last??.checkpoint == .deferredForActivity
+        XCTAssertEqual(reports.last??.checkpoint, .completed)
         XCTAssertFalse(try databaseFileContains(text), "the old text is still in the database file")
+        for report in reports {
+            XCTAssertEqual(report?.retention, .notRun, "a retry ran the retention sweep")
+            XCTAssertEqual(report?.reclaim, .notRun, "a retry ran reclamation")
+        }
         XCTAssertTrue(maintenance.stop(timeout: 5))
+    }
+
+    /// A checkpoint that has to wait is retried by passes that only checkpoint, whichever pass found it owed. A rule
+    /// deleted before maintenance started leaves one owed; a whole pass finds it while a dictation holds a lease, and
+    /// every pass after it, until the checkpoint completes once the dictation ends, ran neither the retention sweep
+    /// nor reclamation. So an edit whose checkpoint a whole pass picks up never adds a sweep either.
+    func testAWholePassWhoseCheckpointMustWaitIsRetriedByPassesThatOnlyCheckpoint() async throws {
+        let store = try makeStore()
+        let text = "entry-\(UUID().uuidString)"
+        let id = try store.insertDictionaryEntry(DictionaryEntry(pattern: "alpha", replacement: text))
+        XCTAssertTrue(try store.checkpointWal())
+        try await store.removeDictionaryEntry(id: id)
+        let activity = ForegroundActivity()
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let maintenance = makeMaintenance(store, activity: activity, hooks: hooks) {
+            $0.initialDelay = 3_600
+            $0.quietPeriod = 3_600
+            $0.checkpointRetryDelay = 0.1
+        }
+        maintenance.start()
+
+        let lease = activity.begin()
+        maintenance.requestPass()
+        let whole = passes.next()
+        XCTAssertNotEqual(whole?.retention, .notRun, "the requested pass was not a whole pass")
+        XCTAssertEqual(whole?.checkpoint, .deferredForActivity)
+        let retry = passes.next()
+        XCTAssertEqual(retry?.checkpoint, .deferredForActivity)
+        lease.end()
+
+        var reports = [retry]
+        while reports.last??.checkpoint == .deferredForActivity {
+            reports.append(passes.next())
+        }
+        XCTAssertEqual(reports.last??.checkpoint, .completed)
+        XCTAssertFalse(try databaseFileContains(text), "the old text is still in the database file")
+        for report in reports {
+            XCTAssertEqual(report?.retention, .notRun, "a retry ran the retention sweep")
+            XCTAssertEqual(report?.reclaim, .notRun, "a retry ran reclamation")
+        }
+        XCTAssertTrue(maintenance.stop(timeout: 5))
+    }
+
+    /// A checkpoint the last session owed is not forgotten across a quit or a crash. A snippet is deleted while a
+    /// dictation holds its checkpoint off, and the app is gone before the retry; the app never closes its connection,
+    /// so nothing checkpoints on the way out. The next launch's first pass empties the log the last session left, and
+    /// the old text leaves the database file.
+    func testTheFirstPassOfALaunchEmptiesTheLogTheLastSessionLeft() async throws {
+        let store = try makeStore()
+        let template = "snippet-\(UUID().uuidString)"
+        let snippetID = try store.insertSnippet(Snippet(phrase: "my block", template: template))
+        XCTAssertTrue(try store.checkpointWal())
+        let activity = ForegroundActivity()
+        let passes = PassReports()
+        var hooks = StorageMaintenance.Hooks()
+        hooks.onPassFinished = { passes.record($0) }
+        let lastSession = makeMaintenance(store, activity: activity, hooks: hooks) {
+            $0.initialDelay = 3_600
+            $0.checkpointRetryDelay = 3_600
+        }
+        lastSession.start()
+        let lease = activity.begin()
+        try await store.removeSnippet(id: snippetID)
+        XCTAssertEqual(passes.next()?.checkpoint, .deferredForActivity)
+        // The quit: maintenance stops before its retry, and the connection stays open, as the app's always does.
+        XCTAssertTrue(lastSession.stop(timeout: 5))
+        lease.end()
+        XCTAssertTrue(try databaseFileContains(template), "the old text left the database file before the relaunch")
+
+        // The relaunch: a store and maintenance of its own on the same file, with nothing removed this session.
+        let relaunched = PersistenceStore(databaseURL: directory.databaseURL)
+        try relaunched.initialize()
+        let firstPass = makeMaintenance(relaunched).runPass()
+
+        XCTAssertEqual(firstPass.checkpoint, .completed)
+        XCTAssertEqual(walBytes, 0)
+        XCTAssertFalse(try databaseFileContains(template), "the old text is still in the database file")
     }
 
     /// Starts a Clear history that will fail and returns once maintenance stands aside for it: one history write is

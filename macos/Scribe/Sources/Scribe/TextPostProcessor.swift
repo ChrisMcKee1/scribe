@@ -117,7 +117,8 @@ final class TextPostProcessor {
     }
 
     /// With AI cleanup on, the step after an accepted reply: the replacements `pass` held back, made where the reply
-    /// kept their words. Nothing but `pass` decides it, so a rule edited while the request was out changes nothing.
+    /// kept their words and had not written them out already (`restore`). Nothing but `pass` decides it, so a rule
+    /// edited while the request was out changes nothing.
     func finishAfterCleanup(_ reply: String, after pass: VocabularyPass) -> TextPostProcessingResult {
         Self.restore(reply, after: pass).result
     }
@@ -478,8 +479,9 @@ final class TextPostProcessor {
         // Ascending start offsets of every existing occurrence of the replacement. Case-insensitive
         // because the AI may emit a different casing than the canonical form; that casing is left
         // as-is (never corrupted into a double expansion), which is preferable to a risky span
-        // rewrite. Mirrors Windows' `CollectReplacementStarts`.
-        private static func collectReplacementStarts(_ replacement: String, in nsText: NSString) -> [Int] {
+        // rewrite. Mirrors Windows' `CollectReplacementStarts`. `restore` asks the same of a
+        // held-back replacement and the reply.
+        static func collectReplacementStarts(_ replacement: String, in nsText: NSString) -> [Int] {
             var starts: [Int] = []
             var from = 0
             let replacementLength = (replacement as NSString).length
@@ -494,8 +496,7 @@ final class TextPostProcessor {
         }
 
         // Mirrors Windows' `IsInsideAnyReplacement`.
-        private static func isInsideAnyReplacement(_ starts: [Int], matchRange: NSRange, replacementLength: Int) -> Bool
-        {
+        static func isInsideAnyReplacement(_ starts: [Int], matchRange: NSRange, replacementLength: Int) -> Bool {
             let matchEnd = matchRange.location + matchRange.length
             for idx in starts {
                 if idx > matchRange.location {
@@ -757,8 +758,11 @@ final class TextPostProcessor {
     /// The words are looked for as the rules match, ignoring case, with a word character on either side exactly where
     /// the text sent has one, and the replacement is made at the occurrence that answers to its own: the k-th in the
     /// reply for the k-th in the text sent. When the reply holds a different number of them (the model dropped,
-    /// repeated or rewrote the words), it is not made and the reply's words stay. Only replacements cleanup off would
-    /// make are ever made, each at most once, and a reply that is the text sent gets exactly the cleanup-off text.
+    /// repeated or rewrote the words), it is not made and the reply's words stay. Nor is it made where the reply
+    /// already holds the whole replacement around those words and the text sent did not: the rules' double-expansion
+    /// guard, so a model that wrote the comma of a held-back ", Inc" itself gets "Acme, Inc.", not "Acme, , Inc.".
+    /// Only replacements cleanup off would make are ever made, each at most once, and a reply that is the text sent
+    /// gets exactly the cleanup-off text.
     static func restore(_ reply: String, after pass: VocabularyPass) -> CleanupRestoration {
         guard !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return CleanupRestoration(reply: "", made: [], result: TextPostProcessingResult(text: "", replacements: []))
@@ -776,6 +780,14 @@ final class TextPostProcessor {
             guard inSent.count == inReply.count, let rank = inSent.firstIndex(of: own),
                 inReply[rank].location >= searchFrom
             else {
+                continue
+            }
+            // The model wrote the rest of the replacement around its words itself, and making it would write that rest
+            // twice. A copy the text sent already held is not the model's, so a reply that is the text sent still gets
+            // every replacement cleanup off makes.
+            if holdsWholeOutput(edit.output, around: inReply[rank], in: target),
+                !holdsWholeOutput(edit.output, around: own, in: sent)
+            {
                 continue
             }
             made.append(CleanupRestoration.Made(heldBack: index, range: inReply[rank]))
@@ -826,6 +838,18 @@ final class TextPostProcessor {
         }
         let whole = NSRange(location: 0, length: text.length)
         return regex.matches(in: text as String, range: whole).map { $0.range(at: 1) }
+    }
+
+    /// Whether `words` of `text` stand inside a copy of the whole of `output`, ignoring case, for an output longer than
+    /// the words: what the rules' double-expansion guard asks of a match (`DictionaryRule.replacementContainsPattern`),
+    /// asked of a held-back replacement with the same two functions.
+    private static func holdsWholeOutput(_ output: String, around words: NSRange, in text: NSString) -> Bool {
+        let length = (output as NSString).length
+        guard length > words.length else {
+            return false
+        }
+        let starts = DictionaryRule.collectReplacementStarts(output, in: text)
+        return DictionaryRule.isInsideAnyReplacement(starts, matchRange: words, replacementLength: length)
     }
 
     /// Whether `range` of `text` begins and ends at a word boundary.

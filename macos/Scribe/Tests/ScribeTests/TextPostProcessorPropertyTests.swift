@@ -6,14 +6,17 @@ import XCTest
 /// rules frozen. `testCleanupOnGivesTheCleanupOffTextToAModelThatChangesNothing`: a model that returns what it was sent
 /// must get exactly the cleanup-off text from the rules, compared as strings with nothing normalized on either side;
 /// one that only capitalizes the first letter, adds a final period or puts a prefix before everything must get the
-/// cleanup-off text with exactly that change; and no snippet template or template-like replacement may reach the text
-/// sent. The changed replies keep an answer that only held for an unchanged one from passing.
-/// `testEveryReplacementMadeAfterCleanupAnswersToItsOwnWordsInTheReply` holds for any reply at all: every replacement
-/// made after cleanup answers to one held-back replacement, at the occurrence of its words that stands where its own
-/// stood in the text sent, found by an account of the rule written apart from `TextPostProcessor`; none is made twice;
-/// and none is made when the reply holds its words a different number of times than the text sent. The response guard,
-/// which rewrites dashes and strips wrappers from a real reply, is not in these tests; `DictationPipelineTests` covers
-/// it. Deterministic: fixed seeds and a generator of its own, so every run meets the same cases.
+/// cleanup-off text with exactly that change (no held-back replacement in these cases ends with the period such a
+/// reply adds, which would then hold it whole; `TextPostProcessorTests` covers that one); and no snippet template or
+/// template-like replacement may reach the text sent. The changed replies keep an answer that only held for an
+/// unchanged one from passing. `testEveryReplacementMadeAfterCleanupAnswersToItsOwnWordsInTheReply` holds for any reply
+/// at all, by an account of the rule written apart from `TextPostProcessor`: a held-back replacement is made exactly
+/// when the reply holds its words as often as the text sent, the occurrence that answers to its own comes after the
+/// replacement made before it, and the reply does not hold the whole replacement around those words where the text
+/// sent did not; it is made at that occurrence, and none is made twice. Beside the generator's replies, each case has
+/// one that a model which made the first held-back replacement itself would give. The response guard, which rewrites
+/// dashes and strips wrappers from a real reply, is not in these tests; `DictationPipelineTests` covers it.
+/// Deterministic: fixed seeds and a generator of its own, so every run meets the same cases.
 final class TextPostProcessorPropertyTests: XCTestCase {
     private static let cases = 4_000
     private static let repliesPerCase = 3
@@ -77,6 +80,7 @@ final class TextPostProcessorPropertyTests: XCTestCase {
         var failures: [String] = []
         var made = 0
         var refusedAsAmbiguous = 0
+        var refusedAsWritten = 0
         for index in 0..<Self.cases {
             let rules = generator.ruleSet()
             let transcript = generator.dictation()
@@ -84,8 +88,16 @@ final class TextPostProcessorPropertyTests: XCTestCase {
             processor.reload(dictionaryEntries: rules.entries, snippets: rules.snippets)
             let pass = processor.correctVocabulary(transcript)
             let sent = pass.text
+            var replies: [String] = []
             for _ in 0..<Self.repliesPerCase {
-                let reply = generator.reply(to: sent)
+                replies.append(generator.reply(to: sent))
+            }
+            // What a model that made the first held-back replacement itself would give: its output in its words' place.
+            if let first = pass.heldBack.first {
+                let words = NSRange(location: first.location, length: first.words.utf16.count)
+                replies.append((sent as NSString).replacingCharacters(in: words, with: first.output))
+            }
+            for reply in replies {
                 let restoration = TextPostProcessor.restore(reply, after: pass)
                 var broken: [String] = []
 
@@ -99,22 +111,39 @@ final class TextPostProcessorPropertyTests: XCTestCase {
                     }
                     previous = replacement
                 }
+                // Where the last replacement made ends in the reply: the next one's words may not begin before it.
+                var madeUpTo = 0
                 for (position, edit) in pass.heldBack.enumerated() {
+                    let length = edit.words.utf16.count
                     let before = Self.isWordCharacter(before: edit.location, in: sent)
-                    let after = Self.isWordCharacter(at: edit.location + edit.words.utf16.count, in: sent)
+                    let after = Self.isWordCharacter(at: edit.location + length, in: sent)
                     let inSent = Self.occurrences(of: edit.words, in: sent, before: before, after: after)
                     let inReply = Self.occurrences(of: edit.words, in: restoration.reply, before: before, after: after)
+                    var answering: Int?
+                    if inSent.count == inReply.count, let rank = inSent.firstIndex(of: edit.location) {
+                        answering = inReply[rank]
+                    }
+                    var owed = false
+                    var alreadyWritten = false
+                    if let answering, answering >= madeUpTo {
+                        let ownWords = NSRange(location: edit.location, length: length)
+                        let replyWords = NSRange(location: answering, length: length)
+                        let wrote = Self.holds(edit.output, around: replyWords, in: restoration.reply)
+                        alreadyWritten = wrote && !Self.holds(edit.output, around: ownWords, in: sent)
+                        owed = !alreadyWritten
+                    }
                     if let replacement = restoration.made.first(where: { $0.heldBack == position }) {
                         made += 1
-                        let answers =
-                            inSent.count == inReply.count
-                            && inSent.firstIndex(of: edit.location).map { inReply[$0] } == replacement.range.location
-                            && replacement.range.length == edit.words.utf16.count
-                        if !answers {
+                        if !owed || replacement.range.location != answering || replacement.range.length != length {
                             broken.append("\(edit.words.debugDescription) was made where its own words did not stand")
                         }
-                    } else if inSent.count != inReply.count {
+                        madeUpTo = replacement.range.location + replacement.range.length
+                    } else if owed {
+                        broken.append("\(edit.words.debugDescription) was not made where its own words stood")
+                    } else if answering == nil {
                         refusedAsAmbiguous += 1
+                    } else if alreadyWritten {
+                        refusedAsWritten += 1
                     }
                 }
                 let marks = restoration.made.reduce(Self.marks(in: restoration.reply)) { total, replacement in
@@ -135,10 +164,12 @@ final class TextPostProcessorPropertyTests: XCTestCase {
             }
         }
         XCTAssertEqual(failures, [])
-        // Both ways are exercised: replacements made, and replacements refused because the reply holds their words a
-        // different number of times than the text sent.
+        // Every way is exercised: replacements made, and replacements refused because the reply holds their words a
+        // different number of times than the text sent, or holds the whole replacement already (7,135, 5,798 and 318
+        // on the Python port of these cases).
         XCTAssertGreaterThan(made, 1_000)
         XCTAssertGreaterThan(refusedAsAmbiguous, 500)
+        XCTAssertGreaterThan(refusedAsWritten, 100)
     }
 
     private static func capitalizingFirst(_ text: String) -> String {
@@ -164,6 +195,20 @@ final class TextPostProcessorPropertyTests: XCTestCase {
         }
         let whole = NSRange(location: 0, length: text.utf16.count)
         return regex.matches(in: text, range: whole).map { $0.range(at: 1).location }
+    }
+
+    /// Whether `text` holds the whole of `output` around `words`, ignoring case, for an output longer than the words:
+    /// the double-expansion guard, worked out a window at a time on lowercased text rather than taken from
+    /// `TextPostProcessor`. The generator writes only characters of one UTF-16 unit, which lowercasing keeps so.
+    private static func holds(_ output: String, around words: NSRange, in text: String) -> Bool {
+        let needle = Array(output.lowercased().utf16)
+        let haystack = Array(text.lowercased().utf16)
+        let first = max(0, words.location + words.length - needle.count)
+        let last = min(words.location, haystack.count - needle.count)
+        guard needle.count > words.length, first <= last else {
+            return false
+        }
+        return (first...last).contains { haystack[$0..<($0 + needle.count)].elementsEqual(needle) }
     }
 
     private static let wordCharacter = try! NSRegularExpression(pattern: "^\\w$")

@@ -700,4 +700,41 @@ final class TextPostProcessorTests: XCTestCase {
             noRules.finishAfterCleanup("We use .NET 8 , and .5 of it .", after: plain).text,
             "We use .NET 8, and .5 of it.")
     }
+
+    /// The rules' double-expansion guard, after cleanup (Opus S2): a held-back replacement is not made where the reply
+    /// already holds the whole of it around its words and the text sent did not. ", Inc" after a word is held back,
+    /// and a model that wrote the comma itself gets "Acme, Inc.", not "Acme, , Inc."; so too a replacement its words
+    /// stand in the middle of (", Jr."), and a snippet that ends with the period a model adds ("That is the end.", not
+    /// "That is the end.."). A reply that kept the words bare still gets the replacement, the model's casing stays
+    /// where it differs, as the rules' guard leaves it, and a copy the text sent already held is not the model's: said
+    /// with its period, the snippet is made on an unchanged reply exactly as cleanup off makes it.
+    func testAHeldBackReplacementTheReplyAlreadyHoldsIsNotWrittenTwice() {
+        let processor = TextPostProcessor()
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "inc", replacement: ", Inc")], snippets: [])
+        XCTAssertEqual(processor.process("acme inc"), "acme , Inc")
+        var pass = processor.correctVocabulary("acme inc")
+        XCTAssertEqual(pass.text, "acme inc")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "acme , Inc")
+        XCTAssertEqual(processor.finishAfterCleanup("Acme, Inc.", after: pass).text, "Acme, Inc.")
+        XCTAssertEqual(processor.finishAfterCleanup("Acme, inc.", after: pass).text, "Acme, inc.")
+        XCTAssertEqual(processor.finishAfterCleanup("Acme inc.", after: pass).text, "Acme , Inc.")
+
+        processor.reload(dictionaryEntries: [DictionaryEntry(pattern: "jr", replacement: ", Jr.")], snippets: [])
+        pass = processor.correctVocabulary("pat doe jr")
+        XCTAssertEqual(pass.text, "pat doe jr")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "pat doe , Jr.")
+        XCTAssertEqual(processor.finishAfterCleanup("Pat Doe, Jr.", after: pass).text, "Pat Doe, Jr.")
+        XCTAssertEqual(processor.finishAfterCleanup("Pat Doe jr", after: pass).text, "Pat Doe , Jr.")
+
+        processor.reload(dictionaryEntries: [], snippets: [Snippet(phrase: "the end", template: "the end.")])
+        XCTAssertEqual(processor.process("that is the end"), "that is the end.")
+        pass = processor.correctVocabulary("that is the end")
+        XCTAssertEqual(pass.text, "that is the end")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "that is the end.")
+        XCTAssertEqual(processor.finishAfterCleanup("That is the end.", after: pass).text, "That is the end.")
+        XCTAssertEqual(processor.process("that is the end."), "that is the end..")
+        pass = processor.correctVocabulary("that is the end.")
+        XCTAssertEqual(pass.text, "that is the end.")
+        XCTAssertEqual(processor.finishAfterCleanup(pass.text, after: pass).text, "that is the end..")
+    }
 }

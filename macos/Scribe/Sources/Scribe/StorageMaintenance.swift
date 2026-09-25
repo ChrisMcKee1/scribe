@@ -238,9 +238,9 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 /// One pass at a time, on a private serial queue, never on the caller's thread: 30 seconds after
 /// `start()`, then daily on the wall clock (so a Mac that slept through the deadline runs it on wake),
 /// when the retention choice changes, and after Clear history; and a pass that only checkpoints after
-/// a dictionary entry, snippet or app profile is deleted, or an entry rewritten. A pass that stands
-/// aside while Clear history runs is asked for again when the Clear lets go, whether it succeeded or
-/// failed, so nothing it owed waits for the next day.
+/// a dictionary entry, snippet or app profile is deleted, or an entry rewritten, and to retry a
+/// checkpoint that had to wait. A pass that stands aside while Clear history runs is asked for again
+/// when the Clear lets go, whether it succeeded or failed, so nothing it owed waits for the next day.
 ///
 /// Retention deletes in short batches, and every batch checks the stored choice in its own
 /// transaction, so a choice changed, removed or made unreadable mid-sweep stops it. Only a choice on
@@ -268,7 +268,10 @@ struct StorageMaintenanceReport: Equatable, Sendable {
 /// profile deleted, or an entry rewritten, owes it through the store's count of such writes
 /// (`PersistenceStore.removedTextCount`), each of which asks, as it commits, for a pass that only
 /// checkpoints. A checkpoint waits while a dictation holds a lease, and one a reader keeps busy is
-/// retried; both back off, doubling.
+/// retried; both back off, doubling, and the retry is a pass that only checkpoints, whichever pass
+/// found the checkpoint owed. The first pass of each launch owes one too: the app never closes its
+/// connection, which would checkpoint, so a checkpoint the last session owed and had not made when it
+/// quit or crashed is made at the next launch.
 ///
 /// Logs counts and outcome names only.
 ///
@@ -333,7 +336,9 @@ final class StorageMaintenance: @unchecked Sendable {
     /// the Clear asks for it again when it lets go, whether it succeeded or failed (`finishClear`).
     private var passAfterClear = false
     private var checkpointPassAfterClear = false
+    /// When the pending retry of a whole pass is due, and that of a pass that only checkpoints (`scheduleRetry`).
     private var followUpDue: DispatchTime?
+    private var checkpointFollowUpDue: DispatchTime?
     private var reclaimEverythingRequested = false
     private var timer: DispatchSourceTimer?
 
@@ -345,7 +350,11 @@ final class StorageMaintenance: @unchecked Sendable {
     private var checkpointRetries = 0
     private var conversionBlocked = false
     private var reclaimEverythingOwed = false
-    private var checkpointOwed = false
+    /// Starts true, so the first pass of each launch checkpoints. The app never closes its connection, which would
+    /// checkpoint, so a checkpoint the last session owed and had not made when it quit or crashed (one a dictation or a
+    /// reader held off, say) would otherwise wait for the next deletion or reclamation. With the WAL empty already it
+    /// costs almost nothing.
+    private var checkpointOwed = true
     /// `PersistenceStore.removedTextCount` as of the last checkpoint decision (`checkpointIfOwed`). It starts at zero,
     /// not at the count, so a removal made before maintenance existed is still owed its checkpoint.
     private var observedRemovedText: UInt64 = 0
@@ -525,9 +534,9 @@ final class StorageMaintenance: @unchecked Sendable {
     }
 
     /// Asks for the checkpoint a deleted or rewritten rule, snippet or profile is owed, soon and on its own: no
-    /// retention sweep and no reclamation run with it, so edits in Settings never change when those run or how long
-    /// their backoff grows. Coalesced like `requestPass`, and dropped before `start` and after `stop`, when the
-    /// store's count waits for the next pass.
+    /// retention sweep and no reclamation run with it or with its retries (`checkpointIfOwed`), so asking for it never
+    /// adds a pass of theirs or grows their backoff. Coalesced like `requestPass`, and dropped before `start` and after
+    /// `stop`, when the store's count waits for the next pass.
     private func requestCheckpointPass() {
         stateLock.lock()
         guard started, !stopped, !checkpointPassPending else {
@@ -543,8 +552,8 @@ final class StorageMaintenance: @unchecked Sendable {
     }
 
     /// A pass that only checkpoints, if one is owed. Like any checkpoint it waits while a dictation holds a lease
-    /// and backs off while a reader keeps it busy; the retry is an ordinary pass. It stands aside for Clear history,
-    /// which asks for it again when it lets go, and for shutdown, which needs no retry.
+    /// and backs off while a reader keeps it busy, retried by another pass that only checkpoints. It stands aside for
+    /// Clear history, which asks for it again when it lets go, and for shutdown, which needs no retry.
     private func performCheckpointPass() {
         stateLock.lock()
         checkpointPassPending = false
@@ -689,7 +698,7 @@ final class StorageMaintenance: @unchecked Sendable {
         // user asked for the space back, so only a running dictation holds it off.
         let quiet = quietFor()
         if foregroundBusy || (!everything && quiet < options.quietPeriod) {
-            scheduleRetry(after: nextReclaimRetryDelay())
+            scheduleRetry(after: nextReclaimRetryDelay(), kind: .wholePass)
             return .deferredForActivity
         }
 
@@ -720,7 +729,7 @@ final class StorageMaintenance: @unchecked Sendable {
             reclaimEverythingOwed = false
             checkpointOwed = true
         case .yielded:
-            scheduleRetry(after: nextReclaimRetryDelay())
+            scheduleRetry(after: nextReclaimRetryDelay(), kind: .wholePass)
         default:
             break
         }
@@ -792,7 +801,9 @@ final class StorageMaintenance: @unchecked Sendable {
     /// Owed after any deletion or rewrite of stored text or any reclamation, whatever the freelist says: a
     /// small delete frees no whole page yet still leaves the deleted text in the WAL until a checkpoint
     /// copies it back and truncates the file. A move of the store's count of rule, snippet and profile
-    /// removals since the last attempt makes it owed here.
+    /// removals since the last attempt makes it owed here, and the first pass of each launch owes it. One
+    /// that has to wait is retried by a pass that only checkpoints, whichever pass found it owed, so waiting
+    /// on a dictation or a reader never runs the retention sweep or reclamation again.
     private func checkpointIfOwed() -> StorageMaintenanceReport.Checkpoint {
         let removedText = store.removedTextCount
         if removedText != observedRemovedText {
@@ -803,7 +814,7 @@ final class StorageMaintenance: @unchecked Sendable {
             return .notNeeded
         }
         guard !foregroundBusy else {
-            scheduleRetry(after: nextCheckpointRetryDelay())
+            scheduleRetry(after: nextCheckpointRetryDelay(), kind: .checkpointOnly)
             return .deferredForActivity
         }
 
@@ -814,7 +825,7 @@ final class StorageMaintenance: @unchecked Sendable {
                 return .completed
             }
             let delay = nextCheckpointRetryDelay()
-            scheduleRetry(after: delay)
+            scheduleRetry(after: delay, kind: .checkpointOnly)
             return .busy(retryIn: delay)
         } catch {
             // Still owed: the next pass tries again.
@@ -849,9 +860,18 @@ final class StorageMaintenance: @unchecked Sendable {
         return min(options.checkpointRetryDelay * Double(1 << min(checkpointRetries, 16)), options.maximumRetryDelay)
     }
 
-    /// Runs one more pass after `delay`. Only a started schedule retries: passes run directly (tests,
-    /// Clear history) never leave work behind. An earlier retry already pending covers a later one.
-    private func scheduleRetry(after delay: TimeInterval) {
+    /// What a retry runs: a whole pass, for a reclamation that had to wait, or a pass that only checkpoints, for a
+    /// checkpoint that had to wait.
+    private enum RetryKind {
+        case wholePass
+        case checkpointOnly
+    }
+
+    /// Runs one more pass of `kind` after `delay`. Only a started schedule retries: passes run directly (tests,
+    /// Clear history) never leave work behind. A retry already pending that is due no later covers one of its kind,
+    /// and a pending whole pass covers a pass that only checkpoints too, since it checkpoints and a wait it meets is
+    /// retried as a checkpoint; a pending pass that only checkpoints never covers a whole one.
+    private func scheduleRetry(after delay: TimeInterval, kind: RetryKind) {
         let due = DispatchTime.now() + delay
         stateLock.lock()
         guard started, !stopped else {
@@ -862,7 +882,16 @@ final class StorageMaintenance: @unchecked Sendable {
             stateLock.unlock()
             return
         }
-        followUpDue = due
+        switch kind {
+        case .wholePass:
+            followUpDue = due
+        case .checkpointOnly:
+            if let pending = checkpointFollowUpDue, pending <= due {
+                stateLock.unlock()
+                return
+            }
+            checkpointFollowUpDue = due
+        }
         stateLock.unlock()
 
         queue.asyncAfter(deadline: due) { [weak self] in
@@ -870,11 +899,23 @@ final class StorageMaintenance: @unchecked Sendable {
                 return
             }
             self.stateLock.lock()
-            if self.followUpDue == due {
-                self.followUpDue = nil
+            switch kind {
+            case .wholePass:
+                if self.followUpDue == due {
+                    self.followUpDue = nil
+                }
+            case .checkpointOnly:
+                if self.checkpointFollowUpDue == due {
+                    self.checkpointFollowUpDue = nil
+                }
             }
             self.stateLock.unlock()
-            self.performPass()
+            switch kind {
+            case .wholePass:
+                self.performPass()
+            case .checkpointOnly:
+                self.performCheckpointPass()
+            }
         }
     }
 
