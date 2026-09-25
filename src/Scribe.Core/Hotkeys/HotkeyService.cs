@@ -177,6 +177,21 @@ public sealed class HotkeyService : IHotkeyService
         }
     }
 
+    /// <summary>
+    /// What the watchdog does when it finds the keyboard hook dead, done now: the hook thread is replaced by a new one
+    /// with a new engine; for tests. Returns once the new installation has installed its hooks, or failed to.
+    /// </summary>
+    internal void ReinstallHookNow()
+    {
+        lock (_sync)
+        {
+            if (IsRunning)
+            {
+                ReinstallHookLocked();
+            }
+        }
+    }
+
     private HookInstallation? CurrentInstallation
     {
         get
@@ -996,6 +1011,8 @@ public sealed class HotkeyService : IHotkeyService
         // message, so no button event can fall between them and the engine keeps its state through the change. A failed
         // registration keeps the one in place. An old registration that can no longer be released was already gone,
         // which is how a hook Windows removed after a missed deadline shows; it is counted for the watchdog to report.
+        // A registration where there was none has the engine judge the releases it owes against Windows' view
+        // (HotkeyEngine.ReconcileOwedReleases), and a drain-only hook with nothing left owed is removed at once.
         private void SyncMouseHook(bool refresh)
         {
             var current = _mouseHookId;
@@ -1022,16 +1039,30 @@ public sealed class HotkeyService : IHotkeyService
             // the count sees everything this renewal did. Found gone, it was removed by Windows (a missed deadline), and
             // for as long as it was gone no hook saw the mouse: the engine ends a dictation a button was driving, since
             // its release may be the input nobody saw, here between messages and before any button event reaches the
-            // new registration.
+            // new registration. A registration where there was none (the first, one after a failed attempt, one after
+            // the hook was removed) also follows a time no hook of this installation saw the mouse, which is when a
+            // reinstall's inherited debts meet it again: the engine asks Windows about them now that the hook exists,
+            // before this thread takes another message, so a press made after the answer is one this hook sees (one
+            // already on its way through older hooks as the registration landed can still reach Windows just after it).
             Volatile.Write(ref _mouseHookId, replacement);
             Volatile.Write(ref _mouseHookError, 0);
-            if (current != 0 && !NativeMethods.UnhookWindowsHookEx(current))
+            if (current == 0)
+            {
+                _engine.ReconcileOwedReleases();
+            }
+            else if (!NativeMethods.UnhookWindowsHookEx(current))
             {
                 Interlocked.Increment(ref _mouseHookLosses);
                 _engine.OnMouseHookLost();
             }
 
             Interlocked.Increment(ref _mouseHookRegistrations);
+
+            // A drain-only hook whose every debt Windows turned out to hold has nothing left to drain.
+            if (!MouseHookWanted)
+            {
+                RemoveMouseHook();
+            }
         }
 
         // Hook thread only.

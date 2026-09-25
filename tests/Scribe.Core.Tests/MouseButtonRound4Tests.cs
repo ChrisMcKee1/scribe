@@ -75,12 +75,14 @@ public sealed class MouseButtonRound4Tests
     [InlineData(true, 0)]
     [InlineData(false, 1 << (int)Back)]
     [InlineData(null, 0)]
-    public void A_reinstall_hands_on_only_the_releases_windows_is_not_waiting_for(bool? windowsHoldsBack, int handedOn)
+    public void A_reinstall_s_replacement_keeps_only_the_releases_windows_is_not_waiting_for(bool? windowsHoldsBack, int handedOn)
     {
         using var h = new HotkeyEngineHarness(Bare(Back), buttonHeldInWindows: _ => windowsHoldsBack);
         Assert.True(h.ButtonDown(Back).Suppress);
 
+        // The debts are handed on as sealed; the replacement decides once its own mouse hook exists (round 5).
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
+        replacement.ReconcileOwedReleases();
 
         Assert.Equal(handedOn, replacement.OwedButtonReleases);
         Assert.Equal(handedOn != 0, replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);

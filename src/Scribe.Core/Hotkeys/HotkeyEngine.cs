@@ -78,6 +78,7 @@ internal sealed class HotkeyEngine
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
     private long _mouseHookLossesHandled;
+    private long _owedReleaseReconciliations;
     private long _mouseButtonEvents;
     private int _wakePending;
     private uint _ownerThreadId;
@@ -101,12 +102,13 @@ internal sealed class HotkeyEngine
     /// <param name="owedButtonReleases">
     /// The releases still owed to button presses the engine this one replaces had swallowed
     /// (<see cref="OwedButtonReleases"/>), so a reinstall, whose state otherwise starts over, still keeps them from the
-    /// app. Zero for none.
+    /// app. Handed on as they were sealed; this engine judges them against Windows once its own mouse hook exists
+    /// (<see cref="ReconcileOwedReleases"/>). Zero for none.
     /// </param>
     /// <param name="buttonHeldInWindows">
-    /// Windows' own view of a mouse button, null for a button it cannot tell about, which the recovery from a lost mouse
-    /// hook asks about every release still owed (<see cref="ReleasesWindowsDoesNotHold"/>). Null for the whole function
-    /// keeps every owed release, as the tests that do not script Windows expect.
+    /// Windows' own view of a mouse button, null for a button it cannot tell about, which the recovery decision
+    /// (<see cref="ReconcileOwedReleases"/>) asks about every release still owed (<see cref="ReleasesWindowsDoesNotHold"/>).
+    /// Null for the whole function keeps every owed release, as the tests that do not script Windows expect.
     /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
@@ -145,14 +147,16 @@ internal sealed class HotkeyEngine
     public bool OwesButtonRelease => OwedButtonReleases != 0;
 
     /// <summary>
-    /// The recovery decision for owed releases, made between messages when the hook's view can no longer be trusted (a
-    /// lost mouse hook, a reinstall): of <paramref name="owedButtonReleases"/>, only the buttons Windows reports up stay
-    /// owed. A press the hook swallowed never reaches Windows, so Windows holding the button means it received a press
-    /// the hook did not swallow (a callback that missed its deadline passes its message on, or a press made while no hook
-    /// existed), and that press's release must reach the app, or the app keeps the button down and every later swallowed
-    /// click keeps it so. A button Windows cannot tell about (null) is dropped too: at worst that lets one release through,
-    /// never strands a press. Windows reporting up holds nothing a swallowed release could strand. Without a view at all
-    /// (a null function) everything stays owed.
+    /// The recovery decision for owed releases, made between messages once the hook's view can no longer be trusted (a
+    /// lost mouse hook, a registration after a time without one, such as a reinstall's first): of
+    /// <paramref name="owedButtonReleases"/>, only the buttons Windows reports up stay owed. A press the hook swallowed
+    /// never reaches Windows, so Windows holding the button means it received a press the hook did not swallow (a
+    /// callback that missed its deadline passes its message on, or a press made while no hook existed), and that press's
+    /// release must reach the app, or the app keeps the button down and every later swallowed click keeps it so. A button
+    /// Windows cannot tell about (null, which includes a reading of up the call may have failed to take:
+    /// <see cref="NativeMethods.ReadMouseButtonState"/>) is dropped too: at worst that lets one release through, never
+    /// strands a press. Windows reporting up holds nothing a swallowed release could strand. Without a view at all (a
+    /// null function) everything stays owed.
     /// </summary>
     internal static int ReleasesWindowsDoesNotHold(int owedButtonReleases, Func<uint, bool?>? buttonHeldInWindows)
     {
@@ -186,6 +190,28 @@ internal sealed class HotkeyEngine
                 _ = SettleRelease(button);
             }
         }
+    }
+
+    /// <summary>Any thread, for tests: how many times the owner reconciled its owed releases with Windows' view.</summary>
+    internal long OwedReleaseReconciliations => Interlocked.Read(ref _owedReleaseReconciliations);
+
+    /// <summary>
+    /// Owner thread, between messages, only once this engine's mouse hook exists: the recovery decision for the releases
+    /// still owed (<see cref="ReleasesWindowsDoesNotHold"/>), made at every point after which the hook's view may lag
+    /// Windows': a renewal that found the hook gone (<see cref="OnMouseHookLost"/>), and every registration that follows a
+    /// time without this installation's mouse hook, its first one included, which is when a reinstall's inherited debts
+    /// meet the mouse again. Asked any earlier, a release and a new press could still reach Windows unseen between the
+    /// answer and the hook. A retired engine does nothing: its debts are the replacement's.
+    /// </summary>
+    public void ReconcileOwedReleases()
+    {
+        if (!IsOwnerCall())
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _owedReleaseReconciliations);
+        ForgiveReleasesWindowsHolds();
     }
 
     // Owner thread, for a press the machines swallow: commits the debt of its release unless the retirement sealed the
@@ -291,7 +317,7 @@ internal sealed class HotkeyEngine
 
         ApplyPendingCommands();
         Interlocked.Increment(ref _mouseHookLossesHandled);
-        ForgiveReleasesWindowsHolds();
+        ReconcileOwedReleases();
         _standard.ForgetMouseButtons();
         _dictationOnly?.ForgetMouseButtons();
 

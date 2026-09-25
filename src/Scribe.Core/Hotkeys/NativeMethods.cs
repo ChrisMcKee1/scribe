@@ -137,12 +137,171 @@ internal static partial class NativeMethods
         (GetAsyncKeyState((int)virtualKey) & 0x8000) != 0;
 
     /// <summary>
-    /// Windows' own view of a mouse button (GetAsyncKeyState, which "works with mouse buttons"), or null when it cannot be
-    /// trusted: GetAsyncKeyState returns zero, the same as up, when it fails, and it fails when "The current desktop is
-    /// not the active desktop", which the caller's desktop not receiving input tells (see the round 4 notes in AGENTS.md).
+    /// Windows' own view of a mouse button, or null when it cannot be trusted (see <see cref="ReadMouseButtonState"/>).
     /// </summary>
     internal static bool? MouseButtonStateInWindows(uint button) =>
-        ThreadDesktopReceivesInput() == true ? IsKeyLogicallyDown(button) : null;
+        ReadMouseButtonState(
+            button, ThreadDesktopReceivesInput, GetForegroundWindow, IsKeyLogicallyDown, WindowAllowsKeyStateReads);
+
+    /// <summary>
+    /// The decision behind <see cref="MouseButtonStateInWindows"/>, over the readings it takes, so a test can script
+    /// them. GetAsyncKeyState "works with mouse buttons", but "The return value is zero if the call fails", the same as
+    /// up, and it fails when "The current desktop is not the active desktop" and when "UI Privilege Isolation (UIPI)
+    /// prevents the calling thread from accessing the foreground thread" (a window of a higher integrity level in front,
+    /// such as an elevated app's); its third failure, no DESKTOP_HOOKCONTROL or DESKTOP_JOURNALRECORD access to the
+    /// foreground thread's desktop, cannot happen once the first check holds: that desktop is then this thread's own, and
+    /// the hooks this thread installed there needed DESKTOP_HOOKCONTROL ("Required to establish any of the window
+    /// hooks"). So a reading of down is Windows' own, while a reading of up counts only on a desktop receiving input,
+    /// with the same foreground window before and after the reading, which <paramref name="windowAllowsReads"/> says the
+    /// call could reach; anything else is null, which the recovery treats as unknown and so drops the debt.
+    /// </summary>
+    internal static bool? ReadMouseButtonState(
+        uint button,
+        Func<bool?> desktopReceivesInput,
+        Func<nint> foregroundWindow,
+        Func<uint, bool> isDown,
+        Func<nint, bool?> windowAllowsReads)
+    {
+        if (desktopReceivesInput() != true)
+        {
+            return null;
+        }
+
+        var before = foregroundWindow();
+        if (isDown(button))
+        {
+            return true;
+        }
+
+        var after = foregroundWindow();
+        return before != 0 && before == after && windowAllowsReads(before) == true ? false : null;
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial nint GetForegroundWindow();
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    private static partial uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
+
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const uint TOKEN_QUERY = 0x0008;
+    private const int TokenIntegrityLevel = 25;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial nint OpenProcess(
+        uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(nint hObject);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool OpenProcessToken(nint processHandle, uint desiredAccess, out nint tokenHandle);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetTokenInformation(
+        nint tokenHandle, int tokenInformationClass, nint tokenInformation, int tokenInformationLength, out int returnLength);
+
+    [LibraryImport("advapi32.dll")]
+    private static partial nint GetSidSubAuthorityCount(nint sid);
+
+    [LibraryImport("advapi32.dll")]
+    private static partial nint GetSidSubAuthority(nint sid, uint subAuthority);
+
+    private static readonly Lazy<uint?> OwnIntegrityLevel = new(() => ProcessIntegrityLevel((uint)Environment.ProcessId));
+
+    /// <summary>
+    /// Whether GetAsyncKeyState can reach the thread that owns <paramref name="window"/>: true for this process's own
+    /// windows and for a process whose integrity level is no higher than this one's, false for a higher one, which UIPI
+    /// keeps the call from, and null when either level cannot be read.
+    /// </summary>
+    internal static bool? WindowAllowsKeyStateReads(nint window)
+    {
+        if (window == 0)
+        {
+            return null;
+        }
+
+        _ = GetWindowThreadProcessId(window, out var processId);
+        if (processId == 0)
+        {
+            return null;
+        }
+
+        if (processId == (uint)Environment.ProcessId)
+        {
+            return true;
+        }
+
+        return IntegrityAllowsReads(OwnIntegrityLevel.Value, ProcessIntegrityLevel(processId));
+    }
+
+    /// <summary>
+    /// UIPI's rule, as the reading needs it: a thread can reach the thread of a process whose integrity level is no
+    /// higher than its own (UIPI "prevents messages from being received from a lower-integrity-level sender"), and cannot
+    /// reach a higher one. Null when either level is unknown.
+    /// </summary>
+    internal static bool? IntegrityAllowsReads(uint? own, uint? theirs) =>
+        own is { } mine && theirs is { } other ? other <= mine : null;
+
+    /// <summary>
+    /// A process's mandatory integrity level (the RID of its token's integrity SID: 0x2000 medium, 0x3000 high), or null
+    /// when it cannot be read. OpenProcessToken needs only PROCESS_QUERY_LIMITED_INFORMATION.
+    /// </summary>
+    internal static uint? ProcessIntegrityLevel(uint processId)
+    {
+        var process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (process == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!OpenProcessToken(process, TOKEN_QUERY, out var token))
+            {
+                return null;
+            }
+
+            try
+            {
+                _ = GetTokenInformation(token, TokenIntegrityLevel, 0, 0, out var needed);
+                if (needed <= 0)
+                {
+                    return null;
+                }
+
+                var label = Marshal.AllocHGlobal(needed);
+                try
+                {
+                    if (!GetTokenInformation(token, TokenIntegrityLevel, label, needed, out _))
+                    {
+                        return null;
+                    }
+
+                    // TOKEN_MANDATORY_LABEL starts with its SID_AND_ATTRIBUTES, which starts with the SID pointer; the
+                    // level is that SID's last subauthority.
+                    var sid = Marshal.ReadIntPtr(label);
+                    var count = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+                    return count == 0 ? null : (uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(label);
+                }
+            }
+            finally
+            {
+                CloseHandle(token);
+            }
+        }
+        finally
+        {
+            CloseHandle(process);
+        }
+    }
 
     internal const uint EVENT_SYSTEM_DESKTOPSWITCH = 0x0020;
     internal const uint WINEVENT_OUTOFCONTEXT = 0x0000;
