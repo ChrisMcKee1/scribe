@@ -64,7 +64,8 @@ privacy/offline promise.
   for cleanup (with the app profile's writing style, and a one-line request for a terminal), the reply checked
   against what was sent and its dashes rewritten, and then your snippets and every other dictionary replacement
   made where the reply kept the words that set them off (where the model rewrote, dropped or repeated those
-  words, its words stay). Those others are the template-like replacements: one that is more than one line,
+  words, or already wrote the whole replacement around them, as a model that writes the comma of a ", Inc"
+  itself does, its words stay). Those others are the template-like replacements: one that is more than one line,
   longer than 100 characters, holds an em or en dash, deletes the words, or has spacing the reply's
   normalization would change (a tab, a run of spaces, a space at either end, or a space before a punctuation
   mark that no letter or digit follows). The reply's normalization keeps the space before a mark that begins a
@@ -134,7 +135,8 @@ privacy/offline promise.
   reclaimed, and after a dictionary entry, snippet or app profile is deleted or an entry is changed, Scribe
   checkpoints the database's write-ahead log and truncates it, so the old text is gone from both files once
   that checkpoint succeeds; a dictation, a Clear History still running or another reader of the database can
-  hold it off, and it is retried.
+  hold it off, and it is retried. One still owed when Scribe quits or crashes is made at the next launch: the
+  first maintenance pass of each launch, about 30 seconds after Scribe starts or sooner, checkpoints too.
   Text deleted by an earlier build, before this was set, can remain in free pages until they are reused or
   reclaimed.
   Settings > History chooses the limit (7, 30, 90 days, 1 year or Forever) and clears all history after a
