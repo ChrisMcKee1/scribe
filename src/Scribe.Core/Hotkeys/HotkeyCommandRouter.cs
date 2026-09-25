@@ -37,7 +37,7 @@ internal sealed class HotkeyCommandRouter
     /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
     /// <param name="buttonHeldInWindows">
     /// Windows' own view of a mouse button, null when it cannot be told, which a recovery asks about every release still
-    /// owed (see <see cref="HotkeyEngine.OnMouseHookLost"/> and <see cref="BeginEngine"/>).
+    /// owed (see <see cref="HotkeyEngine.ReconcileOwedReleases"/>), handed to every engine.
     /// </param>
     public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, Func<uint, bool?>? buttonHeldInWindows = null)
         : this(binding, new object(), isLogicallyDown, buttonHeldInWindows)
@@ -178,10 +178,13 @@ internal sealed class HotkeyCommandRouter
     /// sticky setting is read from the published configuration, and the retired engine can no longer
     /// act on them. The one thing the new engine takes from the old is the releases still owed to
     /// mouse button presses the old one swallowed (<see cref="HotkeyEngine.OwedButtonReleases"/>), read
-    /// after the retirement, from which the old engine changes them no more (short of a callback its
-    /// thread was already inside, which a reinstall has asked to quit and joined by then): DefWindowProc
+    /// after the retirement sealed them, so no callback of the old engine, one already running
+    /// included, changes them any more (a press whose debt loses to the seal is not swallowed): DefWindowProc
     /// makes a side button's lone release a Back or Forward command, so a button held through a
-    /// reinstall must still reach no app.
+    /// reinstall must still reach no app. They are handed on as sealed, not judged here: until the new
+    /// engine's mouse hook exists a release and a new press can still reach Windows unseen, so the
+    /// replacement asks Windows about them once its first registration is in place
+    /// (<see cref="HotkeyEngine.ReconcileOwedReleases"/>).
     /// </summary>
     public (HotkeyEngine Engine, HotkeyTrigger? Interrupted) BeginEngine(HotkeyTransitionQueue transitions)
     {
@@ -192,7 +195,7 @@ internal sealed class HotkeyCommandRouter
             var interrupted = previous?.Retire();
             var engine = new HotkeyEngine(
                 _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
-                HotkeyEngine.ReleasesWindowsDoesNotHold(previous?.OwedButtonReleases ?? 0, _buttonHeldInWindows),
+                previous?.OwedButtonReleases ?? 0,
                 _buttonHeldInWindows);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);

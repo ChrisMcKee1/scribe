@@ -119,7 +119,11 @@ public partial class HotkeyServiceTests
         {
             Assert.True(SpinWait.SpinUntil(() => NativeMethods.IsKeyLogicallyDown(F20), HookTimeout), "F20 never reached Windows.");
             Assert.False(NativeMethods.IsKeyLogicallyDown(MouseButtons.Back), "Windows shows the swallowed Back press as down.");
-            Assert.Equal(false, NativeMethods.MouseButtonStateInWindows(MouseButtons.Back));
+
+            // The production reading never takes the swallowed press for down. Whether it can vouch for up depends on the
+            // window in front (a zero reading UIPI may have caused is unknown: review round 5, A6), which a runner's
+            // desktop may not have, so up or unknown are both right here.
+            Assert.NotEqual(true, NativeMethods.MouseButtonStateInWindows(MouseButtons.Back));
         }
         finally
         {
@@ -144,6 +148,87 @@ public partial class HotkeyServiceTests
 
         AwaitRenewal(service);
         Assert.Equal(1, service.MouseHookLossesHandled);
+    }
+
+    // A5 (round 5): a real reinstall, with Windows' view scripted by thread. Asked on the reinstalling thread, before the
+    // replacement's mouse hook exists, Windows still shows Middle up (its press was swallowed); asked on the new hook
+    // thread once its mouse hook is registered, Middle is down, because the user let go and pressed Middle again in the
+    // gap, both reaching Windows. The inherited debt must be judged by the second answer, so the real release of that
+    // second press reaches the app. The test plays the hook thread between its messages, as the drain-only tests do.
+    [Fact]
+    public void Start_judges_inherited_debts_only_once_the_replacement_s_mouse_hook_exists()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        static bool? View(uint button) =>
+            button == MouseButtons.Middle && Thread.CurrentThread.Name == "Scribe.HotkeyHook";
+        var router = new HotkeyCommandRouter(BareButton(MouseButtons.Middle), new object(), isLogicallyDown: null, View);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
+        service.Start();
+        Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: true).Suppress);
+
+        service.ReinstallHookNow();
+
+        var replacement = service.CurrentEngineForTests!;
+        Assert.True(service.MouseHookInstalled);
+        Assert.Equal(0, replacement.OwedButtonReleases);
+        Assert.False(replacement.OnMouseButtonEvent(MouseButtons.Middle, isDown: false).Suppress);
+    }
+
+    // The same reinstall when the owed release was all that kept the mouse hook (no binding presses a button): the new
+    // thread registers it drain-only, its first reconciliation finds Windows holding Middle and drops the debt, and the
+    // hook, with nothing left to drain, goes at once rather than at the next watchdog period.
+    [Fact]
+    public void Start_drops_a_drain_only_mouse_hook_at_once_when_its_first_reconciliation_leaves_nothing_owed()
+    {
+        if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return; // someone's own desktop: the test's events are real engine input, so it runs on CI or a private desktop
+        }
+
+        static bool? View(uint button) =>
+            button == MouseButtons.Middle && Thread.CurrentThread.Name == "Scribe.HotkeyHook";
+        var router = new HotkeyCommandRouter(BareButton(MouseButtons.Middle), new object(), isLogicallyDown: null, View);
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
+        service.Start();
+        Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: true).Suppress);
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
+        AwaitRenewal(service);
+        Assert.True(service.MouseHookInstalled, "The drain-only mouse hook was removed with a release still owed.");
+
+        service.ReinstallHookNow();
+
+        Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
+        Assert.False(service.MouseHookInstalled, "The drain-only mouse hook outlived the only release it was kept for.");
+    }
+
+    // The wiring of that decision: the hook thread reconciles its owed releases after every registration that follows a
+    // time without its mouse hook (its first, one after the hook was removed) and after a renewal that finds the hook
+    // gone, and never after a healthy renewal.
+    [Fact]
+    public void Start_reconciles_owed_releases_after_each_registration_that_follows_a_gap()
+    {
+        using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, BareButton(MouseButtons.Back), () => true);
+        service.Start();
+        Assert.Equal(1, service.CurrentEngineForTests!.OwedReleaseReconciliations);
+
+        AwaitRenewal(service);
+        Assert.Equal(1, service.CurrentEngineForTests!.OwedReleaseReconciliations);
+
+        Assert.True(UnhookWindowsHookEx(service.MouseHookHandle), $"Could not remove the registration (Win32 error {Marshal.GetLastWin32Error()}).");
+        AwaitRenewal(service);
+        Assert.Equal(2, service.CurrentEngineForTests!.OwedReleaseReconciliations);
+
+        service.UpdateBindings(HotkeyBinding.DefaultDictation, null);
+        Assert.True(SpinWait.SpinUntil(() => !service.MouseHookInstalled, HookTimeout), "The mouse hook was never removed.");
+        service.UpdateBindings(BareButton(MouseButtons.Back), null);
+        Assert.True(SpinWait.SpinUntil(() => service.MouseHookInstalled, HookTimeout), "The mouse hook was never installed.");
+        Assert.True(
+            SpinWait.SpinUntil(() => service.CurrentEngineForTests!.OwedReleaseReconciliations == 3, HookTimeout),
+            $"Reconciled {service.CurrentEngineForTests!.OwedReleaseReconciliations} time(s), not 3.");
     }
 
     // G1: the last mouse binding replaced by a key while Back is still held after a swallowed press. The service keeps a
