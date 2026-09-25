@@ -62,11 +62,11 @@ public enum LibraryValidationKind
     ContentNotSaveable,
 
     /// <summary>
-    /// A name, category, description, spoken or written form is ill-formed UTF-16 (an unpaired surrogate, half of an
-    /// emoji a paste or an input method left behind). No library file can hold it, and the stores refuse it, so the
-    /// editor refuses it first.
+    /// A typed or pasted name, category, description, spoken or written form holds text that is not well-formed UTF-16:
+    /// an unpaired surrogate, half of an emoji a paste or an input method left behind, a high surrogate at the very end
+    /// included. No library file can hold it, and the stores refuse it, so the editor refuses it first (3.5.1).
     /// </summary>
-    IllFormedText,
+    MalformedText,
 }
 
 /// <summary>A validation problem, with the row and field to focus.</summary>
@@ -133,9 +133,11 @@ public sealed record LibraryCaptureResult(LibraryChangeSet? ChangeSet, IReadOnly
 /// Decision 2 arrives as a delegate (<c>LibraryDecisions.DefaultAiPermission</c> in production), so this type never
 /// encodes which libraries AI cleanup may use by default. The one place it needs the permission a library currently has
 /// is where a new library inherits it (a duplicate, a retired built-in's kept rows) and where Use these choices records
-/// what is shown; that follows the policy's documented order (an unhealthy state permits nothing, content that is not the
-/// accepted one is not permitted, an explicit choice decides, a lost state denies, then the kind default: a built-in's
-/// from the delegate, a custom library's off), which the integration commit can point at <c>AiVocabularyPolicy</c>.
+/// what is shown. That is the draft-time mirror of the policy's documented order, not a call to it: an unhealthy state
+/// permits nothing, content that is not the accepted one is not permitted (a retired built-in's document included), an
+/// explicit choice decides, a lost state denies, then the kind default from the delegate, a built-in's as an existing
+/// one and a custom library's as a discovered file. Content the draft rewrites is accepted by its Save, so it is not
+/// checked.
 /// </para>
 /// </remarks>
 public sealed class LibraryWorkspace
@@ -279,7 +281,7 @@ public sealed class LibraryWorkspace
 
         if (!LibraryEditor.IsWellFormed(name))
         {
-            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Name);
+            return Refused(lib, LibraryValidationKind.MalformedText, LibraryMetadataField.Name);
         }
 
         if (LibraryMetadata.CheckTyped(name) == LibraryMetadataProblem.DoubleQuote)
@@ -335,12 +337,12 @@ public sealed class LibraryWorkspace
 
         if (!sameCategory && !LibraryEditor.IsWellFormed(category))
         {
-            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Category);
+            return Refused(lib, LibraryValidationKind.MalformedText, LibraryMetadataField.Category);
         }
 
         if (!sameDescription && !LibraryEditor.IsWellFormed(description))
         {
-            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Description);
+            return Refused(lib, LibraryValidationKind.MalformedText, LibraryMetadataField.Description);
         }
 
         if (!sameCategory && LibraryMetadata.CheckTyped(category) == LibraryMetadataProblem.DoubleQuote)
@@ -400,6 +402,14 @@ public sealed class LibraryWorkspace
         Change(_state.WithAi(lib.Header.Id, permitted));
         return Accepted();
     }
+
+    /// <summary>
+    /// What the library's Use in AI cleanup box shows in this draft: the draft-time mirror of the policy's order (see the
+    /// class remarks), with Decision 2 from the delegate for a library nothing recorded, the loss's denial, and content the
+    /// draft rewrites counted as accepted by its Save. The page renders the box from this, not from the committed
+    /// runtime policy, which judges committed content only.
+    /// </summary>
+    public bool ShowsAiPermission(string libraryId) => ShownAi(_state, Get(libraryId));
 
     /// <summary>
     /// Use these choices, after the AI permissions were lost (review finding A3): records an explicit choice for every
@@ -585,8 +595,9 @@ public sealed class LibraryWorkspace
 
     /// <summary>
     /// Keeps the rows the user authored in a built-in that no longer ships as a new custom library (based on the retired
-    /// id, AI permission inherited through Decision 2, on when the retired built-in was on). Returns the id; asking again
-    /// for the same retired built-in returns the library this draft already made.
+    /// id, on when the retired built-in was on, AI permission through Decision 2 from the permission the retired
+    /// built-in's edits document had: none unless the committed state accepted that document). Returns the id; asking
+    /// again for the same retired built-in returns the library this draft already made.
     /// </summary>
     /// <exception cref="ArgumentException">The catalog has no retired built-in with that id.</exception>
     public string KeepRetiredBuiltIn(string retiredLibraryId)
@@ -609,7 +620,10 @@ public sealed class LibraryWorkspace
         var rows = retired.AuthoredTerms
             .Select(values => NewRow(LibraryRow.Custom(values), legacyEmpty: values.Written.Length == 0))
             .ToImmutableList();
-        var inherited = ShownAi(_state, retired.LibraryId, builtIn: true, committed: null, rewritten: false);
+
+        // The retired built-in's edits document is present, so what it passes on is the permission for that document
+        // (review finding A4): one the state never accepted passes nothing on, whatever was chosen for the id.
+        var inherited = ShownAi(_state, retired.LibraryId, builtIn: true, ContentAccepted(retired.LibraryId, builtIn: true, retired.ContentHash));
         var ai = _defaultAiPermission(LibraryOrigin.RetiredBuiltIn, false, inherited);
         var enabled = _committed.LocalState.EnabledIds.Contains(retired.LibraryId);
         var header = NewHeader(id, name, DefaultCategory, description: null, basedOn: retired.LibraryId, LibraryOrigin.RetiredBuiltIn);
@@ -1220,10 +1234,13 @@ public sealed class LibraryWorkspace
     /// <summary>
     /// After the Save of the change set captured at <paramref name="revision"/> committed: <paramref name="committed"/> is
     /// the new catalog, everything the Save wrote is committed, and every edit made after <paramref name="revision"/>
-    /// stays unsaved on top of it. A library the Save had to keep under another id (another app took its file name) is
-    /// the kept library from now on, edits after the capture included. The undo history ends here. Call it only when
-    /// the Save stands (<see cref="LibrarySaveStatus.Applied"/> or <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>):
-    /// after any other outcome the draft is still unsaved, and a newer catalog is taken with <see cref="Rebase"/>.
+    /// stays unsaved on top of it, structural ones included: a library the Save created or restored that the user
+    /// removed meanwhile is a pending deletion of the saved library, and a library it deleted that the user took back is
+    /// an unsaved restore of the Recently deleted entry the Save made (review finding A2). A library the Save had to keep
+    /// under another id (another app took its file name) is the kept library from now on, edits after the capture
+    /// included. The undo history ends here. Call it only when the Save stands (<see cref="LibrarySaveStatus.Applied"/>
+    /// or <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>): after any other outcome the draft is still unsaved,
+    /// and a newer catalog is taken with <see cref="Rebase"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">No change set was captured at <paramref name="revision"/>.</exception>
     public void MarkSaved(long revision, LibraryCatalog committed)
@@ -1267,9 +1284,11 @@ public sealed class LibraryWorkspace
 
     /// <summary>
     /// Takes a newer committed catalog and keeps the draft's edits: whatever the user did not change takes the new
-    /// catalog's value, and every change the user made stays unsaved on top of it. A library the user edited is then
-    /// saved over what the newer catalog holds for it, so use this when the catalog moved for a reason the user has seen
-    /// (a Save refused as stale, say), never to write over an outside edit without asking. The undo history ends here.
+    /// catalog's value, field by field for a library's name and details and row by row for its terms, and every change
+    /// the user made stays unsaved on top of it. A library the user edited is then saved over what the newer catalog
+    /// holds for it, so use this when the catalog moved for a reason the user has seen (a Save refused as stale, say),
+    /// never to write over an outside edit without asking. A library the user edited that the newer catalog no longer has
+    /// stays, unsaved, as a new file with the draft's content. The undo history ends here.
     /// </summary>
     public void Rebase(LibraryCatalog committed)
     {
@@ -1296,6 +1315,23 @@ public sealed class LibraryWorkspace
         }
 
         var merged = Merge(current, from, to);
+
+        // A library the Save committed that the user removed from the draft while it ran (a new library deleted, a
+        // restore or an import discarded or undone) is committed now, so it is a pending deletion of the committed
+        // library, which the next Save deletes (review finding A2). Only a library the draft added can leave the draft,
+        // so only a MarkSaved meets this.
+        foreach (var (id, saved) in to.Libraries)
+        {
+            if (!saved.Header.BuiltIn
+                && !merged.Libraries.ContainsKey(id)
+                && !current.Libraries.ContainsKey(id)
+                && from.Libraries.TryGetValue(id, out var captured)
+                && captured.Header.Committed is null)
+            {
+                merged = merged.WithLib(saved with { Header = saved.Header with { PendingDelete = true } });
+            }
+        }
+
         foreach (var lib in merged.Libraries.Values.ToList())
         {
             var id = lib.Header.Id;
@@ -1319,7 +1355,10 @@ public sealed class LibraryWorkspace
             }
             else if (lib.Header.Committed is not null)
             {
-                merged = merged.WithoutLib(id);
+                // Its committed file is gone from the new catalog while the draft keeps the library: the Save deleted it
+                // and the user took the deletion back, or it went outside Scribe after the user edited it. A deletion
+                // the draft still asks for is done; anything else stays, unsaved (review finding A2).
+                merged = lib.Header.PendingDelete ? merged.WithoutLib(id) : Recreated(merged, lib, current, committed);
             }
         }
 
@@ -1329,13 +1368,40 @@ public sealed class LibraryWorkspace
         Commit(merged);
     }
 
+    // A library whose committed file the new catalog no longer has, kept by the draft: a restore of the Recently deleted
+    // entry the Save that deleted it made (the same bytes: its original id, its hash, and new in this catalog), so
+    // nothing but the move back is written; or, with no such entry, a new file with the draft's content. Its enabled
+    // state, AI choice, markers and notice stay as the draft shows them.
+    private State Recreated(State merged, Lib lib, State current, LibraryCatalog committed)
+    {
+        var id = lib.Header.Id;
+        var gone = lib.Header.Committed!;
+        var listed = _committed.RecentlyDeleted.Select(entry => entry.EntryName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var entry = gone.ContentHash is { } hash
+            ? committed.RecentlyDeleted.FirstOrDefault(candidate =>
+                !listed.Contains(candidate.EntryName)
+                && string.Equals(candidate.OriginalId, id, StringComparison.OrdinalIgnoreCase)
+                && candidate.ContentHash == hash)
+            : null;
+        var header = lib.Header with
+        {
+            Origin = entry is null ? LibraryOrigin.Created : LibraryOrigin.Restored,
+            FileState = entry is null ? lib.Header.FileState : gone.State,
+            FileName = id + ".csv",
+            Committed = null,
+            RestoredFrom = entry is null ? null : new RecentlyDeletedContent(entry, gone.Content, gone.State),
+            Created = null,
+        };
+        return merged.WithLib(lib with { Header = header }).WithLocalOf(id, current.Local);
+    }
+
     // Ill-formed text in what an import would bring in: the name (a new library's), its details and every row it
     // applies. The codec never decodes bytes into ill-formed text, so this guards a plan made from anything else.
     private static LibraryValidationIssue? IllFormedIn(LibraryImportPlan plan)
     {
         var libraryId = plan.Target is LibraryImportTarget.ExistingLibrary into ? into.LibraryId : string.Empty;
         LibraryValidationIssue Issue(TermFields field, LibraryMetadataField metadata) =>
-            new(libraryId, null, LibraryValidationKind.IllFormedText, field, metadata);
+            new(libraryId, null, LibraryValidationKind.MalformedText, field, metadata);
 
         if (plan.Target is LibraryImportTarget.NewLibrary)
         {
@@ -1506,21 +1572,7 @@ public sealed class LibraryWorkspace
                     }
 
                     var existing = list[found];
-                    var values = existing.Row.Values with
-                    {
-                        Written = operation.FileRow.Written,
-                        WholeWord = operation.FileRow.WholeWord,
-                        Enabled = operation.FileRow.Enabled,
-                    };
-
-                    // Met by spoken form, the row keeps its own spelling of it, as the dictionary merge does. Met by a
-                    // renamed built-in row's original key, the file's row is that term as the file says it, so its
-                    // spoken form comes back too.
-                    if (!LibraryTermKey.AreSame(existing.Row.Values.Spoken, operation.FileRow.Spoken))
-                    {
-                        values = values with { Spoken = operation.FileRow.Spoken };
-                    }
-
+                    var values = LibraryImportPlanner.FilesVersion(existing.Row.Values, operation.FileRow);
                     list[found] = existing with
                     {
                         Row = builtIn ? _overlay.Edit(existing.Row, values) : LibraryRow.Custom(values),
@@ -1558,7 +1610,10 @@ public sealed class LibraryWorkspace
 
     private static bool IsBlank(TermValues values) => values.Spoken.Length == 0 && values.Written.Length == 0;
 
-    private static bool IsBlank(DraftTermRow row) => IsBlank(row.Row.Values);
+    // A blank placeholder is a custom row with nothing typed in it yet. A built-in row is never one: every row of a
+    // built-in is a shipped or authored term with a key, so a built-in row the user cleared stays a term, shown, counted
+    // and validated (it blocks Save until it is typed again or restored), never dropped as if it had not been there.
+    private static bool IsBlank(DraftTermRow row) => row.Row.Origin == TermOrigin.Custom && IsBlank(row.Row.Values);
 
     private static int CountTerms(IEnumerable<DraftTermRow>? rows) => rows?.Count(row => !IsBlank(row)) ?? 0;
 
@@ -1573,12 +1628,12 @@ public sealed class LibraryWorkspace
     {
         if (!string.Equals(typed.Spoken, current?.Spoken, StringComparison.Ordinal) && !LibraryEditor.IsWellFormed(typed.Spoken))
         {
-            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.IllFormedText, TermFields.Spoken);
+            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.MalformedText, TermFields.Spoken);
         }
 
         if (!string.Equals(typed.Written, current?.Written, StringComparison.Ordinal) && !LibraryEditor.IsWellFormed(typed.Written))
         {
-            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.IllFormedText, TermFields.Written);
+            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.MalformedText, TermFields.Written);
         }
 
         return null;
@@ -1776,7 +1831,8 @@ public sealed class LibraryWorkspace
             .Select(lib => lib.Header.Name);
 
     // Every id a new library must not take (3.5.4): built-in ids, shipped and retired; the catalog's and the draft's
-    // libraries; the stems of the files in the libraries folder (every CSV there is a catalog library); and, unless a
+    // libraries; the stems of the files in the libraries folder (every CSV there is a catalog library); the libraries of a
+    // Save in flight, which its commit may bring back even after the user removed them from the draft; and, unless a
     // restore is asking for its own old id, the original ids of Recently deleted entries.
     private IEnumerable<string> TakenIds(bool includeRecentlyDeleted)
     {
@@ -1787,7 +1843,8 @@ public sealed class LibraryWorkspace
             .Concat(_committed.Libraries
                 .Where(library => !string.IsNullOrEmpty(library.FileName))
                 .Select(library => Path.GetFileNameWithoutExtension(library.FileName!)))
-            .Concat(_state.Libraries.Values.Select(lib => lib.Header.Id));
+            .Concat(_state.Libraries.Values.Select(lib => lib.Header.Id))
+            .Concat(_captures.Values.SelectMany(capture => capture.State.Libraries.Keys));
         return includeRecentlyDeleted
             ? ids.Concat(_committed.RecentlyDeleted.Select(entry => entry.OriginalId))
             : ids;
@@ -1805,20 +1862,17 @@ public sealed class LibraryWorkspace
             && string.Equals(restored.Entry.EntryName, entryName, StringComparison.OrdinalIgnoreCase));
 
     private bool ShownAi(State state, Lib lib) =>
-        ShownAi(state, lib.Header.Id, lib.Header.BuiltIn, lib.Header.Committed,
-            rewritten: !lib.Header.PendingDelete && Diff.Libraries.TryGetValue(lib.Header.Id, out var change) && change.ContentChanged);
+        ShownAi(state, lib.Header.Id, lib.Header.BuiltIn,
+            contentAccepted: lib.Header.Committed is not { } committed
+                || (!lib.Header.PendingDelete && Diff.Libraries.TryGetValue(lib.Header.Id, out var change) && change.ContentChanged)
+                || ContentAccepted(lib.Header.Id, lib.Header.BuiltIn, committed.ContentHash));
 
     // What a library's Use in AI cleanup box shows, in the policy's order (see the class remarks): used where a new
     // library inherits a permission and where Use these choices records what is shown. Content the Save rewrites is
-    // accepted by that Save, so only an unchanged committed file is checked against the accepted content.
-    private bool ShownAi(State state, string id, bool builtIn, CatalogLibrary? committed, bool rewritten)
+    // accepted by that Save, so only content the draft keeps as committed is checked against the accepted content.
+    private bool ShownAi(State state, string id, bool builtIn, bool contentAccepted)
     {
-        if (IsReadOnly)
-        {
-            return false;
-        }
-
-        if (committed is not null && !rewritten && !ContentAccepted(id, builtIn, committed))
+        if (IsReadOnly || !contentAccepted)
         {
             return false;
         }
@@ -1828,19 +1882,25 @@ public sealed class LibraryWorkspace
             return chosen;
         }
 
-        return !state.Local.Lost && builtIn && _defaultAiPermission(LibraryOrigin.Existing, true, null);
+        // A custom library meets the kind default only as a file nothing recorded, which is Decision 2's for a discovered
+        // one, exactly as the policy asks it: never a rule of the workspace's own, so a change to Decision 2 is one change.
+        return !state.Local.Lost
+            && _defaultAiPermission(builtIn ? LibraryOrigin.Existing : LibraryOrigin.Discovered, builtIn, null);
     }
 
-    private bool ContentAccepted(string id, bool builtIn, CatalogLibrary committed)
+    // Whether content is what the committed state's choices were made for (review finding A4), as the policy decides it:
+    // a built-in with no edits document holds its shipped rows; an edits document, a retired built-in's included, and
+    // every custom file must be the accepted content, and a custom file whose bytes were not read is never accepted.
+    private bool ContentAccepted(string id, bool builtIn, LibraryContentHash? content)
     {
-        var accepted = _committed.LocalState.AcceptedContent;
-        if (builtIn)
+        if (builtIn && content is null)
         {
-            return committed.ContentHash is not { } document
-                || (accepted.TryGetValue(id, out var acceptedDocument) && acceptedDocument == document);
+            return true;
         }
 
-        return committed.ContentHash is { } file && accepted.TryGetValue(id, out var acceptedFile) && acceptedFile == file;
+        return content is { } held
+            && _committed.LocalState.AcceptedContent.TryGetValue(id, out var accepted)
+            && accepted == held;
     }
 
     private Differences Diff => _differences ??= ComputeDifferences();
@@ -2154,12 +2214,12 @@ public sealed class LibraryWorkspace
         // content that came from elsewhere (a restored entry, a retired built-in's rows).
         if (!LibraryEditor.IsWellFormed(values.Spoken))
         {
-            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.IllFormedText, TermFields.Spoken));
+            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.MalformedText, TermFields.Spoken));
         }
 
         if (!LibraryEditor.IsWellFormed(values.Written))
         {
-            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.IllFormedText, TermFields.Written));
+            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.MalformedText, TermFields.Written));
         }
 
         if (values.Written.Length == 0 && !row.RemovalIntent && !row.LegacyEmpty)
@@ -2266,7 +2326,7 @@ public sealed class LibraryWorkspace
         {
             if (!LibraryEditor.IsWellFormed(value))
             {
-                issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.IllFormedText, TermFields.None, field));
+                issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.MalformedText, TermFields.None, field));
             }
         }
     }
@@ -2315,9 +2375,9 @@ public sealed class LibraryWorkspace
             ? rows[index]
             : null;
 
-    // The draft of a catalog with nothing changed. Rows keep the ids they had in mapFrom where the rows are the same ones
-    // (a custom library read back exactly as it was saved, a built-in's rows by their key), so a Save or a reload does not
-    // move the selection; every other row gets a new id.
+    // The draft of a catalog with nothing changed. Rows keep the ids they had in mapFrom where they are the same rows
+    // (MapRowIds: a custom row by its values or its one spoken form, a built-in's rows by their key), so a Save or a reload
+    // does not move the selection and a rebase merges row by row; every other row gets a new id.
     private State FromCatalog(LibraryCatalog catalog, State? mapFrom)
     {
         var libraries = ImmutableDictionary.CreateBuilder<string, Lib>(StringComparer.OrdinalIgnoreCase);
@@ -2356,6 +2416,11 @@ public sealed class LibraryWorkspace
                 ImmutableDictionary.Create<string, RecentlyDeletedLibrary>(StringComparer.OrdinalIgnoreCase)));
     }
 
+    // Which row of `previous` each row of `content` is, so a Save, a rebase or a reload keeps the selection, and a rebase
+    // merges a custom library row by row (review finding A3). A custom row is met first by its exact values, in order among
+    // rows with the same values, then by its spoken form where exactly one row on each side is left with it; a spoken form
+    // more rows could be keeps no identity, so its rows meet as a conflict the Save names (a repeated spoken form) rather
+    // than one of them being guessed. A built-in's rows are met by their keys. Every other row gets a new id.
     private static long?[]? MapRowIds(LibraryContent content, Lib? previous)
     {
         if (previous is null || previous.Header.BuiltIn != content.BuiltIn)
@@ -2367,19 +2432,42 @@ public sealed class LibraryWorkspace
         var ids = new long?[content.Rows.Count];
         if (!content.BuiltIn)
         {
-            if (earlier.Count != content.Rows.Count)
+            var byValues = new Dictionary<TermValues, Queue<long>>();
+            foreach (var row in earlier)
             {
-                return null;
-            }
-
-            for (var i = 0; i < earlier.Count; i++)
-            {
-                if (earlier[i].Row.Values != content.Rows[i].Values)
+                if (!byValues.TryGetValue(row.Row.Values, out var queue))
                 {
-                    return null;
+                    byValues[row.Row.Values] = queue = new Queue<long>();
                 }
 
-                ids[i] = earlier[i].RowId;
+                queue.Enqueue(row.RowId);
+            }
+
+            var matched = new HashSet<long>();
+            for (var i = 0; i < content.Rows.Count; i++)
+            {
+                if (byValues.TryGetValue(content.Rows[i].Values, out var queue) && queue.TryDequeue(out var id))
+                {
+                    ids[i] = id;
+                    matched.Add(id);
+                }
+            }
+
+            var unmatched = earlier
+                .Where(row => !matched.Contains(row.RowId))
+                .GroupBy(row => row.Row.Key)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single().RowId);
+            var changed = Enumerable.Range(0, content.Rows.Count)
+                .Where(i => ids[i] is null)
+                .GroupBy(i => content.Rows[i].Key)
+                .Where(group => group.Count() == 1);
+            foreach (var group in changed)
+            {
+                if (unmatched.TryGetValue(group.Key, out var id))
+                {
+                    ids[group.Single()] = id;
+                }
             }
 
             return ids;
@@ -2442,18 +2530,78 @@ public sealed class LibraryWorkspace
                 continue;
             }
 
-            var header = before.Header != after.Header && mine.Header == before.Header ? after.Header : mine.Header;
-            var rows = ReferenceEquals(before.Rows, after.Rows) ? mine.Rows : MergeRows(mine.Rows, before.Rows, after.Rows);
+            var header = MergeHeader(mine.Header, before.Header, after.Header);
+            var rows = mine.Rows;
+            if (!ReferenceEquals(before.Rows, after.Rows))
+            {
+                // Rows the draft left as they were take the other side's list whole, its order included.
+                rows = !SameRows(mine.Rows, before.Rows) ? MergeRows(mine.Rows, before.Rows, after.Rows)
+                    : SameRows(mine.Rows, after.Rows) ? mine.Rows
+                    : after.Rows;
+            }
+
             if (header != mine.Header || !ReferenceEquals(rows, mine.Rows))
             {
                 libraries = libraries.SetItem(id, new Lib(header, rows));
             }
         }
 
-        var local = MergeLocal(current.Local, from.Local, to.Local);
+        var merged = libraries;
+        var local = MergeLocal(current.Local, from.Local, to.Local, marker => SameRowsOfKey(merged, to.Libraries, marker));
         return ReferenceEquals(libraries, current.Libraries) && ReferenceEquals(local, current.Local)
             ? current
             : new State(libraries, local);
+    }
+
+    // Each field of a library's header merges on its own (review finding A4): the draft's value where the draft changed
+    // that field, the other side's for every field it did not, so a rename a newer catalog brought and a category the user
+    // typed both stand. The committed facts merge the same way here, and a rebase then takes them from the new catalog.
+    private static Header MergeHeader(Header mine, Header before, Header after)
+    {
+        if (before == after || mine == after)
+        {
+            return mine;
+        }
+
+        if (mine == before)
+        {
+            return after;
+        }
+
+        var merged = new Header(
+            mine.Id,
+            mine.BuiltIn,
+            Pick(mine.Name, before.Name, after.Name),
+            Pick(mine.Category, before.Category, after.Category),
+            Pick(mine.Description, before.Description, after.Description),
+            Pick(mine.BasedOn, before.BasedOn, after.BasedOn),
+            Pick(mine.PendingDelete, before.PendingDelete, after.PendingDelete),
+            Pick(mine.Recovery, before.Recovery, after.Recovery),
+            Pick(mine.EditsReset, before.EditsReset, after.EditsReset),
+            Pick(mine.Origin, before.Origin, after.Origin),
+            Pick(mine.FileState, before.FileState, after.FileState),
+            Pick(mine.FileName, before.FileName, after.FileName),
+            Pick(mine.Committed, before.Committed, after.Committed),
+            Pick(mine.RestoredFrom, before.RestoredFrom, after.RestoredFrom),
+            Pick(mine.Created, before.Created, after.Created));
+        return merged == mine ? mine : merged;
+    }
+
+    // One field of a three-way merge: the other side's value unless the draft changed it.
+    private static T Pick<T>(T mine, T before, T after) => EqualityComparer<T>.Default.Equals(mine, before) ? after : mine;
+
+    // Whether the rows a legacy marker answers are, after a merge, exactly the rows `to` has for it. A marker changes only
+    // together with the state of its row (review finding A5): an undo never brings one back over a correction the user
+    // typed after the operation, which would have composition treat that correction as a legacy row behind the built-in.
+    private static bool SameRowsOfKey(
+        ImmutableDictionary<string, Lib> merged, ImmutableDictionary<string, Lib> to, LegacyMarker marker)
+    {
+        IEnumerable<DraftTermRow> RowsWithKey(ImmutableDictionary<string, Lib> libraries) =>
+            libraries.TryGetValue(marker.LibraryId, out var lib)
+                ? lib.Rows.Where(row => !IsBlank(row) && row.Row.Key == marker.Key)
+                : [];
+
+        return RowsWithKey(merged).SequenceEqual(RowsWithKey(to));
     }
 
     private static ImmutableList<DraftTermRow> MergeRows(
@@ -2547,7 +2695,7 @@ public sealed class LibraryWorkspace
         return merged.ToImmutable();
     }
 
-    private static Local MergeLocal(Local current, Local from, Local to)
+    private static Local MergeLocal(Local current, Local from, Local to, Func<LegacyMarker, bool> followsItsRow)
     {
         var enabled = MergeSet(current.Enabled, from.Enabled, to.Enabled);
         var notice = MergeSet(current.Notice, from.Notice, to.Notice);
@@ -2566,17 +2714,18 @@ public sealed class LibraryWorkspace
             }
         }
 
+        // A marker comes and goes only with the state of the row it answers.
         var markers = current.Markers;
         if (!ReferenceEquals(from.Markers, to.Markers))
         {
             var fromSet = from.Markers.ToHashSet();
             var toSet = to.Markers.ToHashSet();
-            foreach (var marker in fromSet.Where(marker => !toSet.Contains(marker)))
+            foreach (var marker in fromSet.Where(marker => !toSet.Contains(marker) && followsItsRow(marker)))
             {
                 markers = markers.Remove(marker);
             }
 
-            foreach (var marker in to.Markers.Where(marker => !fromSet.Contains(marker)))
+            foreach (var marker in to.Markers.Where(marker => !fromSet.Contains(marker) && followsItsRow(marker)))
             {
                 if (!markers.Contains(marker))
                 {

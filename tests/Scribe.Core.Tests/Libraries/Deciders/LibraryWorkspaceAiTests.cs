@@ -91,7 +91,8 @@ public sealed class LibraryWorkspaceAiTests
             [GitHubId, "private"],
             ai: [new("private", false)],
             recentlyDeleted: [entry.Entry],
-            retired: [new RetiredBuiltInEdits("data-and-ai", [new TermValues("llm", "LLM")], Hash("retired"))]);
+            retired: [new RetiredBuiltInEdits("data-and-ai", [new TermValues("llm", "LLM")], Hash("retired"))],
+            accepted: [new("data-and-ai", Hash("retired"))]);
         var workspace = new LibraryWorkspace(catalog, TestOverlay, Decision, ShippedLibrary);
 
         var created = workspace.CreateLibrary();
@@ -123,6 +124,117 @@ public sealed class LibraryWorkspaceAiTests
         Assert.DoesNotContain(restored, enabled);
         Assert.DoesNotContain(kept, enabled);
         Assert.Equal(kept, workspace.KeepRetiredBuiltIn("data-and-ai"));
+    }
+
+    [Theory]
+    [InlineData("matching", null, true)]
+    [InlineData("missing", null, false)]
+    [InlineData("mismatched", null, false)]
+    [InlineData("mismatched", true, false)]
+    [InlineData("matching", false, false)]
+    public void A_retired_built_in_passes_its_permission_on_only_for_the_document_its_state_accepted(
+        string accepted, bool? chosen, bool inherited)
+    {
+        // The retired built-in's edits document is present, so its content is that document's, never a built-in's
+        // shipped rows: a document the state never accepted permits nothing, whatever was chosen for the id (A4).
+        var document = Hash("retired edits");
+        var asked = new List<bool?>();
+        bool Decision(LibraryOrigin origin, bool builtIn, bool? source)
+        {
+            if (origin == LibraryOrigin.RetiredBuiltIn)
+            {
+                asked.Add(source);
+            }
+
+            return DefaultAi(origin, builtIn, source);
+        }
+
+        KeyValuePair<string, LibraryContentHash>[] acceptedContent = accepted switch
+        {
+            "matching" => [new("data-and-ai", document)],
+            "mismatched" => [new("data-and-ai", Hash("an earlier document"))],
+            _ => [],
+        };
+        KeyValuePair<string, bool>[] choices = chosen is { } choice ? [new("data-and-ai", choice)] : [];
+        var catalog = Catalog(
+            [BuiltIn(GitHubId)],
+            [GitHubId, "data-and-ai"],
+            ai: choices,
+            retired: [new RetiredBuiltInEdits("data-and-ai", [new TermValues("llm", "LLM")], document)],
+            accepted: acceptedContent);
+        var workspace = new LibraryWorkspace(catalog, TestOverlay, Decision, ShippedLibrary);
+
+        var kept = workspace.KeepRetiredBuiltIn("data-and-ai");
+
+        Assert.Equal([inherited], asked);
+        Assert.Equal(inherited, workspace.Draft.LocalState.AiPermissions[kept]);
+        Assert.Equal(inherited, Capture(workspace).LocalState.AiPermissions[kept]);
+    }
+
+    [Fact]
+    public void A_custom_library_with_no_recorded_choice_shows_what_decision_2_gives_a_discovered_file()
+    {
+        // A Decision 2 that permits discovered files (a veto of the plan's default): the workspace follows the delegate,
+        // as the policy does for an unrecorded custom file, and a copy inherits what it gives.
+        var asked = new List<(LibraryOrigin Origin, bool BuiltIn, bool? Source)>();
+        bool Permissive(LibraryOrigin origin, bool builtIn, bool? source)
+        {
+            asked.Add((origin, builtIn, source));
+            return origin == LibraryOrigin.Discovered || DefaultAi(origin, builtIn, source);
+        }
+
+        var catalog = Catalog(
+            [BuiltIn(GitHubId), Custom("unrecorded", "Unrecorded", [new TermValues("kube", "Kubernetes")])],
+            [GitHubId, "unrecorded"]);
+        var permissive = new LibraryWorkspace(catalog, TestOverlay, Permissive, ShippedLibrary);
+        var copy = permissive.Duplicate("unrecorded");
+        Assert.Contains((LibraryOrigin.Discovered, false, (bool?)null), asked);
+        Assert.Contains((LibraryOrigin.Duplicated, false, (bool?)true), asked);
+        Assert.True(permissive.Draft.LocalState.AiPermissions[copy]);
+
+        // One that keeps even the built-ins off: nothing is shown on, so nothing is inherited on.
+        static bool Strict(LibraryOrigin origin, bool builtIn, bool? source) => origin == LibraryOrigin.Duplicated && (source ?? false);
+        var strict = new LibraryWorkspace(catalog, TestOverlay, Strict, ShippedLibrary);
+        var builtInCopy = strict.Duplicate(GitHubId);
+        var customCopy = strict.Duplicate("unrecorded");
+        Assert.False(strict.Draft.LocalState.AiPermissions[builtInCopy]);
+        Assert.False(strict.Draft.LocalState.AiPermissions[customCopy]);
+    }
+
+    [Fact]
+    public void Each_box_shows_the_workspaces_mirror_of_the_policy_for_the_draft()
+    {
+        var catalog = Catalog(
+            [
+                BuiltIn(GitHubId), BuiltIn(AzureId),
+                Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes")]),
+                Custom("unrecorded", "Unrecorded", [new TermValues("vm", "VM")]),
+                Custom("replaced", "Replaced", [new TermValues("x", "X")]),
+            ],
+            [GitHubId, "team-terms"],
+            ai: [new("team-terms", true), new(AzureId, false), new("replaced", true)],
+            accepted: [new("replaced", Hash("the bytes this version wrote"))]);
+        var workspace = Workspace(catalog);
+
+        Assert.True(workspace.ShowsAiPermission(GitHubId));
+        Assert.False(workspace.ShowsAiPermission(AzureId));
+        Assert.True(workspace.ShowsAiPermission("team-terms"));
+        Assert.False(workspace.ShowsAiPermission("unrecorded"));
+
+        // Replaced outside Scribe, the file's choice no longer applies to it; once the draft rewrites it, its Save
+        // records the new content and the choice shows again.
+        Assert.False(workspace.ShowsAiPermission("replaced"));
+        workspace.EditTerm("replaced", RowIdOf(workspace, "replaced", "x"), new TermValues("x", "Ex"));
+        Assert.True(workspace.ShowsAiPermission("replaced"));
+
+        workspace.SetAiPermission("unrecorded", true);
+        Assert.True(workspace.ShowsAiPermission("unrecorded"));
+
+        // A lost state shows unchecked whatever nothing chose again.
+        var lost = Workspace(Catalog([BuiltIn(GitHubId), Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes")])],
+            [GitHubId], ai: [new("team-terms", true)], lost: true));
+        Assert.False(lost.ShowsAiPermission(GitHubId));
+        Assert.True(lost.ShowsAiPermission("team-terms"));
     }
 
     [Fact]

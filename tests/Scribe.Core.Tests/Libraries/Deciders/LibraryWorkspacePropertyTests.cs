@@ -20,13 +20,17 @@ public sealed class LibraryWorkspacePropertyTests
             Run(seed, totals);
         }
 
-        // The sequences reach every kind of change a Save carries, and saves in the middle of them.
+        // The sequences reach every kind of change a Save carries, and saves in the middle of them, some with the user
+        // working on while they run.
         Assert.True(totals.CustomWrites > 100, $"custom writes {totals.CustomWrites}");
         Assert.True(totals.BuiltInWrites > 50, $"built-in writes {totals.BuiltInWrites}");
         Assert.True(totals.Deletions > 20, $"deletions {totals.Deletions}");
         Assert.True(totals.Restores > 20, $"restores {totals.Restores}");
         Assert.True(totals.Purges > 5, $"purges {totals.Purges}");
         Assert.True(totals.MidSaves > 50, $"saves in the middle {totals.MidSaves}");
+        Assert.True(totals.InterleavedSaves > 25, $"saves with work while they ran {totals.InterleavedSaves}");
+        Assert.True(totals.DeletedWhileSaving > 5, $"libraries deleted while their save ran {totals.DeletedWhileSaving}");
+        Assert.True(totals.KeptWhileSaving > 5, $"deletions taken back while their save ran {totals.KeptWhileSaving}");
     }
 
     private sealed class Coverage
@@ -37,6 +41,9 @@ public sealed class LibraryWorkspacePropertyTests
         public int Restores;
         public int Purges;
         public int MidSaves;
+        public int InterleavedSaves;
+        public int DeletedWhileSaving;
+        public int KeptWhileSaving;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -81,194 +88,15 @@ public sealed class LibraryWorkspacePropertyTests
 
         for (var step = 0; step < 40; step++)
         {
-            var live = workspace.Draft.Libraries.Where(library => !library.PendingDelete).Select(library => library.Content.Id).ToList();
-            var editable = live.Where(workspace.CanEditContent).ToList();
-            var custom = live.Where(id => !workspace.Draft.Find(id)!.Content.BuiltIn).ToList();
-            string Pick(IReadOnlyList<string> ids) => ids[random.Next(ids.Count)];
-
-            switch (random.Next(20))
+            var choice = random.Next(20);
+            if (choice == 19)
             {
-                case 0 or 1 when editable.Count > 0:
-                    var target = Pick(editable);
-                    if (random.Next(4) == 0)
-                    {
-                        workspace.AddTerm(target, new TermValues(Fresh("removes"), ""), removalIntent: true);
-                    }
-                    else
-                    {
-                        workspace.AddTerm(target, new TermValues(Fresh("word"), Fresh("Word"), WholeWord: random.Next(2) == 0));
-                    }
-
-                    break;
-
-                case 2 or 3 when editable.Count > 0:
-                    var edited = Pick(editable);
-                    var rows = workspace.RowsOf(edited).Where(row => row.Row.Values.Spoken.Length > 0).ToList();
-                    if (rows.Count > 0)
-                    {
-                        var row = rows[random.Next(rows.Count)];
-                        var values = random.Next(2) == 0
-                            ? row.Row.Values with { Written = Fresh("Edited") }
-                            : row.Row.Values with { Spoken = Fresh("spoken"), Written = row.Row.Values.Written.Length == 0 ? Fresh("Now") : row.Row.Values.Written };
-                        workspace.EditTerm(edited, row.RowId, values);
-                    }
-
-                    break;
-
-                case 4 when editable.Count > 0:
-                    var owner = Pick(editable);
-                    var deletable = workspace.RowsOf(owner)
-                        .Where(row => row.Row.Origin is TermOrigin.Custom or TermOrigin.Added or TermOrigin.NoLongerShipped)
-                        .ToList();
-                    if (deletable.Count > 0)
-                    {
-                        workspace.DeleteTerm(owner, deletable[random.Next(deletable.Count)].RowId);
-                    }
-
-                    break;
-
-                case 5 when editable.Count > 0:
-                    var toggled = Pick(editable);
-                    var all = workspace.RowsOf(toggled);
-                    if (all.Count > 0)
-                    {
-                        var row = all[random.Next(all.Count)];
-                        workspace.SetTermEnabled(toggled, row.RowId, !row.Row.Values.Enabled);
-                    }
-
-                    break;
-
-                case 6:
-                    var library = Pick(live);
-                    workspace.SetEnabled(library, !workspace.Draft.LocalState.EnabledIds.Contains(library));
-                    break;
-
-                case 7:
-                    workspace.SetAiPermission(Pick(live), random.Next(2) == 0);
-                    break;
-
-                case 8:
-                    var created = workspace.CreateLibrary();
-                    if (random.Next(2) == 0)
-                    {
-                        workspace.Rename(created, Fresh("Library"));
-                    }
-
-                    break;
-
-                case 9 when custom.Count > 0:
-                    var renamed = Pick(custom);
-                    if (workspace.CanEditContent(renamed))
-                    {
-                        if (random.Next(2) == 0)
-                        {
-                            workspace.Rename(renamed, Fresh("Renamed"));
-                        }
-                        else
-                        {
-                            workspace.SetDetails(renamed, Fresh("Category"), random.Next(2) == 0 ? null : Fresh("Description"));
-                        }
-                    }
-
-                    break;
-
-                case 10:
-                    workspace.Duplicate(Pick(live));
-                    break;
-
-                case 11 when custom.Count > 0:
-                    workspace.DeleteLibrary(Pick(custom));
-                    break;
-
-                case 12:
-                    var available = workspace.Draft.RecentlyDeleted.ToList();
-                    if (available.Count > 0)
-                    {
-                        var entry = available[random.Next(available.Count)];
-                        if (random.Next(3) == 0)
-                        {
-                            workspace.DeletePermanently(entry);
-                        }
-                        else
-                        {
-                            workspace.RestoreDeleted(store[entry.EntryName]);
-                        }
-                    }
-
-                    break;
-
-                case 13 when workspace.CanEditContent(GitHubId):
-                    var shippedRows = workspace.RowsOf(GitHubId).Where(row => row.Row.Shipped is not null && row.Row.Origin != TermOrigin.Shipped).ToList();
-                    if (shippedRows.Count > 0 && random.Next(3) > 0)
-                    {
-                        workspace.RestoreBuiltInValues(GitHubId, shippedRows[random.Next(shippedRows.Count)].RowId);
-                    }
-                    else
-                    {
-                        workspace.RestoreAllBuiltInValues(GitHubId);
-                    }
-
-                    break;
-
-                case 14:
-                    var copies = custom.Where(id => workspace.Draft.Find(id)!.Content.BasedOn is { } basedOn
-                        && workspace.Draft.Find(basedOn) is { PendingDelete: false }).ToList();
-                    if (copies.Count > 0)
-                    {
-                        workspace.UseCopyInstead(Pick(copies));
-                    }
-
-                    break;
-
-                case 15:
-                    workspace.Undo();
-                    break;
-
-                case 16:
-                    workspace.Redo();
-                    break;
-
-                case 17 when editable.Count > 0:
-                    var into = Pick(editable);
-                    var existing = workspace.RowsOf(into).FirstOrDefault(row => row.Row.Values.Spoken.Length > 0);
-                    var fileRows = new List<TermValues> { new(Fresh("imported"), Fresh("Imported")) };
-                    if (existing is not null)
-                    {
-                        fileRows.Add(existing.Row.Values with { Written = Fresh("From file") });
-                    }
-
-                    var document = Document(Fresh("Import"), [.. fileRows]);
-                    LibraryImportTarget importTarget = random.Next(2) == 0
-                        ? new LibraryImportTarget.NewLibrary(null)
-                        : new LibraryImportTarget.ExistingLibrary(into);
-                    workspace.ApplyImport(
-                        LibraryImportPlanner.Plan(document, importTarget, workspace.Draft),
-                        random.Next(2) == 0 ? ImportConflictChoice.KeepMine : ImportConflictChoice.UseFilesVersion);
-                    break;
-
-                case 18:
-                    if (random.Next(3) == 0)
-                    {
-                        workspace.KeepRetiredBuiltIn("data-and-ai");
-                    }
-                    else
-                    {
-                        workspace.DiscardLibrary(Pick(live));
-                    }
-
-                    break;
-
-                case 19:
-                    // A Save in the middle of the sequence: the edits after it carry on over the new catalog.
-                    var changes = CaptureOrFail(workspace, seed, step);
-                    totals.Count(changes);
-                    totals.MidSaves++;
-                    var saved = Apply(catalog, changes, store);
-                    workspace.MarkSaved(changes.DraftRevision, saved);
-                    Assert.False(workspace.HasUnsavedChanges, $"seed {seed} step {step}: unsaved after a save");
-                    Assert.Equal(Content(Workspace(saved)), Content(workspace));
-                    catalog = saved;
-                    break;
+                // A Save in the middle of the sequence: the edits after it carry on over the new catalog.
+                catalog = Save(workspace, catalog, store, random, seed, step, totals, Fresh);
+            }
+            else
+            {
+                Operate(workspace, choice, random, store, Fresh);
             }
         }
 
@@ -282,6 +110,271 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.Equal(expected, Content(workspace));
     }
 
+    // A Save: capture, commit through the fake store, mark saved. Half of them let the user go on working while the Save
+    // runs (review finding A2): deleting a library the Save creates or restores, taking back a deletion it makes, undoing,
+    // or any other operation. Marking saved never changes what the page shows, and what it shows reads back from a Save.
+    private static LibraryCatalog Save(
+        LibraryWorkspace workspace,
+        LibraryCatalog catalog,
+        Dictionary<string, RecentlyDeletedContent> store,
+        Random random,
+        int seed,
+        int step,
+        Coverage totals,
+        Func<string, string> fresh)
+    {
+        var changes = CaptureOrFail(workspace, seed, step);
+        totals.Count(changes);
+        totals.MidSaves++;
+        var saved = Apply(catalog, changes, store);
+        if (random.Next(2) == 0)
+        {
+            workspace.MarkSaved(changes.DraftRevision, saved);
+            Assert.False(workspace.HasUnsavedChanges, $"seed {seed} step {step}: unsaved after a save");
+            Assert.Equal(Content(Workspace(saved)), Content(workspace));
+            return saved;
+        }
+
+        totals.InterleavedSaves++;
+        var added = changes.Writes
+            .Where(write => !write.BuiltIn && write.Origin != LibraryOrigin.Existing)
+            .Select(write => write.LibraryId)
+            .Concat(changes.RecentlyDeletedActions.Where(action => action.RestoreAsId is not null).Select(action => action.RestoreAsId!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var deleted = changes.Deletions.Select(deletion => deletion.LibraryId).ToList();
+        for (var operations = random.Next(1, 4); operations > 0; operations--)
+        {
+            switch (random.Next(4))
+            {
+                case 0 when added.Count > 0:
+                    var created = added[random.Next(added.Count)];
+                    if (workspace.Draft.Find(created) is { PendingDelete: false })
+                    {
+                        workspace.DeleteLibrary(created);
+                        totals.DeletedWhileSaving++;
+                    }
+
+                    break;
+
+                case 1 when deleted.Count > 0:
+                    var gone = deleted[random.Next(deleted.Count)];
+                    if (workspace.Draft.Find(gone) is { PendingDelete: true })
+                    {
+                        workspace.DiscardLibrary(gone);
+                        totals.KeptWhileSaving++;
+                    }
+
+                    break;
+
+                case 2:
+                    workspace.Undo();
+                    break;
+
+                default:
+                    Operate(workspace, random.Next(19), random, store, fresh);
+                    break;
+            }
+        }
+
+        var shown = Shown(workspace);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.True(shown == Shown(workspace), $"seed {seed} step {step}: marking saved changed the page\n{shown}\n---\n{Shown(workspace)}");
+        var again = workspace.CaptureChangeSet();
+        if (again.ChangeSet is { } next)
+        {
+            Assert.Equal(Content(workspace), Content(Workspace(Apply(saved, next, store))));
+        }
+
+        return saved;
+    }
+
+    // One operation of the sequence, chosen by 0 to 18.
+    private static void Operate(
+        LibraryWorkspace workspace,
+        int choice,
+        Random random,
+        IReadOnlyDictionary<string, RecentlyDeletedContent> store,
+        Func<string, string> fresh)
+    {
+        var live = workspace.Draft.Libraries.Where(library => !library.PendingDelete).Select(library => library.Content.Id).ToList();
+        var editable = live.Where(workspace.CanEditContent).ToList();
+        var custom = live.Where(id => !workspace.Draft.Find(id)!.Content.BuiltIn).ToList();
+        string Pick(IReadOnlyList<string> ids) => ids[random.Next(ids.Count)];
+
+        switch (choice)
+        {
+            case 0 or 1 when editable.Count > 0:
+                var target = Pick(editable);
+                if (random.Next(4) == 0)
+                {
+                    workspace.AddTerm(target, new TermValues(fresh("removes"), ""), removalIntent: true);
+                }
+                else
+                {
+                    workspace.AddTerm(target, new TermValues(fresh("word"), fresh("Word"), WholeWord: random.Next(2) == 0));
+                }
+
+                break;
+
+            case 2 or 3 when editable.Count > 0:
+                var edited = Pick(editable);
+                var rows = workspace.RowsOf(edited).Where(row => row.Row.Values.Spoken.Length > 0).ToList();
+                if (rows.Count > 0)
+                {
+                    var row = rows[random.Next(rows.Count)];
+                    var values = random.Next(2) == 0
+                        ? row.Row.Values with { Written = fresh("Edited") }
+                        : row.Row.Values with { Spoken = fresh("spoken"), Written = row.Row.Values.Written.Length == 0 ? fresh("Now") : row.Row.Values.Written };
+                    workspace.EditTerm(edited, row.RowId, values);
+                }
+
+                break;
+
+            case 4 when editable.Count > 0:
+                var owner = Pick(editable);
+                var deletable = workspace.RowsOf(owner)
+                    .Where(row => row.Row.Origin is TermOrigin.Custom or TermOrigin.Added or TermOrigin.NoLongerShipped)
+                    .ToList();
+                if (deletable.Count > 0)
+                {
+                    workspace.DeleteTerm(owner, deletable[random.Next(deletable.Count)].RowId);
+                }
+
+                break;
+
+            case 5 when editable.Count > 0:
+                var toggled = Pick(editable);
+                var all = workspace.RowsOf(toggled);
+                if (all.Count > 0)
+                {
+                    var row = all[random.Next(all.Count)];
+                    workspace.SetTermEnabled(toggled, row.RowId, !row.Row.Values.Enabled);
+                }
+
+                break;
+
+            case 6:
+                var library = Pick(live);
+                workspace.SetEnabled(library, !workspace.Draft.LocalState.EnabledIds.Contains(library));
+                break;
+
+            case 7:
+                workspace.SetAiPermission(Pick(live), random.Next(2) == 0);
+                break;
+
+            case 8:
+                var created = workspace.CreateLibrary();
+                if (random.Next(2) == 0)
+                {
+                    workspace.Rename(created, fresh("Library"));
+                }
+
+                break;
+
+            case 9 when custom.Count > 0:
+                var renamed = Pick(custom);
+                if (workspace.CanEditContent(renamed))
+                {
+                    if (random.Next(2) == 0)
+                    {
+                        workspace.Rename(renamed, fresh("Renamed"));
+                    }
+                    else
+                    {
+                        workspace.SetDetails(renamed, fresh("Category"), random.Next(2) == 0 ? null : fresh("Description"));
+                    }
+                }
+
+                break;
+
+            case 10:
+                workspace.Duplicate(Pick(live));
+                break;
+
+            case 11 when custom.Count > 0:
+                workspace.DeleteLibrary(Pick(custom));
+                break;
+
+            case 12:
+                var available = workspace.Draft.RecentlyDeleted.ToList();
+                if (available.Count > 0)
+                {
+                    var entry = available[random.Next(available.Count)];
+                    if (random.Next(3) == 0)
+                    {
+                        workspace.DeletePermanently(entry);
+                    }
+                    else
+                    {
+                        workspace.RestoreDeleted(store[entry.EntryName]);
+                    }
+                }
+
+                break;
+
+            case 13 when workspace.CanEditContent(GitHubId):
+                var shippedRows = workspace.RowsOf(GitHubId).Where(row => row.Row.Shipped is not null && row.Row.Origin != TermOrigin.Shipped).ToList();
+                if (shippedRows.Count > 0 && random.Next(3) > 0)
+                {
+                    workspace.RestoreBuiltInValues(GitHubId, shippedRows[random.Next(shippedRows.Count)].RowId);
+                }
+                else
+                {
+                    workspace.RestoreAllBuiltInValues(GitHubId);
+                }
+
+                break;
+
+            case 14:
+                var copies = custom.Where(id => workspace.Draft.Find(id)!.Content.BasedOn is { } basedOn
+                    && workspace.Draft.Find(basedOn) is { PendingDelete: false }).ToList();
+                if (copies.Count > 0)
+                {
+                    workspace.UseCopyInstead(Pick(copies));
+                }
+
+                break;
+
+            case 15:
+                workspace.Undo();
+                break;
+
+            case 16:
+                workspace.Redo();
+                break;
+
+            case 17 when editable.Count > 0:
+                var into = Pick(editable);
+                var existing = workspace.RowsOf(into).FirstOrDefault(row => row.Row.Values.Spoken.Length > 0);
+                var fileRows = new List<TermValues> { new(fresh("imported"), fresh("Imported")) };
+                if (existing is not null)
+                {
+                    fileRows.Add(existing.Row.Values with { Written = fresh("From file") });
+                }
+
+                var document = Document(fresh("Import"), [.. fileRows]);
+                LibraryImportTarget importTarget = random.Next(2) == 0
+                    ? new LibraryImportTarget.NewLibrary(null)
+                    : new LibraryImportTarget.ExistingLibrary(into);
+                workspace.ApplyImport(
+                    LibraryImportPlanner.Plan(document, importTarget, workspace.Draft),
+                    random.Next(2) == 0 ? ImportConflictChoice.KeepMine : ImportConflictChoice.UseFilesVersion);
+                break;
+
+            case 18:
+                if (random.Next(3) == 0)
+                {
+                    workspace.KeepRetiredBuiltIn("data-and-ai");
+                }
+                else
+                {
+                    workspace.DiscardLibrary(Pick(live));
+                }
+
+                break;
+        }
+    }
     // Undo can bring back a library whose generated name another library took meanwhile ("New library", say); that is a
     // real duplicate the user would rename, so the sequence renames it and captures again. Anything else fails the seed.
     private static LibraryChangeSet CaptureOrFail(LibraryWorkspace workspace, int seed, int step)
@@ -323,4 +416,9 @@ public sealed class LibraryWorkspacePropertyTests
         return string.Join("\n", lines) + "\ndeleted=" + string.Join(",", deleted)
             + $"\nlost={draft.LocalState.AiPermissionsLost}\nnotice={string.Join(",", draft.LocalState.AiUpgradeNotice.Order(StringComparer.OrdinalIgnoreCase))}";
     }
+
+    // What the page shows of the libraries the user keeps: the content without the deleted list, where a library the user
+    // removed while its Save ran moves from nowhere to a pending deletion of the saved library.
+    private static string Shown(LibraryWorkspace workspace) =>
+        string.Join("\n", Content(workspace).Split('\n').Where(line => !line.StartsWith("deleted=", StringComparison.Ordinal)));
 }

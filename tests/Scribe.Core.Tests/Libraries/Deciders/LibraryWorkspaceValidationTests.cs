@@ -224,6 +224,33 @@ public sealed class LibraryWorkspaceValidationTests
     }
 
     [Fact]
+    public void D2_clearing_both_fields_of_a_built_in_row_keeps_it_with_a_spoken_issue_until_it_is_corrected_or_restored()
+    {
+        var workspace = Workspace(Standard());
+        var getHub = RowIdOf(workspace, GitHubId, "get hub");
+
+        var cleared = workspace.EditTerm(GitHubId, getHub, new TermValues("", ""));
+
+        // A built-in row is never a blank placeholder: it stays in the rows, the draft and its previews, and blocks Save.
+        Assert.True(cleared.Applied);
+        Assert.Equal(
+            (LibraryValidationKind.WrittenWithoutSpoken, TermFields.Spoken, (long?)getHub),
+            (cleared.Issue!.Kind, cleared.Issue.Field, cleared.Issue.RowId));
+        Assert.Contains(workspace.RowsOf(GitHubId), row => row.RowId == getHub && row.Row.Values.Spoken.Length == 0);
+        Assert.Contains(workspace.Draft.Find(GitHubId)!.Content.Rows, row => row.Key == LibraryTermKey.From("get hub"));
+        Assert.True(workspace.HasUnsavedChanges);
+        Assert.Equal([GitHubId], workspace.UnsavedLibraryIds);
+        var capture = workspace.CaptureChangeSet();
+        Assert.Null(capture.ChangeSet);
+        Assert.Contains(capture.Issues, issue => issue.RowId == getHub && issue.Kind == LibraryValidationKind.WrittenWithoutSpoken);
+
+        // Typing a spoken form again, or restoring the built-in values, settles it.
+        Assert.Null(workspace.EditTerm(GitHubId, getHub, new TermValues("get hub", "GH")).Issue);
+        workspace.RestoreBuiltInValues(GitHubId, getHub);
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
     public void D2_an_addition_a_later_version_ships_is_restored_rather_than_deleted()
     {
         // The document added "copilot" before the shipped library had it; this version ships it.

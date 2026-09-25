@@ -35,8 +35,9 @@ public enum LibraryImportOperationKind
 
     /// <summary>
     /// The spoken form is already there with a different written form, whole-word or enabled value (decision 3: whole
-    /// word counts), in the library or earlier in the same file; or, in a built-in, the file row says the original form
-    /// of a row the user renamed, which is that row's key.
+    /// word counts), in the library or earlier in the same file, compared with the term as the rows before it leave it
+    /// under Use the file's version; or, in a built-in, the file row says the original form of a row the user renamed,
+    /// which is that row's key.
     /// </summary>
     WrittenDifferently,
 
@@ -52,7 +53,10 @@ public enum LibraryImportOperationKind
 /// <see cref="LibraryImportOperationKind.AlreadyHere"/> against a row of the target; null for an added row, a row that
 /// meets an earlier row of the same file, and a draft no workspace built.
 /// </param>
-/// <param name="ExistingValues">The values it meets: the target's row, or the earlier file row.</param>
+/// <param name="ExistingValues">
+/// The values it meets: the target's row, or the earlier file row, as the rows before it leave them under Use the file's
+/// version.
+/// </param>
 public sealed record LibraryImportOperation(
     LibraryImportOperationKind Kind, TermValues FileRow, long? ExistingRowId, TermValues? ExistingValues);
 
@@ -107,10 +111,13 @@ public sealed record LibraryImportPlan(
 /// <remarks>
 /// Rows are matched by spoken form trimmed and compared without case (<see cref="LibraryTermKey"/>), the rule
 /// <see cref="DictionaryImportMerger"/> applies to the dictionary, and in the same single pass: a row the import adds is
-/// what a later row of the file with the same spoken form meets. Into a built-in, a file row also meets a row whose key
-/// it is (a row the user renamed keeps the key of the form it shipped or was added with), so an import never adds a
-/// second row with a key the built-in has; Use the file's version then gives that row the file's spoken form back. Two
-/// files that differ in one row give plans that differ in that row. Pure; the file was read by the codec already.
+/// what a later row of the file with the same spoken form meets, and each row meets a term as the rows before it leave it
+/// under Use the file's version, so the plan and its counts describe applying the file in order with that choice; Keep
+/// mine applies the same plan and leaves every row written differently alone. Into a built-in, a file row also meets a
+/// row whose key it is (a row the user renamed keeps the key of the form it shipped or was added with), so an import
+/// never adds a second row with a key the built-in has, and both forms of that row stay one term for the whole file;
+/// Use the file's version then gives that row the file's spoken form. Two files that differ in one row give plans that
+/// differ in that row. Pure; the file was read by the codec already.
 /// </remarks>
 public static class LibraryImportPlanner
 {
@@ -133,13 +140,20 @@ public static class LibraryImportPlanner
         }
 
         var rows = existing?.Content.Rows ?? [];
-        var known = new Dictionary<LibraryTermKey, (TermValues Values, long? RowId)>();
+
+        // What a file row can meet: a row of the library, by its place, or a row this import adds. The spoken forms the
+        // rows go by each name one target for good, and a target's values move as Use the file's version would move them,
+        // so a later row of the file meets what the rows before it leave, as DictionaryImportMerger plans the dictionary
+        // (review finding A6). Keep mine applies the same plan and leaves every written-differently row alone.
+        var targets = new List<(TermValues Values, long? RowId)>(rows.Count);
+        var known = new Dictionary<LibraryTermKey, int>();
         for (var i = 0; i < rows.Count; i++)
         {
+            targets.Add((rows[i].Values, LibraryWorkspace.RowIdIn(draft, existing!.Content.Id, i)));
             var key = LibraryTermKey.From(rows[i].Values.Spoken);
             if (!key.IsEmpty)
             {
-                known.TryAdd(key, (rows[i].Values, LibraryWorkspace.RowIdIn(draft, existing!.Content.Id, i)));
+                known.TryAdd(key, i);
             }
         }
 
@@ -149,7 +163,7 @@ public static class LibraryImportPlanner
             // hold a second row with that key: a file row saying the original form is that term, not a new one.
             for (var i = 0; i < rows.Count; i++)
             {
-                known.TryAdd(rows[i].Key, (rows[i].Values, LibraryWorkspace.RowIdIn(draft, existing.Content.Id, i)));
+                known.TryAdd(rows[i].Key, i);
             }
         }
 
@@ -174,13 +188,22 @@ public static class LibraryImportPlanner
 
             if (known.TryGetValue(key, out var met))
             {
-                var kind = Same(term, met.Values) ? LibraryImportOperationKind.AlreadyHere : LibraryImportOperationKind.WrittenDifferently;
-                operations.Add(new LibraryImportOperation(kind, term, met.RowId, met.Values));
+                var (values, rowId) = targets[met];
+                if (Same(term, values))
+                {
+                    operations.Add(new LibraryImportOperation(LibraryImportOperationKind.AlreadyHere, term, rowId, values));
+                }
+                else
+                {
+                    operations.Add(new LibraryImportOperation(LibraryImportOperationKind.WrittenDifferently, term, rowId, values));
+                    targets[met] = (FilesVersion(values, term), rowId);
+                }
             }
             else
             {
                 operations.Add(new LibraryImportOperation(LibraryImportOperationKind.Add, term, null, null));
-                known[key] = (term, null);
+                known[key] = targets.Count;
+                targets.Add((term, null));
             }
         }
 
@@ -236,6 +259,18 @@ public static class LibraryImportPlanner
         && string.Equals(file.Written, existing.Written, StringComparison.Ordinal)
         && file.WholeWord == existing.WholeWord
         && file.Enabled == existing.Enabled;
+
+    /// <summary>
+    /// A term after Use the file's version applied a file row written differently: the file's written form, whole-word
+    /// and enabled values. Met by its own spoken form, the term keeps its spelling of it, as the dictionary merge does;
+    /// met by a renamed built-in row's original key, the file's row is that term as the file says it, so the file's
+    /// spoken form comes back too. The planner and the workspace both use it, so the plan describes what applying does.
+    /// </summary>
+    internal static TermValues FilesVersion(TermValues existing, TermValues file)
+    {
+        var values = existing with { Written = file.Written, WholeWord = file.WholeWord, Enabled = file.Enabled };
+        return LibraryTermKey.AreSame(existing.Spoken, file.Spoken) ? values : values with { Spoken = file.Spoken };
+    }
 
     private static bool HasNonAsciiLetter(string value)
     {

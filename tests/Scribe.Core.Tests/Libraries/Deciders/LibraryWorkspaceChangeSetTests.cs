@@ -258,6 +258,209 @@ public sealed class LibraryWorkspaceChangeSetTests
     }
 
     [Fact]
+    public void D4_a_new_library_deleted_while_its_save_runs_is_a_pending_deletion_of_the_saved_library()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var created = workspace.CreateLibrary();
+        workspace.Rename(created, "Release notes");
+        workspace.AddTerm(created, new TermValues("ga", "general availability"));
+        var changes = Capture(workspace);
+
+        // While the Save runs, the user deletes the library it is saving, and makes another: the Save may still bring
+        // the first back under its id, so the new one never takes it.
+        workspace.DeleteLibrary(created);
+        var another = workspace.CreateLibrary();
+        Assert.NotEqual(created, another, StringComparer.OrdinalIgnoreCase);
+        workspace.AddTerm(another, new TermValues("rc", "release candidate"));
+        var saved = Apply(catalog, changes);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var committed = saved.Find(created)!;
+        Assert.True(workspace.HasUnsavedChanges);
+        Assert.Equal([created, another], workspace.UnsavedLibraryIds.Order(StringComparer.OrdinalIgnoreCase));
+        Assert.True(workspace.Draft.Find(created)!.PendingDelete);
+        Assert.Equal([new TermValues("rc", "release candidate")], ValuesOf(workspace, another));
+        var next = Capture(workspace);
+        var deletion = Assert.Single(next.Deletions);
+        Assert.Equal((created, committed.FileName, committed.ContentHash!.Value), (deletion.LibraryId, deletion.FileName, deletion.ExpectedPreImage));
+        Assert.Equal(another, Assert.Single(next.Writes).LibraryId);
+
+        // Saving it leaves what the user saw: the first library gone, the second saved, and nothing unsaved.
+        var deleted = Apply(saved, next);
+        workspace.MarkSaved(next.DraftRevision, deleted);
+        Assert.Null(deleted.Find(created));
+        Assert.NotNull(deleted.Find(another));
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void D4_a_deletion_undone_while_its_save_runs_stays_an_unsaved_restore()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var rows = ValuesOf(workspace, "team-terms");
+        workspace.DeleteLibrary("team-terms");
+        var changes = Capture(workspace);
+        Assert.Single(changes.Deletions);
+
+        // While the Save runs, the user takes the deletion back.
+        workspace.Undo();
+        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase);
+        var saved = Apply(catalog, changes, store);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var entry = Assert.Single(saved.RecentlyDeleted);
+        var library = workspace.Draft.Find("team-terms");
+        Assert.NotNull(library);
+        Assert.Equal((LibraryOrigin.Restored, false, true), (library.Origin, library.PendingDelete, library.Unsaved));
+        Assert.Equal(rows, ValuesOf(workspace, "team-terms"));
+        Assert.Contains("team-terms", workspace.Draft.LocalState.EnabledIds);
+        Assert.True(workspace.Draft.LocalState.AiPermissions["team-terms"]);
+        Assert.Empty(workspace.Draft.RecentlyDeleted);
+        Assert.Equal(["team-terms"], workspace.UnsavedLibraryIds);
+
+        // The next Save restores the entry that Save made, and the library reads back as the user saw it.
+        var next = Capture(workspace);
+        var restore = Assert.Single(next.RecentlyDeletedActions);
+        Assert.Equal(
+            (RecentlyDeletedActionKind.Restore, entry.EntryName, entry.ContentHash, "team-terms"),
+            (restore.Kind, restore.EntryName, restore.ExpectedHash, restore.RestoreAsId));
+        Assert.Empty(next.Writes);
+        var restored = Apply(saved, next, store);
+        workspace.MarkSaved(next.DraftRevision, restored);
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Equal(rows, ValuesOf(workspace, "team-terms"));
+        Assert.Contains("team-terms", restored.LocalState.EnabledIds);
+        Assert.True(restored.LocalState.AiPermissions["team-terms"]);
+    }
+
+    [Fact]
+    public void Rebase_keeps_a_library_the_user_edited_that_the_newer_catalog_no_longer_has_as_an_unsaved_recreation()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        workspace.EditTerm("team-terms", RowIdOf(workspace, "team-terms", "kube"), new TermValues("kube", "K8s"));
+
+        // Its file was deleted outside Scribe meanwhile.
+        var newer = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        var library = workspace.Draft.Find("team-terms");
+        Assert.NotNull(library);
+        Assert.Equal((LibraryOrigin.Created, true), (library.Origin, library.Unsaved));
+        Assert.Equal([new TermValues("kube", "K8s"), new TermValues("get hub", "GitHub Enterprise")], ValuesOf(workspace, "team-terms"));
+        var write = Assert.Single(Capture(workspace).Writes);
+        Assert.Equal(("team-terms", (LibraryContentHash?)null), (write.LibraryId, write.ExpectedPreImage));
+
+        // A library the user did not edit simply goes with its file.
+        var untouched = Workspace(catalog);
+        untouched.Rebase(newer);
+        Assert.Null(untouched.Draft.Find("team-terms"));
+        Assert.False(untouched.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void Rebase_keeps_each_custom_row_its_identity_so_disjoint_edits_merge_without_a_second_copy()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        var kube = RowIdOf(workspace, "team-terms", "kube");
+        var getHub = RowIdOf(workspace, "team-terms", "get hub");
+        workspace.EditTerm("team-terms", kube, new TermValues("kube", "K8s"));
+
+        // Another commit changed only "get hub" and added "helm" after it.
+        var newer = Catalog(
+            [
+                BuiltIn(GitHubId), BuiltIn(AzureId),
+                Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GH"), new TermValues("helm", "Helm")]),
+            ],
+            [GitHubId, "team-terms"], ai: [new("team-terms", true)], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        Assert.Equal([new TermValues("kube", "K8s"), new TermValues("get hub", "GH"), new TermValues("helm", "Helm")], ValuesOf(workspace, "team-terms"));
+        Assert.Equal((kube, getHub), (RowIdOf(workspace, "team-terms", "kube"), RowIdOf(workspace, "team-terms", "get hub")));
+        var write = Assert.Single(Capture(workspace).Writes);
+        Assert.Equal(ValuesOf(workspace, "team-terms"), write.Content!.Rows.Select(row => row.Values));
+    }
+
+    [Fact]
+    public void Rebase_takes_the_rows_a_newer_catalog_deleted_unless_the_user_edited_them()
+    {
+        var catalog = Catalog(
+            [Custom("notes", "Notes", [new TermValues("vm", "VM"), new TermValues("kube", "Kubernetes"), new TermValues("helm", "Helm")])],
+            ["notes"], ai: [new("notes", true)]);
+        var workspace = Workspace(catalog);
+        workspace.EditTerm("notes", RowIdOf(workspace, "notes", "vm"), new TermValues("vm", "virtual machine"));
+        workspace.EditTerm("notes", RowIdOf(workspace, "notes", "helm"), new TermValues("helm", "Helm charts"));
+
+        // Another commit deleted "kube" and "helm".
+        var newer = Catalog([Custom("notes", "Notes", [new TermValues("vm", "VM")])], ["notes"], ai: [new("notes", true)], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        Assert.Equal([new TermValues("vm", "virtual machine"), new TermValues("helm", "Helm charts")], ValuesOf(workspace, "notes"));
+        Assert.Empty(workspace.CaptureChangeSet().Issues);
+    }
+
+    [Fact]
+    public void Rebase_treats_a_spoken_form_several_rows_could_be_as_a_conflict_the_save_names()
+    {
+        var catalog = Catalog([Custom("notes", "Notes", [new TermValues("kube", "Kubernetes")])], ["notes"], ai: [new("notes", true)]);
+        var workspace = Workspace(catalog);
+        var mine = RowIdOf(workspace, "notes", "kube");
+        workspace.EditTerm("notes", mine, new TermValues("kube", "K8s"));
+
+        // Another commit made the one "kube" row two: which of them is the user's row cannot be told.
+        var newer = Catalog(
+            [Custom("notes", "Notes", [new TermValues("kube", "Kube"), new TermValues("kube", "Kubernetes cluster")])],
+            ["notes"], ai: [new("notes", true)], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        // Nothing is dropped or guessed: the user's row keeps its identity beside the newer rows, and the Save names the
+        // repeat until the user settles it.
+        Assert.Equal(
+            [new TermValues("kube", "Kube"), new TermValues("kube", "Kubernetes cluster"), new TermValues("kube", "K8s")],
+            ValuesOf(workspace, "notes"));
+        Assert.Equal(mine, workspace.RowsOf("notes").Single(row => row.Row.Values.Written == "K8s").RowId);
+        var issues = workspace.CaptureChangeSet().Issues;
+        Assert.Contains(issues, issue => issue.Kind == LibraryValidationKind.DuplicateSpoken && issue.RowId == mine);
+    }
+
+    [Fact]
+    public void Rebase_takes_a_newer_order_of_rows_the_user_left_alone_and_nothing_reads_as_unsaved()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        workspace.SetEnabled(AzureId, true);
+
+        // Another commit only reordered "Team terms".
+        var reordered = Custom("team-terms", "Team terms", [new TermValues("get hub", "GitHub Enterprise"), new TermValues("kube", "Kubernetes")]);
+        var newer = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId), reordered], [GitHubId, "team-terms"], ai: [new("team-terms", true)], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        Assert.Equal([new TermValues("get hub", "GitHub Enterprise"), new TermValues("kube", "Kubernetes")], ValuesOf(workspace, "team-terms"));
+        Assert.Equal([AzureId], workspace.UnsavedLibraryIds);
+    }
+
+    [Fact]
+    public void Rebase_merges_each_metadata_field_on_its_own()
+    {
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        Assert.True(workspace.SetDetails("team-terms", "Work", null).Applied);
+
+        // Another commit renamed the library meanwhile.
+        var renamed = Custom("team-terms", "Platform terms", [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GitHub Enterprise")]);
+        var newer = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId), renamed], [GitHubId, "team-terms"], ai: [new("team-terms", true)], generation: catalog.Generation + 1);
+        workspace.Rebase(newer);
+
+        var content = workspace.Draft.Find("team-terms")!.Content;
+        Assert.Equal(("Platform terms", "Work"), (content.Name, content.Category));
+        var write = Assert.Single(Capture(workspace).Writes);
+        Assert.Equal(("Platform terms", "Work"), (write.Content!.Name, write.Content.Category));
+    }
+
+    [Fact]
     public void Restore_all_built_in_values_writes_no_document_and_later_edits_start_a_new_one()
     {
         var edits = new BuiltInLibraryEdits(GitHubId,

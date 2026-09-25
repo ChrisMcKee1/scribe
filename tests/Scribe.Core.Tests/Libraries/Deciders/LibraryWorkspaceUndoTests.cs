@@ -195,6 +195,46 @@ public sealed class LibraryWorkspaceUndoTests
         Assert.False(workspace.CanUndo);
     }
 
+    [Fact]
+    public void D5_undoing_an_import_brings_a_legacy_marker_back_only_with_its_row()
+    {
+        var marker = new LegacyMarker("team-terms", LibraryTermKey.From("get hub"));
+        var catalog = Catalog(Standard().Libraries, [GitHubId, "team-terms"], ai: [new("team-terms", true)], markers: [marker]);
+        static LibraryImportPlan PlanFor(LibraryWorkspace workspace) =>
+            LibraryImportPlanner.Plan(
+                Document("Team terms", new TermValues("get hub", "GitHub"), new TermValues("helm", "Helm")),
+                new LibraryImportTarget.ExistingLibrary("team-terms"),
+                workspace.Draft);
+
+        // Undone right away, the import puts the row and its marker back together.
+        var plain = Workspace(catalog);
+        Assert.True(plain.ApplyImport(PlanFor(plain), ImportConflictChoice.UseFilesVersion).Applied);
+        Assert.Empty(plain.Draft.LocalState.LegacyMarkers);
+        plain.Undo();
+        Assert.Equal([marker], plain.Draft.LocalState.LegacyMarkers);
+        Assert.False(plain.HasUnsavedChanges);
+
+        // A correction typed after the import keeps its row from being undone, so the marker stays gone with it: the
+        // user's value competes as their own term, never as a legacy row behind the built-in.
+        var workspace = Workspace(catalog);
+        workspace.ApplyImport(PlanFor(workspace), ImportConflictChoice.UseFilesVersion);
+        workspace.EditTerm("team-terms", RowIdOf(workspace, "team-terms", "get hub"), new TermValues("get hub", "GitHub Cloud"));
+        Assert.Equal("Import terms", workspace.UndoLabel);
+        workspace.Undo();
+        Assert.Equal(
+            [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GitHub Cloud")],
+            ValuesOf(workspace, "team-terms"));
+        Assert.Empty(workspace.Draft.LocalState.LegacyMarkers);
+        Assert.Empty(Capture(workspace).LocalState.LegacyMarkers);
+
+        // Redo takes the row it can take (the addition) and leaves the marker question where the user left it.
+        workspace.Redo();
+        Assert.Equal(
+            [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GitHub Cloud"), new TermValues("helm", "Helm")],
+            ValuesOf(workspace, "team-terms"));
+        Assert.Empty(workspace.Draft.LocalState.LegacyMarkers);
+    }
+
     private static string Snapshot(LibraryWorkspace workspace)
     {
         var draft = workspace.Draft;

@@ -27,6 +27,8 @@ public sealed class LibraryImportPlannerTests
 
         var plan = LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary("team-terms"), workspace.Draft);
 
+        // Each row meets the term as the rows before it leave it under Use the file's version, so the last "vm" row is
+        // written differently from "virtual machine", not already here as "VM".
         Assert.Equal(
             [
                 LibraryImportOperationKind.AlreadyHere,
@@ -35,14 +37,16 @@ public sealed class LibraryImportPlannerTests
                 LibraryImportOperationKind.Add,
                 LibraryImportOperationKind.Add,
                 LibraryImportOperationKind.WrittenDifferently,
-                LibraryImportOperationKind.AlreadyHere,
+                LibraryImportOperationKind.WrittenDifferently,
             ],
             plan.Operations.Select(operation => operation.Kind));
-        Assert.Equal((2, 3, 2, 1, 1), (plan.Adds, plan.WrittenDifferently, plan.AlreadyHere, plan.RemovalRules, plan.Skipped));
+        Assert.Equal((2, 4, 1, 1, 1), (plan.Adds, plan.WrittenDifferently, plan.AlreadyHere, plan.RemovalRules, plan.Skipped));
         Assert.Equal(RowIdOf(workspace, "team-terms", "get hub"), plan.Operations[1].ExistingRowId);
         Assert.Equal(new TermValues("get hub", "GitHub Enterprise"), plan.Operations[1].ExistingValues);
+        Assert.Equal(new TermValues("get hub", "GitHub"), plan.Operations[2].ExistingValues);
         Assert.Null(plan.Operations[5].ExistingRowId);
         Assert.Equal(new TermValues("vm", "VM"), plan.Operations[5].ExistingValues);
+        Assert.Equal(new TermValues("vm", "virtual machine"), plan.Operations[6].ExistingValues);
         Assert.Equal(workspace.Revision, plan.DraftRevision);
         Assert.True(plan.Encoding.AnsiFallback);
         Assert.Empty(plan.NonAsciiRows);
@@ -53,6 +57,70 @@ public sealed class LibraryImportPlannerTests
             [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GitHub Enterprise"), new TermValues("vm", "VM"), new TermValues("um", "")],
             ValuesOf(workspace, "team-terms"));
         Assert.Equal(ImportConflictChoice.KeepMine, default(ImportConflictChoice));
+    }
+
+    [Fact]
+    public void D7_a_repeated_file_row_meets_what_the_rows_before_it_leave_so_the_files_last_word_stands()
+    {
+        // A, B, A for a term the library lacks, for one it has, and into a new library.
+        var document = Document("Team terms",
+            new TermValues("vm", "VM"), new TermValues("vm", "virtual machine"), new TermValues("vm", "VM"),
+            new TermValues("kube", "Kubernetes"), new TermValues("kube", "K8s"), new TermValues("kube", "Kubernetes"));
+        var into = new LibraryImportTarget.ExistingLibrary("team-terms");
+        var workspace = Workspace(Standard());
+
+        var plan = LibraryImportPlanner.Plan(document, into, workspace.Draft);
+
+        Assert.Equal(
+            [
+                LibraryImportOperationKind.Add, LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.WrittenDifferently,
+                LibraryImportOperationKind.AlreadyHere, LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.WrittenDifferently,
+            ],
+            plan.Operations.Select(operation => operation.Kind));
+        Assert.Equal((1, 4, 1), (plan.Adds, plan.WrittenDifferently, plan.AlreadyHere));
+        Assert.Equal(new TermValues("vm", "virtual machine"), plan.Operations[2].ExistingValues);
+        Assert.Equal((RowIdOf(workspace, "team-terms", "kube"), new TermValues("kube", "K8s")), (plan.Operations[5].ExistingRowId, plan.Operations[5].ExistingValues));
+
+        // Applied in file order, the file's last row for each term stands; Keep mine keeps what the library had or the
+        // file added first.
+        Assert.True(workspace.ApplyImport(plan, ImportConflictChoice.UseFilesVersion).Applied);
+        Assert.Equal(
+            [new TermValues("kube", "Kubernetes"), new TermValues("get hub", "GitHub Enterprise"), new TermValues("vm", "VM")],
+            ValuesOf(workspace, "team-terms"));
+        var mine = Workspace(Standard());
+        mine.ApplyImport(LibraryImportPlanner.Plan(document, into, mine.Draft), ImportConflictChoice.KeepMine);
+        Assert.Equal(ValuesOf(workspace, "team-terms"), ValuesOf(mine, "team-terms"));
+
+        var fresh = Workspace(Standard());
+        var asNew = LibraryImportPlanner.Plan(Document("Machines", new TermValues("vm", "VM"), new TermValues("vm", "virtual machine"), new TermValues("vm", "VM")),
+            new LibraryImportTarget.NewLibrary(null), fresh.Draft);
+        Assert.Equal((1, 2, 0), (asNew.Adds, asNew.WrittenDifferently, asNew.AlreadyHere));
+        fresh.ApplyImport(asNew, ImportConflictChoice.UseFilesVersion);
+        var machines = fresh.Draft.Libraries.Single(library => library.Content.Name == "Machines").Content;
+        Assert.Equal([new TermValues("vm", "VM")], machines.Rows.Select(row => row.Values));
+    }
+
+    [Fact]
+    public void D7_a_renamed_built_in_term_stays_one_target_whichever_of_its_two_forms_the_file_rows_say()
+    {
+        var workspace = Workspace(Standard());
+        var getHub = RowIdOf(workspace, GitHubId, "get hub");
+        workspace.EditTerm(GitHubId, getHub, new TermValues("git hub", "GitHub"));
+        var document = Document("GitHub", new TermValues("get hub", "GH"), new TermValues("git hub", "GitHub"));
+
+        var plan = LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), workspace.Draft);
+
+        Assert.Equal(
+            [LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.WrittenDifferently],
+            plan.Operations.Select(operation => operation.Kind));
+        Assert.All(plan.Operations, operation => Assert.Equal(getHub, operation.ExistingRowId));
+        Assert.Equal(new TermValues("get hub", "GH"), plan.Operations[1].ExistingValues);
+
+        Assert.True(workspace.ApplyImport(plan, ImportConflictChoice.UseFilesVersion).Applied);
+        var row = Assert.Single(workspace.RowsOf(GitHubId), candidate => candidate.RowId == getHub);
+        Assert.Equal((new TermValues("git hub", "GitHub"), LibraryTermKey.From("get hub")), (row.Row.Values, row.Row.Key));
+        Assert.Equal(3, workspace.RowsOf(GitHubId).Count);
+        Assert.Empty(workspace.CaptureChangeSet().Issues);
     }
 
     [Fact]
@@ -152,22 +220,33 @@ public sealed class LibraryImportPlannerTests
         var keep = Renamed(out var renamedRow);
         var plan = LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), keep.Draft);
 
+        // Both of the row's forms are that one term for the whole file, and the second row meets it as the first leaves
+        // it under Use the file's version.
         Assert.Equal(
-            [LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.AlreadyHere, LibraryImportOperationKind.Add],
+            [LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.Add],
             plan.Operations.Select(operation => operation.Kind));
-        Assert.Equal(renamedRow, plan.Operations[0].ExistingRowId);
+        Assert.Equal((renamedRow, renamedRow), (plan.Operations[0].ExistingRowId, plan.Operations[1].ExistingRowId));
         Assert.Equal(new TermValues("git hub", "GitHub"), plan.Operations[0].ExistingValues);
+        Assert.Equal(new TermValues("get hub", "GitHub!"), plan.Operations[1].ExistingValues);
 
         Assert.True(keep.ApplyImport(plan, ImportConflictChoice.KeepMine).Applied);
         Assert.Equal("git hub", keep.RowsOf(GitHubId).Single(row => row.RowId == renamedRow).Row.Values.Spoken);
         Assert.NotNull(keep.CaptureChangeSet().ChangeSet);
 
-        // The file's version of that term is the term as the file says it: its original form comes back.
+        // The file's version of that term is the term as the file says it, row by row: its original form comes back,
+        // and then the file's own row for the renamed form has the last word.
         var take = Renamed(out renamedRow);
-        Assert.True(take.ApplyImport(LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), take.Draft),
+        var onlyOriginal = Document(null, new TermValues("get hub", "GitHub!"), new TermValues("gh cli", "GitHub CLI"));
+        Assert.True(take.ApplyImport(LibraryImportPlanner.Plan(onlyOriginal, new LibraryImportTarget.ExistingLibrary(GitHubId), take.Draft),
             ImportConflictChoice.UseFilesVersion).Applied);
         Assert.Equal(new TermValues("get hub", "GitHub!"), take.RowsOf(GitHubId).Single(row => row.RowId == renamedRow).Row.Values);
         Assert.Equal(2, Assert.Single(Capture(take).Writes).Edits!.Terms.Count);
+
+        var both = Renamed(out renamedRow);
+        Assert.True(both.ApplyImport(LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), both.Draft),
+            ImportConflictChoice.UseFilesVersion).Applied);
+        Assert.Equal(new TermValues("git hub", "GitHub"), both.RowsOf(GitHubId).Single(row => row.RowId == renamedRow).Row.Values);
+        Assert.Equal(3, both.RowsOf(GitHubId).Count(row => row.Row.Shipped is not null));
     }
 
     [Fact]

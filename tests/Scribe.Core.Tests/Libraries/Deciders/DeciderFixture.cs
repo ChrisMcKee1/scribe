@@ -8,9 +8,9 @@ using Scribe.Core.Settings;
 namespace Scribe.Core.Tests.Libraries.Deciders;
 
 /// <summary>
-/// What the deciders' tests build catalogs, drafts and change sets from: a minimal built-in overlay implementing the
-/// 3.2.1 transitions, a pair of fake shipped libraries, Decision 2 as the plan states it, and a fake store that applies
-/// a change set to a catalog the way the journal's committed result reads back.
+/// What the deciders' tests build catalogs, drafts and change sets from: an overlay following the amended 3.2.1 rules
+/// (the real one is another stream's until integration), a pair of fake shipped libraries, Decision 2 as the plan states
+/// it, and a fake store that applies a change set to a catalog the way the journal's committed result reads back.
 /// </summary>
 internal static class DeciderFixture
 {
@@ -84,7 +84,10 @@ internal static class DeciderFixture
         return new CatalogLibrary(content, state, null, hash, paused ? null : edits, previousEdits);
     }
 
-    /// <summary>A catalog; the local state accepts every library's content, so nothing reads as replaced.</summary>
+    /// <summary>
+    /// A catalog; the local state accepts every library's content, so nothing reads as replaced, plus the entries of
+    /// <paramref name="accepted"/> (a retired built-in's document, say), which override a library's own.
+    /// </summary>
     public static LibraryCatalog Catalog(
         IEnumerable<CatalogLibrary> libraries,
         IEnumerable<string>? enabled = null,
@@ -96,15 +99,22 @@ internal static class DeciderFixture
         IEnumerable<RecentlyDeletedLibrary>? recentlyDeleted = null,
         IEnumerable<RetiredBuiltInEdits>? retired = null,
         long generation = 3,
-        IEnumerable<LibraryKeptVersion>? kept = null)
+        IEnumerable<LibraryKeptVersion>? kept = null,
+        IEnumerable<KeyValuePair<string, LibraryContentHash>>? accepted = null)
     {
         var list = LibraryPrecedence.Order(
             libraries, library => library.Content.Id, library => library.Content.BuiltIn, library => library.FileName).ToList();
-        var accepted = list
+        var acceptedContent = list
             .Where(library => library.ContentHash is not null)
-            .Select(library => new KeyValuePair<string, LibraryContentHash>(library.Content.Id, library.ContentHash!.Value));
+            .Select(library => new KeyValuePair<string, LibraryContentHash>(library.Content.Id, library.ContentHash!.Value))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, hash) in accepted ?? [])
+        {
+            acceptedContent[id] = hash;
+        }
+
         var enabledIds = enabled?.ToList();
-        var state = LibraryLocalState.Create(enabledIds, enabledIds, ai, markers, notice, health, accepted, lost);
+        var state = LibraryLocalState.Create(enabledIds, enabledIds, ai, markers, notice, health, acceptedContent, lost);
         return new LibraryCatalog(
             generation, list, state, (recentlyDeleted ?? []).ToList(), (retired ?? []).ToList(), filesAwaitingRelease: 0,
             (kept ?? []).ToList());
@@ -229,54 +239,48 @@ internal static class DeciderFixture
             filesAwaitingRelease: 0);
     }
 
-    /// <summary>A minimal overlay: the 3.2.1 transitions, and an Apply and a Collect that are each other's inverse.</summary>
+    /// <summary>
+    /// An overlay that follows the amended 3.2.1 rules, written from the contract rather than taken from the overlay
+    /// stream: one definition of a row per entry (<see cref="RowOf"/>), which Apply, every command and Collect's check go
+    /// through; per-field authorship, a changed field based on the shipped value in use; an edit of an off row keeping the
+    /// off authored; Turn on against a disabled shipped row authoring an edited turn-on; reviews raised and resolved; and a
+    /// Collect that refuses a custom row, a repeated key and any row it would not give itself, and writes its entries in
+    /// the one order.
+    /// </summary>
     internal sealed class FakeOverlay : IBuiltInLibraryOverlay
     {
+        private const TermFields All = TermFields.Spoken | TermFields.Written | TermFields.WholeWord | TermFields.Enabled;
+
+        private static readonly UTF8Encoding Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
         public BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes) => throw new NotSupportedException();
 
         public byte[] WriteEdits(BuiltInLibraryEdits edits) => throw new NotSupportedException();
 
         public IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits)
         {
-            var byKey = (edits?.Terms ?? []).ToDictionary(term => term.Key);
-            var shippedKeys = new HashSet<LibraryTermKey>();
-            var rows = new List<LibraryRow>();
-            foreach (var entry in shipped.Entries)
+            var byKey = new Dictionary<LibraryTermKey, BuiltInTermEdit>();
+            foreach (var edit in edits?.Terms ?? [])
             {
-                var values = TermValues.FromEntry(entry);
-                var key = LibraryTermKey.From(values.Spoken);
-                shippedKeys.Add(key);
-                if (!byKey.TryGetValue(key, out var edit))
+                if (!byKey.TryAdd(edit.Key, edit))
                 {
-                    rows.Add(new LibraryRow(key, values, TermOrigin.Shipped, values));
+                    throw new ArgumentException("A document holds one entry per key.", nameof(edits));
                 }
-                else if (edit.Intent == BuiltInTermIntent.Off)
-                {
-                    rows.Add(new LibraryRow(key, values with { Enabled = false }, TermOrigin.Off, values, edit));
-                }
-                else
-                {
-                    var origin = edit.Value == values
-                        ? TermOrigin.Pinned
-                        : edit.Intent == BuiltInTermIntent.Added ? TermOrigin.Added : TermOrigin.Edited;
-                    rows.Add(new LibraryRow(key, edit.Value!, origin, values, edit));
-                }
+            }
+
+            var (order, shippedValues) = ShippedValues(shipped);
+            var rows = new List<LibraryRow>();
+            foreach (var key in order)
+            {
+                var values = shippedValues[key];
+                rows.Add(byKey.TryGetValue(key, out var edit) ? RowOf(values, edit)! : ShippedRow(key, values));
             }
 
             foreach (var edit in edits?.Terms ?? [])
             {
-                if (shippedKeys.Contains(edit.Key))
+                if (!shippedValues.ContainsKey(edit.Key) && RowOf(null, edit) is { } row)
                 {
-                    continue;
-                }
-
-                if (edit.Intent == BuiltInTermIntent.Added)
-                {
-                    rows.Add(new LibraryRow(edit.Key, edit.Value!, TermOrigin.Added, null, edit));
-                }
-                else if (edit.Intent is BuiltInTermIntent.Edited or BuiltInTermIntent.Pinned)
-                {
-                    rows.Add(new LibraryRow(edit.Key, edit.Value!, TermOrigin.NoLongerShipped, null, edit));
+                    rows.Add(row);
                 }
             }
 
@@ -285,86 +289,255 @@ internal static class DeciderFixture
 
         public LibraryRow Edit(LibraryRow row, TermValues values)
         {
-            EnsureBuiltIn(row);
-            if (row.Origin is TermOrigin.Added or TermOrigin.NoLongerShipped || row.Shipped is null)
+            EnsureCanonical(row);
+            EnsureText(values);
+            if (row.Values == values)
             {
-                var intent = row.Edit?.Intent ?? BuiltInTermIntent.Added;
-                return row with { Values = values, Edit = new BuiltInTermEdit(row.Key, intent, row.Edit?.Base, values) };
+                return row;
             }
 
-            var pinned = values == row.Shipped;
-            return new LibraryRow(
-                row.Key, values, pinned ? TermOrigin.Pinned : TermOrigin.Edited, row.Shipped,
-                new BuiltInTermEdit(row.Key, pinned ? BuiltInTermIntent.Pinned : BuiltInTermIntent.Edited, row.Shipped, values));
+            var changed = Differ(row.Values, values);
+            return changed == TermFields.Enabled ? SetEnabled(row, values.Enabled) : EditValues(row, values, changed);
         }
 
         public LibraryRow SetEnabled(LibraryRow row, bool enabled)
         {
-            EnsureBuiltIn(row);
+            EnsureCanonical(row);
             if (row.Values.Enabled == enabled)
             {
                 return row;
             }
 
-            return row.Origin switch
+            if (row.Origin == TermOrigin.Shipped && !enabled)
             {
-                TermOrigin.Shipped => new LibraryRow(
-                    row.Key, row.Values with { Enabled = false }, TermOrigin.Off, row.Shipped,
-                    new BuiltInTermEdit(row.Key, BuiltInTermIntent.Off, row.Shipped, null)),
-                TermOrigin.Off => new LibraryRow(row.Key, row.Shipped!, TermOrigin.Shipped, row.Shipped),
-                _ => Edit(row, row.Values with { Enabled = enabled }),
-            };
+                return RowOf(row.Shipped, new BuiltInTermEdit(row.Key, BuiltInTermIntent.Off, row.Shipped, null))!;
+            }
+
+            // Turn on removes an off entry only while this version ships the row on; against a disabled shipped row it
+            // is the user's own choice, an edited turn-on.
+            if (row.Edit?.Intent == BuiltInTermIntent.Off && row.Shipped!.Enabled)
+            {
+                return ShippedRow(row.Key, row.Shipped);
+            }
+
+            return EditValues(row, row.Values with { Enabled = enabled }, TermFields.Enabled);
         }
 
         public LibraryRow? RestoreShipped(LibraryRow row)
         {
-            EnsureBuiltIn(row);
-            return row.Shipped is { } shipped ? new LibraryRow(row.Key, shipped, TermOrigin.Shipped, shipped) : null;
+            EnsureCanonical(row);
+            return row.Shipped is not { } shipped ? null : row.Origin == TermOrigin.Shipped ? row : ShippedRow(row.Key, shipped);
         }
 
         public LibraryRow Add(TermValues values)
         {
             // As the real overlay: an added row is keyed by its spoken form, so a blank one is a caller's bug.
             ArgumentException.ThrowIfNullOrWhiteSpace(values.Spoken);
-            var key = LibraryTermKey.From(values.Spoken);
-            return new LibraryRow(key, values, TermOrigin.Added, null, new BuiltInTermEdit(key, BuiltInTermIntent.Added, null, values));
+            EnsureText(values);
+            return RowOf(null, new BuiltInTermEdit(LibraryTermKey.From(values.Spoken), BuiltInTermIntent.Added, null, values))!;
         }
 
-        public LibraryRow ResolveReview(LibraryRow row, TermReviewChoice choice) => row;
+        public LibraryRow ResolveReview(LibraryRow row, TermReviewChoice choice)
+        {
+            EnsureCanonical(row);
+            if (row.Review is null)
+            {
+                return row;
+            }
+
+            var shipped = row.Shipped!;
+            return choice == TermReviewChoice.KeepMine
+                ? RowOf(shipped, row.Edit! with { Acknowledged = shipped })!
+                : RowOf(shipped, new BuiltInTermEdit(row.Key, BuiltInTermIntent.Pinned, shipped, shipped))!;
+        }
 
         public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows)
         {
-            // As the real overlay: a custom row, or two rows with one key, is no document (O's
-            // Collect_refuses_rows_it_did_not_give_and_rows_that_repeat_a_key).
-            if (rows.Any(row => row.Origin == TermOrigin.Custom) || rows.Select(row => row.Key).Distinct().Count() != rows.Count)
+            var (order, shippedValues) = ShippedValues(shipped);
+            var byKey = new Dictionary<LibraryTermKey, LibraryRow>();
+            foreach (var row in rows)
             {
-                throw new ArgumentException("Rows the overlay did not give, or rows that repeat a key.", nameof(rows));
+                // As the real overlay: a custom row, two rows with one key, or a row it would not give for this shipped
+                // library is no document (an authored row would be saved as something other than what the user saw).
+                if (row.Origin == TermOrigin.Custom || !byKey.TryAdd(row.Key, row))
+                {
+                    throw new ArgumentException("Rows the overlay did not give, or rows that repeat a key.", nameof(rows));
+                }
+
+                if (!IsCanonical(row, shippedValues.TryGetValue(row.Key, out var values) ? values : null))
+                {
+                    throw new ArgumentException("A row the overlay would not give for this shipped library.", nameof(rows));
+                }
             }
 
-            var shippedKeys = shipped.Entries.Select(entry => LibraryTermKey.From(entry.Pattern)).ToHashSet();
-            var rowKeys = rows.Select(row => row.Key).ToHashSet();
-            var entries = rows.Where(row => row.Origin != TermOrigin.Shipped && row.Edit is not null).Select(row => row.Edit!).ToList();
+            var committedByKey = new Dictionary<LibraryTermKey, BuiltInTermEdit>();
             foreach (var entry in committed?.Terms ?? [])
             {
-                if (!rowKeys.Contains(entry.Key)
-                    && (entry.Intent == BuiltInTermIntent.Off || (entry.Intent != BuiltInTermIntent.Added && shippedKeys.Contains(entry.Key))))
+                committedByKey.TryAdd(entry.Key, entry);
+            }
+
+            // Shipped rows in shipped order (a row left out keeps its committed entry, but an addition), then the rows this
+            // version does not ship in the order given, then kept off entries whose row this version does not ship.
+            var entries = new List<BuiltInTermEdit>();
+            foreach (var key in order)
+            {
+                if (byKey.TryGetValue(key, out var row))
+                {
+                    if (row.Edit is { } edit)
+                    {
+                        entries.Add(edit);
+                    }
+                }
+                else if (committedByKey.TryGetValue(key, out var entry) && entry.Intent != BuiltInTermIntent.Added)
                 {
                     entries.Add(entry);
                 }
             }
 
+            entries.AddRange(rows.Where(row => !shippedValues.ContainsKey(row.Key) && row.Edit is not null).Select(row => row.Edit!));
+            entries.AddRange((committed?.Terms ?? []).Where(entry =>
+                entry.Intent == BuiltInTermIntent.Off && !shippedValues.ContainsKey(entry.Key) && !byKey.ContainsKey(entry.Key)));
             return entries.Count == 0 ? null : new BuiltInLibraryEdits(shipped.Id, entries);
         }
 
         public IReadOnlyList<TermValues> AuthoredTerms(BuiltInLibraryEdits edits) =>
             edits.Terms.Where(term => term.Intent != BuiltInTermIntent.Off && term.Value is not null).Select(term => term.Value!).ToList();
 
-        private static void EnsureBuiltIn(LibraryRow row)
+        // The one definition of a built-in row: an entry against the shipped values in use, or null when this version does
+        // not ship its key and the entry is an off one, which then shows no row.
+        internal static LibraryRow? RowOf(TermValues? shipped, BuiltInTermEdit edit)
         {
-            if (row.Origin == TermOrigin.Custom)
+            switch (edit.Intent)
             {
-                throw new ArgumentException("A custom row is not the overlay's.", nameof(row));
+                case BuiltInTermIntent.Off:
+                    return shipped is null ? null : new LibraryRow(edit.Key, shipped with { Enabled = false }, TermOrigin.Off, shipped, edit);
+
+                case BuiltInTermIntent.Added:
+                    var added = edit.Value!;
+                    return new LibraryRow(
+                        edit.Key, added, shipped is not null && added == shipped ? TermOrigin.Pinned : TermOrigin.Added, shipped, edit);
+
+                case BuiltInTermIntent.Edited when shipped is not null:
+                {
+                    // Per field: a field the user left at its base takes the shipped value; a field both changed keeps the
+                    // user's and asks, unless the user already kept it against this shipped value.
+                    var user = edit.Value!;
+                    var authored = Differ(user, edit.Base!);
+                    var merged = Take(user, shipped, ~authored & All);
+                    var asks = authored & Differ(shipped, edit.Base!) & Differ(user, shipped)
+                        & (edit.Acknowledged is { } acknowledged ? Differ(acknowledged, shipped) : All);
+                    return new LibraryRow(
+                        edit.Key, merged, merged == shipped ? TermOrigin.Pinned : TermOrigin.Edited, shipped, edit,
+                        asks == TermFields.None ? null : new TermReview(merged, shipped, Differ(merged, shipped)));
+                }
+
+                case BuiltInTermIntent.Pinned when shipped is not null:
+                {
+                    var user = edit.Value!;
+                    var asks = Differ(shipped, user) & (edit.Acknowledged is { } acknowledged ? Differ(shipped, acknowledged) : All);
+                    return new LibraryRow(
+                        edit.Key, user, user == shipped ? TermOrigin.Pinned : TermOrigin.Edited, shipped, edit,
+                        asks == TermFields.None ? null : new TermReview(user, shipped, Differ(user, shipped)));
+                }
+
+                default:
+                    return new LibraryRow(edit.Key, edit.Value!, TermOrigin.NoLongerShipped, null, edit);
             }
         }
+
+        private static LibraryRow EditValues(LibraryRow row, TermValues values, TermFields changed)
+        {
+            var shipped = row.Shipped;
+            var edit = row.Edit;
+            if (edit is null)
+            {
+                // A shipped row: an edited entry based on the shipped values, the user's values equal to them but in the
+                // changed fields.
+                return RowOf(shipped, new BuiltInTermEdit(row.Key, BuiltInTermIntent.Edited, shipped, values))!;
+            }
+
+            switch (edit.Intent)
+            {
+                case BuiltInTermIntent.Off:
+                    // The off stays authored: Enabled off against a base that is on, unless this edit turns the row on.
+                    return RowOf(shipped, new BuiltInTermEdit(
+                        row.Key, BuiltInTermIntent.Edited, values.Enabled ? shipped : shipped! with { Enabled = true }, values))!;
+
+                case BuiltInTermIntent.Edited when shipped is not null:
+                    // A changed field takes the typed value against the shipped value in use; the others keep theirs.
+                    return RowOf(shipped, edit with { Base = Take(edit.Base!, shipped, changed), Value = Take(edit.Value!, values, changed) })!;
+
+                case BuiltInTermIntent.Pinned when shipped is not null:
+                    // A pinned entry keeps its base and acknowledges the shipped value in use for the changed fields.
+                    var acknowledged = Take(edit.Acknowledged ?? edit.Value!, shipped, changed);
+                    return RowOf(shipped, edit with { Value = values, Acknowledged = acknowledged == values ? null : acknowledged })!;
+
+                default:
+                    return RowOf(shipped, edit with { Value = Take(edit.Value!, values, changed) })!;
+            }
+        }
+
+        // The shipped rows by key in shipped order; a key shipped twice counts once, as its first row.
+        private static (List<LibraryTermKey> Order, Dictionary<LibraryTermKey, TermValues> Values) ShippedValues(DictionaryLibrary shipped)
+        {
+            var order = new List<LibraryTermKey>();
+            var values = new Dictionary<LibraryTermKey, TermValues>();
+            foreach (var entry in shipped.Entries)
+            {
+                var row = TermValues.FromEntry(entry);
+                var key = LibraryTermKey.From(row.Spoken);
+                if (values.TryAdd(key, row))
+                {
+                    order.Add(key);
+                }
+            }
+
+            return (order, values);
+        }
+
+        private static LibraryRow ShippedRow(LibraryTermKey key, TermValues shipped) => new(key, shipped, TermOrigin.Shipped, shipped);
+
+        // Rebuilt from the shipped values in use and its own entry, the row comes out the same.
+        private static bool IsCanonical(LibraryRow row, TermValues? shipped) =>
+            row.Origin != TermOrigin.Custom
+            && row.Shipped == shipped
+            && (row.Origin == TermOrigin.Shipped
+                ? shipped is not null && row == ShippedRow(row.Key, shipped)
+                : row.Edit is { } edit && edit.Key == row.Key && RowOf(shipped, edit) == row);
+
+        private static void EnsureCanonical(LibraryRow row)
+        {
+            if (!IsCanonical(row, row.Shipped))
+            {
+                throw new ArgumentException("A row the overlay did not give.", nameof(row));
+            }
+        }
+
+        // As the real overlay: values that are not well-formed text (an unpaired surrogate) are refused, judged by a
+        // strict encoder rather than by the editor's own check.
+        private static void EnsureText(TermValues values)
+        {
+            try
+            {
+                Strict.GetByteCount(values.Spoken);
+                Strict.GetByteCount(values.Written);
+            }
+            catch (EncoderFallbackException)
+            {
+                throw new ArgumentException("Values that are not well-formed text.", nameof(values));
+            }
+        }
+
+        private static TermFields Differ(TermValues first, TermValues second) =>
+            (string.Equals(first.Spoken, second.Spoken, StringComparison.Ordinal) ? TermFields.None : TermFields.Spoken)
+            | (string.Equals(first.Written, second.Written, StringComparison.Ordinal) ? TermFields.None : TermFields.Written)
+            | (first.WholeWord == second.WholeWord ? TermFields.None : TermFields.WholeWord)
+            | (first.Enabled == second.Enabled ? TermFields.None : TermFields.Enabled);
+
+        private static TermValues Take(TermValues into, TermValues from, TermFields fields) => new(
+            fields.HasFlag(TermFields.Spoken) ? from.Spoken : into.Spoken,
+            fields.HasFlag(TermFields.Written) ? from.Written : into.Written,
+            fields.HasFlag(TermFields.WholeWord) ? from.WholeWord : into.WholeWord,
+            fields.HasFlag(TermFields.Enabled) ? from.Enabled : into.Enabled);
     }
 }

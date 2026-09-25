@@ -57,6 +57,10 @@ public sealed class LibraryEditorTests
             ("\uDE80", false),
             ("backwards \uDE80\uD83D", false),
             ("pair then half \uD83D\uDE80\uD83D", false),
+
+            // A high surrogate as the last character, with nothing after it to pair with (the contract's rule for it).
+            ("GitHub\uD83D", false),
+            ("\uD83D\uD83D\uDE80", false),
         };
 
         foreach (var (text, wellFormed) in cases)

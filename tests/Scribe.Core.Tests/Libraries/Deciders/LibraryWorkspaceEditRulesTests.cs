@@ -66,20 +66,21 @@ public sealed class LibraryWorkspaceEditRulesTests
         var kube = RowIdOf(workspace, "team-terms", "kube");
 
         var name = workspace.Rename("team-terms", "Team " + Half);
-        Assert.Equal((false, LibraryValidationKind.IllFormedText, LibraryMetadataField.Name), (name.Applied, name.Issue!.Kind, name.Issue.Metadata));
+        Assert.Equal((false, LibraryValidationKind.MalformedText, LibraryMetadataField.Name), (name.Applied, name.Issue!.Kind, name.Issue.Metadata));
         Assert.Equal(
-            "Part of a character is missing here, so this can't be saved. Delete it and type it again.",
+            "This text has a broken character that can't be saved. Delete it and type it again.",
             LibraryEditor.Message(name.Issue));
         Assert.Equal(LibraryMetadataField.Category, workspace.SetDetails("team-terms", "Work" + Half, null).Issue!.Metadata);
         Assert.Equal(LibraryMetadataField.Description, workspace.SetDetails("team-terms", "Custom", "\uDE80 terms").Issue!.Metadata);
 
         var spoken = workspace.AddTerm("team-terms", new TermValues("kube" + Half, "K"));
-        Assert.Equal((false, LibraryValidationKind.IllFormedText, TermFields.Spoken), (spoken.Applied, spoken.Issue!.Kind, spoken.Issue.Field));
+        Assert.Equal((false, LibraryValidationKind.MalformedText, TermFields.Spoken), (spoken.Applied, spoken.Issue!.Kind, spoken.Issue.Field));
         Assert.Equal(TermFields.Written, workspace.AddTerm("team-terms", new TermValues("x", "\uDE80")).Issue!.Field);
+        Assert.Equal(TermFields.Written, workspace.AddTerm("team-terms", new TermValues("gh", "GitHub" + Half)).Issue!.Field);
         var edited = workspace.EditTerm("team-terms", kube, new TermValues("kube", "K" + Half));
-        Assert.Equal((false, LibraryValidationKind.IllFormedText, TermFields.Written, (long?)kube), (edited.Applied, edited.Issue!.Kind, edited.Issue.Field, edited.Issue.RowId));
-        Assert.Equal(LibraryValidationKind.IllFormedText, workspace.AddTerm(GitHubId, new TermValues("gh" + Half, "GH")).Issue!.Kind);
-        Assert.Equal(LibraryValidationKind.IllFormedText,
+        Assert.Equal((false, LibraryValidationKind.MalformedText, TermFields.Written, (long?)kube), (edited.Applied, edited.Issue!.Kind, edited.Issue.Field, edited.Issue.RowId));
+        Assert.Equal(LibraryValidationKind.MalformedText, workspace.AddTerm(GitHubId, new TermValues("gh" + Half, "GH")).Issue!.Kind);
+        Assert.Equal(LibraryValidationKind.MalformedText,
             workspace.EditTerm(GitHubId, RowIdOf(workspace, GitHubId, "copilot"), new TermValues("copilot", Half)).Issue!.Kind);
         Assert.False(workspace.HasUnsavedChanges);
 
@@ -99,12 +100,12 @@ public sealed class LibraryWorkspaceEditRulesTests
             new LibraryImportTarget.ExistingLibrary("team-terms"),
             workspace.Draft);
         var refused = workspace.ApplyImport(badRow, ImportConflictChoice.KeepMine);
-        Assert.Equal((false, LibraryValidationKind.IllFormedText, TermFields.Written, "team-terms"),
+        Assert.Equal((false, LibraryValidationKind.MalformedText, TermFields.Written, "team-terms"),
             (refused.Applied, refused.Issue!.Kind, refused.Issue.Field, refused.Issue.LibraryId));
 
         var named = LibraryImportPlanner.Plan(Document("Imported", new TermValues("ok", "OK")), new LibraryImportTarget.NewLibrary(null), workspace.Draft);
         var badName = workspace.ApplyImport(named with { SuggestedName = "Imported " + Half }, ImportConflictChoice.KeepMine);
-        Assert.Equal((LibraryValidationKind.IllFormedText, LibraryMetadataField.Name), (badName.Issue!.Kind, badName.Issue.Metadata));
+        Assert.Equal((LibraryValidationKind.MalformedText, LibraryMetadataField.Name), (badName.Issue!.Kind, badName.Issue.Metadata));
         Assert.False(workspace.HasUnsavedChanges);
         Assert.True(workspace.ApplyImport(named, ImportConflictChoice.KeepMine).Applied);
     }
@@ -121,7 +122,7 @@ public sealed class LibraryWorkspaceEditRulesTests
         workspace.EditTerm(id, RowIdOf(workspace, id, "fine"), new TermValues("fine", "Finer"));
         var issue = Assert.Single(workspace.CaptureChangeSet().Issues);
 
-        Assert.Equal((LibraryValidationKind.IllFormedText, TermFields.Written, (long?)RowIdOf(workspace, id, "odd")),
+        Assert.Equal((LibraryValidationKind.MalformedText, TermFields.Written, (long?)RowIdOf(workspace, id, "odd")),
             (issue.Kind, issue.Field, issue.RowId));
     }
 

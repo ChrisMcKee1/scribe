@@ -215,8 +215,8 @@ public static class LibraryEditor
                     "This library is open in another app. Close it there to make changes.",
                 _ => "This library couldn't be read, so it can't be edited here.",
             },
-            LibraryValidationKind.IllFormedText =>
-                "Part of a character is missing here, so this can't be saved. Delete it and type it again.",
+            LibraryValidationKind.MalformedText =>
+                "This text has a broken character that can't be saved. Delete it and type it again.",
             _ => string.Empty,
         };
     }
