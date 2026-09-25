@@ -170,9 +170,10 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
     [Fact]
     public void A_blocked_term_that_runs_into_a_copy_keeps_its_library_on()
     {
-        // The same, with "retro" beside "north star": the blocked term would go and it ends with the letter the copy begins
-        // with, so the library stays on and nothing is reported.
-        var team = Library("team-terms", builtIn: false, ("north star", "North Star"), ("retro", "Retro"));
+        // The same, with "star map" beside "north star": the blocked term would go, and the two can share the word "star"
+        // in "north star map", so the library stays on and nothing is reported. (This used "retro", which shares only the
+        // letter r with "north star"; both are whole words, and from round 7 a whole word cannot end inside another.)
+        var team = Library("team-terms", builtIn: false, ("north star", "North Star"), ("star map", "Star Map"));
         LibrarySwitchOffCopy.Row[] rows = [new(" north star", "North star", WholeWord: true, Enabled: false)];
 
         var plan = PlanWithTicked(rows, [team], [Usage(team, unused: 9)]);
@@ -897,6 +898,107 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         Assert.Equal(["Yc", "bc", "Y"], Dictated([ab], [], inputs));
     }
 
+    // --- Round 7: rules meet only where their matches can overlap in some text ---
+
+    [Fact]
+    public void Round_7_two_whole_word_rows_that_share_only_a_letter_do_not_meet()
+    {
+        // Alpha's unused "kilo" ends with the letter beta's "open" begins with, but both are whole words, so no text holds
+        // both matches: "kilo" needs a boundary right after its "o", where "open" goes on with "p". Alpha goes off, and
+        // beta writes where it wrote; only "kilo" itself is no longer replaced.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("kilo", "Kilo")]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("open", "Open")]);
+        LibraryUsage[] asked = [new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false)];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        Assert.Empty(plan.KeptOn);
+        Assert.Empty(plan.Copies);
+        string[] inputs = ["kilopen", "kilo open", "open kilo", "open", "kilo"];
+        Assert.Equal(["kilopen", "Kilo Open", "Open Kilo", "Open", "Kilo"], Dictated([], [alpha, beta], inputs));
+        Assert.Equal(["kilopen", "kilo Open", "Open kilo", "Open", "kilo"], Dictated(plan.Copies, StillOn([alpha, beta], asked, plan), inputs));
+    }
+
+    [Fact]
+    public void Round_7_whole_word_phrases_that_share_a_word_at_the_edge_still_meet()
+    {
+        // Alpha's unused "get hub" and beta's "hub spot" are whole-word phrases that can share the word "hub": "get hub spot"
+        // is "GitHub spot" today, and without alpha, beta would take it and write "get HubSpot". So alpha stays on.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("get hub", "GitHub")]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("hub spot", "HubSpot")]);
+        LibraryUsage[] asked = [new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false)];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        string[] inputs = ["get hub spot", "get hub", "hub spot", "get hubspot"];
+        AssertKeptOnAndUnchanged(plan, "alpha", [], [alpha, beta], asked, inputs, before: ["GitHub spot", "GitHub", "HubSpot", "get hubspot"]);
+        Assert.Equal(["get HubSpot", "get hub", "HubSpot", "get hubspot"], Dictated([], [beta], inputs));
+    }
+
+    [Fact]
+    public void Round_7_the_default_libraries_let_an_unused_built_in_that_meets_none_of_their_rows_go_off()
+    {
+        // The two default libraries as they ship, and a built-in whose whole-word terms meet none of their rows: a word
+        // cannot end inside another word, and no default row holds these words. It goes off, and the defaults write where
+        // they wrote; only the library's own words are left as dictated.
+        var defaults = BuiltInDictionaryLibraries.All.Where(l => l.Id is "ai-terminology" or "ai-model-names").ToList();
+        Assert.Equal(2, defaults.Count);
+        var extra = new DictionaryLibrary("zoology", "Zoology", "Built-in", Description: null, BuiltIn: true,
+            [DictionaryEntry.New("quokka", "Quokka"), DictionaryEntry.New("axolotl", "Axolotl"), DictionaryEntry.New("pangolin", "Pangolin")]);
+        DictionaryLibrary[] ticked = [.. defaults, extra];
+        LibraryUsage[] asked = [new(extra.Id, extra.Name, [], UnusedCount: 3, BuiltIn: true)];
+
+        var plan = PlanWithTicked([], ticked, asked);
+
+        Assert.Empty(plan.KeptOn);
+        Assert.Empty(plan.Copies);
+        string[] inputs = ["quokka", "a quokka ate the llm", "gpt axolotl rag", "pangolin, open ai and chat gpt"];
+        var before = Dictated([], ticked, inputs);
+        Assert.Equal("Quokka", before[0]);
+        var after = Dictated(plan.Copies, StillOn(ticked, asked, plan), inputs);
+        Assert.Equal(before.Select(text => text.Replace("Quokka", "quokka").Replace("Axolotl", "axolotl").Replace("Pangolin", "pangolin")), after);
+    }
+
+    [Fact]
+    public void Round_7_a_row_whose_guard_reads_text_a_rule_that_stays_can_match_keeps_its_library_on()
+    {
+        // Alpha's unused "york" writes "New York", so its guard reads the text around each match for "New York". Beta's
+        // "new" cannot overlap "york" itself, but it lies inside that written form, so the two count as meeting, as the
+        // guard's reading is part of what the rule looks at. The switch would change nothing here (the guard only reads
+        // the text dictation was given), so this is margin: alpha stays on.
+        var alpha = new DictionaryLibrary("alpha", "alpha", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("york", "New York")]);
+        var beta = new DictionaryLibrary("beta", "beta", "Custom", Description: null, BuiltIn: false, [DictionaryEntry.New("new", "NEW")]);
+        LibraryUsage[] asked = [new(alpha.Id, alpha.Name, [], UnusedCount: 1, BuiltIn: false)];
+
+        var plan = PlanWithTicked([], [alpha, beta], asked);
+
+        string[] inputs = ["new york", "york", "new"];
+        AssertKeptOnAndUnchanged(plan, "alpha", [], [alpha, beta], asked, inputs, before: ["NEW york", "New York", "NEW"]);
+    }
+
+    [Fact]
+    public void Round_7_every_other_shipped_library_beside_the_default_libraries_still_meets_one_of_their_rows()
+    {
+        // Phrases and spelled-out acronyms chain across the shipped libraries. In "copilot chat gpt", Microsoft 365's
+        // "copilot chat" takes the text before AI Model Names' "chat gpt" can, so switching Microsoft 365 off changes what
+        // the default library writes there. Every other shipped library has a row like it, so beside the defaults each
+        // stays on even with none of its terms used.
+        var all = BuiltInDictionaryLibraries.All;
+        var defaults = all.Where(l => l.Id is "ai-terminology" or "ai-model-names").ToList();
+        foreach (var library in all.Except(defaults))
+        {
+            DictionaryLibrary[] ticked = [.. defaults, library];
+            LibraryUsage[] asked = [new(library.Id, library.Name, [], UnusedCount: library.EnabledEntries.Count(), BuiltIn: true)];
+            Assert.Equal([library.Id], PlanWithTicked([], ticked, asked).KeptOn.Select(k => k.Id));
+        }
+
+        var m365 = all.Single(l => l.Id == "microsoft-365");
+        var chatGpt = defaults.SelectMany(l => l.EnabledEntries).First(e => e.Pattern == "chat gpt").Replacement;
+        string[] inputs = ["copilot chat gpt"];
+        Assert.DoesNotContain(chatGpt, Dictated([], [.. defaults, m365], inputs)[0], StringComparison.Ordinal);
+        Assert.Contains(chatGpt, Dictated([], defaults, inputs)[0], StringComparison.Ordinal);
+    }
+
     // --- The property ---
 
     [Fact]
@@ -913,7 +1015,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         (string Spoken, string[] Written)[][] families =
         [
             [("acme", ["Acme", "ACME"])],
-            [("get hub", ["GitHub", "Get Hub"]), ("hub", ["Hub", "HUB"])],
+            [("get hub", ["GitHub", "Get Hub"]), ("hub", ["Hub", "HUB"]), ("hub spot", ["HubSpot", "Hub Spot"])],
             [("ΛΟΓΟΣ", ["Λόγος", "ΛΟΓΟΣ"]), ("λογος", ["Λόγος", "ΛΟΓΟΣ"]), ("λογοσ", ["Λόγος", "ΛΟΓΟΣ"])],
             [("k", ["First", "Second", "New K"]), ("K", ["First", "New K"]), (Kelvin, ["First", "Second", "New " + Kelvin])],
             [("york", ["New York", "York"]), ("new york", ["New York"])],
@@ -924,10 +1026,14 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             [("retro", ["Retro"])],
             [("kilo", ["kilogram", "Kilo"]), ("ilo", ["ILO", "Ilo"])],
             [("ab", ["Y", "AB"]), ("bc", ["X", "BC"]), ("cd", ["Z", "CD"])],
+            [("open", ["Open", "OPEN"])],
+            [("c#", ["C#-code", "C#"]), ("#-code", ["Sharp", "#Code"]), ("-", ["+"])],
+            [("node.js", ["Node.js", "NodeJS"]), ("js file", ["JS file", "JSFile"])],
+            [("e-mail", ["email", "E-mail"]), ("mail box", ["mailbox", "Mail Box"])],
         ];
 
         // These meet inside words, so their rows match anywhere in a word more often than the others.
-        string[] insideWords = ["kilo", "ilo", "ab", "bc", "cd"];
+        string[] insideWords = ["kilo", "ilo", "ab", "bc", "cd", "#-code", "-", "js file", "e-mail"];
         (string Id, bool BuiltIn)[] ids =
         [
             ("github", true), ("ai-terminology", true), ("microsoft-azure", true), ("github", false),
@@ -939,11 +1045,21 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         // sentence, which is text already in canonical form; and texts where forms run into one another in a chain, so a
         // row that goes can free the next rule to apply, which then pushes out the one after it.
         string[] chains = ["abc", "bcd", "abcd", "ABCD", "Abcd", "abcdab", "cdab", "bcab", "xabcdx", "abcd abcd", "we said abcd today"];
+        // And texts with spaces and punctuation where the forms meet, around whole-word and substring rows alike.
+        var edges = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["c#"] = ["c#-code", "c#-code.", "(c#-code)", "c# code", "c#code", "the c#-code, again", "c#-c#-code"],
+            ["hub spot"] = ["get hub spot", "get hub spot.", "get hubspot", "(get hub spot)", "hub spot hub"],
+            ["js file"] = ["node.js file", "node.js files", "node.js-file", "node.jsfile"],
+            ["mail box"] = ["e-mail box", "e-mailbox", "e-mail, box", "email box"],
+            ["open"] = ["kilo open", "kilopen", "open kilo", "open-kilo", "kilo.open"],
+        };
         var probes = families.Select(family => family
             .SelectMany(form => new[] { form.Spoken, form.Spoken.ToLowerInvariant(), form.Spoken.ToUpperInvariant() }
                 .SelectMany(v => new[] { v, $"a{v}b", $"{v} {v}", v + v, $"we said {v} today" })
                 .Concat(form.Written.SelectMany(w => new[] { w, $"{w} {w}", $"we said {w} today" })))
             .Concat(family.Any(form => form.Spoken == "cd") ? chains : [])
+            .Concat(family.SelectMany(form => edges.GetValueOrDefault(form.Spoken, [])))
             .Distinct(StringComparer.Ordinal)
             .ToArray()).ToArray();
 
@@ -951,7 +1067,7 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         void Count(string outcome, int by = 1) => counts[outcome] = counts.GetValueOrDefault(outcome) + by;
 
-        for (var round = 0; round < 1000; round++)
+        for (var round = 0; round < 2000; round++)
         {
             // Every library in the round is loaded and most rows are ticked. A library whose row is not ticked still applies
             // while a row with its id is, as the saved id says.
@@ -1155,7 +1271,8 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             {
                 Check(text);
                 Check($"we said {text} today");
-                Count("checked: two forms of the round run into each other", 2);
+                Check($"({text}), {text}.");
+                Count("checked: two forms of the round run into each other", 3);
             }
 
             foreach (var library in asked.Where(l => !plan.KeepsOn(l.Id, l.BuiltIn) && off.Contains(l)))
@@ -1174,30 +1291,28 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
             // still counted, to show the generator makes it). Checked with the comparison the decisions describe
             // (invariant upper and lower case, either containing the other or, for a row that goes, running into it,
             // after the known specials), written here independently of SpokenFormFold.
-            var dictionaryStaysOn = Saves(dictionary).Entries.Where(e => e.Enabled).Select(e => e.Pattern);
+            var dictionaryStaysOn = Saves(dictionary).Entries.Where(e => e.Enabled);
             var staysUnasked = dictionaryStaysOn
-                .Concat(after.Where(l => !keptOnLibraries.Contains(l)).SelectMany(l => l.EnabledEntries).Select(e => e.Pattern))
-                .Where(p => !string.IsNullOrWhiteSpace(p))
-                .Distinct(StringComparer.Ordinal)
+                .Concat(after.Where(l => !keptOnLibraries.Contains(l)).SelectMany(l => l.EnabledEntries))
+                .Where(e => !string.IsNullOrWhiteSpace(e.Pattern))
                 .ToList();
-            bool Meets(string a, string b) => LiteralOverlap(a, b) || LiteralRunsInto(a, b);
-            bool ReachesThroughRulesThatStay(string start, DictionaryLibrary member)
+            bool ReachesThroughRulesThatStay(DictionaryEntry start, DictionaryLibrary member)
             {
-                var guarded = plan.Copies.Select(c => c.Pattern)
-                    .Concat(keptOnLibraries.Where(l => l != member).SelectMany(l => l.EnabledEntries).Select(e => e.Pattern))
-                    .Concat(Promised(member).Select(e => e.Pattern))
-                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                var guarded = plan.Copies
+                    .Concat(keptOnLibraries.Where(l => l != member).SelectMany(l => l.EnabledEntries))
+                    .Concat(Promised(member))
+                    .Where(e => !string.IsNullOrWhiteSpace(e.Pattern))
                     .ToList();
-                var seen = staysUnasked.Where(rule => Meets(start, rule)).ToHashSet(StringComparer.Ordinal);
-                var queue = new Queue<string>(seen);
+                var seen = staysUnasked.Where(rule => Interact(start, rule, runningInto: true)).ToHashSet(ReferenceEqualityComparer.Instance);
+                var queue = new Queue<DictionaryEntry>(seen.Cast<DictionaryEntry>());
                 while (queue.TryDequeue(out var rule))
                 {
-                    if (guarded.Any(g => Meets(rule, g)))
+                    if (guarded.Any(g => Interact(rule, g, runningInto: true)))
                     {
                         return true;
                     }
 
-                    foreach (var next in staysUnasked.Where(next => !seen.Contains(next) && Meets(rule, next)))
+                    foreach (var next in staysUnasked.Where(next => !seen.Contains(next) && Interact(rule, next, runningInto: true)))
                     {
                         seen.Add(next);
                         queue.Enqueue(next);
@@ -1218,12 +1333,12 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
                     var copies = Promised(member);
                     foreach (var row in member.EnabledEntries.Where(e => !string.IsNullOrWhiteSpace(e.Pattern)))
                     {
-                        var dictionaryOverlaps = dictionaryOn.Where(e => LiteralOverlap(row.Pattern, e.Pattern)).ToList();
+                        var dictionaryOverlaps = dictionaryOn.Where(e => Interact(row, e, runningInto: false)).ToList();
                         var otherRows = today.Where(l => l != member)
                             .SelectMany(l => l.EnabledEntries)
                             .Where(e => !string.IsNullOrWhiteSpace(e.Pattern))
                             .ToList();
-                        var libraryOverlaps = otherRows.Where(e => LiteralOverlap(row.Pattern, e.Pattern)).ToList();
+                        var libraryOverlaps = otherRows.Where(e => Interact(row, e, runningInto: false)).ToList();
                         if (dictionaryOverlaps.Count > 0)
                         {
                             reasons.Add("overlaps the dictionary");
@@ -1242,33 +1357,32 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
                             onlyContainment = false;
                         }
 
-                        if (!copied && copies.Any(copy => LiteralOverlap(row.Pattern, copy.Pattern)))
+                        if (!copied && copies.Any(copy => Interact(row, copy, runningInto: false)))
                         {
                             reasons.Add("a row that goes contains or sits in a copy of its own");
                             onlyContainment = false;
                         }
-                        else if (!copied && copies.Any(copy => LiteralRunsInto(row.Pattern, copy.Pattern)))
+                        else if (!copied && copies.Any(copy => Interact(row, copy, runningInto: true)))
                         {
                             reasons.Add("a row that goes runs into a copy of its own");
                             onlyContainment = false;
                         }
 
-                        if (!copied && otherRows.Any(e => LiteralRunsInto(row.Pattern, e.Pattern)))
+                        if (!copied && otherRows.Any(e => Interact(row, e, runningInto: true) && !Interact(row, e, runningInto: false)))
                         {
                             reasons.Add("a row that goes runs into a row of another library that is on");
                             onlyContainment = false;
                         }
 
-                        if (!copied && dictionaryOn.Any(e => LiteralRunsInto(row.Pattern, e.Pattern)))
+                        if (!copied && dictionaryOn.Any(e => Interact(row, e, runningInto: true) && !Interact(row, e, runningInto: false)))
                         {
                             reasons.Add("a row that goes runs into a dictionary row");
                             onlyContainment = false;
                         }
 
-                        if (!copied && ReachesThroughRulesThatStay(row.Pattern, member))
+                        if (!copied && ReachesThroughRulesThatStay(row, member))
                         {
                             reasons.Add("a row that goes reaches a copy or a row kept on through rules that stay in effect");
-                            onlyContainment = false;
                         }
                     }
                 }
@@ -1391,15 +1505,48 @@ public sealed class LibrarySwitchOffCopyTests(ITestOutputHelper output)
         return [mapped.ToUpperInvariant(), mapped.ToLowerInvariant()];
     }
 
-    private static bool LiteralOverlap(string a, string b) =>
-        Foldings(a).Any(x => Foldings(b).Any(y => x.Contains(y, StringComparison.Ordinal) || y.Contains(x, StringComparison.Ordinal)));
-
     private static bool LiteralSame(string a, string b) => Foldings(a).Any(x => Foldings(b).Contains(x, StringComparer.Ordinal));
 
-    // A nonempty proper suffix of one folding is a proper prefix of the other, either way round.
-    private static bool LiteralRunsInto(string a, string b) =>
-        Foldings(a).Any(x => Foldings(b).Any(y => Enumerable.Range(1, Math.Max(0, Math.Min(x.Length, y.Length) - 1))
-            .Any(shared => x[^shared..] == y[..shared] || y[^shared..] == x[..shared])));
+    // Whether two rules can meet in some text, worked out apart from the planner: every way a stretch of one can overlap a
+    // stretch of the other (b starting d characters after a), with the characters they share alike under the test's own
+    // foldings, and each whole-word boundary able to hold: a character that is not a letter, digit or underscore, or the
+    // edge of the text. The written form is a second stretch, with no boundaries, when the guard reads it (it is longer
+    // than the spoken form and contains it, ignoring case). Without `runningInto`, only one stretch inside the other counts.
+    private static bool Interact(DictionaryEntry a, DictionaryEntry b, bool runningInto) =>
+        TestStretches(a).Any(x => TestStretches(b).Any(y => StretchesOverlap(x, y, runningInto)));
+
+    private static IEnumerable<(string Text, bool WholeWord)> TestStretches(DictionaryEntry entry)
+    {
+        var pattern = entry.Pattern.Trim();
+        yield return (Foldings(pattern)[1], entry.WholeWord);
+        var written = entry.Replacement ?? string.Empty;
+        if (pattern.Length > 0 && written.Length > pattern.Length && written.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+        {
+            yield return (Foldings(written)[1], false);
+        }
+    }
+
+    private static bool StretchesOverlap((string Text, bool WholeWord) a, (string Text, bool WholeWord) b, bool runningInto)
+    {
+        static bool Free(string text, int i) => i < 0 || i >= text.Length || !(char.IsLetterOrDigit(text[i]) || text[i] == '_');
+        var m = a.Text.Length;
+        var n = b.Text.Length;
+        for (var d = 1 - n; d < m; d++)
+        {
+            var inside = (d >= 0 && d + n <= m) || (d <= 0 && d + n >= m);
+            var from = Math.Max(0, d);
+            var to = Math.Min(m, d + n);
+            if ((inside || runningInto) &&
+                Enumerable.Range(from, to - from).All(p => a.Text[p] == b.Text[p - d]) &&
+                (!a.WholeWord || (Free(b.Text, -1 - d) && Free(b.Text, m - d))) &&
+                (!b.WholeWord || (Free(a.Text, d - 1) && Free(a.Text, d + n))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsFor(LibraryUsage usage, DictionaryLibrary library) =>
         usage.Id == library.Id && usage.BuiltIn == library.BuiltIn;

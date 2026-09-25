@@ -961,34 +961,40 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   row it does not copy, a blocked copy included) meets a rule that stays in effect, a row it copies, a copy from
   another library or a row of a library kept on; it then copies each kept row dictation compiles today. Otherwise it
   is kept on, whole, with every library sharing its id, nothing of it is copied, and the window names it in a notice
-  (`DescribeKeptOn`: library names, never terms). Two spoken forms overlap when one, folded by `SpokenFormFold`,
-  equals or contains the other, and meet when they overlap or a nonempty proper suffix of one is a proper prefix of
-  the other, either way round, whole-word flags ignored. A row that goes must meet nothing that stays because the
-  matcher takes the match that starts first, then the longer one: beside a used "k", an unused whole-word "kilo"
-  writes "kilogram" where "k" alone writes "Kilo"; beside "bc", an unused "ab" turns "abc" into "Yc" where "bc" alone
-  writes "aX"; and the push passes along rules ("abcd" is "YZ" with "ab", "bc" and "cd", and "aXd" without "ab").
-  Never trust the review's "unused" to make a meeting safe: history holds text as dictation wrote it, and a row whose
-  guard found its written form already in the text keeps that span as it is, so a rule that then edits the text around
-  it can erase every trace of it ("c#" writing "C#-code", beside a dictionary that removes "-" and writes "Sharp" for
-  "#-code": history says "c#code", and without "c#" the same dictation writes "cSharp"). With nothing met, every rule
-  that stays, every copy and every library kept on writes exactly where it wrote, in any text, and where a dropped row
-  wrote, the text is left as dictated. Copies of one library may meet one another, since where they start and how long
-  they are decide between them before their order does. In practice any shipped library with a term in use is kept on
-  (its terms nest, or one ends as another begins), and while the default libraries stay on, every row of every other
-  shipped library meets one of theirs, so the cleanup keeps on every other shipped library the review offers. The fold
-  is read at run time from the matcher's own regex equivalence (`TextPostProcessor.DictionaryMatchOptions`),
-  `OrdinalIgnoreCase` and invariant case mapping, plus dotted and dotless i, and must stay broader than every
-  comparison dictation makes: invariant case mapping comes from the operating system and lacks pairs the regex engine
-  has (U+0264 with U+A7CB), and `OrdinalIgnoreCase` folds the Greek final sigma and some characters outside the Basic
-  Multilingual Plane, which the regex does not. `SpokenFormFoldTests` checks it on every character. Never treat two
-  rules as equivalent because the composer gives them one key, and never judge a rule by running it over its own
-  spoken form: a substring rule meets text inside words, the guard against expanding a written form meets text already
-  written, and rule order breaks ties between rules that match the same text. Which libraries are on before and after
-  the switch comes from the Libraries list's rows the way Save stores them, as ids, and the library service applies
-  every loaded library with a saved id: a hand-placed file that reuses a built-in's id goes on and off with it, so
-  unticking one of the two while the other's row stays ticked switches nothing off, and unticking the last row with
-  the id switches both off. The window passes every row and every loaded library, leaves the rows of libraries kept on
-  ticked, and Core decides.
+  (`DescribeKeptOn`: library names, never terms). Two rules meet when their matches can overlap in some text, and
+  overlap when one can lie inside the other, read from what the matcher compiles
+  (`TextPostProcessor.DictionaryPattern`: an escaped literal, between `(?<!\w)` and `(?!\w)` when whole word; a rule
+  compiled to anything else meets every rule) plus, when the guard is on (`TextPostProcessor.GuardsWrittenForm`), the
+  written form it reads around each match, without boundaries. At each offset the shared characters must fold alike
+  under `SpokenFormFold`, and each boundary a whole-word rule needs must be able to hold: outside both a space or the
+  edge of the text always can, inside the other only a character that can be a non-word character
+  (`SpokenFormFold.CanBeNonWord`, from the regex engine's own `\w`). So whole words that share only a letter never
+  meet ("kilo" and "open"), and phrases that can share a word do ("get hub" and "hub spot"). A row that goes must meet
+  nothing that stays because the matcher takes the match that starts first, then the longer one: beside a used "k", an
+  unused whole-word "kilo" writes "kilogram" where "k" alone writes "Kilo"; beside "bc", an unused "ab" turns "abc"
+  into "Yc" where "bc" alone writes "aX"; and the push passes along rules ("abcd" is "YZ" with "ab", "bc" and "cd",
+  and "aXd" without "ab"). Never trust the review's "unused" to make a meeting safe: history holds text as dictation
+  wrote it, and a row whose guard found its written form already in the text keeps that span as it is, so a rule that
+  then edits the text around it can erase every trace of it ("c#" writing "C#-code", beside a dictionary that removes
+  "-" and writes "Sharp" for "#-code": history says "c#code", and without "c#" the same dictation writes "cSharp").
+  With nothing met, every rule that stays, every copy and every library kept on writes exactly where it wrote, in any
+  text, and where a dropped row wrote, the text is left as dictated. Copies of one library may meet one another, since
+  where they start and how long they are decide between them before their order does. While the default libraries stay
+  on, every other shipped library still has rows that meet theirs (phrases and spelled-out acronyms that chain:
+  "copilot chat" before "chat gpt", "code q l" before "l l m"), so the cleanup keeps it on; with nothing else on, most
+  can go off, their used terms copied first. The fold is read at run time from the matcher's own regex equivalence
+  (`TextPostProcessor.DictionaryMatchOptions`), `OrdinalIgnoreCase` and invariant case mapping, plus dotted and
+  dotless i, and must stay broader than every comparison dictation makes: invariant case mapping comes from the
+  operating system and lacks pairs the regex engine has (U+0264 with U+A7CB), and `OrdinalIgnoreCase` folds the Greek
+  final sigma and some characters outside the Basic Multilingual Plane, which the regex does not.
+  `SpokenFormFoldTests` checks it on every character. Never treat two rules as equivalent because the composer gives
+  them one key, and never judge a rule by running it over its own spoken form: a substring rule meets text inside
+  words, the guard against expanding a written form meets text already written, and rule order breaks ties between
+  rules that match the same text. Which libraries are on before and after the switch comes from the Libraries list's
+  rows the way Save stores them, as ids, and the library service applies every loaded library with a saved id: a
+  hand-placed file that reuses a built-in's id goes on and off with it, so unticking one of the two while the other's
+  row stays ticked switches nothing off, and unticking the last row with the id switches both off. The window passes
+  every row and every loaded library, leaves the rows of libraries kept on ticked, and Core decides.
 - **Golden outputs.** `tests/fixtures/libraries/composition-golden.txt`, captured from 0.4.3's behaviour, pins the
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row

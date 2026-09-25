@@ -40,6 +40,10 @@ internal static class SpokenFormFold
     // never sees half of one; two threads working out the same set write the same values.
     private static readonly int[] s_folded = new int[char.MaxValue + 1];
 
+    // For each character whose set has been worked out: 2 when some member of the set is not a word character to the
+    // matcher, 1 when every member is. Written before the set's folded values, which publish it.
+    private static readonly int[] s_nonWord = new int[char.MaxValue + 1];
+
     private static readonly Lazy<string> s_everyCharacter = new(() => string.Create(char.MaxValue + 1, 0, static (span, _) =>
     {
         for (var i = 0; i < span.Length; i++)
@@ -47,6 +51,20 @@ internal static class SpokenFormFold
             span[i] = (char)i;
         }
     }));
+
+    // Every character the regex engine takes for \w with the matcher's options, which is what its whole-word lookarounds test.
+    private static readonly Lazy<bool[]> s_wordCharacter = new(() =>
+    {
+        var word = new bool[char.MaxValue + 1];
+        var text = s_everyCharacter.Value;
+        var regex = new Regex(@"\w", TextPostProcessor.DictionaryMatchOptions);
+        for (var match = regex.Match(text); match.Success; match = match.NextMatch())
+        {
+            word[match.Index] = true;
+        }
+
+        return word;
+    });
 
     private static readonly Lazy<Dictionary<char, List<char>>> s_caseRelated = new(BuildCaseRelated);
 
@@ -69,6 +87,25 @@ internal static class SpokenFormFold
         return known != 0 ? (char)(known - 1) : FoldSet(c);
     }
 
+    /// <summary>Whether the regex engine takes this character for a word character (\w) with the matcher's options.</summary>
+    public static bool IsWordCharacter(char c) => s_wordCharacter.Value[c];
+
+    /// <summary>
+    /// Whether text that a spoken form's character matches, there, can be a character the matcher's whole-word lookarounds
+    /// accept beside a match: not a word character. Asked of the whole set the character folds with, which holds every
+    /// character the matcher could match there, so the answer is yes whenever any of them could.
+    /// </summary>
+    public static bool CanBeNonWord(char c)
+    {
+        if (char.IsSurrogate(c))
+        {
+            return true;
+        }
+
+        _ = Fold(c);
+        return Volatile.Read(ref s_nonWord[c]) == 2;
+    }
+
     private static char FoldSet(char start)
     {
         var members = new HashSet<char> { start };
@@ -86,6 +123,12 @@ internal static class SpokenFormFold
         }
 
         var folded = members.Min();
+        var nonWord = members.Any(member => !s_wordCharacter.Value[member]) ? 2 : 1;
+        foreach (var member in members)
+        {
+            Volatile.Write(ref s_nonWord[member], nonWord);
+        }
+
         foreach (var member in members)
         {
             Volatile.Write(ref s_folded[member], folded + 1);

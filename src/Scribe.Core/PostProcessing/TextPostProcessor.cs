@@ -447,6 +447,27 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     /// </summary>
     internal const RegexOptions DictionaryMatchOptions = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 
+    /// <summary>
+    /// The regular expression a dictionary rule is compiled to: its spoken form as an escaped literal, inside negative
+    /// lookarounds for a word character when the rule is whole word. <see cref="Scribe.Core.Settings.LibrarySwitchOffCopy"/>
+    /// reads it to decide which rules can meet in a text, and treats any other construct as meeting every rule.
+    /// </summary>
+    internal static string DictionaryPattern(DictionaryEntry entry)
+    {
+        var escaped = Regex.Escape(entry.Pattern);
+        return entry.WholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
+    }
+
+    /// <summary>
+    /// Whether a rule's guard reads the text around each match: only when the written form is longer than the spoken
+    /// form and contains it, ignoring case (see <see cref="CompiledRule"/>). A missing written form throws, as the rule's
+    /// constructor always has, so the rule is skipped when the rules are built.
+    /// </summary>
+    internal static bool GuardsWrittenForm(string? pattern, string replacement) =>
+        !string.IsNullOrEmpty(pattern) &&
+        replacement.Length > pattern.Length &&
+        replacement.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
     private sealed class CompiledRule
     {
@@ -459,9 +480,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         {
             _pattern = entry.Pattern;
             _replacement = entry.Replacement;
-            var escaped = Regex.Escape(entry.Pattern);
-            var pattern = entry.WholeWord ? $@"(?<!\w){escaped}(?!\w)" : escaped;
-            _regex = new Regex(pattern, DictionaryMatchOptions);
+            _regex = new Regex(DictionaryPattern(entry), DictionaryMatchOptions);
 
             // Only an expansion whose replacement is strictly longer than its pattern AND embeds that
             // pattern (e.g. "york" -> "New York") can double-fire: when AI cleanup is enabled the
@@ -470,10 +489,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
             // "New New York"). A same-length entry is a pure casing/punctuation fix ("azure" ->
             // "Azure", "sherpa onnx" -> "sherpa-onnx"); it must keep the plain fast-path replace so the
             // fix actually applies, so the length guard is essential here, not just an optimization.
-            _replacementContainsPattern =
-                !string.IsNullOrEmpty(entry.Pattern) &&
-                _replacement.Length > entry.Pattern.Length &&
-                _replacement.Contains(entry.Pattern, StringComparison.OrdinalIgnoreCase);
+            _replacementContainsPattern = GuardsWrittenForm(entry.Pattern, _replacement);
         }
 
         // MatchEvaluator avoids $-substitution surprises in user-supplied replacement text.

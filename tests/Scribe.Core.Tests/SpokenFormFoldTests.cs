@@ -165,6 +165,40 @@ public sealed class SpokenFormFoldTests
         Assert.Equal("X", TextPostProcessor.ApplyRule("[ab]", DictionaryEntry.New("[ab]", "X", wholeWord: false)));
     }
 
+    [Fact]
+    public void A_dictionary_rule_compiles_to_the_literal_or_the_literal_between_the_word_lookarounds()
+    {
+        // LibrarySwitchOffCopy decides which rules can meet from these two constructs and treats any other as meeting every
+        // rule; a change here must be deliberate, and must come with its model.
+        Assert.Equal(@"c\#-code", TextPostProcessor.DictionaryPattern(DictionaryEntry.New("c#-code", "X", wholeWord: false)));
+        Assert.Equal(@"(?<!\w)get\ hub(?!\w)", TextPostProcessor.DictionaryPattern(DictionaryEntry.New("get hub", "GitHub")));
+        Assert.True(TextPostProcessor.GuardsWrittenForm("york", "New York"));
+        Assert.False(TextPostProcessor.GuardsWrittenForm("azure", "Azure"));
+        Assert.False(TextPostProcessor.GuardsWrittenForm("um", ""));
+    }
+
+    [Fact]
+    public void Word_characters_are_the_regex_engines_own_and_a_fold_can_be_a_boundary_only_if_a_member_can()
+    {
+        var word = new Regex(@"\w", MatcherOptions);
+        foreach (var c in "aZ7_\u00DF\u212A\u0301\u03C2 -#.,'\u00A0")
+        {
+            Assert.Equal(word.IsMatch(c.ToString()), SpokenFormFold.IsWordCharacter(c));
+        }
+
+        // A letter, a digit, the underscore, a combining mark and the Kelvin sign are word characters, and so is every
+        // character they fold with; a space, a hyphen, a hash and a full stop are not, and nor is a lone surrogate.
+        foreach (var c in "aZ7_\u00DF\u212A\u0301\u03C2")
+        {
+            Assert.False(SpokenFormFold.CanBeNonWord(c), $"U+{(int)c:X4}");
+        }
+
+        foreach (var c in " -#.,'\u00A0\uD800\uDC00")
+        {
+            Assert.True(SpokenFormFold.CanBeNonWord(c), $"U+{(int)c:X4}");
+        }
+    }
+
     private static string EveryCharacter() =>
         string.Create(char.MaxValue + 1, 0, static (span, _) =>
         {

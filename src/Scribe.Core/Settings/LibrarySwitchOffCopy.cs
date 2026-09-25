@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
@@ -22,9 +23,15 @@ namespace Scribe.Core.Settings;
 /// in effect (an enabled dictionary row, or an enabled row of a library that stays on) or a rule copied from another
 /// library; when no two of its own copies fold alike; and when no row of it that goes (every enabled row that is not
 /// copied, a blocked copy included) meets a rule that stays in effect, a row copied from it or from another library going
-/// off, or a row of a library kept on. Two spoken forms overlap when one, folded by <see cref="SpokenFormFold"/>, equals
-/// or contains the other; they meet when they overlap or a nonempty proper suffix of one is a proper prefix of the other,
-/// either way round, whole-word flags ignored.
+/// off, or a row of a library kept on. Two rules meet when their matches can overlap in some text, and overlap when one
+/// can lie inside the other. That is read from what <see cref="TextPostProcessor"/> compiles each rule to: its spoken
+/// form as an escaped literal, alone or between the lookarounds <c>(?&lt;!\w)</c> and <c>(?!\w)</c> when it is whole
+/// word, and, when its guard is on, the written form the guard reads around each match, which has no boundaries. The two
+/// can overlap at an offset when their characters there fold alike (<see cref="SpokenFormFold"/>) and each boundary a
+/// whole-word rule needs can hold: outside both, a space or the edge of the text always can; inside the other, only a
+/// character that can be one the regex engine does not take for <c>\w</c>. So whole words that share only a letter never
+/// meet ("kilo" and "open"), while phrases that can share a word do ("get hub" and "hub spot" in "get hub spot"). A rule
+/// compiled to anything else meets every rule.
 /// </para>
 /// <para>
 /// The fold is broader than every comparison dictation makes, and every spoken form is an escaped literal that matches
@@ -46,8 +53,9 @@ namespace Scribe.Core.Settings;
 /// must meet nothing that stays. Then no match of it shares a character with a match of a rule that stays, no push can
 /// start from it, and every rule that stays in effect, every copy and every library kept on writes exactly where it wrote,
 /// in any text. The only change the switch makes is a dropped row's own: where it wrote, the text is left as dictated,
-/// since no rule that stays can match there. With the default libraries staying on, every row of every other shipped
-/// library meets one of theirs, so a shipped library with a row that goes is then always kept on.
+/// since no rule that stays can match there. With the default libraries staying on, every other shipped library still
+/// has rows that meet theirs, phrases and spelled-out acronyms that chain ("copilot chat" before "chat gpt", "code q l"
+/// before "l l m"), so a shipped library is then still kept on; with nothing else on, most of them can go off.
 /// </para>
 /// <para>
 /// Otherwise the library is kept on, whole, with nothing copied from it, together with every library that shares its id;
@@ -67,7 +75,9 @@ namespace Scribe.Core.Settings;
 /// copied a losing rule over a winner that stayed on. Later versions here compared the composer's keys, then ran the
 /// matcher over each term's own spoken form; both missed rules that meet the same text in other ways (inside a word,
 /// or in text already in its written form). The version before this one let a row that goes run into a rule that stays,
-/// trusting the review to have found every row that ever held text, which history written after dictation cannot show.
+/// trusting the review to have found every row that ever held text, which history written after dictation cannot show;
+/// and until round 7 two rules met whenever their folded forms could share text, whole-word flags ignored, which kept on
+/// libraries whose rules no text could make overlap.
 /// </para>
 /// </remarks>
 public static class LibrarySwitchOffCopy
@@ -146,22 +156,23 @@ public static class LibrarySwitchOffCopy
             return folded;
         }
 
+        Shape? ShapeFor(DictionaryEntry entry) => ShapeOf(entry, Folded);
+
         // Which row the composer keeps for each spoken form today.
         var current = DictionaryLibraryOverlapAnalyzer.Coverage(enabled, enabled.Select(library => library.Id));
         var considered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var sides = goingOff.Select(g => Side.For(g.Library, g.Usage, current, writtenByDictionary, blocking, considered, Folded)).ToList();
+        var sides = goingOff.Select(g => Side.For(g.Library, g.Usage, current, writtenByDictionary, blocking, considered, Folded, ShapeFor)).ToList();
 
         // What stays in effect whatever is decided here.
-        var inEffect = dictionaryOn.Select(entry => entry.Pattern)
-            .Concat(staying.SelectMany(SpokenForms))
-            .Select(Folded)
-            .ToHashSet(StringComparer.Ordinal);
+        var inEffect = Distinct(dictionaryOn
+            .Concat(staying.SelectMany(library => library.EnabledEntries.Where(entry => !string.IsNullOrWhiteSpace(entry.Pattern))))
+            .Select(ShapeFor));
 
         var count = sides.Count;
         // A row that is not copied goes, so it must not meet what stays either way round: not even a proper overlap, since
         // the review reads history after dictation wrote it, and a row it calls unused may still have held text there
         // that a rule staying on would take once it is gone (A4). A copy keeps its span, so containment is enough for it.
-        var againstInEffect = sides.Select(side => Overlapping(side.Folds, inEffect, runsInto: row => !side.Copied.Contains(row))).ToArray();
+        var againstInEffect = sides.Select(side => Overlapping(side.Shapes, inEffect, runsInto: row => !side.Copied.Contains(row))).ToArray();
         var againstRows = new HashSet<int>[count, count];
         var againstCopies = new HashSet<int>[count, count];
         for (var i = 0; i < count; i++)
@@ -172,8 +183,8 @@ public static class LibrarySwitchOffCopy
                 {
                     // A row that is not copied goes, so it must not meet what remains in the text either way round.
                     var side = sides[i];
-                    againstRows[i, j] = Overlapping(side.Folds, sides[j].RowFolds, runsInto: row => !side.Copied.Contains(row));
-                    againstCopies[i, j] = Overlapping(side.Folds, sides[j].CopyFolds, runsInto: row => !side.Copied.Contains(row));
+                    againstRows[i, j] = Overlapping(side.Shapes, sides[j].RowShapes, runsInto: row => !side.Copied.Contains(row));
+                    againstCopies[i, j] = Overlapping(side.Shapes, sides[j].CopyShapes, runsInto: row => !side.Copied.Contains(row));
                 }
             }
         }
@@ -316,20 +327,17 @@ public static class LibrarySwitchOffCopy
         return (enabled, staying, goingOff, asked);
     }
 
-    private static IEnumerable<string> SpokenForms(DictionaryLibrary library) =>
-        library.EnabledEntries.Where(entry => !string.IsNullOrWhiteSpace(entry.Pattern)).Select(entry => entry.Pattern.Trim());
-
-    // The positions in `folds` whose spoken form meets any of `others`; `runsInto` says for which positions running into
-    // one counts as well as containing or sitting inside it.
-    private static HashSet<int> Overlapping(IReadOnlyList<string> folds, IReadOnlyCollection<string> others, Func<int, bool> runsInto)
+    // The positions in `shapes` whose rule meets any of `others`; `runsInto` says for which positions running into one
+    // counts as well as containing or sitting inside it.
+    private static HashSet<int> Overlapping(IReadOnlyList<Shape?> shapes, IReadOnlyCollection<Shape?> others, Func<int, bool> runsInto)
     {
         var found = new HashSet<int>();
-        for (var i = 0; i < folds.Count; i++)
+        for (var i = 0; i < shapes.Count; i++)
         {
             var alsoRunningInto = runsInto(i);
             foreach (var other in others)
             {
-                if (Meet(folds[i], other, alsoRunningInto))
+                if (Meet(shapes[i], other, alsoRunningInto))
                 {
                     found.Add(i);
                     break;
@@ -340,10 +348,112 @@ public static class LibrarySwitchOffCopy
         return found;
     }
 
-    // Whether two folded spoken forms can meet in one text: one equals or contains the other, or, with `runningInto`, a
-    // nonempty proper suffix of one is a proper prefix of the other, either way round, so a text can hold both sharing the
-    // stretch between them. Whole-word flags are ignored, which only ever finds more.
-    private static bool Meet(string a, string b, bool runningInto)
+    // The distinct shapes among these, in the order first seen.
+    private static List<Shape?> Distinct(IEnumerable<Shape?> shapes)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return [.. shapes.Where(shape => seen.Add(shape?.Key ?? "\u0000"))];
+    }
+
+    /// <summary>
+    /// How a rule meets text, read from what <see cref="TextPostProcessor"/> compiles it to: the stretch its match covers,
+    /// its spoken form folded, and whether the matcher's whole-word lookarounds (<c>(?&lt;!\w)</c> and <c>(?!\w)</c>)
+    /// stand around it; and, when its guard is on, the written form the guard reads around each match, which has no
+    /// boundaries. A rule compiled to anything else has no shape and meets every rule.
+    /// </summary>
+    private sealed record Shape(Stretch[] Stretches)
+    {
+        public string Key => string.Join('\u0001', Stretches.Select(stretch => (stretch.WholeWord ? "w" : "s") + stretch.Fold));
+    }
+
+    /// <param name="Fold">The text the stretch holds, folded.</param>
+    /// <param name="WholeWord">Whether the matcher requires a character that is not a word character, or the edge of the
+    /// text, on each side of it.</param>
+    private readonly record struct Stretch(string Fold, bool WholeWord);
+
+    private static Shape? ShapeOf(DictionaryEntry entry, Func<string, string> folded)
+    {
+        var escaped = Regex.Escape(entry.Pattern);
+        var compiled = TextPostProcessor.DictionaryPattern(entry);
+        bool wholeWord;
+        if (string.Equals(compiled, escaped, StringComparison.Ordinal))
+        {
+            wholeWord = false;
+        }
+        else if (string.Equals(compiled, $@"(?<!\w){escaped}(?!\w)", StringComparison.Ordinal))
+        {
+            wholeWord = true;
+        }
+        else
+        {
+            return null;
+        }
+
+        var match = new Stretch(folded(entry.Pattern), wholeWord);
+        var written = entry.Replacement ?? string.Empty;
+        return TextPostProcessor.GuardsWrittenForm(entry.Pattern, written)
+            ? new Shape([match, new Stretch(folded(written), WholeWord: false)])
+            : new Shape([match]);
+    }
+
+    // Whether two rules can meet in some text: a stretch of one and a stretch of the other can overlap there, one inside
+    // the other or, with `runningInto`, the end of one shared with the start of the other, either way round. A rule
+    // without a shape meets every rule.
+    private static bool Meet(Shape? a, Shape? b, bool runningInto)
+    {
+        if (a is null || b is null)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < a.Stretches.Length; i++)
+        {
+            for (var j = 0; j < b.Stretches.Length; j++)
+            {
+                if (Meet(a.Stretches[i], b.Stretches[j], runningInto))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // Tries every way the two stretches can overlap, b starting at offset d from a's start: they overlap when the folded
+    // characters they share agree, and when every word boundary a whole-word stretch needs can hold. A boundary outside
+    // both stretches always can (a space, or the edge of the text); one that falls inside the other stretch needs the
+    // character there to be able to be one that is not a word character. Only negative lookarounds exist, so nothing ever
+    // needs a word character.
+    private static bool Meet(Stretch a, Stretch b, bool runningInto)
+    {
+        // Word boundaries only ever rule an overlap out, so when the folded texts cannot overlap at all, nothing can: that
+        // test is cheap and settles most pairs before the offsets are tried one by one.
+        if (!Touch(a.Fold, b.Fold, runningInto))
+        {
+            return false;
+        }
+
+        var m = a.Fold.Length;
+        var n = b.Fold.Length;
+        for (var d = 1 - n; d < m; d++)
+        {
+            var inside = (d >= 0 && d + n <= m) || (d <= 0 && d + n >= m);
+            if ((inside || runningInto) &&
+                Agree(a.Fold, b.Fold, d) &&
+                (!a.WholeWord || (Boundary(b.Fold, -1 - d) && Boundary(b.Fold, m - d))) &&
+                (!b.WholeWord || (Boundary(a.Fold, d - 1) && Boundary(a.Fold, d + n))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Whether two folded texts can overlap with the characters they share alike: one contains the other, or, with
+    // `runningInto`, a nonempty proper suffix of one is a proper prefix of the other, either way round.
+    private static bool Touch(string a, string b, bool runningInto)
     {
         if (a.Length >= b.Length ? a.Contains(b, StringComparison.Ordinal) : b.Contains(a, StringComparison.Ordinal))
         {
@@ -366,6 +476,24 @@ public static class LibrarySwitchOffCopy
 
         return false;
     }
+
+    // Whether the characters a and b both cover, b placed d characters after a's start, fold alike.
+    private static bool Agree(string a, string b, int d)
+    {
+        var to = Math.Min(a.Length, d + b.Length);
+        for (var p = Math.Max(0, d); p < to; p++)
+        {
+            if (a[p] != b[p - d])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Whether a boundary another stretch needs at position i of this one can hold.
+    private static bool Boundary(string fold, int i) => i < 0 || i >= fold.Length || SpokenFormFold.CanBeNonWord(fold[i]);
 
     // The same rule wherever the text is: the spoken form exactly as it is compiled, and the written form and word-boundary
     // rule as they are applied, all compared ordinally.
@@ -393,12 +521,15 @@ public static class LibrarySwitchOffCopy
         /// <summary>Every enabled row with a spoken form, folded, by position.</summary>
         public required string[] Folds { get; init; }
 
-        public required HashSet<string> RowFolds { get; init; }
+        /// <summary>Every enabled row with a spoken form, as it meets text, by position.</summary>
+        public required Shape?[] Shapes { get; init; }
+
+        public required List<Shape?> RowShapes { get; init; }
 
         public required IReadOnlyList<Candidate> Candidates { get; init; }
 
-        /// <summary>The copies it would make, folded.</summary>
-        public required HashSet<string> CopyFolds { get; init; }
+        /// <summary>The copies it would make, as they meet text.</summary>
+        public required List<Shape?> CopyShapes { get; init; }
 
         /// <summary>The positions of the rows it would copy; every other row goes with the library.</summary>
         public required HashSet<int> Copied { get; init; }
@@ -414,10 +545,12 @@ public static class LibrarySwitchOffCopy
             HashSet<string> writtenByDictionary,
             HashSet<string> blocking,
             HashSet<string> considered,
-            Func<string, string> folded)
+            Func<string, string> folded,
+            Func<DictionaryEntry, Shape?> shapeOf)
         {
             var rows = library.EnabledEntries.Where(entry => !string.IsNullOrWhiteSpace(entry.Pattern)).ToList();
             var folds = rows.Select(entry => folded(entry.Pattern.Trim())).ToArray();
+            var shapes = rows.Select(shapeOf).ToArray();
 
             var candidates = new List<Candidate>();
             foreach (var term in usage.KeepTerms)
@@ -464,7 +597,7 @@ public static class LibrarySwitchOffCopy
             // they are still decide between them.
             for (var row = 0; row < folds.Length; row++)
             {
-                if (!copied.Contains(row) && copied.Any(copy => Meet(folds[row], folds[copy], runningInto: true)))
+                if (!copied.Contains(row) && copied.Any(copy => Meet(shapes[row], shapes[copy], runningInto: true)))
                 {
                     ownProblems.Add(row);
                 }
@@ -474,9 +607,10 @@ public static class LibrarySwitchOffCopy
             {
                 Library = library,
                 Folds = folds,
-                RowFolds = folds.ToHashSet(StringComparer.Ordinal),
+                Shapes = shapes,
+                RowShapes = Distinct(shapes),
                 Candidates = candidates,
-                CopyFolds = copying.Select(candidate => folds[candidate.Row]).ToHashSet(StringComparer.Ordinal),
+                CopyShapes = Distinct(copying.Select(candidate => shapes[candidate.Row])),
                 Copied = copied,
                 OwnProblems = ownProblems,
             };
