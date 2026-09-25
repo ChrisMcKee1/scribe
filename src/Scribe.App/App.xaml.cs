@@ -78,6 +78,7 @@ public partial class App : Application
 
         // Before any window exists, the already-running notice below included.
         TitleBarButtonNames.Apply(Resources);
+        ButtonLabelContrast.Apply(Resources);
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         if (!isNew)
@@ -191,6 +192,11 @@ public partial class App : Application
         _diagnostics.WriteBanner(log);
 
         WireGlobalExceptionLogging(log);
+
+        // Before the first theme is applied, so the foregrounds on accent fills are chosen for it and for every theme
+        // change after it, in time for the first window.
+        AccentContrastResources.Attach(
+            this, services.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(AccentContrastResources).FullName!));
         InitializeApplicationTheme(log);
         if (paths.IsFallbackRoot)
         {
