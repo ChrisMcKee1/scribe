@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "get hub",
+      "intent": "edited",
+      "base": {
+        "spoken": "get hub",
+        "written": "GitHub",
+        "wholeWord": true,
+        "enabled": true
+      },
+      "value": {
+        "spoken": "git hub",
+        "written": "GitHub Enterprise",
+        "wholeWord": true,
+        "enabled": true
+      }
+    }
+  ]
+}

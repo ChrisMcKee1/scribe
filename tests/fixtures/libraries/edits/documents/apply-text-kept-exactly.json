@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "caf\u00E9",
+      "intent": "added",
+      "value": {
+        "spoken": "caf\u00E9",
+        "written": "Caf\u00E9 \u0022au lait\u0022\r\nline two \uD83D\uDE00",
+        "wholeWord": true,
+        "enabled": true
+      }
+    },
+    {
+      "key": "octo cat",
+      "intent": "edited",
+      "base": {
+        "spoken": "octo cat",
+        "written": "Octocat",
+        "wholeWord": true,
+        "enabled": true
+      },
+      "value": {
+        "spoken": "octo  cat",
+        "written": "Octo\tcat",
+        "wholeWord": false,
+        "enabled": true
+      }
+    }
+  ]
+}

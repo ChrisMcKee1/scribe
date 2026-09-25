@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "library": "github",
+  "terms": [
+    {
+      "key": "old term",
+      "intent": "off",
+      "base": {
+        "spoken": "old term",
+        "written": "Old",
+        "wholeWord": true,
+        "enabled": true
+      }
+    }
+  ]
+}
