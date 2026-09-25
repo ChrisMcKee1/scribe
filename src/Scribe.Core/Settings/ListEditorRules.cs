@@ -127,11 +127,18 @@ public sealed record TextChangesNoticeState(bool Show, string Message, string Ac
 
 public static class TextChangesNotice
 {
-    public const string Message = "Your dictionary and snippets are turned off, so Scribe saves these changes but doesn't use them.";
+    public const string AiCleanupOffMessage = "Your dictionary and snippets are turned off, so Scribe saves these changes but doesn't use them.";
+    public const string AiCleanupOnMessage = "Your dictionary and snippets are turned off, so Scribe doesn't replace any words with them. AI cleanup still receives your vocabulary when this is off.";
     public const string ActionText = "Turn on";
 
     public static TextChangesNoticeState Describe(bool applyDictionaryAndSnippets) =>
-        new(!applyDictionaryAndSnippets, Message, ActionText);
+        Describe(applyDictionaryAndSnippets, aiCleanupEnabled: false);
+
+    public static TextChangesNoticeState Describe(bool applyDictionaryAndSnippets, bool aiCleanupEnabled) =>
+        new(
+            !applyDictionaryAndSnippets,
+            aiCleanupEnabled ? AiCleanupOnMessage : AiCleanupOffMessage,
+            ActionText);
 }
 
 public sealed record ProfileRulesState(bool ShowAiCleanupNotice, string? NoticeText, string? ActionText, bool ShowFirstMatchHint);

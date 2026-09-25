@@ -87,14 +87,14 @@ public static class AzureSettingsAccess
         return new State(
             ShowCliSetup: !cliInstalled,
             ShowDiscovery: signedIn,
-            ShowConfiguration: signedIn || manualConfigurationAvailable,
+            ShowConfiguration: apiKeySelected || signedIn || manualConfigurationAvailable,
             ShowManualConfigurationAction: !signedIn && !manualConfigurationAvailable,
             CanStartSignIn: cliInstalled,
             HasUsableAuthentication: signedIn || hasApiKey,
             ShowServicePrincipalFields: false,
             ShowCliTenant: !apiKeySelected,
-            ShowManualDetails: signedIn,
-            ManualDetailsExpanded: manualConfigurationRequested || hasApiKey);
+            ShowManualDetails: apiKeySelected || signedIn,
+            ManualDetailsExpanded: apiKeySelected || manualConfigurationRequested || hasApiKey);
     }
 
     public static ValidationIssue ValidateCleanup(

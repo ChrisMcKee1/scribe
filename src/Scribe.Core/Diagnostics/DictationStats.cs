@@ -40,8 +40,72 @@ public static class DictationStats
     /// non-positive audio length are skipped (RTF would be undefined). Returns null when nothing
     /// qualifies, so the panel can show a friendly empty state instead of zeros.
     /// </summary>
-    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since) =>
-        Compute(entries, since, TranscriptionModelCatalog.DefaultId);
+    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var decodeMs = new List<double>();
+        var rtf = new List<double>();
+        var cleanupMs = new List<double>();
+        var combinedMs = new List<double>();
+        var count = 0;
+        long totalAudioMs = 0;
+        double longestAudioMs = 0;
+
+        foreach (var entry in entries)
+        {
+            if (entry.TimestampUtc < since || entry.AudioMilliseconds <= 0)
+            {
+                continue;
+            }
+
+            count++;
+            if (string.Equals(
+                    entry.TranscriptionModelId,
+                    TranscriptionModelCatalog.DefaultId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                decodeMs.Add(entry.DecodeMilliseconds);
+                rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+            }
+
+            if (entry.CleanupMilliseconds is > 0)
+            {
+                cleanupMs.Add(entry.CleanupMilliseconds.Value);
+                combinedMs.Add(entry.DecodeMilliseconds + entry.CleanupMilliseconds.Value);
+            }
+
+            totalAudioMs += entry.AudioMilliseconds;
+            longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
+        }
+
+        if (totalAudioMs == 0)
+        {
+            return null;
+        }
+
+        decodeMs.Sort();
+        rtf.Sort();
+        cleanupMs.Sort();
+        combinedMs.Sort();
+
+        return new Snapshot(
+            Count: count,
+            TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
+            CurrentModelId: TranscriptionModelCatalog.DefaultId,
+            CurrentModelName: TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId).DisplayName,
+            HasEarlierModelDictations: false,
+            ParakeetDecodeCount: decodeMs.Count,
+            ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
+            CleanupCount: cleanupMs.Count,
+            CleanupMs: cleanupMs.Count > 0 ? Summarize(cleanupMs) : null,
+            CombinedCount: combinedMs.Count,
+            CombinedMs: combinedMs.Count > 0 ? Summarize(combinedMs) : null,
+            FastestRtf: rtf.FirstOrDefault(value => value > 0),
+            RtfP50: rtf.Count > 0 ? Percentile(rtf, 0.50) : 0,
+            RtfP95: rtf.Count > 0 ? Percentile(rtf, 0.95) : 0,
+            LongestAudioSeconds: longestAudioMs / 1000.0);
+    }
 
     public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since, string? currentModelId)
     {

@@ -136,4 +136,15 @@ public static class RemoteActivityPolicy
 
         return RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
     }
+
+    public static bool IsSavedAndActive(AppSettings savedSettings, AppSettings draft)
+    {
+        ArgumentNullException.ThrowIfNull(savedSettings);
+        ArgumentNullException.ThrowIfNull(draft);
+
+        return savedSettings.EnableAiCleanup &&
+            draft.EnableAiCleanup &&
+            savedSettings.AiCleanupProvider == draft.AiCleanupProvider &&
+            RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
+    }
 }

@@ -114,6 +114,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(FoundryLocalSetupStage.NotSetUp, AiCleanupStatusKind.Warning, "Set up", false)]
     [InlineData(FoundryLocalSetupStage.SettingUp, AiCleanupStatusKind.Busy, null, false)]
     [InlineData(FoundryLocalSetupStage.RuntimeReady, AiCleanupStatusKind.Info, "Download and load", false)]
+    [InlineData(FoundryLocalSetupStage.CachedUnloaded, AiCleanupStatusKind.Info, "Load", false)]
+    [InlineData(FoundryLocalSetupStage.Checking, AiCleanupStatusKind.Info, "Unload", false)]
     [InlineData(FoundryLocalSetupStage.DownloadingOrLoading, AiCleanupStatusKind.Busy, null, false)]
     [InlineData(FoundryLocalSetupStage.Loaded, AiCleanupStatusKind.Success, "Unload", true)]
     [InlineData(FoundryLocalSetupStage.Failed, AiCleanupStatusKind.Error, "Try again", false)]
@@ -128,6 +130,21 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(kind, state.Kind);
         Assert.Equal(action, state.ActionText);
         Assert.Equal(canUnload, state.CanUnload);
+    }
+
+    [Theory]
+    [InlineData(CleanupStatus.Disabled, true, false, false, FoundryLocalSetupStage.RuntimeReady)]
+    [InlineData(CleanupStatus.Disabled, true, true, false, FoundryLocalSetupStage.CachedUnloaded)]
+    [InlineData(CleanupStatus.Disabled, true, true, null, FoundryLocalSetupStage.Checking)]
+    [InlineData(CleanupStatus.Disabled, false, false, false, FoundryLocalSetupStage.NotSetUp)]
+    public void Foundry_setup_distinguishes_cached_and_unknown_residency(
+        CleanupStatus status,
+        bool runtimeReady,
+        bool modelCached,
+        bool? modelLoaded,
+        FoundryLocalSetupStage expected)
+    {
+        Assert.Equal(expected, FoundryLocalSetup.FromCleanupStatus(status, runtimeReady, modelCached, modelLoaded));
     }
 
     [Fact]
@@ -200,7 +217,8 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [Fact]
     public void Notices_for_text_changes_profiles_and_usage_insights_are_core_owned()
     {
-        Assert.Equal(TextChangesNotice.Message, TextChangesNotice.Describe(false).Message);
+        Assert.Equal("Your dictionary and snippets are turned off, so Scribe saves these changes but doesn't use them.", TextChangesNotice.Describe(false, aiCleanupEnabled: false).Message);
+        Assert.Equal("Your dictionary and snippets are turned off, so Scribe doesn't replace any words with them. AI cleanup still receives your vocabulary when this is off.", TextChangesNotice.Describe(false, aiCleanupEnabled: true).Message);
         Assert.False(TextChangesNotice.Describe(true).Show);
 
         var profile = ProfileRules.Describe(aiCleanupEnabled: false, profileCount: 2);
@@ -254,4 +272,185 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
     private static HistoryEntry Entry(string app) =>
         new(0, DateTimeOffset.UtcNow, "text", 1000, 100, TargetApp: app);
+
+    [Fact]
+    public void Ai_cleanup_draft_state_does_not_use_saved_live_status()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://old.example";
+        saved.AiCleanupAzureDeployment = "old";
+
+        var draft = saved.Clone();
+        draft.AiCleanupProvider = CleanupProvider.FoundryLocal;
+
+        var state = AiCleanupPageState.Describe(
+            saved,
+            draft,
+            CleanupStatus.Ready,
+            foundrySetup: FoundryLocalSetup.Describe(FoundryLocalSetupStage.CachedUnloaded, "Qwen3 1.7B"),
+            modelName: "Qwen3 1.7B");
+
+        Assert.Equal("Save to start AI cleanup.", state.StatusLine);
+        Assert.Equal("Load", state.StatusRow!.ActionText);
+        Assert.DoesNotContain("Using", state.StatusLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Ai_cleanup_newly_enabled_complete_setup_says_save_first()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = false;
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://example.test";
+        saved.AiCleanupAzureDeployment = "cleanup";
+
+        var draft = saved.Clone();
+        draft.EnableAiCleanup = true;
+
+        var state = AiCleanupPageState.Describe(
+            saved,
+            draft,
+            CleanupStatus.Ready,
+            azureSetup: new(AzureSetupResult.ApiKeyVerified, ApiKeySelected: true));
+
+        Assert.Equal("Save to start AI cleanup.", state.StatusLine);
+        Assert.Equal("Azure accepted the key.", state.StatusRow!.Text);
+        Assert.Equal("Verify", state.StatusRow.ActionText);
+    }
+
+    [Fact]
+    public void Ai_cleanup_edited_remote_details_do_not_show_saved_live_status()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        saved.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
+        saved.AiCleanupCustomModel = "qwen3:4b";
+
+        var draft = saved.Clone();
+        draft.AiCleanupCustomModel = "llama3";
+
+        var state = AiCleanupPageState.Describe(
+            saved,
+            draft,
+            CleanupStatus.Ready,
+            customSetup: new(CustomEndpointTestResult.NotTested));
+
+        Assert.Equal("Save to start AI cleanup.", state.StatusLine);
+        Assert.Equal("Not tested yet.", state.StatusRow!.Text);
+    }
+
+    public static TheoryData<AzureSetupResult, AiCleanupStatusKind, string, string?, bool, string?> AzureRows => new()
+    {
+        { AzureSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Check sign-in", true, null },
+        { AzureSetupResult.CliMissing, AiCleanupStatusKind.Warning, "Azure CLI isn't installed.", "Install Azure CLI", true, "Use an API key instead" },
+        { AzureSetupResult.NotSignedIn, AiCleanupStatusKind.Info, "Not signed in to Azure.", "Sign in", true, "Use an API key instead" },
+        { AzureSetupResult.SigningIn, AiCleanupStatusKind.Busy, "Finish signing in in your browser.", null, false, null },
+        { AzureSetupResult.SignedIn, AiCleanupStatusKind.Success, "Signed in.", "Refresh models", true, null },
+        { AzureSetupResult.ListingModels, AiCleanupStatusKind.Busy, "Finding your models...", null, false, null },
+        { AzureSetupResult.ListingFailed, AiCleanupStatusKind.Error, "Couldn't list your models. no access", "Try again", true, null },
+        { AzureSetupResult.ApiKeyIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
+        { AzureSetupResult.ApiKeyComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
+        { AzureSetupResult.ApiKeyVerified, AiCleanupStatusKind.Success, "Azure accepted the key.", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalIncomplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", false, null },
+        { AzureSetupResult.ServicePrincipalComplete, AiCleanupStatusKind.Info, "Fill in the details above, then choose Verify.", "Verify", true, null },
+        { AzureSetupResult.ServicePrincipalVerified, AiCleanupStatusKind.Success, "Verified.", "Verify", true, null },
+    };
+
+    [Theory]
+    [MemberData(nameof(AzureRows))]
+    public void Ai_cleanup_azure_rows_have_provider_specific_actions(
+        AzureSetupResult result,
+        AiCleanupStatusKind kind,
+        string text,
+        string? action,
+        bool actionEnabled,
+        string? secondary)
+    {
+        var state = ActiveAzure(new AzureAiSetupState(result, SafeReason: "no access"));
+
+        Assert.Equal(kind, state.StatusRow!.Kind);
+        Assert.Equal(text, state.StatusRow.Text);
+        Assert.Equal(action, state.StatusRow.ActionText);
+        Assert.Equal(actionEnabled, state.StatusRow.ActionEnabled);
+        Assert.Equal(secondary, state.StatusRow.SecondaryActionText);
+    }
+
+    public static TheoryData<CopilotSetupResult, AiCleanupStatusKind, string, string?, string?> CopilotRows => new()
+    {
+        { CopilotSetupResult.NotChecked, AiCleanupStatusKind.Info, "Not checked yet.", "Get models", null },
+        { CopilotSetupResult.ToolNotFound, AiCleanupStatusKind.Warning, "GitHub Copilot isn't installed on this PC.", "Install", "Check again" },
+        { CopilotSetupResult.Installing, AiCleanupStatusKind.Info, "The installer is open. Finish it, then choose Check again.", "Check again", null },
+        { CopilotSetupResult.Installed, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Sign in", "Get models" },
+        { CopilotSetupResult.SignedIn, AiCleanupStatusKind.Success, "GitHub Copilot is installed.", "Get models", null },
+        { CopilotSetupResult.ModelsListed, AiCleanupStatusKind.Success, "GitHub Copilot is ready.", "Get models", null },
+    };
+
+    [Theory]
+    [MemberData(nameof(CopilotRows))]
+    public void Ai_cleanup_copilot_rows_have_provider_specific_actions(
+        CopilotSetupResult result,
+        AiCleanupStatusKind kind,
+        string text,
+        string? action,
+        string? secondary)
+    {
+        var state = ActiveCopilot(new CopilotSetupState(result));
+
+        Assert.Equal(kind, state.StatusRow!.Kind);
+        Assert.Equal(text, state.StatusRow.Text);
+        Assert.Equal(action, state.StatusRow.ActionText);
+        Assert.Equal(secondary, state.StatusRow.SecondaryActionText);
+    }
+
+    [Theory]
+    [InlineData(CustomEndpointTestResult.NotTested, AiCleanupStatusKind.Info, "Not tested yet.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.Testing, AiCleanupStatusKind.Busy, "Testing...", null)]
+    [InlineData(CustomEndpointTestResult.Connected, AiCleanupStatusKind.Success, "Connected. qwen answered.", "Test connection")]
+    [InlineData(CustomEndpointTestResult.Failed, AiCleanupStatusKind.Error, "Connection refused.", "Try again")]
+    public void Ai_cleanup_custom_rows_have_provider_specific_actions(
+        CustomEndpointTestResult result,
+        AiCleanupStatusKind kind,
+        string text,
+        string? action)
+    {
+        var state = ActiveCustom(new CustomEndpointSetupState(result, "qwen", "Connection refused."));
+
+        Assert.Equal(kind, state.StatusRow!.Kind);
+        Assert.Equal(text, state.StatusRow.Text);
+        Assert.Equal(action, state.StatusRow.ActionText);
+    }
+
+    private static AiCleanupPageDescription ActiveAzure(AzureAiSetupState setup)
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        saved.AiCleanupAzureEndpoint = "https://example.test";
+        saved.AiCleanupAzureDeployment = "cleanup";
+        var draft = saved.Clone();
+        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, azureSetup: setup);
+    }
+
+    private static AiCleanupPageDescription ActiveCopilot(CopilotSetupState setup)
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.GitHubCopilot;
+        var draft = saved.Clone();
+        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, copilotSetup: setup);
+    }
+
+    private static AiCleanupPageDescription ActiveCustom(CustomEndpointSetupState setup)
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        saved.AiCleanupProvider = CleanupProvider.OpenAiCompatible;
+        saved.AiCleanupCustomEndpoint = "http://localhost:11434/v1";
+        saved.AiCleanupCustomModel = "qwen";
+        var draft = saved.Clone();
+        return AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready, customSetup: setup);
+    }
 }

@@ -7,6 +7,8 @@ public enum FoundryLocalSetupStage
     NotSetUp,
     SettingUp,
     RuntimeReady,
+    CachedUnloaded,
+    Checking,
     DownloadingOrLoading,
     Loaded,
     Failed,
@@ -37,6 +39,8 @@ public static class FoundryLocalSetup
                 CanUnload: false),
             FoundryLocalSetupStage.SettingUp => new(AiCleanupStatusKind.Busy, "Setting up. The first time can take a while.", null, false),
             FoundryLocalSetupStage.RuntimeReady => new(AiCleanupStatusKind.Info, $"Ready to download {modelName} ({size}).", "Download and load", false),
+            FoundryLocalSetupStage.CachedUnloaded => new(AiCleanupStatusKind.Info, "No model is loaded.", "Load", false),
+            FoundryLocalSetupStage.Checking => new(AiCleanupStatusKind.Info, "Checking...", "Unload", false),
             FoundryLocalSetupStage.DownloadingOrLoading => new(AiCleanupStatusKind.Busy, progressText ?? $"Loading {modelName}...", null, false),
             FoundryLocalSetupStage.Loaded => new(AiCleanupStatusKind.Success, $"{modelName} is ready.", "Unload", true),
             FoundryLocalSetupStage.Failed => new(
@@ -48,12 +52,18 @@ public static class FoundryLocalSetup
         };
     }
 
-    public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached) => status switch
+    public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached) =>
+        FromCleanupStatus(status, runtimeReady, modelCached, modelLoaded: null);
+
+    public static FoundryLocalSetupStage FromCleanupStatus(CleanupStatus status, bool runtimeReady, bool modelCached, bool? modelLoaded) => status switch
     {
         CleanupStatus.Ready => FoundryLocalSetupStage.Loaded,
         CleanupStatus.Initializing => FoundryLocalSetupStage.SettingUp,
         CleanupStatus.Downloading => FoundryLocalSetupStage.DownloadingOrLoading,
         CleanupStatus.Unavailable => FoundryLocalSetupStage.Failed,
-        _ => runtimeReady && !modelCached ? FoundryLocalSetupStage.RuntimeReady : FoundryLocalSetupStage.NotSetUp,
+        _ => modelLoaded is null && modelCached ? FoundryLocalSetupStage.Checking :
+            modelLoaded == false && modelCached ? FoundryLocalSetupStage.CachedUnloaded :
+            runtimeReady && !modelCached ? FoundryLocalSetupStage.RuntimeReady :
+            FoundryLocalSetupStage.NotSetUp,
     };
 }

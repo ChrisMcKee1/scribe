@@ -75,6 +75,38 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.HasUsableAuthentication);
     }
 
+    [Fact]
+    public void Fresh_api_key_setup_shows_manual_details_without_sign_in()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: false,
+            apiKeySelected: true);
+
+        Assert.False(state.ShowDiscovery);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
+        Assert.True(state.ShowConfiguration);
+    }
+
+    [Fact]
+    public void Saved_api_key_setup_shows_manual_details_without_sign_in()
+    {
+        var state = AzureSettingsAccess.Resolve(
+            cliInstalled: true,
+            signedIn: false,
+            manualConfigurationRequested: false,
+            hasApiKey: true,
+            apiKeySelected: true);
+
+        Assert.False(state.ShowDiscovery);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
+        Assert.True(state.ShowConfiguration);
+    }
+
     [Theory]
     [InlineData(false, true, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]
     [InlineData(true, false, false, null, null, null, AzureSettingsAccess.ValidationIssue.None)]

@@ -127,6 +127,29 @@ public sealed class DictationStatsTests
     }
 
     [Fact]
+    public void Compute_two_argument_overload_keeps_shipping_mixed_model_semantics()
+    {
+        var entries = new[]
+        {
+            Entry(audioMs: 10_000, decodeMs: 1_000, cleanupMs: 400),
+            Entry(audioMs: 10_000, decodeMs: 8_000, cleanupMs: 700, modelId: "moonshine-base-en-int8"),
+            Entry(audioMs: 10_000, decodeMs: 9_000, cleanupMs: 900, modelId: null),
+        };
+
+        var stats = DictationStats.Compute(entries, DateTimeOffset.UtcNow.AddDays(-7));
+
+        Assert.NotNull(stats);
+        Assert.Equal(3, stats!.Count);
+        Assert.Equal(TimeSpan.FromMilliseconds(30_000), stats.TotalAudio);
+        Assert.Equal(1, stats.ParakeetDecodeCount);
+        Assert.Equal(1_000, stats.ParakeetDecodeMs!.Average);
+        Assert.Equal(3, stats.CleanupCount);
+        Assert.Equal(2_000.0 / 3.0, stats.CleanupMs!.Average, precision: 6);
+        Assert.Equal(3, stats.CombinedCount);
+        Assert.Equal(20_000.0 / 3.0, stats.CombinedMs!.Average, precision: 6);
+    }
+
+    [Fact]
     public void Compute_returns_null_when_only_other_models_exist()
     {
         var stats = DictationStats.Compute(
