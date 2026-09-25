@@ -14,29 +14,70 @@ namespace Scribe.Core.Libraries;
 public interface ILibraryComposer
 {
     /// <summary>
-    /// The local state stored as the settings document's enabled list and the value of
-    /// <see cref="LibrarySettingKeys.State"/> (null when the row is absent). An absent row reads as
-    /// <see cref="LocalStateHealth.Absent"/> only when <paramref name="context"/> gives no sign it was lost (no stored
-    /// generation, no repair at this start, no session on defaults, no witness file); otherwise it reads as
-    /// <see cref="LocalStateHealth.Unreadable"/>, so a lost row never re-grants AI permission, on this start or the next.
+    /// The local state stored as the settings document's enabled list (<paramref name="documentEnabledIds"/>, null when
+    /// no readable document holds it: a session on defaults) and the value of <see cref="LibrarySettingKeys.State"/>
+    /// (null when the row is absent), for the libraries <paramref name="libraries"/> names (every library of the catalog;
+    /// an unreadable file counts). An absent row reads as <see cref="LocalStateHealth.Absent"/> only when
+    /// <paramref name="context"/> gives no sign it was lost (no stored generation, no repair record, no session on
+    /// defaults, no witness file); otherwise it reads as <see cref="LocalStateHealth.Unreadable"/>, so a lost row never
+    /// re-grants AI permission, on this start or the next.
     /// </summary>
-    LibraryLocalState ReadLocalState(IReadOnlyList<string>? enabledLibraryIds, string? storedState, LibraryStateContext context);
+    /// <remarks>
+    /// The auxiliary row is this build's source of truth for which libraries are on, by logical id (review finding A17);
+    /// the settings document's list is only the projection older builds read, and the row stores the projection this
+    /// build last wrote beside it, in the same transaction as the list. Reading compares the two to apply what an older
+    /// build changed since, conservatively, through <see cref="LibraryIdentity.LegacyId"/>: a legacy id an older build
+    /// turned off turns off every library it stands for, and one it turned on turns them all on, their AI permission
+    /// unchanged (a twin that was not permitted stays off for AI). An older build's Save writes only the ids its window
+    /// lists, so a built-in id of the <c>scribe.</c> form, which is reserved for built-ins older builds do not ship, is
+    /// not read as turned off by its absence. With no readable row (a first start, a lost or newer state), the document's
+    /// list is read the same way, each legacy id standing for every library an older build loads under it, which is how a
+    /// hand-placed twin takes the enabled state its stem had at the first start (decision 5). With no document list, no
+    /// change is inferred: a readable row is used as stored, and otherwise nothing is on.
+    /// </remarks>
+    LibraryLocalState ReadLocalState(
+        IReadOnlyList<string>? documentEnabledIds,
+        string? storedState,
+        IReadOnlyList<LibraryIdentity> libraries,
+        LibraryStateContext context);
 
     /// <summary>
-    /// <paramref name="state"/> encoded for the settings store, for the libraries <paramref name="libraries"/> names (the
-    /// set the commit leaves: the catalog's, minus deletions, plus creations and restores; an unreadable file still
-    /// counts). The settings document's list is what 0.4.3 and 0.4.2 read, and it is a downgrade-safe projection of the
-    /// enabled libraries (review finding A15): libraries are grouped by <see cref="LibraryIdentity.LegacyId"/>, the id an
-    /// older build loads them as, and a group's legacy id enters the document's list only when every library in the
-    /// group is enabled and permitted for AI with its accepted content, because an older build turns the whole group on
-    /// and sends it all. Every other enabled library is withheld from the document's list and kept in the auxiliary row
-    /// instead, where this build reads it; an older build then runs with it off, which loses nothing private. An id no
-    /// library has right now stays in the document's list if it was there and is dropped from the stored library state.
-    /// A <see cref="LocalStateHealth.Newer"/> state encodes with a null <see cref="LibraryStateEncoding.StateValue"/> and
+    /// <paramref name="state"/> encoded for the settings store by a commit whose physical changes take the libraries
+    /// from <paramref name="librariesBefore"/> (the catalog's, before any file of the commit is installed) to
+    /// <paramref name="librariesAfter"/> (minus deletions, plus creations and restores; an unreadable file counts in
+    /// both), starting from <paramref name="startingState"/> (the catalog's <see cref="LibraryCatalog.LocalState"/>, which
+    /// the Save's draft began from; null for a commit that moves no file, an adoption, whose two lists are the same).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The auxiliary row holds every enabled library by logical id, the source of truth (review finding A17), and the
+    /// projection this commit writes into the settings document's list, which is what 0.4.3 and 0.4.2 read. The
+    /// projection is downgrade-safe (A15 and A18): an older build turns on every library it loads under a listed id and
+    /// sends all of them, and until the commit's files are all in place it may meet any mix of the files before and
+    /// after. So libraries are grouped by <see cref="LibraryIdentity.LegacyId"/> over both lists, and a group's legacy id
+    /// enters the projection only when every library in it (1) is still there after the commit (one the commit deletes
+    /// makes the group unsafe), (2) is enabled in <paramref name="state"/> and permitted by it for AI with its accepted
+    /// content, and (3), for a custom library whose content the commit rewrites (its accepted content differs from
+    /// <paramref name="startingState"/>'s), was also permitted by <paramref name="startingState"/> with the content it
+    /// held, because an older build may still load those bytes. An older build loads a built-in's shipped rows whatever
+    /// its edits document holds, so (3) never applies to a built-in.
+    /// </para>
+    /// <para>
+    /// Every other enabled library stays out of the projection, so an older build runs with it off, which loses nothing
+    /// private. Completion writes no settings (decision 12), so a group kept out only because of this commit's physical
+    /// changes (a deleted twin, bytes rewritten under a permission granted in the same Save) joins the projection at the
+    /// next commit. An id no library has, before or after, stays in the document's list if it was there (it is in
+    /// <see cref="LibraryLocalState.LegacyEnabledIds"/>) and is dropped from the stored library state. A
+    /// <see cref="LocalStateHealth.Newer"/> state encodes with a null <see cref="LibraryStateEncoding.StateValue"/> and
     /// the document's list as it was read. <see cref="LibraryLocalState.AiPermissionsLost"/> is always encoded, so every
     /// commit carries a denial until the user confirms the choices.
-    /// </summary>
-    LibraryStateEncoding EncodeLocalState(LibraryLocalState state, IReadOnlyList<LibraryIdentity> libraries);
+    /// </para>
+    /// </remarks>
+    LibraryStateEncoding EncodeLocalState(
+        LibraryLocalState state,
+        LibraryLocalState? startingState,
+        IReadOnlyList<LibraryIdentity> librariesBefore,
+        IReadOnlyList<LibraryIdentity> librariesAfter);
 
     /// <summary>
     /// The state to commit because the stored state has not recorded what the catalog shows

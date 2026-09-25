@@ -13,7 +13,9 @@ namespace Scribe.Core.Libraries;
 /// it (review finding A16: with <c>epsilon.csv</c> beside it, 0.4.3 lets epsilon win a shared spoken form, and ranking
 /// by <c>custom-github.csv</c> would hand it to the twin). And an older build still loads it as <c>github</c>, together
 /// with the built-in, under one enabled flag, which is why the state encoder writes a shared legacy id into the settings
-/// document's list only when every library it stands for is on and permitted for AI (A15).
+/// document's list only when every library it stands for is on and permitted for AI (A15), before the commit's physical
+/// changes as well as after them (A18), and why reading that list back applies an older build's change of the shared id
+/// to every library it stands for (A17).
 /// </para>
 /// <para>
 /// Invariants the producer keeps (J for committed libraries, D for draft ones): a built-in has no file name; a custom
