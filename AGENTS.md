@@ -269,7 +269,7 @@ dotnet run --project src/Scribe.App -- --settings
 # The speech tests load the real sherpa-onnx and Silero engines when models are found (SCRIBE_MODELS_DIR,
 # or src/Scribe.App/models found from the test output); without models they pass vacuously. CI sets
 # SCRIBE_MODELS_DIR, so they run there.
-# The Start_ tests that inject mouse clicks into the real mouse hook (HotkeyServiceMouseTests.cs) run only on CI
+# The Start_ tests that inject mouse clicks and keys into the real hooks (HotkeyServiceMouseTests.cs) run only on CI
 # (GITHUB_ACTIONS) or with SCRIBE_INPUT_INJECTION_TESTS=1, and then require the input desktop: injected input lands
 # under the pointer, so never opt in on a desktop someone is using. Elsewhere they return at once.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
@@ -655,8 +655,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   refused). A press the user made meanwhile, still queued behind the consumer, keeps its latch, so the
   recording it starts is still ended by its own release; releasing whatever the hook held, before the
   admission, cleared that latch and left the microphone recording. A stop the lifecycle turns away
-  releases nothing. The two stops the hook sends itself, a release or second press and a desktop switch,
-  release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
+  releases nothing. The stops the hook sends itself, a release or second press, a desktop switch and a mouse
+  hook found removed, release nothing either: the hook ended or reset that latch before sending them. A press the lifecycle
   turns away because the previous dictation is still processing releases its own latch the same way
   (`DictationStartPolicy.BeginRecording`): it started nothing, and after a stop Scribe made itself, whose
   release had just made that tap a new start, a latch left on cost the user a third tap. The other
@@ -743,10 +743,40 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   move that reaches the desktop brings back a pointer hidden while typing. So every watchdog period
   (`MaintainMouseHookLocked`) the thread registers the mouse hook afresh, the new registration before
   the old one is released and both before it takes another message, so the engine keeps its state and
-  no event falls between them; a hook Windows removed is back within one period, and a renewal that
-  finds the old registration already gone is logged. Nothing is injected and nothing is added to any
-  event. The leaked-input check releases a bound button Windows still holds with a marked button-up
-  (`NativeMethods.MarkedMouseButtonUp`), as it releases a key. **Windows hands a low-level mouse hook only
+  no event falls between them; a registration Windows removed is back within one period, which is
+  registration recovery only. **A renewal that finds the old registration already gone is a lost
+  hook, and the engine is told** (`HotkeyEngine.OnMouseHookLost`, on the hook thread between
+  messages, before any button event reaches the new registration): while it was gone no hook saw the
+  mouse, so a held button's release, or a toggle's second click, may be the input nobody saw. Both
+  machines forget their mouse buttons (keys stay: the keyboard hook saw them), a binding that presses
+  one gives up its latch, and if the arbiter's owner is such a binding, the engine advances its
+  activation epoch and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
+  (`DictationStopReason.MouseHookLost` in the log), so its queued Activated can never open the
+  microphone; a keyboard binding's dictation and its queued start are left alone. So recording
+  recovery comes at that renewal, at most one watchdog period after the loss, and until then a press
+  or release no hook saw reaches the app. The loss is logged. Nothing is injected and nothing is added
+  to any event.
+- **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
+  keeps the buttons whose press it swallowed until their release comes, and swallows that release
+  whatever happened in between: a desktop switch, capture, new bindings, a dictation-only trigger
+  removed, a mouse hook found removed. DefWindowProc makes a side button's lone release a
+  `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
+  of the button retires the debt (buttons never repeat, so its release went up where no hook could
+  see it) and is judged afresh. Keys keep the reset they had: a key's lone release does nothing
+  documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
+  `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
+  Not covered: a reinstall (a new engine starts with no debts) and new bindings that need no mouse hook
+  at all, which remove it.
+- **The leaked-input check releases a button only on evidence.** It releases a bound button Windows
+  still holds with a marked button-up (`NativeMethods.MarkedMouseButtonUp`), as it releases a key, but
+  only on the engine's evidence of a release it swallowed (`HotkeyEngine.ClaimButtonReleaseEvidence`):
+  the one state in which Windows holds a bound button the user let go of is a press a missed deadline
+  let through whose release was then swallowed. "The engine does not hold it" also means "the engine
+  never saw it go down", as for a button held in another app since before the mouse hook existed, which
+  a release would end mid-drag. The evidence answers one check (a compare-exchange claims it), and a
+  new press of the button, a desktop switch, capture, new bindings, a lost mouse hook and a reinstall
+  all end it. Keys keep the older rule, which can still misjudge a key held since before a keyboard hook
+  reinstall (a new engine never saw it go down); reinstalls are rare. **Windows hands a low-level mouse hook only
   the low 32 bits of `MOUSEINPUT.dwExtraInfo`** (measured on both CI runners: a 64-bit value arrived with
   its high half zeroed), so the mouse hook recognizes Scribe's own input by the low half of
   `SyntheticInputMarker` (`MouseHookFilter.Marker`); a full-width compare never matches there. Windows
@@ -806,7 +836,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   before a reinstall, and a shared epoch let that late switch discard the replacement's first genuine
   press. Without all this a key held through Win+L or a UAC prompt
   kept the microphone recording while the PC was locked, and its stale state swallowed the next press
-  as an autorepeat. A switch with nothing recording starts and stops nothing. The reset also clears a
+  as an autorepeat. A switch with nothing recording starts and stops nothing. A mouse button whose press
+  was swallowed keeps its release owed through the reset (see above), so a side button held through a
+  UAC prompt and let go afterwards navigates nothing. The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
@@ -1001,8 +1033,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   app under the pointer (a chord is swallowed from the input that completes it). Beyond two inputs it records only
   Ctrl, Alt and Shift keys and at most one other input, and builds that as the one input with modifier flags
   ("Ctrl+Shift+F13"), matched on either side of each modifier and for the generic codes injected input can carry; one
-  or two inputs stay the exact physical binding every build captured. A Windows key is never one of more than two
-  inputs: only a shortcut's key is kept from Windows, and a Windows key it sees pressed and released with nothing
+  or two inputs stay the exact physical binding every build captured. Only the input that completes a shortcut is
+  kept from Windows and the app: its key when the modifiers go down first, as a mouse's software and a person send
+  one; with the key first (F13, then Shift, then Ctrl) the key reaches the app whole and the last modifier is kept
+  instead, and Set warns when it records that order. A Windows key is never one of more than two
+  inputs: a Windows key Windows sees pressed and released with nothing
   between opens Start. For the same reason a shortcut of Shift with Ctrl or Alt warns
   (`HotkeyCaptureSession.LayoutSwitchWarning`) that its modifiers can still switch the keyboard language or layout;
   sending a masking key, as AutoHotkey does, would remove that and is not done. The Settings window maps its own
@@ -1025,7 +1060,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
   directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
   here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
-  modifier.
+  modifier; that holds through desktop switches, capture and rebinding (the owed release above), and not while
+  Windows has removed the mouse hook, when a press or release no hook sees reaches the app until the renewal.
 
 ## Startup (read before touching OnStartup)
 
