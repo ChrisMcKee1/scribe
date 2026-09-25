@@ -16,8 +16,10 @@ namespace Scribe.Core.Libraries;
 /// every older build reads, and a managed read takes each value from its raw line and never removes spreadsheet padding,
 /// so a value ending in a comma reads back as written. An export stores each metadata line as one CSV field, quoted
 /// when it holds a comma, a quote or a line break, so a spreadsheet that pads or re-quotes the line cannot change the
-/// value; an import recognizes a metadata record, quoted or not, only before the column header, where unquoted trailing
-/// empty fields are padding (reported) and a comma between non-empty fields is part of the value.
+/// value; an import recognizes a metadata record, quoted or not, only before the column header, and reads its line as
+/// the record's fields rejoined with commas, less the unquoted trailing empty fields a spreadsheet pads it with
+/// (reported), whether or not the first field was quoted: an export's line is its one field, and a raw 0.4.3 line a
+/// spreadsheet split at its commas comes back whole, inner empty fields included.
 /// </para>
 /// </remarks>
 public interface ILibraryCsvCodec
@@ -26,9 +28,11 @@ public interface ILibraryCsvCodec
     /// A managed file in the libraries folder. A file without the <c># scribe-format: 2</c> marker is read exactly as
     /// 0.4.3 read it (a byte order mark decides the encoding, UTF-8 otherwise, an invalid byte becomes U+FFFD and is
     /// reported; 0.4.3's header, comment and trimming rules), so the rows dictation uses never change on upgrade; a
-    /// file with the marker gets the strict header, comment and quoting rules for its rows. Either way metadata comes
-    /// from the raw comment lines, first line wins, trimmed, with no padding recovery. A header-only file is an empty
-    /// library; a file with row errors is partly readable (<see cref="LibraryFileState.PartlyReadable"/>).
+    /// file with the marker gets the strict header, comment and quoting rules for its rows, the header only as the first
+    /// data record and only by its shape: a header of three or four columns counts quoted or not, because its third field
+    /// is never a valid flag, and a quoted two-column record is data. Either way metadata comes from the raw comment
+    /// lines, first line wins, trimmed, with no padding recovery. A header-only file is an empty library; a file with row
+    /// errors is partly readable (<see cref="LibraryFileState.PartlyReadable"/>).
     /// </summary>
     LibraryCsvDocument ReadManaged(ReadOnlySpan<byte> bytes);
 
@@ -45,9 +49,12 @@ public interface ILibraryCsvCodec
     byte[] WriteManaged(LibraryContent content);
 
     /// <summary>
-    /// A file the user chose to import: strict UTF-8, honouring a byte order mark; bytes that are not valid UTF-8 and
-    /// carry no byte order mark decode with the system ANSI code page and say so. A file that declares the formula
-    /// guard has it reversed; metadata is recovered from spreadsheet padding and re-quoting and reported.
+    /// A file the user chose to import: strict UTF-8, honouring a byte order mark (UTF-8, UTF-16 or UTF-32) even over
+    /// broken bytes, which are then replaced and reported; bytes that are not valid UTF-8 and carry no byte order mark
+    /// decode with the system ANSI code page and say so, and a sequence that code page does not define is replaced and
+    /// reported too (<see cref="LibraryTextEncoding.InvalidBytesReplaced"/>). The column header is recognized as
+    /// <see cref="ReadManaged"/> recognizes it in a file with the format marker. A file that declares the formula guard
+    /// has it reversed; metadata is recovered from spreadsheet padding and re-quoting and reported.
     /// </summary>
     LibraryCsvDocument ReadImport(ReadOnlySpan<byte> bytes);
 
