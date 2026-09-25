@@ -54,8 +54,10 @@ public enum BuiltInTermIntent
 /// the user changed, each against the shipped value in use as its base (<see cref="IBuiltInLibraryOverlay.Edit"/>).
 /// </param>
 /// <param name="Acknowledged">
-/// The shipped values the user last reviewed with Keep my changes, so the same shipped change asks once; null until then.
-/// An edit of a pinned entry also acknowledges the shipped value in use for each field it changes.
+/// The shipped values the user has already answered for, so the same shipped change asks once: set whole by Keep my
+/// changes, and field by field by an edit of a pinned entry, which acknowledges the shipped value in use for each field
+/// it changes, so the edit itself asks nothing about the field just typed. Null until one of the two happens, and again
+/// when a pinned entry's edit leaves it equal to the user's values.
 /// </param>
 public sealed record BuiltInTermEdit(
     LibraryTermKey Key,

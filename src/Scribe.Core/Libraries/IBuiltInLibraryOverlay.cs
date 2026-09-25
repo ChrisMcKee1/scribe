@@ -9,8 +9,18 @@ namespace Scribe.Core.Libraries;
 /// one place.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Pure and thread-safe: no I/O, no clock, no logging. Row methods take and return rows of built-in libraries only
 /// (a <see cref="TermOrigin.Custom"/> row is an <see cref="ArgumentException"/>), and never change the row passed in.
+/// </para>
+/// <para>
+/// Every member refuses a string that is not well-formed UTF-16 (an unpaired surrogate) with
+/// <see cref="ArgumentException"/>, wherever it comes from: the shipped library's id and values, a document's library
+/// id, keys and values, a row's own key and values, and the values a command is given. <see cref="ReadEdits"/> refuses
+/// an ill-formed library id the same way and never throws on the bytes it reads: a document holding such text is
+/// <see cref="LibraryFileState.Unreadable"/>. Each case is a bug upstream, since the editor refuses such text first and
+/// nothing Scribe reads can produce it.
+/// </para>
 /// </remarks>
 public interface IBuiltInLibraryOverlay
 {
@@ -57,18 +67,19 @@ public interface IBuiltInLibraryOverlay
     /// replaced by the values shown, which would pin every inherited field to today's shipped value.
     /// </para>
     /// <para>
-    /// A field the edit changes takes the typed value as U and, in an edited entry, the shipped value in use now as B: the
-    /// row returned shows exactly <paramref name="values"/>, nothing asks about that field until a later version changes
-    /// it again, and a field typed back to the shipped value inherits again. A pinned entry keeps its B, which only Use
-    /// updated values moves, and acknowledges the shipped value in use for the changed fields instead
-    /// (<see cref="BuiltInTermEdit.Acknowledged"/>). Editing a shipped row creates the entry with B the shipped values and
-    /// U equal to B except in the changed fields.
+    /// The rule: a field the edit changes takes the shipped value in use as its base (B) and the typed value as U, and a
+    /// field it leaves unchanged keeps both, so the row returned shows exactly <paramref name="values"/>, nothing asks
+    /// about a changed field until a later version changes it again, and a field typed back to the shipped value
+    /// inherits again. Editing a shipped row therefore creates the entry with B the shipped values and U equal to B
+    /// except in the changed fields.
     /// </para>
     /// <para>
-    /// Editing a turned-off row keeps the off authored: the edited entry it becomes has Enabled false against a base that
-    /// is on, the value the row was turned off from, never the shipped value in use when that is off too, unless the edit
-    /// itself turns the row on (its base is then the shipped values in use). So a later version that ships the row on
-    /// does not turn it back on.
+    /// Two exceptions. A turned-off row that the edit converts to an edited entry keeps Enabled authored false: its base
+    /// is the shipped row with Enabled true, the value the row was turned off from, never the shipped value in use when
+    /// that is off too, unless the edit itself turns the row on (its base is then the shipped row as it is); so a later
+    /// version that ships the row on does not turn it back on. A pinned entry does not move its base, which only Use
+    /// updated values moves: only the acknowledgment of each changed field moves, to the shipped value in use
+    /// (<see cref="BuiltInTermEdit.Acknowledged"/>), so the edit asks nothing about it.
     /// </para>
     /// </remarks>
     LibraryRow Edit(LibraryRow row, TermValues values);
