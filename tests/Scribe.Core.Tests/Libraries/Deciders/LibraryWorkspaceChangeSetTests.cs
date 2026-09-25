@@ -596,6 +596,7 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Equal(keptAs, next.Writes.Single(write => write.LibraryId == copy).Content!.BasedOn);
         var repaired = Apply(saved, next);
         workspace.MarkSaved(next.DraftRevision, repaired);
+        Assert.False(workspace.HasPendingReferenceRepairs);
         workspace.Reload(repaired);
         workspace.SetEnabled(keptAs, true);
         workspace.SetEnabled(copy, false);
@@ -672,7 +673,8 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Equal(keptAs, workspace.CopyOriginal(copy));
 
         // The follow-up Save writes the repair, which is pending until that Save is marked saved.
-        var followUp = Capture(workspace);
+        var followUp = RepairsOf(workspace);
+        Assert.Equal([copy], followUp.Writes.Select(write => write.LibraryId));
         Assert.Equal(keptAs, followUp.Writes.Single(write => write.LibraryId == copy).Content!.BasedOn);
         Assert.True(workspace.HasPendingReferenceRepairs);
         var repaired = Apply(saved, followUp);
@@ -821,7 +823,7 @@ public sealed class LibraryWorkspaceChangeSetTests
         var saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
         workspace.MarkSaved(changes.DraftRevision, saved);
 
-        var followUp = Capture(workspace);
+        var followUp = RepairsOf(workspace);
         workspace.DiscardLibrary(copy);
         var repaired = Apply(saved, followUp);
         workspace.MarkSaved(followUp.DraftRevision, repaired);
@@ -845,6 +847,264 @@ public sealed class LibraryWorkspaceChangeSetTests
         Assert.Equal(keptAs, workspace.Draft.Find(copy)!.Content.BasedOn);
         Assert.Equal(keptAs, workspace.CopyOriginal(copy));
     }
+
+    // A library and its copy saved together, the store keeping the library under another id, so the copy's reference is
+    // repaired in the draft and pending; `whileSaving` is what the user does, to the copy or elsewhere, while that Save runs.
+    private static LibraryWorkspace PendingRepair(
+        LibraryCatalog catalog, out string copy, out string keptAs, out LibraryCatalog saved,
+        Action<LibraryWorkspace, string>? whileSaving = null)
+    {
+        var workspace = Workspace(catalog);
+        var original = workspace.CreateLibrary();
+        workspace.AddTerm(original, new TermValues("ga", "general availability"));
+        copy = workspace.Duplicate(original);
+        var changes = Capture(workspace);
+        whileSaving?.Invoke(workspace, copy);
+        keptAs = original + "-7";
+        saved = Apply(catalog, changes, outcomes: [new StoreOutcome.SavedUnderNewId(original, keptAs, [new TermValues("theirs", "Theirs")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        Assert.Equal([copy], workspace.PendingReferenceRepairs);
+        return workspace;
+    }
+
+    private static bool? AiOf(LibraryLocalState state, string id) =>
+        state.AiPermissions.TryGetValue(id, out var permitted) ? permitted : null;
+
+    private static string[] Sorted(IEnumerable<string> ids) => [.. ids.Order(StringComparer.Ordinal)];
+
+    // The ruling on the follow-up Save: W2 runs it without the user pressing Save, so it writes the reference repairs and
+    // nothing else, and every other change waits for the user's own Save (plan 3.9).
+    [Fact]
+    public void D4_the_follow_up_save_writes_only_the_reference_repairs_and_an_edit_made_while_the_first_save_ran_stays_unsaved()
+    {
+        var catalog = Standard();
+        var workspace = PendingRepair(catalog, out var copy, out var keptAs, out var saved, (w, _) =>
+        {
+            w.EditTerm("team-terms", RowIdOf(w, "team-terms", "kube"), new TermValues("kube", "K8s"));
+            w.SetEnabled(AzureId, true);
+        });
+        Assert.Equal(Sorted([AzureId, "team-terms", copy]), Sorted(workspace.UnsavedLibraryIds));
+
+        // The repair alone: the copy's file with its based-on line corrected, the rest of the draft left out.
+        var followUp = RepairsOf(workspace);
+        var file = saved.Find(copy)!;
+        var write = Assert.Single(followUp.Writes);
+        Assert.Equal(copy, write.LibraryId);
+        Assert.False(write.BuiltIn);
+        Assert.Equal(file.ContentHash, write.ExpectedPreImage);
+        Assert.Equal(Describe(file.Content with { BasedOn = keptAs }), Describe(write.Content!));
+        Assert.Empty(followUp.Deletions);
+        Assert.Empty(followUp.RecentlyDeletedActions);
+        Assert.False(followUp.LocalStateChanged);
+        Assert.Equal(Sorted(saved.LocalState.EnabledIds), Sorted(followUp.LocalState.EnabledIds));
+        Assert.Equal(
+            saved.LocalState.AiPermissions.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+            followUp.LocalState.AiPermissions.OrderBy(pair => pair.Key, StringComparer.Ordinal));
+
+        var repaired = Apply(saved, followUp);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+
+        // The repair is committed, and nothing else is.
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(keptAs, repaired.Find(copy)!.Content.BasedOn);
+        Assert.Equal(new TermValues("kube", "Kubernetes"), repaired.Find("team-terms")!.Content.Rows[0].Values);
+        Assert.DoesNotContain(AzureId, repaired.LocalState.EnabledIds);
+
+        // The edit and the switch are still the draft's and unsaved, and the user's own Save writes them and nothing of the
+        // copy.
+        Assert.Equal(new TermValues("kube", "K8s"), ValuesOf(workspace, "team-terms")[0]);
+        Assert.Contains(AzureId, workspace.Draft.LocalState.EnabledIds);
+        Assert.Equal(Sorted([AzureId, "team-terms"]), Sorted(workspace.UnsavedLibraryIds));
+        var next = Capture(workspace);
+        AssertPreImages(repaired, next);
+        Assert.Equal(["team-terms"], next.Writes.Select(change => change.LibraryId));
+        Assert.True(next.LocalStateChanged);
+        Assert.Contains(AzureId, next.LocalState.EnabledIds);
+        workspace.MarkSaved(next.DraftRevision, Apply(repaired, next));
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void D4_the_follow_up_save_writes_only_a_copys_based_on_line_whatever_else_the_user_changed_in_it()
+    {
+        // While the first Save runs, the user renames the copy and adds a term to it.
+        var catalog = Standard();
+        var workspace = PendingRepair(catalog, out var copy, out var keptAs, out var saved, (w, c) =>
+        {
+            Assert.True(w.Rename(c, "My copy").Applied);
+            Assert.True(w.AddTerm(c, new TermValues("rc", "release candidate")).Applied);
+        });
+
+        // And after it, before the follow-up: its details, a row, its switches.
+        Assert.True(workspace.SetDetails(copy, "Release", "Notes for releases").Applied);
+        Assert.True(workspace.EditTerm(copy, RowIdOf(workspace, copy, "ga"), new TermValues("ga", "GA")).Applied);
+        workspace.SetEnabled(copy, true);
+        var ai = !workspace.ShowsAiPermission(copy);
+        Assert.True(workspace.SetAiPermission(copy, ai).Applied);
+        var mine = workspace.Draft.Find(copy)!.Content;
+        Assert.Equal(keptAs, mine.BasedOn);
+
+        // Only its based-on line is written: the rest of the file stays what the first Save wrote, and so do its switches.
+        var followUp = RepairsOf(workspace);
+        var file = saved.Find(copy)!;
+        var write = Assert.Single(followUp.Writes);
+        Assert.Equal(Describe(file.Content with { BasedOn = keptAs }), Describe(write.Content!));
+        Assert.NotEqual("My copy", write.Content!.Name);
+        Assert.Equal([new TermValues("ga", "general availability")], write.Content!.Rows.Select(row => row.Values));
+        Assert.False(followUp.LocalStateChanged);
+        Assert.DoesNotContain(copy, followUp.LocalState.EnabledIds);
+        Assert.Equal(AiOf(saved.LocalState, copy), AiOf(followUp.LocalState, copy));
+
+        var repaired = Apply(saved, followUp);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+
+        // Everything else the user changed in the copy is still theirs, and unsaved.
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal(Describe(mine), Describe(workspace.Draft.Find(copy)!.Content));
+        Assert.Contains(copy, workspace.Draft.LocalState.EnabledIds);
+        Assert.Equal(ai, workspace.Draft.LocalState.AiPermissions[copy]);
+        Assert.Equal([copy], workspace.UnsavedLibraryIds);
+        var next = Capture(workspace);
+        AssertPreImages(repaired, next);
+        var userWrite = Assert.Single(next.Writes);
+        Assert.Equal(repaired.Find(copy)!.ContentHash, userWrite.ExpectedPreImage);
+        Assert.Equal(Describe(mine), Describe(userWrite.Content!));
+        Assert.Contains(copy, next.LocalState.EnabledIds);
+        Assert.Equal(ai, next.LocalState.AiPermissions[copy]);
+    }
+
+    [Fact]
+    public void D4_a_repairs_capture_and_a_full_capture_taken_at_one_revision_each_mark_their_own_save_saved()
+    {
+        // MarkSaved finds a capture by its revision, so the two kinds never share one: whichever is taken second moves the
+        // revision on, so marking the follow-up saved never counts the whole draft as saved, nor the other way round.
+        foreach (var (repairsFirst, saveRepairs) in new[] { (true, true), (true, false), (false, true), (false, false) })
+        {
+            var catalog = Standard();
+            var workspace = PendingRepair(catalog, out var copy, out _, out var saved, (w, _) =>
+                w.EditTerm("team-terms", RowIdOf(w, "team-terms", "kube"), new TermValues("kube", "K8s")));
+            LibraryChangeSet repairs;
+            LibraryChangeSet full;
+            if (repairsFirst)
+            {
+                repairs = RepairsOf(workspace);
+                full = Capture(workspace);
+            }
+            else
+            {
+                full = Capture(workspace);
+                repairs = RepairsOf(workspace);
+            }
+
+            Assert.NotEqual(repairs.DraftRevision, full.DraftRevision);
+            Assert.Equal([copy], repairs.Writes.Select(write => write.LibraryId));
+            Assert.Equal(Sorted([copy, "team-terms"]), Sorted(full.Writes.Select(write => write.LibraryId)));
+
+            var chosen = saveRepairs ? repairs : full;
+            var committed = Apply(saved, chosen);
+            workspace.MarkSaved(chosen.DraftRevision, committed);
+            Assert.False(workspace.HasPendingReferenceRepairs);
+            Assert.Equal(new TermValues("kube", "K8s"), ValuesOf(workspace, "team-terms")[0]);
+            Assert.Equal(saveRepairs ? new[] { "team-terms" } : Array.Empty<string>(), workspace.UnsavedLibraryIds);
+            Assert.Equal(saveRepairs ? "Kubernetes" : "K8s", committed.Find("team-terms")!.Content.Rows[0].Values.Written);
+        }
+    }
+
+    [Fact]
+    public void D4_a_repairs_capture_is_empty_with_nothing_pending_and_refused_while_a_copys_file_cannot_be_written()
+    {
+        // Nothing pending: an empty change set, whatever else is unsaved.
+        var catalog = Standard();
+        var plain = Workspace(catalog);
+        plain.EditTerm("team-terms", RowIdOf(plain, "team-terms", "kube"), new TermValues("kube", "K8s"));
+        Assert.True(RepairsOf(plain).IsEmpty);
+        Assert.True(plain.HasUnsavedChanges);
+
+        // Read-only (libraries changed by a newer Scribe): empty too, as every capture is.
+        var readOnly = Workspace(Catalog(catalog.Libraries, [GitHubId], health: LocalStateHealth.Newer));
+        Assert.True(readOnly.IsReadOnly);
+        Assert.True(RepairsOf(readOnly).IsEmpty);
+
+        // A repair pending on a copy whose file another app holds: the repairs capture refuses as the full one does, nothing
+        // is written, and the repair stays pending.
+        var workspace = PendingRepair(catalog, out var copy, out var keptAs, out var saved);
+        var held = WithFileState(saved, copy, LibraryFileState.AwaitingRelease);
+        workspace.Rebase(held);
+        Assert.Equal([copy], workspace.PendingReferenceRepairs);
+        var refused = workspace.CaptureReferenceRepairs();
+        Assert.Null(refused.ChangeSet);
+        var issue = Assert.Single(refused.Issues);
+        Assert.Equal((copy, LibraryValidationKind.ContentNotSaveable), (issue.LibraryId, issue.Kind));
+        Assert.Contains(workspace.CaptureChangeSet().Issues, full => full.LibraryId == copy && full.Kind == LibraryValidationKind.ContentNotSaveable);
+        Assert.True(workspace.HasPendingReferenceRepairs);
+
+        // Once the file is back, the follow-up writes the repair.
+        var back = WithFileState(held, copy, LibraryFileState.Available);
+        workspace.Rebase(back);
+        var followUp = RepairsOf(workspace);
+        Assert.Equal(keptAs, Assert.Single(followUp.Writes).Content!.BasedOn);
+        workspace.MarkSaved(followUp.DraftRevision, Apply(back, followUp));
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void D4_a_repair_with_no_kept_original_is_pending_and_the_follow_up_writes_only_it()
+    {
+        // The rarer source of a repair, which keying the follow-up on HasPendingReferenceRepairs covers: an original
+        // restored while a Save runs takes its id back, the store keeps an outside version under that same id, so the
+        // restored original moves to a fresh id and the saved copy's reference follows it there.
+        var entry = Deleted("20260901T100000Z.orig.csv", "orig", "Original", new TermValues("ga", "general availability"));
+        var catalog = Catalog(
+            [
+                BuiltIn(GitHubId),
+                Custom("orig-copy", "Original - Copy", [new TermValues("ga", "general availability")], basedOn: "orig"),
+                Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes")]),
+            ],
+            [GitHubId, "team-terms"],
+            recentlyDeleted: [entry.Entry]);
+        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase) { [entry.Entry.EntryName] = entry };
+        var workspace = Workspace(catalog);
+        workspace.EditTerm("team-terms", RowIdOf(workspace, "team-terms", "kube"), new TermValues("kube", "K8s"));
+        var changes = Capture(workspace);
+        Assert.Equal("orig", workspace.RestoreDeleted(entry));
+        var saved = Apply(catalog, changes, store, [new StoreOutcome.OutsideVersion("team-terms", "orig", [new TermValues("outside", "Outside")])]);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+
+        var movedTo = workspace.Draft.Libraries.Single(library => library.Content.Name == "Original").Content.Id;
+        Assert.NotEqual("orig", movedTo);
+        Assert.Equal(movedTo, workspace.Draft.Find("orig-copy")!.Content.BasedOn);
+        Assert.Equal(["orig-copy"], workspace.PendingReferenceRepairs);
+        Assert.Equal(movedTo, workspace.CopyOriginal("orig-copy"));
+
+        // The follow-up writes the copy's line alone; the restore stays the user's to save.
+        var followUp = RepairsOf(workspace);
+        var write = Assert.Single(followUp.Writes);
+        Assert.Equal(Describe(saved.Find("orig-copy")!.Content with { BasedOn = movedTo }), Describe(write.Content!));
+        Assert.Empty(followUp.RecentlyDeletedActions);
+        var repaired = Apply(saved, followUp, store);
+        workspace.MarkSaved(followUp.DraftRevision, repaired);
+        Assert.False(workspace.HasPendingReferenceRepairs);
+        Assert.Equal([movedTo], workspace.UnsavedLibraryIds);
+
+        // The user's Save restores the original under the id the copy now names.
+        var next = Capture(workspace);
+        Assert.Contains(next.RecentlyDeletedActions, action => action.Kind == RecentlyDeletedActionKind.Restore && action.RestoreAsId == movedTo);
+        workspace.MarkSaved(next.DraftRevision, Apply(repaired, next, store));
+        Assert.False(workspace.HasUnsavedChanges);
+        Assert.Equal(movedTo, workspace.CopyOriginal("orig-copy"));
+    }
+
+    // The catalog with one library's file in another state, one generation on.
+    private static LibraryCatalog WithFileState(LibraryCatalog catalog, string id, LibraryFileState state) =>
+        new(
+            catalog.Generation + 1,
+            catalog.Libraries.Select(library => library.Content.Id == id ? library with { State = state } : library).ToList(),
+            catalog.LocalState,
+            catalog.RecentlyDeleted.ToList(),
+            catalog.RetiredBuiltInEdits.ToList(),
+            filesAwaitingRelease: state == LibraryFileState.AwaitingRelease ? 1 : 0,
+            catalog.KeptVersions.ToList());
 
     private static (bool, bool, bool) Enabled(LibraryWorkspace workspace, string first, string second, string third) =>
         (workspace.Draft.LocalState.EnabledIds.Contains(first),

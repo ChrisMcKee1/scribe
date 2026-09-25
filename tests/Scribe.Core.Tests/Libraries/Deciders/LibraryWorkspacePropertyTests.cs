@@ -10,7 +10,9 @@ namespace Scribe.Core.Tests.Libraries.Deciders;
 /// happen in the middle of sequences, half of them with arbitrary operations while they run and some with the store doing
 /// more than the plan (a library kept under an id it invents, an outside version kept), and after every MarkSaved nothing
 /// the page showed is lost or overwritten, every operation of the next change set names what the committed catalog holds,
-/// and something is unsaved exactly when the next Save would change something. Seeded, so a failure names the sequence.
+/// and something is unsaved exactly when the next Save would change something. A Save that leaves a reference repair
+/// pending is followed by W2's follow-up Save of the repairs alone, which writes exactly them and leaves every other change
+/// unsaved. Seeded, so a failure names the sequence.
 /// </summary>
 public sealed class LibraryWorkspacePropertyTests
 {
@@ -41,8 +43,12 @@ public sealed class LibraryWorkspacePropertyTests
         Assert.True(totals.OutsideVersions > 10, $"outside versions kept {totals.OutsideVersions}");
         Assert.True(totals.Probes > 100, $"change sets checked after marking saved {totals.Probes}");
         Assert.True(totals.KeptWithACopy > 5, $"libraries kept under another id with a copy {totals.KeptWithACopy}");
-        Assert.True(totals.RepairsPending > 3, $"saves that left a reference repair pending {totals.RepairsPending}");
+        Assert.True(totals.RepairsPending > 15, $"saves that left a reference repair pending {totals.RepairsPending}");
         Assert.True(totals.FollowUpSaves == totals.RepairsPending, $"follow-up saves {totals.FollowUpSaves}");
+        Assert.True(totals.InterleavedFollowUps > 5, $"follow-up saves with work while they ran {totals.InterleavedFollowUps}");
+        Assert.True(totals.ExactFollowUps > 8, $"follow-up saves compared with the change set before them {totals.ExactFollowUps}");
+        Assert.True(totals.FollowUpsLeavingChangesUnsaved > 3, $"follow-up saves that left other changes unsaved {totals.FollowUpsLeavingChangesUnsaved}");
+        Assert.True(totals.RepairedCopiesRenamed > 8, $"repaired copies renamed before their follow-up {totals.RepairedCopiesRenamed}");
     }
 
     private sealed class Coverage
@@ -66,6 +72,11 @@ public sealed class LibraryWorkspacePropertyTests
         public int RepairsPending;
         public int RepairsWithoutAKeptOriginal;
         public int FollowUpSaves;
+        public int CopiedBeforeSaving;
+        public int InterleavedFollowUps;
+        public int ExactFollowUps;
+        public int FollowUpsLeavingChangesUnsaved;
+        public int RepairedCopiesRenamed;
 
         public void Count(LibraryChangeSet changes)
         {
@@ -238,10 +249,26 @@ public sealed class LibraryWorkspacePropertyTests
         int seed,
         int step,
         Coverage totals,
-        Func<string, string> fresh,
-        int depth = 0)
+        Func<string, string> fresh)
     {
         var context = $"seed {seed} step {step}: ";
+
+        // Sometimes a library the Save creates is duplicated first, so the Save writes a copy with its original and the
+        // store may keep the original under another id: what leaves a reference repair pending (A10). Drawn from a stream
+        // of its own, so a sequence that does not take this path is the one it was.
+        var aim = new Random(seed * 1009 + step);
+        var planned = workspace.Draft.Libraries
+            .Where(library => library.Unsaved
+                && !library.PendingDelete
+                && library.Origin is LibraryOrigin.Created or LibraryOrigin.Imported or LibraryOrigin.Duplicated)
+            .Select(library => library.Content.Id)
+            .ToList();
+        if (planned.Count > 0 && aim.Next(3) == 0)
+        {
+            workspace.Duplicate(planned[aim.Next(planned.Count)]);
+            totals.CopiedBeforeSaving++;
+        }
+
         var changes = CaptureOrFail(workspace, seed, step);
         totals.Count(changes);
         totals.MidSaves++;
@@ -255,7 +282,31 @@ public sealed class LibraryWorkspacePropertyTests
         var saved = Apply(catalog, changes, store, outcomes);
         var shown = Kept(workspace.Draft);
         workspace.MarkSaved(changes.DraftRevision, saved);
+        var probe = AfterMarkSaved(workspace, shown, outcomes, saved, context, totals);
 
+        // W2's rule after round 4: a Save that left reference repairs pending is completed by a follow-up Save of the
+        // repairs alone, which the user may work through as well.
+        if (workspace.HasPendingReferenceRepairs)
+        {
+            totals.RepairsPending++;
+            if (!outcomes.Any(outcome => outcome is StoreOutcome.SavedUnderNewId))
+            {
+                totals.RepairsWithoutAKeptOriginal++;
+            }
+
+            saved = FollowUp(workspace, saved, store, random, context, totals, fresh, probe);
+        }
+
+        return saved;
+    }
+
+    // What holds after every MarkSaved: nothing the page showed is lost or overwritten and the store's additions are all
+    // that is new, every operation of the next change set names what the committed catalog holds, something is unsaved
+    // exactly when that change set is not empty, and every reference Use this copy instead would follow is one it can
+    // trust. Returns that change set, or null when a problem blocks it.
+    private static LibraryChangeSet? AfterMarkSaved(
+        LibraryWorkspace workspace, List<string> shown, List<StoreOutcome> outcomes, LibraryCatalog saved, string context, Coverage totals)
+    {
         var fromStore = Workspace(saved).Draft;
         var added = outcomes
             .Select(outcome => outcome switch
@@ -283,25 +334,161 @@ public sealed class LibraryWorkspacePropertyTests
         }
 
         AssertReferences(workspace, saved, context);
+        return next.ChangeSet;
+    }
 
-        // W2's rule after round 4: a Save that left reference repairs pending (a kept original's copy the Save wrote) is
-        // completed by a follow-up Save, which the user may work through as well.
-        if (workspace.HasPendingReferenceRepairs)
+    // W2's follow-up Save (the ruling after round 4): the reference repairs alone, committed by the store like any Save (it
+    // may keep an outside version of a copy it rewrites) while the user may go on working. Its change set holds exactly the
+    // repairs; after MarkSaved everything a Save leaves holds and no repair is pending; and when nothing was done while it
+    // ran and the store moved no library off its id, the next full change set is the one taken before it less the repairs,
+    // so every other change is still unsaved.
+    private static LibraryCatalog FollowUp(
+        LibraryWorkspace workspace,
+        LibraryCatalog catalog,
+        Dictionary<string, RecentlyDeletedContent> store,
+        Random random,
+        string context,
+        Coverage totals,
+        Func<string, string> fresh,
+        LibraryChangeSet? before)
+    {
+        context += "the follow-up Save: ";
+        totals.FollowUpSaves++;
+        var repairs = workspace.PendingReferenceRepairs.ToList();
+
+        // Sometimes the user renames a repaired copy after the first Save and before the follow-up is captured, which the
+        // follow-up must not write. The change set to compare with is then taken again, at the revision the follow-up is
+        // captured at, which the two captures must not share.
+        if (random.Next(2) == 0)
         {
-            totals.RepairsPending++;
-            if (!outcomes.Any(outcome => outcome is StoreOutcome.SavedUnderNewId))
+            var renamed = repairs[random.Next(repairs.Count)];
+            if (workspace.CanEditContent(renamed) && workspace.Rename(renamed, fresh("Renamed copy")).Applied)
             {
-                totals.RepairsWithoutAKeptOriginal++;
+                totals.RepairedCopiesRenamed++;
+                before = workspace.CaptureChangeSet().ChangeSet;
             }
+        }
 
-            Assert.True(depth < 5, $"{context}follow-up Saves did not settle");
-            totals.FollowUpSaves++;
-            saved = Save(workspace, saved, store, random, seed, step, totals, fresh, depth + 1);
-            Assert.False(workspace.HasPendingReferenceRepairs, $"{context}a reference repair is still pending after the follow-up Save");
+        var draft = workspace.Draft;
+        var result = workspace.CaptureReferenceRepairs();
+        Assert.True(result.ChangeSet is not null, $"{context}{string.Join(", ", result.Issues.Select(issue => issue.Kind))}");
+        var changes = result.ChangeSet!;
+        AssertRepairsOnly(changes, repairs, draft, catalog, context);
+
+        var interleaved = random.Next(3) == 0;
+        if (interleaved)
+        {
+            totals.InterleavedFollowUps++;
+            WorkWhileSaving(workspace, changes, store, random, totals, fresh);
+        }
+
+        var outcomes = Outcomes(workspace, catalog, changes, random, totals);
+        var saved = Apply(catalog, changes, store, outcomes);
+        var shownDraft = workspace.Draft;
+        var shown = Kept(shownDraft);
+        workspace.MarkSaved(changes.DraftRevision, saved);
+        var after = AfterMarkSaved(workspace, shown, outcomes, saved, context, totals);
+        Assert.False(workspace.HasPendingReferenceRepairs, $"{context}a reference repair is still pending after it");
+
+        // The exact comparison needs the ids to stay put: an outside version the store kept under an id no library of the
+        // draft held moves nothing.
+        var nothingMoved = outcomes.All(outcome => outcome is StoreOutcome.OutsideVersion kept && shownDraft.Find(kept.KeptAsId) is null);
+        if (!interleaved && nothingMoved && before is not null)
+        {
+            Assert.True(after is not null, $"{context}the next change set is refused");
+            AssertOnlyTheRepairsWereSaved(before, after!, repairs, saved, context);
+            totals.ExactFollowUps++;
+            if (!after!.IsEmpty)
+            {
+                totals.FollowUpsLeavingChangesUnsaved++;
+            }
         }
 
         return saved;
     }
+
+    // The follow-up's change set is exactly the pending repairs: one write per listed copy, of its committed file with the
+    // based-on reference the draft shows and nothing else of it; no other write, deletion or Recently deleted action; and
+    // the committed local state, unchanged.
+    private static void AssertRepairsOnly(
+        LibraryChangeSet changes, IReadOnlyList<string> repairs, LibraryDraft draft, LibraryCatalog committed, string context)
+    {
+        Assert.True(changes.Deletions.Count == 0 && changes.RecentlyDeletedActions.Count == 0, $"{context}it deletes, restores or purges");
+        Assert.False(changes.LocalStateChanged, $"{context}it changes the local state");
+        Assert.True(
+            repairs.Order(StringComparer.OrdinalIgnoreCase)
+                .SequenceEqual(changes.Writes.Select(write => write.LibraryId).Order(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase),
+            $"{context}it writes {string.Join(", ", changes.Writes.Select(write => write.LibraryId))}, not the repairs {string.Join(", ", repairs)}");
+        foreach (var write in changes.Writes)
+        {
+            var file = committed.Find(write.LibraryId)!;
+            var repaired = file.Content with { BasedOn = draft.Find(write.LibraryId)!.Content.BasedOn };
+            Assert.True(
+                !write.BuiltIn && write.Edits is null && write.Recovery == BuiltInEditsRecovery.None && write.ExpectedPreImage == file.ContentHash,
+                $"{context}{write.LibraryId} is not written as an ordinary write over its file");
+            Assert.True(
+                Describe(repaired) == Describe(write.Content!) && !string.Equals(file.Content.BasedOn, repaired.BasedOn, StringComparison.Ordinal),
+                $"{context}{write.LibraryId} is written as {Describe(write.Content!)}, not as its file with the repaired reference {Describe(repaired)}");
+        }
+
+        Assert.True(LocalOf(changes.LocalState) == LocalOf(committed.LocalState), $"{context}it carries another local state than the committed one");
+    }
+
+    // With nothing done while the follow-up ran and no library moved off its id, the next change set is the one taken
+    // before the follow-up less the repairs: a repaired copy is written only if the user changed more than its reference,
+    // with the same content over the file the follow-up wrote; every other write, every deletion and Recently deleted
+    // action and the local state are exactly as they were. So nothing but the repairs was counted as saved.
+    private static void AssertOnlyTheRepairsWereSaved(
+        LibraryChangeSet before, LibraryChangeSet after, IReadOnlyList<string> repairs, LibraryCatalog committed, string context)
+    {
+        var repaired = repairs.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var expected = new List<string>();
+        foreach (var write in before.Writes)
+        {
+            var preImage = write.ExpectedPreImage;
+            if (repaired.Contains(write.LibraryId))
+            {
+                var file = committed.Find(write.LibraryId)!;
+                if (Describe(write.Content!) == Describe(file.Content))
+                {
+                    continue;
+                }
+
+                preImage = file.ContentHash;
+            }
+
+            expected.Add(WriteOf(write, preImage));
+        }
+
+        var actual = after.Writes.Select(write => WriteOf(write, write.ExpectedPreImage)).ToList();
+        Assert.True(
+            expected.Order(StringComparer.Ordinal).SequenceEqual(actual.Order(StringComparer.Ordinal)),
+            $"{context}the next writes are not the earlier ones less the repairs\n{string.Join("\n", expected)}\n---\n{string.Join("\n", actual)}");
+        Assert.True(
+            before.Deletions.Select(deletion => $"{deletion.LibraryId}|{deletion.FileName}|{deletion.ExpectedPreImage}").Order(StringComparer.Ordinal)
+                .SequenceEqual(after.Deletions.Select(deletion => $"{deletion.LibraryId}|{deletion.FileName}|{deletion.ExpectedPreImage}").Order(StringComparer.Ordinal)),
+            $"{context}the next deletions changed");
+        Assert.True(
+            before.RecentlyDeletedActions.Select(action => $"{action.Kind}|{action.EntryName}|{action.ExpectedHash}|{action.RestoreAsId}").Order(StringComparer.Ordinal)
+                .SequenceEqual(after.RecentlyDeletedActions.Select(action => $"{action.Kind}|{action.EntryName}|{action.ExpectedHash}|{action.RestoreAsId}").Order(StringComparer.Ordinal)),
+            $"{context}the next Recently deleted actions changed");
+        Assert.True(
+            LocalOf(before.LocalState) == LocalOf(after.LocalState) && before.LocalStateChanged == after.LocalStateChanged,
+            $"{context}the next local state changed");
+    }
+
+    private static string WriteOf(LibraryWrite write, LibraryContentHash? preImage) =>
+        $"{write.LibraryId}|{write.BuiltIn}|{write.Origin}|{write.Recovery}|{preImage}|"
+        + (write.Content is { } content ? Describe(content) : "")
+        + "|" + (write.Edits is { } edits ? string.Join(";", edits.Terms.Select(term => term.ToString())) : "");
+
+    // A local state as one string, the accepted content aside (a Save changes that for every file it writes).
+    private static string LocalOf(LibraryLocalState state) =>
+        string.Join(",", state.EnabledIds.Order(StringComparer.Ordinal)) + "|"
+        + string.Join(",", state.AiPermissions.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}")) + "|"
+        + string.Join(",", state.LegacyMarkers.Select(marker => $"{marker.LibraryId}:{marker.Key.Value}").Order(StringComparer.Ordinal)) + "|"
+        + string.Join(",", state.AiUpgradeNotice.Order(StringComparer.Ordinal)) + "|"
+        + state.AiPermissionsLost;
 
     // Every pending reference repair is a saved copy whose draft reference is not its file's, and Use this copy instead
     // acts on the library that reference names; a saved copy whose draft reference is neither its file's nor a repair

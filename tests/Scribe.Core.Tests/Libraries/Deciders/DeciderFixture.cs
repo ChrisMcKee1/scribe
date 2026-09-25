@@ -171,6 +171,19 @@ internal static class DeciderFixture
         return Assert.IsType<LibraryChangeSet>(result.ChangeSet);
     }
 
+    /// <summary>The follow-up Save's change set: the pending reference repairs alone.</summary>
+    public static LibraryChangeSet RepairsOf(LibraryWorkspace workspace)
+    {
+        var result = workspace.CaptureReferenceRepairs();
+        Assert.Empty(result.Issues);
+        return Assert.IsType<LibraryChangeSet>(result.ChangeSet);
+    }
+
+    /// <summary>A library's content as one string, every header field and every row's values, for comparing contents.</summary>
+    public static string Describe(LibraryContent content) =>
+        $"{content.Id}|{content.BuiltIn}|{content.Name}|{content.Category}|{content.Description}|{content.BasedOn}|"
+        + string.Join(";", content.Rows.Select(row => row.Values.ToString()));
+
     /// <summary>What the store did at commit beyond the plan (<see cref="LibraryKeptVersion"/>), for a test to inject.</summary>
     public abstract record StoreOutcome
     {

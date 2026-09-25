@@ -225,9 +225,9 @@ public sealed class LibraryWorkspace
 
     /// <summary>
     /// Whether <see cref="PendingReferenceRepairs"/> lists any copy: true exactly while a repaired reference has not been
-    /// committed. W2 completes a Save after which this is true with a follow-up Save, so a stale reference outlives only a
-    /// crash between the two, and the confirmation of Use this copy instead, which names the library
-    /// <see cref="CopyOriginal"/> gives, covers that.
+    /// committed. W2 completes a Save after which this is true with a follow-up Save of <see cref="CaptureReferenceRepairs"/>,
+    /// which writes the repairs alone, so a stale reference outlives only a crash between the two, and the confirmation of
+    /// Use this copy instead, which names the library <see cref="CopyOriginal"/> gives, covers that.
     /// </summary>
     public bool HasPendingReferenceRepairs => Diff.RepairIds.Count > 0;
 
@@ -1244,24 +1244,78 @@ public sealed class LibraryWorkspace
             return new LibraryCaptureResult(null, issues);
         }
 
-        var local = CapturedLocal(diff);
+        TakeRevisionFor(repairsOnly: false);
+        var local = CapturedLocal(_state, diff.UntouchedIds);
         var changes = new LibraryChangeSet(
-            _committed.Generation, _revision, writes, deletions, actions,
-            LibraryLocalState.Create(
-                local.Enabled, _committed.LocalState.LegacyEnabledIds, local.Ai, local.Markers, local.Notice,
-                LocalStateHealth.Ok, _committed.LocalState.AcceptedContent, local.Lost),
-            diff.LocalChanged);
-        _captures[_revision] = new Capture(_state, local, diff.UntouchedIds);
-        foreach (var old in _captures.Keys.Where(revision => revision < _revision).OrderBy(r => r).SkipLast(MaxCaptures - 1).ToList())
-        {
-            _captures.Remove(old);
-        }
-
+            _committed.Generation, _revision, writes, deletions, actions, LocalStateOf(local), diff.LocalChanged);
+        Register(new Capture(_state, local, diff.UntouchedIds));
         return new LibraryCaptureResult(changes, []);
     }
 
     /// <summary>
-    /// After the Save of the change set captured at <paramref name="revision"/> committed: <paramref name="committed"/> is
+    /// The change set of W2's follow-up Save (the ruling after round 4): exactly the pending reference repairs
+    /// (<see cref="PendingReferenceRepairs"/>). W2 runs it without the user pressing Save, after <see cref="MarkSaved"/> of a
+    /// Save that stands, while <see cref="HasPendingReferenceRepairs"/> is true, so it holds nothing the user changed: each
+    /// repair is a write of the copy's committed file with its based-on reference corrected and nothing else of it, and there
+    /// is no other write, no deletion, no Recently deleted action and no change of the local state, since every other change
+    /// waits for the user's own Save (plan 3.9). Marking it saved commits the repairs and leaves every other change unsaved,
+    /// by the rule every Save is marked saved with, this Save having written the committed catalog plus the repairs. Nothing
+    /// is validated beyond whether each file can be written now, decided as the full capture decides it, since no row, name
+    /// or detail the user typed is written: a copy whose file cannot be (another app holds it, say) is
+    /// <see cref="LibraryValidationKind.ContentNotSaveable"/>, no change set is returned and the repairs stay pending. The
+    /// change set is empty when nothing is pending and while the state is read-only.
+    /// </summary>
+    public LibraryCaptureResult CaptureReferenceRepairs()
+    {
+        if (IsReadOnly)
+        {
+            return new LibraryCaptureResult(
+                new LibraryChangeSet(_committed.Generation, _revision, [], [], [], _committed.LocalState, localStateChanged: false),
+                []);
+        }
+
+        // The draft as this Save commits it: the committed catalog, each repaired copy's reference as the draft has it.
+        var saving = _base;
+        var issues = new List<LibraryValidationIssue>();
+        var writes = new List<LibraryWrite>();
+        var repair = new LibraryChange(Untouched: false, ContentChanged: true, Edits: null, LocalChanged: false, Unsaved: true);
+        foreach (var id in Diff.RepairIds)
+        {
+            if (LibOf(_base, id) is not { Header.Committed: { } file } saved)
+            {
+                continue;
+            }
+
+            var repaired = saved with
+            {
+                Header = saved.Header with { BasedOn = _state.Libraries[id].Header.BasedOn, ReferenceRepaired = true },
+            };
+            if (!StepsOf(repaired, repair).HasFlag(SaveSteps.Write))
+            {
+                issues.Add(new LibraryValidationIssue(id, null, LibraryValidationKind.ContentNotSaveable, TermFields.None));
+                continue;
+            }
+
+            writes.Add(new LibraryWrite(id, false, saved.Header.Origin, file.ContentHash, Content: ContentOf(repaired)));
+            saving = saving.WithLib(repaired);
+        }
+
+        if (issues.Count > 0)
+        {
+            return new LibraryCaptureResult(null, issues);
+        }
+
+        TakeRevisionFor(repairsOnly: true);
+        var local = CapturedLocal(saving, ImmutableHashSet<string>.Empty);
+        var changes = new LibraryChangeSet(
+            _committed.Generation, _revision, writes, [], [], LocalStateOf(local), localStateChanged: false);
+        Register(new Capture(saving, local, ImmutableHashSet<string>.Empty, RepairsOnly: true));
+        return new LibraryCaptureResult(changes, []);
+    }
+
+    /// <summary>
+    /// After the Save of the change set captured at <paramref name="revision"/> (by <see cref="CaptureChangeSet"/> or
+    /// <see cref="CaptureReferenceRepairs"/>) committed: <paramref name="committed"/> is
     /// the new catalog, everything the Save wrote is committed, and every edit made after <paramref name="revision"/>
     /// stays unsaved on top of it, structural ones included: a library the Save created or restored that the user
     /// removed meanwhile is a pending deletion of the saved library, a library it deleted that the user took back is an
@@ -2315,14 +2369,15 @@ public sealed class LibraryWorkspace
                     .ToList());
     }
 
-    private Local CapturedLocal(Differences diff)
+    // The local state a Save of `state` commits: the libraries it leaves out untouched have none, and the markers of rows or
+    // libraries the state no longer has are pruned (3.5.1).
+    private static Local CapturedLocal(State state, IReadOnlySet<string> untouched)
     {
-        var untouched = diff.UntouchedIds;
-        var local = _state.Local;
+        var local = state.Local;
         var markers = ImmutableList.CreateBuilder<LegacyMarker>();
         foreach (var group in local.Markers.GroupBy(marker => marker.LibraryId, StringComparer.OrdinalIgnoreCase))
         {
-            var live = LiveMarkers(local, Find(group.Key));
+            var live = LiveMarkers(local, LibOf(state, group.Key));
             markers.AddRange(group.Where(live.Contains));
         }
 
@@ -2333,6 +2388,30 @@ public sealed class LibraryWorkspace
             local.Notice,
             local.Lost,
             local.Purges);
+    }
+
+    private LibraryLocalState LocalStateOf(Local local) =>
+        LibraryLocalState.Create(
+            local.Enabled, _committed.LocalState.LegacyEnabledIds, local.Ai, local.Markers, local.Notice,
+            LocalStateHealth.Ok, _committed.LocalState.AcceptedContent, local.Lost);
+
+    // MarkSaved finds a capture by its revision, so a full capture and a repairs capture never share one: a capture taken
+    // at a revision that holds one of the other kind moves the revision on first. The draft itself does not change.
+    private void TakeRevisionFor(bool repairsOnly)
+    {
+        if (_captures.TryGetValue(_revision, out var taken) && taken.RepairsOnly != repairsOnly)
+        {
+            Commit(_state);
+        }
+    }
+
+    private void Register(Capture capture)
+    {
+        _captures[_revision] = capture;
+        foreach (var old in _captures.Keys.Where(revision => revision < _revision).OrderBy(r => r).SkipLast(MaxCaptures - 1).ToList())
+        {
+            _captures.Remove(old);
+        }
     }
 
     // The draft as the Save captured at a revision committed it: without the libraries it left out and the blank rows it
@@ -2993,7 +3072,9 @@ public sealed class LibraryWorkspace
 
     private sealed record UndoEntry(string Label, State Before, State After);
 
-    private sealed record Capture(State State, Local Local, IReadOnlySet<string> Untouched);
+    // What a Save captured at a revision committed, for MarkSaved: the draft it wrote, the local state it carried, the new
+    // libraries it left out untouched, and whether it held the reference repairs alone (CaptureReferenceRepairs).
+    private sealed record Capture(State State, Local Local, IReadOnlySet<string> Untouched, bool RepairsOnly = false);
 
     private sealed record Differences(
         IReadOnlyDictionary<string, LibraryChange> Libraries,
