@@ -6,11 +6,24 @@ namespace Scribe.Core.Libraries;
 /// generation from it.
 /// </summary>
 /// <remarks>
+/// <para>
 /// After the first load, <see cref="Current"/> is a cheap, lock-free read safe from any thread, including the dictation
 /// path, which must never wait on library I/O. The first read of <see cref="Current"/> loads synchronously when nothing
-/// has been published yet, as <see cref="PostProcessing.IDictionaryLibraryService.GetEnabledLibraryEntries"/> does
-/// today, so the first dictation after startup never runs without its libraries; the app warms it off the dispatcher at
-/// startup.
+/// has been published yet, as <c>IDictionaryLibraryService.GetEnabledLibraryEntries()</c> does today, so the first
+/// dictation after startup never runs without its libraries; the app warms it off the dispatcher at startup.
+/// </para>
+/// <para>
+/// It replaces exactly the library-selection seam of release 0.4.4:
+/// <c>IDictionaryLibraryService.GetEnabledLibraryEntries(IReadOnlyCollection&lt;string&gt;)</c> and
+/// <c>ITextPostProcessor.Reload(IReadOnlyCollection&lt;string&gt;)</c>, through which the post-processor, the AI cleanup
+/// glossary, the usage report and quick add each pass the enabled ids of the settings dictation runs on. Once the
+/// library state is the source of truth, those ids are only the projection older builds read
+/// (<see cref="LibraryStateEncoding.EnabledLibraryIds"/>), so every one of those callers moves here:
+/// <see cref="LibraryVocabulary.Entries"/> for local replacement, <see cref="LibraryVocabulary.AiEntries"/> for the
+/// glossary and the usage report's shareable labels. The seam's two guarantees hold by construction: nothing re-reads
+/// the stored settings document per request, so a document that turns unreadable mid-session changes nothing, and the
+/// vocabulary changes only when a new one is published, so a reload of the dictionary alone keeps it.
+/// </para>
 /// </remarks>
 public interface ILibraryVocabularySource
 {
