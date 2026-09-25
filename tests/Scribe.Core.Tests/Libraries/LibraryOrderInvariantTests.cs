@@ -85,7 +85,7 @@ public sealed class LibraryOrderInvariantTests
         // The dictionary cleanup switching off every enabled custom library while the built-ins stay on, with the review
         // listing them in whatever order they arrive here.
         var cleanup = LibrarySwitchOffCopy.Plan(
-            personal.Select(e => new LibrarySwitchOffCopy.Row(e.Pattern, e.Enabled)),
+            personal.Select(e => new LibrarySwitchOffCopy.Row(e.Pattern, e.Replacement, e.WholeWord, e.Enabled)),
             libraries.Where(l => enabled.Contains(l.Id)),
             libraries
                 .Where(l => enabled.Contains(l.Id) && !l.BuiltIn)
