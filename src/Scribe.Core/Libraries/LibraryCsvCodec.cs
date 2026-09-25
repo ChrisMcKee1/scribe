@@ -29,13 +29,21 @@ namespace Scribe.Core.Libraries;
 /// Metadata has two encodings (review finding A11) and they are never confused. A managed file keeps 0.4.3's raw
 /// comment lines, read from the raw text (first line wins, trimmed) and never stripped of anything, so a trailing comma
 /// reads back as written. An export writes each metadata line as one CSV field, quoted when it holds a comma, a quote or
-/// a line break, and an import rejoins a metadata record's fields and drops a spreadsheet's padding.
+/// a line break, and an import rejoins a metadata record's fields and drops a spreadsheet's padding, which it reports
+/// whichever key the record holds, if any (3.4.4).
 /// </para>
 /// <para>
 /// Every string is well-formed UTF-16 (contract 2.2): the writers encode strictly and throw
-/// <see cref="ArgumentException"/> (an <see cref="EncoderFallbackException"/>) for a value or metadata string holding an
-/// unpaired surrogate, never writing U+FFFD for one, and the readers cannot produce one, because every decoding replaces
-/// an invalid sequence with U+FFFD and the parsing only ever splits text at ASCII characters.
+/// <see cref="ArgumentException"/> for the content (the strict encoder's <see cref="EncoderFallbackException"/> inside)
+/// for a value or metadata string holding an unpaired surrogate, returning no bytes and never writing U+FFFD for one, and
+/// the readers cannot produce one, because every decoding replaces an invalid sequence with U+FFFD and the parsing only
+/// ever splits text at ASCII characters.
+/// </para>
+/// <para>
+/// The column header counts only as the first data record and only by its shape (<c>pattern</c> and a prefix of
+/// <c>replacement</c>, <c>whole_word</c>, <c>enabled</c>). In a managed file with the format marker it must be unquoted
+/// (6.4), as in every file this version writes; an import also counts a quoted one of three or four columns (3.4.4),
+/// which can never be a real row because <c>whole_word</c> is not a flag.
 /// </para>
 /// </remarks>
 public sealed class LibraryCsvCodec : ILibraryCsvCodec
@@ -44,9 +52,9 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
     private const string FormatVersion = "2";
     private const int WesternAnsiCodePage = 1252;
 
-    // Strict: an unpaired surrogate in any value or metadata string throws EncoderFallbackException (an
-    // ArgumentException) instead of being written as U+FFFD, so a file never holds a character its content did not
-    // (contract 2.2 and 3.4.2, well-formed UTF-16). The editor refuses such a string first; this is the last line.
+    // Strict: an unpaired surrogate in any value or metadata string throws instead of being written as U+FFFD, so a file
+    // never holds a character its content did not (contract 2.2 and 3.4.2, well-formed UTF-16); EncodeStrictly reports
+    // it. The editor refuses such a string first; this is the last line.
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
     private static readonly string[] HeaderColumns = ["pattern", "replacement", "whole_word", "enabled"];
@@ -107,7 +115,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
         text.Append("# scribe-format: ").Append(FormatVersion).Append(NewLine);
         AppendRows(text, content, guard: false);
-        return StrictUtf8.GetBytes(text.ToString());
+        return EncodeStrictly(text.ToString(), nameof(content));
     }
 
     /// <inheritdoc/>
@@ -153,7 +161,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
         text.Append("# formula-guard: ").Append(LibraryFormulaGuard.Version.ToString(CultureInfo.InvariantCulture)).Append(NewLine);
         AppendRows(text, content, guard: true);
-        return [.. Utf8Bom, .. StrictUtf8.GetBytes(text.ToString())];
+        return [.. Utf8Bom, .. EncodeStrictly(text.ToString(), nameof(content))];
     }
 
     /// <summary>
@@ -304,7 +312,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
                 beforeData = false;
                 reverseGuard = ParseVersion(header.FormulaGuard) == LibraryFormulaGuard.Version;
-                if (IsHeader(record))
+                if (IsHeader(record, quotedAllowed: true))
                 {
                     continue;
                 }
@@ -346,7 +354,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
             if (firstDataRecord)
             {
                 firstDataRecord = false;
-                if (IsHeader(record))
+                if (IsHeader(record, quotedAllowed: false))
                 {
                     continue;
                 }
@@ -423,10 +431,12 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
     }
 
     // "pattern" and then a prefix of "replacement", "whole_word", "enabled", at least two columns, compared trimmed and
-    // without case, with a spreadsheet's trailing empty fields ignored. A quoted two-column record could be a real row
-    // ("pattern" written "replacement"), so it must be unquoted; with a third column it cannot be one, because
-    // "whole_word" is not a flag, so a spreadsheet that quotes every text cell keeps its header.
-    private static bool IsHeader(CsvRecord record)
+    // without case, with a spreadsheet's trailing empty fields ignored. In a managed file with the format marker only an
+    // unquoted record counts (6.4): every file this version writes has one, so a quoted record there is a row. An import
+    // also counts a quoted one of three or four columns (3.4.4): it can never be a real row, because "whole_word" is not
+    // a flag, and a spreadsheet that quotes every text cell writes one. A quoted two-column record could be a real row
+    // ("pattern" written "replacement"), so it never counts.
+    private static bool IsHeader(CsvRecord record, bool quotedAllowed)
     {
         var fields = record.Fields;
         var count = fields.Count;
@@ -440,23 +450,26 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
             return false;
         }
 
+        var quoted = false;
         for (var i = 0; i < count; i++)
         {
             if (!string.Equals(fields[i].Text.Trim(), HeaderColumns[i], StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
+
+            quoted |= fields[i].Quoted;
         }
 
-        return count > 2 || (!fields[0].Quoted && !fields[1].Quoted);
+        return !quoted || (quotedAllowed && count > 2);
     }
 
     // A metadata record's line is its fields rejoined with commas, less the trailing unquoted empty fields a spreadsheet
     // pads a line with. One rule covers both shapes an import meets: an export writes each metadata line as one field
     // (quoted when it holds a comma or a quote), so whatever a spreadsheet adds after it is padding and the join is that
     // field; a raw line (0.4.3's exports) that a spreadsheet split at its commas comes back whole, and so does a raw line
-    // read directly, apart from any double quote in it, which a CSV reader consumes. Returns whether padding was dropped
-    // from a line that supplied a value, which the preview reports.
+    // read directly, apart from any double quote in it, which a CSV reader consumes. Returns whether padding was dropped,
+    // which the preview reports (3.4.4) whatever key the line held, if any.
     private static bool TakeMetadataRecord(HeaderValues header, CsvRecord record)
     {
         var fields = record.Fields;
@@ -467,7 +480,8 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
         }
 
         var line = count == 1 ? fields[0].Text : string.Join(',', fields.Take(count).Select(field => field.Text));
-        return header.Take(line.TrimStart()) && count < fields.Count;
+        header.Take(line.TrimStart());
+        return count < fields.Count;
     }
 
     // 0.4.3's leading comment block (DictionaryLibraryCsv.Parse): comment lines and blank lines up to the first other line.
@@ -561,6 +575,22 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
         catch (DecoderFallbackException)
         {
             return false;
+        }
+    }
+
+    // The whole file passes through the strict encoder, so an unpaired surrogate in any value or metadata string stops
+    // the write here. It is reported like every other content refusal, as an ArgumentException for the content, with the
+    // encoder's own exception (which names the code unit and its index) kept inside it.
+    private static byte[] EncodeStrictly(string text, string paramName)
+    {
+        try
+        {
+            return StrictUtf8.GetBytes(text);
+        }
+        catch (EncoderFallbackException ex)
+        {
+            throw new ArgumentException(
+                "A library value or metadata string holds an unpaired surrogate, so it is not well-formed UTF-16.", paramName, ex);
         }
     }
 

@@ -213,20 +213,29 @@ public sealed class LibraryCsvImportTests
     }
 
     [Fact]
-    public void Padding_is_reported_only_when_it_was_dropped_from_a_value_in_use()
+    public void Padding_dropped_from_any_metadata_record_is_reported()
     {
+        // Contract 3.4.4: unquoted trailing empty fields before the column header are padding, dropped and reported,
+        // whichever key the record holds, if any. Inner empty fields are part of the value, not padding, and neither the
+        // column header nor a data row is a metadata record.
         var clean = Codec.ReadImport(CsvTestData.Utf8("# name: Team, terms, more\n# category: Work\npattern,replacement\nx,X\n"));
         var template = Codec.ReadImport(CsvTestData.Utf8("# Scribe dictionary template,,,\n# name: Team\npattern,replacement\nx,X\n"));
         var repeated = Codec.ReadImport(CsvTestData.Utf8("# name: Team\n# name: Other,,,\npattern,replacement\nx,X\n"));
+        var quoted = Codec.ReadImport(CsvTestData.Utf8("\"# a comment, quoted\",,\npattern,replacement\nx,X\n"));
         var inner = Codec.ReadImport(CsvTestData.Utf8("# description: a,,b\npattern,replacement\nx,X\n"));
+        var columnHeader = Codec.ReadImport(CsvTestData.Utf8("# name: Team\npattern,replacement,,\nx,X,,\n"));
 
         Assert.Equal("Team, terms, more", clean.Name);
         Assert.Equal(LibraryCsvIssues.None, clean.Issues);
-        Assert.Equal(LibraryCsvIssues.None, template.Issues);
+        Assert.Equal("Team", template.Name);
+        Assert.Equal(LibraryCsvIssues.HeaderPaddingRemoved, template.Issues);
         Assert.Equal("Team", repeated.Name);
-        Assert.Equal(LibraryCsvIssues.None, repeated.Issues);
+        Assert.Equal(LibraryCsvIssues.HeaderPaddingRemoved, repeated.Issues);
+        Assert.Equal(LibraryCsvIssues.HeaderPaddingRemoved, quoted.Issues);
         Assert.Equal("a,,b", inner.Description);
         Assert.Equal(LibraryCsvIssues.None, inner.Issues);
+        Assert.Equal([new TermValues("x", "X")], columnHeader.Terms);
+        Assert.Equal(LibraryCsvIssues.None, columnHeader.Issues);
     }
 
     [Theory]

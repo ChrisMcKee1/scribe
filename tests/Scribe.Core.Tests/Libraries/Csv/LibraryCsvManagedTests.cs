@@ -214,6 +214,40 @@ public sealed class LibraryCsvManagedTests
     }
 
     [Theory]
+    [InlineData("\"pattern\",\"replacement\",\"whole_word\",\"enabled\"")]
+    [InlineData("\"pattern\",\"replacement\",\"whole_word\"")]
+    [InlineData("pattern,\"replacement\",whole_word,enabled")]
+    [InlineData("\"pattern\",replacement,whole_word,enabled")]
+    public void A_marked_file_counts_only_an_unquoted_header_while_an_import_also_counts_a_quoted_one(string header)
+    {
+        // Contract 6.4: in a file with the format marker the header counts only unquoted, as every file this version
+        // writes has it, so a quoted header-shaped first record is a row, reported because "whole_word" is not a flag.
+        // An import also counts a quoted header of three or four columns (3.4.4), which a spreadsheet that quotes every
+        // text cell writes.
+        var csv = "# name: Quoted header\n# scribe-format: 2\n" + header + "\nx,X,true,true\n";
+
+        var managed = Codec.ReadManaged(CsvTestData.Utf8(csv));
+        var imported = Codec.ReadImport(CsvTestData.Utf8(csv));
+
+        Assert.Equal([new TermValues("x", "X")], managed.Terms);
+        Assert.Equal([new LibraryCsvRowError(3, LibraryCsvRowErrorKind.InvalidWholeWord, "whole_word")], managed.Errors);
+        Assert.Equal([new TermValues("x", "X")], imported.Terms);
+        Assert.Empty(imported.Errors);
+    }
+
+    [Fact]
+    public void A_marked_file_still_counts_its_unquoted_header_padded_or_two_columns_wide()
+    {
+        foreach (var header in new[] { "pattern,replacement,whole_word,enabled", "pattern,replacement", " Pattern , Replacement ,,", })
+        {
+            var read = Codec.ReadManaged(CsvTestData.Utf8("# scribe-format: 2\n" + header + "\nx,X\n"));
+
+            Assert.Equal([new TermValues("x", "X")], read.Terms);
+            Assert.Empty(read.Errors);
+        }
+    }
+
+    [Theory]
     [InlineData("# scribe-format: 2", true)]
     [InlineData("#scribe-format:2", true)]
     [InlineData("# Scribe-Format:  2  ", true)]

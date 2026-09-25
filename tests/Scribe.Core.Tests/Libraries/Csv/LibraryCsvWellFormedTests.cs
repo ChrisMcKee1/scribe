@@ -47,12 +47,23 @@ public sealed class LibraryCsvWellFormedTests
 
     [Theory]
     [MemberData(nameof(MalformedInEveryField))]
-    public void Both_writers_refuse_a_string_that_is_not_well_formed(string field, string label)
+    public void Both_writers_refuse_a_string_that_is_not_well_formed_and_return_no_bytes(string field, string label)
     {
         var content = With(field, Malformed.Single(m => m.Label == label).Value);
+        byte[]? managed = null;
+        byte[]? export = null;
 
-        Assert.ThrowsAny<ArgumentException>(() => Codec.WriteManaged(content));
-        Assert.ThrowsAny<ArgumentException>(() => Codec.WriteExport(content));
+        var managedError = Assert.Throws<ArgumentException>(() => managed = Codec.WriteManaged(content));
+        var exportError = Assert.Throws<ArgumentException>(() => export = Codec.WriteExport(content));
+
+        // Nothing comes back to be written, and the refusal has the shape of every other content refusal: an
+        // ArgumentException for the content, the strict encoder's own exception kept inside it.
+        Assert.Null(managed);
+        Assert.Null(export);
+        Assert.Equal("content", managedError.ParamName);
+        Assert.Equal("content", exportError.ParamName);
+        Assert.IsType<EncoderFallbackException>(managedError.InnerException);
+        Assert.IsType<EncoderFallbackException>(exportError.InnerException);
     }
 
     [Fact]
@@ -115,8 +126,8 @@ public sealed class LibraryCsvWellFormedTests
             }
             else
             {
-                Assert.ThrowsAny<ArgumentException>(() => Codec.WriteManaged(content));
-                Assert.ThrowsAny<ArgumentException>(() => Codec.WriteExport(content));
+                Assert.Throws<ArgumentException>(() => Codec.WriteManaged(content));
+                Assert.Throws<ArgumentException>(() => Codec.WriteExport(content));
             }
 
             outcomes[wellFormed ? 1 : 0]++;
