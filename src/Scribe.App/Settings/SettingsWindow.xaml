@@ -4,6 +4,7 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:cleanup="clr-namespace:Scribe.Core.Cleanup;assembly=Scribe.Core"
         xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
+        xmlns:settings="clr-namespace:Scribe.App.Settings"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
         WindowStartupLocation="CenterScreen"
@@ -2509,6 +2510,7 @@
                                           CanUserAddRows="False" CanUserDeleteRows="False"
                                           HeadersVisibility="Column" GridLinesVisibility="Horizontal"
                                           Background="Transparent" BorderThickness="0"
+                                          settings:NestedScrollWheel.ForwardToPage="True"
                                           AutomationProperties.LabeledBy="{Binding ElementName=FailuresTitle}">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="When" Binding="{Binding When}" Width="Auto"/>
@@ -2590,7 +2592,7 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Report an AI result..." Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Text="Report an AI result" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
                                                        Text="If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History."/>
                                         </StackPanel>
