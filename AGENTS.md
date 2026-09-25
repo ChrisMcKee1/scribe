@@ -938,7 +938,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   Append a new built-in at the end of it and of `tests/fixtures/libraries/built-in-precedence.json`. A built-in that
   stops shipping keeps its id in the order and is added to `RetiredBuiltInIds` (and the fixture's "retired"), the only
   way a listed id may be missing from the shipped libraries. `LibraryPrecedenceTests` fails until every shipped id
-  appears exactly once, every other listed id is retired, and the C# lists agree with the fixture.
+  appears exactly once, every other listed id is retired, the catalog follows the order with the retired ids left
+  out, and the C# lists agree with the fixture.
 - **Custom libraries compare as file names** (`id + ".csv"`), not bare ids. The loader has always read them in
   file-name order, and '-' sorts before '.', so "team-terms-2.csv", the file a second import of the same library gets,
   comes before "team-terms.csv"; comparing bare ids would swap which of the two wins.
