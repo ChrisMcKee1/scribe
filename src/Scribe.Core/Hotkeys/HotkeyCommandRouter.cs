@@ -19,7 +19,7 @@ internal sealed class HotkeyCommandRouter
 {
     private readonly object _gate;
     private readonly Func<uint, bool>? _isLogicallyDown;
-    private readonly WindowsMouseView? _windowsView;
+    private readonly Func<uint, bool>? _buttonDownInWindows;
     private volatile HotkeyBinding _binding;
     private volatile HotkeyBinding? _dictationOnlyBinding;
     private bool _captureMode;
@@ -35,12 +35,12 @@ internal sealed class HotkeyCommandRouter
 
     /// <param name="binding">The initial standard binding.</param>
     /// <param name="isLogicallyDown">Windows' view of a key, handed to every engine (see <see cref="HotkeyEngine"/>).</param>
-    /// <param name="windowsView">
-    /// Windows' own view of the mouse buttons, which every engine reads for a release it owes
-    /// (<see cref="WindowsMouseView"/>).
+    /// <param name="buttonDownInWindows">
+    /// Windows' own view of a mouse button, which every engine reads for the release of a press it swallowed (see
+    /// <see cref="HotkeyEngine"/>). Made by the caller, before any hook exists.
     /// </param>
-    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, WindowsMouseView? windowsView = null)
-        : this(binding, new object(), isLogicallyDown, windowsView)
+    public HotkeyCommandRouter(HotkeyBinding binding, Func<uint, bool> isLogicallyDown, Func<uint, bool>? buttonDownInWindows = null)
+        : this(binding, new object(), isLogicallyDown, buttonDownInWindows)
     {
     }
 
@@ -50,17 +50,17 @@ internal sealed class HotkeyCommandRouter
     /// nothing on the hook path ever needs it.
     /// </param>
     /// <param name="isLogicallyDown">Windows' view of a key, or null to trust the hook's view alone.</param>
-    /// <param name="windowsView">
-    /// Windows' own view of the mouse buttons, or null, for the tests that do not script Windows, to decide an owed
-    /// release by the engine's own state alone.
+    /// <param name="buttonDownInWindows">
+    /// Windows' own view of a mouse button, or null, for the tests that do not script Windows, to decide an owed release
+    /// by the engine's own state alone.
     /// </param>
     internal HotkeyCommandRouter(
-        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, WindowsMouseView? windowsView = null)
+        HotkeyBinding binding, object gate, Func<uint, bool>? isLogicallyDown = null, Func<uint, bool>? buttonDownInWindows = null)
     {
         _binding = binding;
         _gate = gate;
         _isLogicallyDown = isLogicallyDown;
-        _windowsView = windowsView;
+        _buttonDownInWindows = buttonDownInWindows;
     }
 
     public HotkeyBinding Binding => _binding;
@@ -70,8 +70,8 @@ internal sealed class HotkeyCommandRouter
     /// <summary>Windows' view of a key that every engine is given, or null; for a test of the service's wiring.</summary>
     internal Func<uint, bool>? WindowsKeyState => _isLogicallyDown;
 
-    /// <summary>Windows' view of the mouse buttons that every engine is given, or null; for a test of the wiring.</summary>
-    internal WindowsMouseView? WindowsButtonView => _windowsView;
+    /// <summary>Windows' view of a mouse button that every engine is given, or null; for a test of the wiring.</summary>
+    internal Func<uint, bool>? WindowsButtonState => _buttonDownInWindows;
 
     /// <summary>The engine that owns the hook right now, or null while the service is stopped.</summary>
     public HotkeyEngine? CurrentEngine => Volatile.Read(ref _engine);
@@ -179,16 +179,12 @@ internal sealed class HotkeyCommandRouter
     /// the held key's eventual release can no longer be matched to the new engine's fresh state.
     /// Requests that were queued on the replaced engine but never applied are covered, because every
     /// sticky setting is read from the published configuration, and the retired engine can no longer
-    /// act on them. The one thing the new engine takes from the old is the releases still owed to
-    /// mouse button presses the old one swallowed (<see cref="HotkeyEngine.OwedButtonReleases"/>), read
-    /// after the retirement sealed them, so no callback of the old engine, one already running
-    /// included, changes them any more (a press whose debt loses to the seal is not swallowed): DefWindowProc
-    /// makes a side button's lone release a Back or Forward command, so a button held through a
-    /// reinstall must still reach no app. They are handed on as sealed, not judged here, and the new
-    /// engine takes them as uncertain: between the old thread's exit and the new registration no hook
-    /// sees the mouse, and a press can still be inside an older program's hook as the registration
-    /// lands, so each is judged by what Windows shows when its release is made
-    /// (<see cref="HotkeyEngine.OnMouseButtonEvent"/>).
+    /// act on them. Nothing else is taken from the old engine, the releases it still owed to swallowed
+    /// mouse button presses included: between the old thread's exit and the new registration no hook
+    /// sees the mouse, so, as for a mouse hook found gone, those releases are let through when they come
+    /// (review round 7; <see cref="HotkeyEngine.OnMouseHookLost"/>). The retirement still seals the old
+    /// engine's debts, so a press it is judging as the reinstall lands is swallowed only if its debt was
+    /// committed first, and otherwise reaches the app whole, with its release.
     /// </summary>
     public (HotkeyEngine Engine, HotkeyTrigger? Interrupted) BeginEngine(HotkeyTransitionQueue transitions)
     {
@@ -199,8 +195,7 @@ internal sealed class HotkeyCommandRouter
             var interrupted = previous?.Retire();
             var engine = new HotkeyEngine(
                 _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
-                previous?.OwedButtonReleases ?? 0,
-                _windowsView);
+                _buttonDownInWindows);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }

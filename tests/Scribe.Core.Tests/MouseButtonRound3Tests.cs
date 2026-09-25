@@ -104,22 +104,21 @@ public sealed class MouseButtonRound3Tests
         Assert.False(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
     }
 
-    // The same seal when the reinstall's 2 s join times out and the old hook thread keeps running: a debt committed before
-    // the retirement is the replacement's, and nothing the old engine sees afterwards, press or release, is swallowed or
-    // changes that debt.
+    // The same seal when the reinstall's 2 s join times out and the old hook thread keeps running: nothing the old engine
+    // sees afterwards, press or release, is swallowed or changes its sealed debt. Since round 7 the replacement starts
+    // owing nothing (a reinstall is a gap in the hook's view), so that release reaches the app once.
     [Fact]
-    public void A_retired_engine_whose_thread_outlived_its_join_hands_on_its_debt_and_swallows_nothing_after()
+    public void A_retired_engine_whose_thread_outlived_its_join_swallows_nothing_after_and_its_release_reaches_the_app()
     {
         using var h = new HotkeyEngineHarness(Bare(Back));
         Assert.True(h.ButtonDown(Back).Suppress);
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
 
-        Assert.Equal(1 << (int)Back, replacement.OwedButtonReleases);
+        Assert.Equal(0, replacement.OwedButtonReleases);
         Assert.False(h.Engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
         Assert.False(h.Engine.OnMouseButtonEvent(Back, isDown: true).Suppress);
         Assert.False(h.Engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
         Assert.Equal(1 << (int)Back, h.Engine.OwedButtonReleases); // sealed: the old thread changes nothing
-        Assert.Equal(1 << (int)Back, replacement.OwedButtonReleases);
-        Assert.True(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
+        Assert.False(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
     }
 }

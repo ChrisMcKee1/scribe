@@ -19,9 +19,9 @@ internal sealed class HotkeyEngineHarness : IDisposable
         HotkeyBinding? dictationOnly = null,
         object? gate = null,
         Func<uint, bool>? isLogicallyDown = null,
-        WindowsMouseView? windowsView = null)
+        Func<uint, bool>? buttonDownInWindows = null)
     {
-        Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown, windowsView);
+        Router = new HotkeyCommandRouter(binding, gate ?? new object(), isLogicallyDown, buttonDownInWindows);
         if (dictationOnly is not null)
         {
             Router.UpdateBindings(binding, dictationOnly);

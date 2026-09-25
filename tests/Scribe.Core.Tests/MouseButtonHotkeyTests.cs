@@ -837,10 +837,17 @@ public sealed class MouseButtonHotkeyTests
     [Fact]
     public void The_hook_message_struct_matches_the_windows_layout()
     {
-        // MSLLHOOKSTRUCT: POINT pt; DWORD mouseData; DWORD flags; DWORD time; ULONG_PTR dwExtraInfo.
+        // MSLLHOOKSTRUCT: POINT pt; DWORD mouseData; DWORD flags; DWORD time; ULONG_PTR dwExtraInfo. The callback reads the
+        // two fields at the offsets MouseHookFilter writes out, which must be the struct's.
         Assert.Equal(8, (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.mouseData)));
         Assert.Equal(
             IntPtr.Size == 8 ? 24 : 20,
+            (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.dwExtraInfo)));
+        Assert.Equal(
+            MouseHookFilter.MouseDataOffset,
+            (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.mouseData)));
+        Assert.Equal(
+            MouseHookFilter.ExtraInfoOffset,
             (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.dwExtraInfo)));
     }
 

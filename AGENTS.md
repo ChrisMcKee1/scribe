@@ -735,9 +735,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   release after the last mouse binding went (`HotkeyEngine.OwesButtonRelease`), the hook stays, to
   judge that release and nothing else (no binding can use a button then), and it is removed at the
   thread's next sync once the debt is gone: the swallowed release asks for that sync at once, and a new
-  press of the button leaves it to the watchdog, within one period. A debt whose release went up where
-  no hook could see it (the lock screen, a secure desktop, a lost hook) keeps the drain-only hook until
-  that button is pressed once more, which is the cost of never guessing. Its callback's first act is the one comparison
+  press of the button leaves it to the watchdog, within one period, as does a lost hook, which drops the
+  debt. A debt whose release went up on the lock screen or a secure desktop, where no hook could see it,
+  keeps the drain-only hook until that button is pressed once more. Its callback's first act is the one comparison
   (`MouseHookFilter.IsButtonMessage`) that hands everything but the four button messages to the next
   hook without reading the message or touching the engine; `MouseButtonHotkeyTests` pins that with
   `lParam` zero and pins that the fast path and an unbound button allocate nothing. A keyboard event
@@ -759,7 +759,7 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   (`HotkeyEngine.OnMouseHookLost`, on the hook thread between messages, before any button event
   reaches the new registration): while it was gone no hook saw the mouse, so a held button's release,
   or a toggle's second click, may be the input nobody saw, and a press may have reached Windows unseen.
-  So every release still owed becomes uncertain, and nothing is read from Windows then; both machines
+  So every release still owed is dropped, and nothing is read from Windows then; both machines
   forget their mouse buttons (keys stay: the keyboard hook saw them), a binding that presses one gives
   up its latch, and if the arbiter's owner is such a binding, the engine advances its activation epoch
   and then ends that dictation, reported as `HotkeyDeactivation.MouseHookLost`
@@ -768,58 +768,58 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   recovery is best effort and comes at the renewal that finds the loss, normally one watchdog period
   after it, later if a renewal's registration fails, and until then a press or release no hook saw
   reaches the app. The loss is logged. Nothing is injected and nothing is added to any event.
-- **An owed release is decided when it is made, on Windows' own view** (review round 6). When the
-  release of a button whose press the engine swallowed reaches the mouse hook
-  (`HotkeyEngine.OnMouseButtonEvent`, `SwallowsOwedRelease`), the callback reads Windows' state for
-  that button through `WindowsMouseView`: GetAsyncKeyState, the same user32 read the keyboard callback
-  makes for a held modifier, which waits for no other thread, takes no lock of Scribe's and allocates
-  nothing. The callback runs before Windows applies this release (the keyboard hook's documentation:
-  "the callback function is called before the asynchronous state of the key is updated"; for the
-  mouse, a press the hook swallows never shows in Windows' view, measured on CI by
-  `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`), and Windows
-  takes input from the system message queue "one at a time" (About Messages and Message Queues), so the
-  reading already shows every earlier press, one that was still inside another program's hook when a
-  registration landed included. A button Windows shows down received a press this hook did not
-  swallow, and its release goes to the app, or the app would keep the button down (review rounds 4 to
-  6, A5). Otherwise the debt decides. A **certain** debt, one no time without the hook has crossed since
-  its press, is swallowed: every press since went through this hook, so the up is right whatever else
-  could make the read zero, and a release after a UAC prompt stays swallowed even with the elevated app
-  in front. An **uncertain** debt, one a lost hook has crossed, or one a reinstall handed on (the new
-  engine takes its inheritance as uncertain), is swallowed only on an up the reading can vouch for
-  (`NativeMethods.ReadMouseButtonState`, through `MouseButtonStateInWindows`): GetAsyncKeyState returns
-  zero, the same as up, when it fails, off the active desktop and when UIPI keeps it from the foreground
-  thread (a window of a higher integrity level in front, such as an elevated app's), so a zero counts
-  as up only when this desktop receives input before and after the read, the same foreground window is
-  in front before and after it, and that window is Scribe's or belongs to a process whose integrity
-  level is no higher than Scribe's (read into a buffer on the stack; Scribe's own is read once, in
-  `HotkeyService.Start`). Anything else lets the release through: fail-open, whose cost is that one
-  release reaching the app under the pointer, for Back or Forward possibly one navigation (review
-  round 6, A6). Nothing is decided when the hook comes back: rounds 4 and 5 read Windows then and kept
-  or dropped debts on that snapshot, which a press still inside an older hook made stale and a zero
-  UIPI caused between two equal foreground samples made wrong. What stays open is what one read cannot
-  tell: Windows gives no reason with a zero, so for an uncertain debt whose button Windows does hold, a
-  foreground that turns to a higher-integrity window and back inside the release's own read (or a
-  desktop that goes and comes back) looks like a trustworthy up, and that release is swallowed; the
-  same holds for a certain debt whose button a press reached some other way (a second mouse, the
-  secure desktop, an event lost in a renewal's swap) while the read fails. Either leaves the button
-  down in Windows until its next click whose release is read with a window Scribe can reach in front:
-  that click's press is swallowed as usual, and its release, read with Windows showing the button down,
-  reaches the app (`A_release_owed_without_a_gap_gets_through_when_windows_holds_the_button`).
+- **An owed release is decided when it is made, on Windows' own view, and a gap lets it through**
+  (review rounds 6 and 7). The engine keeps a release owed to every button press it swallowed; a time
+  no hook saw the mouse (a renewal that finds the hook gone, or a reinstall, whose new engine starts
+  owing nothing) drops those debts. When a release reaches the mouse hook
+  (`HotkeyEngine.OnMouseButtonEvent`), the decision is:
+
+  | The release | What happens |
+  | --- | --- |
+  | Owed, and Windows shows the button down | Let through: a press reached Windows that this hook did not swallow (a second mouse, the secure desktop, an event lost in a renewal's swap), and its release is due |
+  | Owed, and Windows shows it up, or the read failed and returned zero | Swallowed: no time without the hook has passed since its press, so every press since went through this hook |
+  | Its debt dropped by a lost hook or a reinstall | Let through, with no read (fail-open) |
+  | Not owed, and no binding holds the button | Let through, as always |
+
+  The read is `GetAsyncKeyState`'s high bit, through a delegate `HotkeyService.CreateRouter` makes
+  before either hook exists; `CreateRouter` also makes the process's first call to it, for a key
+  nobody presses, because the runtime allocates on the first call a process makes to any P/Invoke. It
+  is the only native call the decision makes; nothing on the mouse callback's path makes a delegate;
+  and no process, window or token is queried inside the hook's deadline (review round 7: opening a
+  process can run drivers' callbacks, which a callback Windows removes on timeout must not wait for).
+  `MouseButtonRound7Tests` pins the three, and that the first owed release after production
+  initialization allocates nothing. Why the read is current evidence: the callback runs before
+  Windows applies the event it is called for (the keyboard hook's documentation: "the callback
+  function is called before the asynchronous state of the key is updated"; for the mouse, a press
+  the hook swallows never shows in Windows' view, measured on CI by
+  `HotkeyServiceTests.Start_keeps_a_swallowed_button_press_out_of_windows_own_view`), and Windows takes
+  input from the system message queue "one at a time" (About Messages and Message Queues), so the
+  read shows every earlier press. Why a gap lets the release through: a press may have reached
+  Windows while no hook saw the mouse, including one still inside another program's hook when a
+  registration landed, and the one read the callback can make cannot tell a failed read from an up
+  (UIPI makes it zero while a window of a higher integrity level is in front, and no check around the
+  read can prove it did not fail), so nothing is guessed. Fail-open's cost is stated plainly: after a
+  rare hook loss or reinstall while a bound button is held, its release reaches the app once, which
+  for Back or Forward is one navigation; it never leaves a button down in Windows. What one read
+  cannot tell for a debt no gap has touched: a zero that is a failed read while Windows does hold the
+  button (a press that reached it some other way, with a higher-integrity window in front) swallows
+  that release, and the button stays down in Windows until a later release of it is read as down,
+  which then reaches the app (`A_release_owed_without_a_gap_gets_through_when_windows_holds_the_button`).
 - **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
   keeps the buttons whose press it swallowed until their release comes, and judges that release when
-  it comes (above), whatever happened in between: every path that clears the machines' state (a
-  desktop switch, capture, new bindings, a dictation-only trigger removed, a mouse hook found removed),
-  a reinstall, whose new engine takes the debts from the retired one (`HotkeyCommandRouter.BeginEngine`,
-  `HotkeyEngine.OwedButtonReleases`), and new bindings with no mouse button at all, which keep the
-  drain-only hook above. DefWindowProc makes a side button's lone release a
+  it comes (above), whatever happened in between: every path that clears the machines' state while
+  the hook keeps seeing the mouse (a desktop switch, capture, new bindings, a dictation-only trigger
+  removed), and new bindings with no mouse button at all, which keep the drain-only hook above. A gap
+  in the hook's view (a mouse hook found gone, a reinstall) drops the debts instead (above).
+  DefWindowProc makes a side button's lone release a
   `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
   of the button retires the debt (buttons never repeat, so its release went up where no hook could
   see it) and is judged afresh; nothing is ever injected for it. The debts are one word changed by
   compare-exchange, which the retirement seals: a press is swallowed only once its debt is committed,
   so a press a reinstall overtakes while its callback is still judging it reaches the app whole, with
-  its release, and a debt committed before the seal is always handed on (the arbiter's rule, for
-  debts). `MouseButtonRecoveryTests`, `MouseButtonRound3Tests` and `MouseButtonRound6Tests` pin each
-  path. Keys keep the reset they had: a key's lone release does nothing
+  its release; a debt committed before the seal is not handed on, so that release reaches the app (the
+  reinstall's fail-open cost above). `MouseButtonRecoveryTests`, `MouseButtonRound3Tests` and
+  `MouseButtonRound6Tests` pin each path. Keys keep the reset they had: a key's lone release does nothing
   documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
   `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
   Not covered: a release made while no mouse hook exists (Windows removed it, or a reinstall is between
@@ -833,8 +833,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   during capture before the injection, which then ended the user's drag. Nothing needs that repair:
   buttons do not repeat, and on Windows 7 and later a hook that misses its deadline is removed rather
   than skipped, so a leaked press is one Windows received. Its release reaches the app too, unless the
-  watchdog's renewal registered the hook again before it came, and then the rule above, reading Windows
-  holding the button, lets it through; the recording that press started ends through the lost-hook
+  watchdog's renewal registered the hook again before it came; that renewal dropped the debt (above),
+  so the release goes through then as well; the recording that press started ends through the lost-hook
   recovery, not through an injected release. So
   no button-up, and no mouse input of any kind, is ever injected by this feature. Keys keep the older
   rule, which can still misjudge a key held since before a keyboard hook reinstall (a new engine never
@@ -868,11 +868,10 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   prompt) never reaches it, and the hook's view alone would refuse every bare press afterwards. So
   a Ctrl, Alt, Shift or Win key the hook holds is checked with `GetAsyncKeyState`: only on such a
   press, never on a bare one, and never about the key the callback is for, whose async state Windows
-  updates only after the callback returns. The only other native reads the hook callbacks make besides
-  `CallNextHookEx` are for the release of a mouse button whose press was swallowed (the owed-release
+  updates only after the callback returns. The only other native read the hook callbacks make besides
+  `CallNextHookEx` is for the release of a mouse button whose press was swallowed (the owed-release
   bullet above): `GetAsyncKeyState` about that very button, where the state before this release is
-  exactly the answer wanted, and, for a debt a gap made uncertain, the foreground, desktop and
-  integrity reads of `NativeMethods.ReadMouseButtonState`.
+  exactly the answer wanted.
 - **A desktop switch resets the hook's key state and ends a recording.** The hook thread also sets an
   out-of-context `EVENT_SYSTEM_DESKTOPSWITCH` WinEvent hook, whose callback runs on that thread from
   its message loop and calls `HotkeyEngine.OnDesktopSwitchNotice` (which ignores a call from any other
@@ -905,10 +904,8 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   was swallowed keeps its release owed through the reset (see above), so a side button held through a
   UAC prompt and let go afterwards navigates nothing, even with the elevated app in front, unless the
   mouse hook was also found gone meanwhile (the watchdog keeps renewing it while the prompt is up):
-  that makes the debt uncertain, and a release then made with a window of a higher integrity level in
-  front, such as the app the prompt elevated, reads a zero Scribe cannot vouch for, so it is let
-  through and can become `WM_APPCOMMAND` (Grok's G4 in round 5; since round 6 a recovery during the
-  prompt drops nothing, so with a normal window in front the release stays swallowed). The reset also clears a
+  that drops the debt, so the release reaches the app and can become `WM_APPCOMMAND` (Grok's G4 in
+  round 5; since round 7 such a release goes through whoever is in front). The reset also clears a
   Narrator key released on the lock screen, which nothing else can: Narrator keeps its key from
   Windows (a single Caps Lock press does not toggle Caps Lock while Narrator runs), and a hook
   installed later runs first, so whenever Scribe's hook is newer than Narrator's, `GetAsyncKeyState`
@@ -1130,13 +1127,12 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
   directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
   here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
-  modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture, any rebinding (one
-  that leaves no mouse binding keeps the drain-only hook for it) and a reinstall (the owed release above), unless
-  Windows shows that button down when it is let go, which means a press reached Windows unseen and its release is due;
-  a press or release made while Windows has removed the mouse hook, before the next successful renewal, can still reach
-  the app, and so can the release of a button held across that time or a reinstall when it is let go with a window
-  Scribe cannot read in front (an elevated app's). The hint's second exception says both in plain words: the click
-  began before Scribe reconnected.
+  modifier. A release owed to a swallowed press stays swallowed through desktop switches, capture and any rebinding (one
+  that leaves no mouse binding keeps the drain-only hook for it), unless Windows shows that button down when it is let
+  go, which means a press reached Windows unseen and its release is due; a press or release made while Windows has
+  removed the mouse hook, before the next successful renewal, can still reach the app, and so does the release of a
+  button held across that time or across a reinstall (the gap dropped its debt: fail-open). The hint's second exception
+  says both in plain words: the click began before Scribe reconnected.
   It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
   press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
   so the text promises no more than that. The same holds for a swallowed key.

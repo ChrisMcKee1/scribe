@@ -120,11 +120,6 @@ public partial class HotkeyServiceTests
         {
             Assert.True(SpinWait.SpinUntil(() => NativeMethods.IsKeyLogicallyDown(F20), HookTimeout), "F20 never reached Windows.");
             Assert.False(NativeMethods.IsKeyLogicallyDown(MouseButtons.Back), "Windows shows the swallowed Back press as down.");
-
-            // The production reading never takes the swallowed press for down. Whether it can vouch for up depends on the
-            // window in front (a zero reading UIPI may have caused is unknown: review round 5, A6), which a runner's
-            // desktop may not have, so up or unknown are both right here.
-            Assert.NotEqual(true, NativeMethods.MouseButtonStateInWindows(MouseButtons.Back));
         }
         finally
         {
@@ -151,15 +146,14 @@ public partial class HotkeyServiceTests
         Assert.Equal(1, service.MouseHookLossesHandled);
     }
 
-    // A5 (round 6): a real reinstall, with Windows' view scripted. The replacement inherits the release owed to a swallowed
-    // Middle press, and registers its hook while Windows still shows Middle up; only then does a press the user made in the
-    // gap, still inside another program's hook at that moment, reach Windows, or not. The release is judged by what Windows
-    // shows when it is made: held, the release reaches the app; up, it stays swallowed. The test plays the hook thread
-    // between its messages, as the drain-only tests do.
+    // A real reinstall, with Windows' view scripted (round 7). The replacement starts owing nothing: between the old thread's
+    // exit and the new registration no hook saw the mouse, and no reading in the callback can be trusted to tell the
+    // swallowed press from one Windows got in that time. So the release of Middle, held through the reinstall, reaches the
+    // app whatever Windows shows: at worst one stray release. The test plays the hook thread between its messages.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public void Start_judges_an_inherited_release_by_what_windows_shows_when_it_is_made(bool windowsHoldsMiddle)
+    public void Start_lets_a_release_held_across_a_reinstall_through(bool windowsHoldsMiddle)
     {
         if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
         {
@@ -167,8 +161,7 @@ public partial class HotkeyServiceTests
         }
 
         var held = new ConcurrentDictionary<uint, bool>();
-        var view = new WindowsMouseView(held.ContainsKey, button => held.ContainsKey(button));
-        var router = new HotkeyCommandRouter(BareButton(MouseButtons.Middle), new object(), isLogicallyDown: null, view);
+        var router = new HotkeyCommandRouter(BareButton(MouseButtons.Middle), new object(), isLogicallyDown: null, held.ContainsKey);
         using var service = new HotkeyService(NullLogger<HotkeyService>.Instance, router, () => true);
         service.Start();
         Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: true).Suppress);
@@ -177,19 +170,18 @@ public partial class HotkeyServiceTests
         Assert.True(service.MouseHookInstalled);
         if (windowsHoldsMiddle)
         {
-            held[MouseButtons.Middle] = true; // the press inside an older hook goes on to Windows after the registration
+            held[MouseButtons.Middle] = true; // a press inside an older hook goes on to Windows after the registration
         }
 
-        Assert.Equal(
-            !windowsHoldsMiddle,
-            service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: false).Suppress);
+        Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
+        Assert.False(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Middle, isDown: false).Suppress);
     }
 
-    // Which gaps make an owed release uncertain, through the real hooks: a healthy renewal overlaps the old registration
-    // and changes nothing; a renewal that finds the registration gone does; a reinstall's new engine takes its debts as
-    // uncertain. The test plays the hook thread between its messages.
+    // Which gaps drop what the engine owes, through the real hooks: a healthy renewal overlaps the old registration and
+    // changes nothing; a renewal that finds the registration gone drops it; a reinstall's new engine owes nothing. The test
+    // plays the hook thread between its messages.
     [Fact]
-    public void Start_makes_owed_releases_uncertain_only_across_a_time_no_hook_saw_the_mouse()
+    public void Start_drops_owed_releases_only_across_a_time_no_hook_saw_the_mouse()
     {
         if (NativeMethods.ThreadDesktopReceivesInput() == true && Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
         {
@@ -203,15 +195,15 @@ public partial class HotkeyServiceTests
 
         AwaitRenewal(service);
         Assert.Equal(BackBit, service.CurrentEngineForTests!.OwedButtonReleases);
-        Assert.Equal(0, service.CurrentEngineForTests!.UncertainButtonReleases);
 
         Assert.True(UnhookWindowsHookEx(service.MouseHookHandle), $"Could not remove the registration (Win32 error {Marshal.GetLastWin32Error()}).");
         AwaitRenewal(service);
-        Assert.Equal(BackBit, service.CurrentEngineForTests!.UncertainButtonReleases);
+        Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
 
-        service.ReinstallHookNow();
+        Assert.True(service.CurrentEngineForTests!.OnMouseButtonEvent(MouseButtons.Back, isDown: true).Suppress);
         Assert.Equal(BackBit, service.CurrentEngineForTests!.OwedButtonReleases);
-        Assert.Equal(BackBit, service.CurrentEngineForTests!.UncertainButtonReleases);
+        service.ReinstallHookNow();
+        Assert.Equal(0, service.CurrentEngineForTests!.OwedButtonReleases);
     }
 
     // G1: the last mouse binding replaced by a key while Back is still held after a swallowed press. The service keeps a
