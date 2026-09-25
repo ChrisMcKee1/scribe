@@ -326,6 +326,115 @@ public sealed class SettingsDraftValidatorTests
         Assert.Equal(SettingsPage.Dictionary, issues[0].Page);
     }
 
+    [Fact]
+    public void Blank_new_rows_are_placeholders_even_when_touched()
+    {
+        var issues = SettingsDraftValidator.Validate(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            DictionaryRows: [new("new", DraftRowOrigin.New, Touched: true, " ", "")],
+            SnippetRows: [new("snippet", DraftRowOrigin.New, Touched: true, "", null)],
+            ProfileRows: [new("profile", DraftRowOrigin.New, Touched: true, null, " ")]));
+
+        Assert.Empty(issues);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void A_flag_change_makes_a_saved_invalid_dictionary_row_block(bool wholeWord, bool enabled)
+    {
+        var loaded = new DictionaryDraftRow(
+            "saved", DraftRowOrigin.Saved, Touched: false, "", "value", LoadedPattern: "", LoadedReplacement: "value");
+
+        Assert.Equal(ValidationSeverity.Warning, Single(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: [loaded])).Severity);
+
+        var edited = loaded with { WholeWord = wholeWord, Enabled = enabled };
+        Assert.Equal(ValidationSeverity.Blocking, Single(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: [edited])).Severity);
+
+        var reverted = edited with { WholeWord = true, Enabled = true };
+        Assert.Equal(ValidationSeverity.Warning, Single(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: [reverted])).Severity);
+    }
+
+    [Fact]
+    public void Turning_on_a_saved_duplicate_makes_it_block()
+    {
+        DictionaryDraftRow[] unchanged =
+        [
+            new("a", DraftRowOrigin.Saved, Touched: false, "dot net", ".NET", LoadedPattern: "dot net", LoadedReplacement: ".NET"),
+            new("b", DraftRowOrigin.Saved, Touched: false, "dot net", "DotNet", LoadedPattern: "dot net", LoadedReplacement: "DotNet",
+                Enabled: false, LoadedEnabled: false),
+        ];
+        Assert.Equal(ValidationSeverity.Warning, Single(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: unchanged)).Severity);
+
+        DictionaryDraftRow[] turnedOn = [unchanged[0], unchanged[1] with { Enabled = true }];
+        Assert.Equal(ValidationSeverity.Blocking, Single(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: turnedOn)).Severity);
+    }
+
+    [Fact]
+    public void A_new_snippet_duplicate_blocks_even_when_its_loaded_values_match()
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            SnippetRows:
+            [
+                new("saved", DraftRowOrigin.Saved, Touched: false, "hello", "one", LoadedPhrase: "hello", LoadedTemplate: "one"),
+                new("new", DraftRowOrigin.New, Touched: false, "hello", "two", LoadedPhrase: "hello", LoadedTemplate: "two"),
+            ]));
+
+        Assert.Equal(ValidationCode.SnippetDuplicate, issue.Code);
+        Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
+    }
+
+    [Fact]
+    public void Turning_a_saved_invalid_snippet_on_or_off_makes_it_block()
+    {
+        var loaded = new SnippetDraftRow(
+            "snippet", DraftRowOrigin.Saved, Touched: false, "legacy", "", LoadedPhrase: "legacy", LoadedTemplate: "");
+
+        Assert.Equal(ValidationSeverity.Warning, Single(new SettingsDraft(AppSettings.CreateDefault(), SnippetRows: [loaded])).Severity);
+        Assert.Equal(
+            ValidationSeverity.Blocking,
+            Single(new SettingsDraft(AppSettings.CreateDefault(), SnippetRows: [loaded with { Enabled = false }])).Severity);
+    }
+
+    [Fact]
+    public void A_style_or_line_break_change_makes_a_saved_invalid_profile_block()
+    {
+        var loaded = new ProfileDraftRow(
+            "profile", DraftRowOrigin.Saved, Touched: false, "Email", "", LoadedName: "Email", LoadedApps: "",
+            WritingStyle: "Formal.", LoadedWritingStyle: "Formal.");
+
+        Assert.Equal(ValidationSeverity.Warning, Single(new SettingsDraft(AppSettings.CreateDefault(), ProfileRows: [loaded])).Severity);
+        Assert.Equal(
+            ValidationSeverity.Blocking,
+            Single(new SettingsDraft(AppSettings.CreateDefault(), ProfileRows: [loaded with { WritingStyle = "Casual." }])).Severity);
+        Assert.Equal(
+            ValidationSeverity.Blocking,
+            Single(new SettingsDraft(
+                AppSettings.CreateDefault(),
+                ProfileRows: [loaded with { NewlineHandling = NewlineInjectionMode.AlwaysFlatten }])).Severity);
+        Assert.Equal(
+            ValidationSeverity.Warning,
+            Single(new SettingsDraft(AppSettings.CreateDefault(), ProfileRows: [loaded with { WritingStyle = "Formal." }])).Severity);
+    }
+
+    [Fact]
+    public void An_untouched_new_profile_with_only_a_style_or_a_line_break_rule_is_validated()
+    {
+        var styleOnly = SettingsDraftValidator.Validate(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            ProfileRows: [new("style", DraftRowOrigin.New, Touched: false, null, null, WritingStyle: "Formal.")]));
+        var newlineOnly = SettingsDraftValidator.Validate(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            ProfileRows: [new("newline", DraftRowOrigin.New, Touched: false, null, null, NewlineHandling: NewlineInjectionMode.AlwaysFlatten)]));
+
+        foreach (var issues in new[] { styleOnly, newlineOnly })
+        {
+            Assert.Contains(issues, issue => issue.Code == ValidationCode.ProfileNameEmpty && issue.Severity == ValidationSeverity.Blocking);
+            Assert.Contains(issues, issue => issue.Code == ValidationCode.ProfileAppsEmpty && issue.Severity == ValidationSeverity.Blocking);
+        }
+    }
+
     private static ValidationIssue Single(SettingsDraft draft) =>
         Assert.Single(SettingsDraftValidator.Validate(draft));
 

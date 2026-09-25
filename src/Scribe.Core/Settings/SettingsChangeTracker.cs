@@ -27,6 +27,62 @@ public sealed record LoadedProfileDraftRow(
     string? WritingStyle = null,
     NewlineInjectionMode? NewlineHandling = null);
 
+/// <summary>
+/// The saved baseline across a Save that can finish after the user has made further edits (plan 6.3): a Save submits an
+/// immutable snapshot of what it writes, and only that snapshot becomes the baseline when the Save completes, so edits
+/// made while it ran stay unsaved. A failed Save leaves the baseline as it was. Not thread-safe: the window calls it on
+/// its dispatcher.
+/// </summary>
+/// <typeparam name="TSnapshot">An immutable snapshot of the saved document and its loaded rows, built by the caller.</typeparam>
+public sealed class SettingsSaveBaseline<TSnapshot>
+    where TSnapshot : class
+{
+    private readonly Dictionary<long, TSnapshot> _submitted = [];
+    private long _lastSubmission;
+    private long _lastCompleted;
+
+    public SettingsSaveBaseline(TSnapshot loaded)
+    {
+        ArgumentNullException.ThrowIfNull(loaded);
+        Current = loaded;
+    }
+
+    /// <summary>What is stored now, as far as this window knows.</summary>
+    public TSnapshot Current { get; private set; }
+
+    /// <summary>Records the snapshot a Save is about to write and returns its submission number.</summary>
+    public long Submit(TSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _submitted[++_lastSubmission] = snapshot;
+        return _lastSubmission;
+    }
+
+    /// <summary>
+    /// Makes the snapshot of <paramref name="submission"/> the baseline, unless a later submission has already completed.
+    /// Returns whether the baseline moved.
+    /// </summary>
+    public bool Complete(long submission)
+    {
+        if (!_submitted.Remove(submission, out var snapshot) || submission <= _lastCompleted)
+        {
+            return false;
+        }
+
+        _lastCompleted = submission;
+        Current = snapshot;
+        foreach (var older in _submitted.Keys.Where(key => key < submission).ToList())
+        {
+            _submitted.Remove(older);
+        }
+
+        return true;
+    }
+
+    /// <summary>Forgets a Save that failed; the baseline stays what it was.</summary>
+    public void Fail(long submission) => _submitted.Remove(submission);
+}
+
 public static class SettingsChangeTracker
 {
     public const string AllChangesSaved = "All changes saved";
@@ -47,6 +103,12 @@ public static class SettingsChangeTracker
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(draft);
+
+        // Checked before any comparison, so an unrelated change that short-circuits a page's test can never let a
+        // caller skip a snapshot it owes.
+        RequireLoadedSnapshot(dictionaryRows, loadedDictionaryRows, nameof(loadedDictionaryRows));
+        RequireLoadedSnapshot(snippetRows, loadedSnippetRows, nameof(loadedSnippetRows));
+        RequireLoadedSnapshot(profileRows, loadedProfileRows, nameof(loadedProfileRows));
 
         var pages = new SortedSet<SettingsPage>();
         if (recoveredMode)
@@ -131,12 +193,10 @@ public static class SettingsChangeTracker
         IReadOnlyList<DictionaryDraftRow>? rows,
         IReadOnlyList<LoadedDictionaryDraftRow>? loadedRows)
     {
-        RequireLoadedSnapshot(rows, loadedRows, "loadedDictionaryRows");
-
         var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
-            .Where(row => !IsEmptyNewDictionary(row))
+            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         if (!SameKeys(loaded.Keys, draft.Keys))
         {
@@ -162,12 +222,10 @@ public static class SettingsChangeTracker
         IReadOnlyList<SnippetDraftRow>? rows,
         IReadOnlyList<LoadedSnippetDraftRow>? loadedRows)
     {
-        RequireLoadedSnapshot(rows, loadedRows, "loadedSnippetRows");
-
         var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
-            .Where(row => !IsEmptyNewSnippet(row))
+            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         if (!SameKeys(loaded.Keys, draft.Keys))
         {
@@ -192,12 +250,10 @@ public static class SettingsChangeTracker
         IReadOnlyList<ProfileDraftRow>? rows,
         IReadOnlyList<LoadedProfileDraftRow>? loadedRows)
     {
-        RequireLoadedSnapshot(rows, loadedRows, "loadedProfileRows");
-
         var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
-            .Where(row => !IsEmptyNewProfile(row))
+            .Where(row => !SettingsDraftValidator.IsPlaceholder(row))
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         if (!SameKeys(loaded.Keys, draft.Keys))
         {
@@ -264,20 +320,4 @@ public static class SettingsChangeTracker
             throw new ArgumentException("A loaded row snapshot is required when draft rows are supplied.", parameterName);
         }
     }
-
-    private static bool IsEmptyNewDictionary(DictionaryDraftRow row) =>
-        row.Origin == DraftRowOrigin.New &&
-        string.IsNullOrWhiteSpace(row.Pattern) &&
-        string.IsNullOrWhiteSpace(row.Replacement);
-
-    private static bool IsEmptyNewSnippet(SnippetDraftRow row) =>
-        row.Origin == DraftRowOrigin.New &&
-        string.IsNullOrWhiteSpace(row.Phrase) &&
-        string.IsNullOrWhiteSpace(row.Template);
-
-    private static bool IsEmptyNewProfile(ProfileDraftRow row) =>
-        row.Origin == DraftRowOrigin.New &&
-        string.IsNullOrWhiteSpace(row.Name) &&
-        string.IsNullOrWhiteSpace(row.Apps) &&
-        string.IsNullOrWhiteSpace(row.WritingStyle);
 }

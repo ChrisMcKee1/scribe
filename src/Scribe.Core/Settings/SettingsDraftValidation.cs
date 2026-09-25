@@ -52,7 +52,9 @@ public sealed record DictionaryDraftRow(
     string? LoadedPattern = null,
     string? LoadedReplacement = null,
     bool WholeWord = true,
-    bool Enabled = true);
+    bool Enabled = true,
+    bool LoadedWholeWord = true,
+    bool LoadedEnabled = true);
 
 public sealed record SnippetDraftRow(
     string RowKey,
@@ -62,7 +64,8 @@ public sealed record SnippetDraftRow(
     string? Template,
     string? LoadedPhrase = null,
     string? LoadedTemplate = null,
-    bool Enabled = true);
+    bool Enabled = true,
+    bool LoadedEnabled = true);
 
 public sealed record ProfileDraftRow(
     string RowKey,
@@ -135,7 +138,7 @@ public static class SettingsDraftValidator
             var seen = new Dictionary<string, DictionaryDraftRow>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Pattern, row.Replacement))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
@@ -149,7 +152,7 @@ public static class SettingsDraftValidator
                         "DictionaryPattern",
                         row.RowKey,
                         DictionarySpokenEmptyMessage,
-                        Severity(row, pattern, Trim(row.Replacement), Trim(row.LoadedPattern), Trim(row.LoadedReplacement)));
+                        SeverityFor(Unchanged(row)));
 
                     continue;
                 }
@@ -162,7 +165,7 @@ public static class SettingsDraftValidator
                         "DictionaryPattern",
                         row.RowKey,
                         $"\"{pattern}\" is already in your dictionary. Keep one of the two rows.",
-                        DuplicateSeverity(first, row));
+                        SeverityFor(Unchanged(first) && Unchanged(row)));
                 }
                 else
                 {
@@ -176,42 +179,36 @@ public static class SettingsDraftValidator
             var seen = new Dictionary<string, SnippetDraftRow>(StringComparer.OrdinalIgnoreCase);
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Phrase, row.Template))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
 
                 var phrase = Trim(row.Phrase);
                 var template = Trim(row.Template);
-                var unchanged = IsUnchanged(row, phrase, template);
+                var severity = SeverityFor(Unchanged(row));
                 if (phrase.Length == 0)
                 {
-                    if (row.Touched || template.Length > 0 || row.Origin == DraftRowOrigin.Saved)
-                    {
-                        Add(
-                            ValidationCode.SnippetTriggerEmpty,
-                            SettingsPage.VoiceSnippets,
-                            "SnippetPhrase",
-                            row.RowKey,
-                            SnippetTriggerEmptyMessage,
-                            Severity(row, unchanged));
-                    }
+                    Add(
+                        ValidationCode.SnippetTriggerEmpty,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetPhrase",
+                        row.RowKey,
+                        SnippetTriggerEmptyMessage,
+                        severity);
 
                     continue;
                 }
 
                 if (template.Length == 0)
                 {
-                    if (row.Touched || phrase.Length > 0 || row.Origin == DraftRowOrigin.Saved)
-                    {
-                        Add(
-                            ValidationCode.SnippetTextEmpty,
-                            SettingsPage.VoiceSnippets,
-                            "SnippetTemplate",
-                            row.RowKey,
-                            SnippetTextEmptyMessage,
-                            Severity(row, unchanged));
-                    }
+                    Add(
+                        ValidationCode.SnippetTextEmpty,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetTemplate",
+                        row.RowKey,
+                        SnippetTextEmptyMessage,
+                        severity);
                 }
 
                 if (seen.TryGetValue(phrase, out var first))
@@ -222,7 +219,7 @@ public static class SettingsDraftValidator
                         "SnippetPhrase",
                         row.RowKey,
                         $"Another snippet already uses \"{phrase}\". Use different words for one of them.",
-                        DuplicateSeverity(first, row));
+                        SeverityFor(Unchanged(first) && Unchanged(row)));
                 }
                 else
                 {
@@ -235,15 +232,13 @@ public static class SettingsDraftValidator
         {
             foreach (var row in rows)
             {
-                if (ShouldIgnoreUntouchedNewRow(row.Origin, row.Touched, row.Name, row.Apps))
+                if (IsPlaceholder(row))
                 {
                     continue;
                 }
 
-                var name = Trim(row.Name);
-                var apps = Trim(row.Apps);
-                var unchanged = IsUnchanged(row, name, apps);
-                if (name.Length == 0 && (row.Touched || apps.Length > 0 || row.Origin == DraftRowOrigin.Saved))
+                var severity = SeverityFor(Unchanged(row));
+                if (Trim(row.Name).Length == 0)
                 {
                     Add(
                         ValidationCode.ProfileNameEmpty,
@@ -251,10 +246,10 @@ public static class SettingsDraftValidator
                         "ProfileName",
                         row.RowKey,
                         ProfileNameEmptyMessage,
-                        Severity(row, unchanged));
+                        severity);
                 }
 
-                if (apps.Length == 0 && (row.Touched || name.Length > 0 || row.Origin == DraftRowOrigin.Saved))
+                if (Trim(row.Apps).Length == 0)
                 {
                     Add(
                         ValidationCode.ProfileAppsEmpty,
@@ -262,7 +257,7 @@ public static class SettingsDraftValidator
                         "ProfileApps",
                         row.RowKey,
                         ProfileAppsEmptyMessage,
-                        Severity(row, unchanged));
+                        severity);
                 }
             }
         }
@@ -364,59 +359,54 @@ public static class SettingsDraftValidator
     public static string DictionaryRemovalTitle(string spoken) =>
         $"Leave \"{spoken}\" out of what you dictate?";
 
-    private static bool ShouldIgnoreUntouchedNewRow(
-        DraftRowOrigin origin,
-        bool touched,
-        string? first,
-        string? second) =>
-        // Touched is not a license to drop content: app-authored suggestions and imports can add
-        // populated New rows before the user focuses them. Only a blank untouched New row is a
-        // placeholder that Save may ignore.
-        origin == DraftRowOrigin.New &&
-        !touched &&
-        string.IsNullOrWhiteSpace(first) &&
-        string.IsNullOrWhiteSpace(second);
+    /// <summary>
+    /// Whether a row is an empty placeholder that Save drops without asking: a New row with every field blank, whether or
+    /// not the user touched it. A row with any content, typed by the user or added by the app (Learn from history
+    /// suggestions, imports, Add to dictionary), is never a placeholder: it is validated and saved or reported.
+    /// </summary>
+    public static bool IsPlaceholder(DictionaryDraftRow row) =>
+        row.Origin == DraftRowOrigin.New && IsBlank(row.Pattern) && IsBlank(row.Replacement);
+
+    /// <inheritdoc cref="IsPlaceholder(DictionaryDraftRow)"/>
+    public static bool IsPlaceholder(SnippetDraftRow row) =>
+        row.Origin == DraftRowOrigin.New && IsBlank(row.Phrase) && IsBlank(row.Template);
+
+    /// <inheritdoc cref="IsPlaceholder(DictionaryDraftRow)"/>
+    public static bool IsPlaceholder(ProfileDraftRow row) =>
+        row.Origin == DraftRowOrigin.New &&
+        IsBlank(row.Name) &&
+        IsBlank(row.Apps) &&
+        IsBlank(row.WritingStyle) &&
+        row.NewlineHandling is null;
+
+    private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
 
     private static string Trim(string? value) => value?.Trim() ?? string.Empty;
 
-    private static ValidationSeverity Severity(
-        DictionaryDraftRow row,
-        string pattern,
-        string replacement,
-        string loadedPattern,
-        string loadedReplacement) =>
-        Severity(row.Origin, IsSame(pattern, loadedPattern) && IsSame(replacement, loadedReplacement));
-
-    private static ValidationSeverity Severity(SnippetDraftRow row, bool unchanged) =>
-        Severity(row.Origin, unchanged);
-
-    private static ValidationSeverity Severity(ProfileDraftRow row, bool unchanged) =>
-        Severity(row.Origin, unchanged);
-
-    private static ValidationSeverity Severity(DraftRowOrigin origin, bool unchanged) =>
-        origin == DraftRowOrigin.Saved && unchanged ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
-
-    private static ValidationSeverity DuplicateSeverity(DictionaryDraftRow first, DictionaryDraftRow second) =>
-        Unchanged(first) && Unchanged(second) ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
-
-    private static ValidationSeverity DuplicateSeverity(SnippetDraftRow first, SnippetDraftRow second) =>
-        IsUnchanged(first, Trim(first.Phrase), Trim(first.Template)) &&
-        IsUnchanged(second, Trim(second.Phrase), Trim(second.Template))
-            ? ValidationSeverity.Warning
-            : ValidationSeverity.Blocking;
+    // An invalid row an older build could save is only a warning while it is exactly as it was loaded; a new row, or a
+    // saved row edited in any stored field, blocks.
+    private static ValidationSeverity SeverityFor(bool unchanged) =>
+        unchanged ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
 
     private static bool Unchanged(DictionaryDraftRow row) =>
         row.Origin == DraftRowOrigin.Saved &&
         IsSame(Trim(row.Pattern), Trim(row.LoadedPattern)) &&
-        IsSame(Trim(row.Replacement), Trim(row.LoadedReplacement));
+        IsSame(Trim(row.Replacement), Trim(row.LoadedReplacement)) &&
+        row.WholeWord == row.LoadedWholeWord &&
+        row.Enabled == row.LoadedEnabled;
 
-    private static bool IsUnchanged(SnippetDraftRow row, string phrase, string template) =>
-        IsSame(phrase, Trim(row.LoadedPhrase)) &&
-        IsSame(template, Trim(row.LoadedTemplate));
+    private static bool Unchanged(SnippetDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Phrase), Trim(row.LoadedPhrase)) &&
+        IsSame(Trim(row.Template), Trim(row.LoadedTemplate)) &&
+        row.Enabled == row.LoadedEnabled;
 
-    private static bool IsUnchanged(ProfileDraftRow row, string name, string apps) =>
-        IsSame(name, Trim(row.LoadedName)) &&
-        IsSame(apps, Trim(row.LoadedApps));
+    private static bool Unchanged(ProfileDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Name), Trim(row.LoadedName)) &&
+        IsSame(Trim(row.Apps), Trim(row.LoadedApps)) &&
+        IsSame(Trim(row.WritingStyle), Trim(row.LoadedWritingStyle)) &&
+        row.NewlineHandling == row.LoadedNewlineHandling;
 
     private static bool IsSame(string left, string right) =>
         string.Equals(left, right, StringComparison.Ordinal);

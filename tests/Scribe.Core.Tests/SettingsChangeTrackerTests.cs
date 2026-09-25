@@ -223,4 +223,135 @@ public sealed class SettingsChangeTrackerTests
 
         Assert.False(SettingsChangeTracker.Compare(baseline, draft).IsDirty);
     }
+
+    [Fact]
+    public void A_missing_snapshot_throws_even_when_another_change_already_marks_the_page()
+    {
+        var baseline = AppSettings.CreateDefault();
+        var draft = baseline.Clone();
+        draft.EnabledDictionaryLibraryIds.Add("github");
+
+        Assert.Throws<ArgumentException>(() => SettingsChangeTracker.Compare(baseline, draft, dictionaryRows: []));
+    }
+
+    [Fact]
+    public void Deleting_the_only_row_is_dirty_for_every_row_type()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        Assert.Equal(
+            [SettingsPage.Dictionary],
+            SettingsChangeTracker.Compare(
+                settings, settings.Clone(),
+                dictionaryRows: [],
+                loadedDictionaryRows: [new("only", "a", "b", WholeWord: true, Enabled: true)]).Pages);
+        Assert.Equal(
+            [SettingsPage.VoiceSnippets],
+            SettingsChangeTracker.Compare(
+                settings, settings.Clone(),
+                snippetRows: [],
+                loadedSnippetRows: [new("only", "a", "b", Enabled: true)]).Pages);
+        Assert.Equal(
+            [SettingsPage.AppProfiles],
+            SettingsChangeTracker.Compare(
+                settings, settings.Clone(),
+                profileRows: [],
+                loadedProfileRows: [new("only", "Email", "OUTLOOK")]).Pages);
+    }
+
+    [Fact]
+    public void Each_stored_row_field_is_a_change_on_its_own_and_reverts_cleanly()
+    {
+        var settings = AppSettings.CreateDefault();
+        LoadedDictionaryDraftRow[] loadedWord = [new("d", "a", "b", WholeWord: true, Enabled: true)];
+        LoadedSnippetDraftRow[] loadedSnippet = [new("s", "a", "b", Enabled: true)];
+        LoadedProfileDraftRow[] loadedProfile = [new("p", "Email", "OUTLOOK", "Formal.", NewlineInjectionMode.KeepNewlines)];
+        var word = new DictionaryDraftRow("d", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b");
+        var snippet = new SnippetDraftRow("s", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b");
+        var profile = new ProfileDraftRow(
+            "p", DraftRowOrigin.Saved, Touched: true, "Email", "OUTLOOK", "Email", "OUTLOOK",
+            WritingStyle: "Formal.", LoadedWritingStyle: "Formal.",
+            NewlineHandling: NewlineInjectionMode.KeepNewlines, LoadedNewlineHandling: NewlineInjectionMode.KeepNewlines);
+
+        bool WordDirty(DictionaryDraftRow row) =>
+            SettingsChangeTracker.Compare(settings, settings.Clone(), dictionaryRows: [row], loadedDictionaryRows: loadedWord).IsDirty;
+        bool SnippetDirty(SnippetDraftRow row) =>
+            SettingsChangeTracker.Compare(settings, settings.Clone(), snippetRows: [row], loadedSnippetRows: loadedSnippet).IsDirty;
+        bool ProfileDirty(ProfileDraftRow row) =>
+            SettingsChangeTracker.Compare(settings, settings.Clone(), profileRows: [row], loadedProfileRows: loadedProfile).IsDirty;
+
+        Assert.False(WordDirty(word));
+        Assert.True(WordDirty(word with { WholeWord = false }));
+        Assert.True(WordDirty(word with { Enabled = false }));
+        Assert.False(WordDirty(word with { WholeWord = false } with { WholeWord = true }));
+
+        Assert.False(SnippetDirty(snippet));
+        Assert.True(SnippetDirty(snippet with { Enabled = false }));
+        Assert.False(SnippetDirty(snippet with { Enabled = false } with { Enabled = true }));
+
+        Assert.False(ProfileDirty(profile));
+        Assert.True(ProfileDirty(profile with { WritingStyle = "Casual." }));
+        Assert.True(ProfileDirty(profile with { NewlineHandling = NewlineInjectionMode.AlwaysFlatten }));
+        Assert.False(ProfileDirty(profile with { WritingStyle = "Casual." } with { WritingStyle = "Formal." }));
+    }
+
+    [Fact]
+    public void A_blank_new_row_is_not_a_change_even_when_touched()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        Assert.False(SettingsChangeTracker.Compare(
+            settings, settings.Clone(),
+            dictionaryRows: [new("new", DraftRowOrigin.New, Touched: true, " ", "")],
+            loadedDictionaryRows: []).IsDirty);
+    }
+
+    [Fact]
+    public void A_save_adopts_only_the_snapshot_it_submitted()
+    {
+        var loaded = AppSettings.CreateDefault();
+        var baseline = new SettingsSaveBaseline<AppSettings>(loaded.Clone());
+        var draft = loaded.Clone();
+        draft.EnableAiCleanup = true;
+
+        var submission = baseline.Submit(draft.Clone());
+        draft.HistoryRetentionDays = 30;
+        Assert.True(baseline.Complete(submission));
+
+        Assert.True(baseline.Current.EnableAiCleanup);
+        Assert.Equal([SettingsPage.History], SettingsChangeTracker.Compare(baseline.Current, draft).Pages);
+    }
+
+    [Fact]
+    public void A_failed_save_keeps_the_baseline()
+    {
+        var loaded = AppSettings.CreateDefault();
+        var baseline = new SettingsSaveBaseline<AppSettings>(loaded);
+        var draft = loaded.Clone();
+        draft.EnableAiCleanup = true;
+
+        var submission = baseline.Submit(draft.Clone());
+        baseline.Fail(submission);
+
+        Assert.False(baseline.Complete(submission));
+        Assert.Same(loaded, baseline.Current);
+        Assert.Equal([SettingsPage.AiCleanup], SettingsChangeTracker.Compare(baseline.Current, draft).Pages);
+    }
+
+    [Fact]
+    public void An_older_save_completing_late_never_replaces_a_newer_baseline()
+    {
+        var baseline = new SettingsSaveBaseline<AppSettings>(AppSettings.CreateDefault());
+        var first = AppSettings.CreateDefault();
+        first.HistoryRetentionDays = 30;
+        var second = AppSettings.CreateDefault();
+        second.HistoryRetentionDays = 7;
+
+        var older = baseline.Submit(first);
+        var newer = baseline.Submit(second);
+        Assert.True(baseline.Complete(newer));
+        Assert.False(baseline.Complete(older));
+
+        Assert.Same(second, baseline.Current);
+    }
 }
