@@ -64,7 +64,7 @@
         <Style TargetType="TextBlock" x:Key="GroupHeader">
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Margin" Value="2,20,0,10"/>
         </Style>
         <Style TargetType="TextBlock" x:Key="SettingTitle">
@@ -518,7 +518,7 @@
                 </ListBoxItem>
                 <ListBoxItem AutomationProperties.Name="Playground">
                     <StackPanel Orientation="Horizontal">
-                        <ui:SymbolIcon Symbol="TextQuote24" FontSize="18"/>
+                        <ui:SymbolIcon Symbol="Beaker24" FontSize="18"/>
                         <TextBlock Text="Playground" FontSize="14" Margin="12,0,0,0" VerticalAlignment="Center"/>
                     </StackPanel>
                 </ListBoxItem>
@@ -817,7 +817,7 @@
                                         <ui:Button x:Name="UpdateCheckButton" Grid.Column="1" Content="Check for updates"
                                                    MinWidth="76" VerticalAlignment="Center" Margin="0,0,8,0"
                                                    Click="UpdateCheckButton_Click"/>
-                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart &amp; update"
+                                        <ui:Button x:Name="UpdateApplyButton" Grid.Column="2" Content="Restart to update"
                                                    MinWidth="76" VerticalAlignment="Center" Appearance="Primary"
                                                    Visibility="Collapsed" Click="UpdateApplyButton_Click"/>
                                     </Grid>
@@ -1047,19 +1047,19 @@
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="TopLeft"
                                                                      ToolTip="Top left"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="TopCenter"
-                                                                     ToolTip="Top centre"/>
+                                                                     ToolTip="Top center"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="TopRight"
                                                                      ToolTip="Top right"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleLeft"
                                                                      ToolTip="Middle left"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="Center"
-                                                                     ToolTip="Centre"/>
+                                                                     ToolTip="Center"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="MiddleRight"
                                                                      ToolTip="Middle right"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomLeft"
                                                                      ToolTip="Bottom left"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomCenter"
-                                                                     ToolTip="Bottom centre (default)"/>
+                                                                     ToolTip="Bottom center (default)"/>
                                                         <RadioButton Style="{StaticResource OverlayZone}" Tag="BottomRight"
                                                                      ToolTip="Bottom right"/>
                                                     </UniformGrid>
@@ -1116,7 +1116,7 @@
                                 <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
                                         <TextBlock Text="What leaves this PC" Style="{StaticResource SettingTitle}"
-                                                   Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
                                                    Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
@@ -1135,7 +1135,7 @@
                                     <StackPanel>
                                         <TextBlock x:Name="AiProviderTitle" Text="Provider" Style="{StaticResource SettingTitle}"/>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Run a model on this PC with Foundry Local (fully offline), use a Microsoft Foundry deployment via your Azure sign-in, point at any OpenAI-compatible server you already run, or use your own GitHub Copilot licence through the Copilot CLI."/>
+                                                   Text="Run a model on this PC with Foundry Local (fully offline), use a Microsoft Foundry deployment via your Azure sign-in, point at any OpenAI-compatible server you already run, or use your own GitHub Copilot subscription through the Copilot CLI."/>
                                         <ComboBox x:Name="AiProviderCombo" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=AiProviderTitle}"
                                                   SelectionChanged="AiProviderCombo_SelectionChanged"/>
@@ -1207,7 +1207,7 @@
                                                        Text="Azure CLI uses whichever account you signed in with. Choose a service principal to pin one identity, which is the reliable option when you belong to more than one tenant."/>
 
                                             <!-- The Azure CLI identity, beside where a service principal's fields go. The tenant is an input
-                                                 to signing in ("Sign in & find models" passes it to az login when no subscription is
+                                                 to signing in ("Sign in and find models" passes it to az login when no subscription is
                                                  selected), so it shows whether or not anyone is signed in: AzureSettingsAccess decides
                                                  when (State.ShowCliTenant). It shares one tenant setting with SpTenantBox. -->
                                             <StackPanel x:Name="AzureCliTenantPanel" Visibility="Collapsed">
@@ -1271,7 +1271,7 @@
                                                         <ui:Button x:Name="AzureManualButton" Content="Use endpoint instead"
                                                                    MinWidth="118" Margin="0,0,8,0" Appearance="Secondary"
                                                                    Click="AzureManualButton_Click"/>
-                                                        <ui:Button x:Name="AzureRefreshButton" Content="Sign in &amp; find models"
+                                                        <ui:Button x:Name="AzureRefreshButton" Content="Sign in and find models"
                                                                    MinWidth="124" Appearance="Primary" IsEnabled="False"
                                                                    Click="AzureRefreshButton_Click"/>
                                                     </StackPanel>
@@ -1400,7 +1400,7 @@
                                                            Click="CopilotSignInButton_Click"/>
                                             </StackPanel>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0"
-                                                       Text="Cleanup runs through your own GitHub Copilot licence, so the models on offer are the ones your GitHub account is entitled to. Scribe uses the CLI you are already signed in to and never asks for a token."/>
+                                                       Text="Uses your own GitHub Copilot subscription and the models it includes. Scribe never asks for or stores a GitHub token."/>
 
                                             <TextBlock x:Name="CopilotModelTitle" Text="Model" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                             <Grid Margin="0,8,0,0">
@@ -1417,7 +1417,7 @@
                                                            Click="CopilotLoadModelsButton_Click"/>
                                             </Grid>
                                             <TextBlock x:Name="CopilotModelHint" Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Leave blank to use whichever model your Copilot account defaults to. The list is read from your Copilot licence when you select this provider; Refresh models re-reads it after an install or a sign-in."/>
+                                                       Text="Leave blank to use whichever model your Copilot account defaults to. The list is read from your Copilot subscription when you select this provider; Refresh models re-reads it after an install or a sign-in."/>
                                         </StackPanel>
                                     </StackPanel>
                                 </ui:Card>
@@ -1430,7 +1430,7 @@
                                         <ui:TextBox x:Name="AiWritingStyleBox" Margin="0,10,0,0" HorizontalAlignment="Stretch"
                                                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="140" MaxHeight="260"
                                                     VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                    SpellCheck.IsEnabled="True"
+                                                    TextAlignment="Left" SpellCheck.IsEnabled="False"
                                                     AutomationProperties.LabeledBy="{Binding ElementName=AiWritingStyleTitle}"/>
                                         <ui:Button x:Name="ResetWritingStyleButton" Content="Restore default" Margin="0,10,0,0"
                                                    HorizontalAlignment="Left" Appearance="Secondary"
@@ -1461,7 +1461,7 @@
                                                 <ui:TextBox x:Name="AiFrontierPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
                                                             VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                            SpellCheck.IsEnabled="True"
+                                                            TextAlignment="Left" SpellCheck.IsEnabled="False"
                                                             AutomationProperties.LabeledBy="{Binding ElementName=AiFrontierPromptTitle}"/>
                                                 <ui:Button x:Name="ResetFrontierPromptButton" Content="Restore default frontier prompt" Margin="0,8,0,0"
                                                            HorizontalAlignment="Left" Appearance="Secondary"
@@ -1471,7 +1471,7 @@
                                                 <ui:TextBox x:Name="AiLocalPromptBox" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="120" MaxHeight="220"
                                                             VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"
-                                                            SpellCheck.IsEnabled="True"
+                                                            TextAlignment="Left" SpellCheck.IsEnabled="False"
                                                             AutomationProperties.LabeledBy="{Binding ElementName=AiLocalPromptTitle}"/>
                                                 <ui:Button x:Name="ResetLocalPromptButton" Content="Restore default local prompt" Margin="0,8,0,0"
                                                            HorizontalAlignment="Left" Appearance="Secondary"
@@ -1804,7 +1804,7 @@
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
                             <TextBlock x:Name="ProfilesPageTitle" Text="Profiles" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}"
-                                       Text="Give different apps different dictation behaviour: formal prose in Outlook, casual in Slack, one terse line in the terminal. The first profile matching the focused app wins; apps with no profile use your global settings."/>
+                                       Text="Use a different writing style or line-break rule in specific apps, like Outlook or Teams."/>
                         </StackPanel>
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
@@ -2327,10 +2327,7 @@
                     <Grid x:Name="SectionDiagnostics" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="2,8,0,14" MaxWidth="860" HorizontalAlignment="Left">
                             <TextBlock Text="Diagnostics" Style="{StaticResource PageTitle}"/>
@@ -2338,8 +2335,10 @@
                                        Text="How fast dictation runs on this PC, and what happened when AI cleanup fell back to raw text. Everything here is computed from data already on your disk. Nothing is collected."/>
                         </StackPanel>
 
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
                         <!-- Local latency stats from stored history, expanded by pipeline stage. -->
-                        <StackPanel Grid.Row="1" Margin="0,0,0,12">
+                        <StackPanel Margin="0,0,0,12">
                             <TextBlock Text="This PC" Style="{StaticResource SettingTitle}"/>
                             <TextBlock x:Name="SystemCapabilityText" Style="{StaticResource SettingHint}" Margin="0,2,0,0"
                                        Text="Checking hardware…"/>
@@ -2367,13 +2366,13 @@
                                             </StackPanel>
                                             <StackPanel>
                                                 <TextBlock x:Name="StatBestPace" Style="{StaticResource DiagnosticMetricValue}"
-                                                           Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                                 <TextBlock Text="best pace this week" Style="{StaticResource DiagnosticMetricLabel}"/>
                                             </StackPanel>
                                         </UniformGrid>
                                     </Border>
 
-                                    <ui:CardExpander x:Name="DecodeSpeedExpander" IsExpanded="True" Margin="0,0,0,8"
+                                    <ui:CardExpander x:Name="DecodeSpeedExpander" IsExpanded="False" Margin="0,0,0,8"
                                                      AutomationProperties.LabeledBy="{Binding ElementName=DecodeSpeedTitle}">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
@@ -2415,7 +2414,7 @@
                                         </StackPanel>
                                     </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="True" Margin="0,0,0,8"
+                                    <ui:CardExpander x:Name="CleanupSpeedExpander" IsExpanded="False" Margin="0,0,0,8"
                                                      AutomationProperties.LabeledBy="{Binding ElementName=CleanupSpeedTitle}">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
@@ -2457,7 +2456,7 @@
                                         </StackPanel>
                                     </ui:CardExpander>
 
-                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="True"
+                                    <ui:CardExpander x:Name="CombinedSpeedExpander" IsExpanded="False"
                                                      AutomationProperties.LabeledBy="{Binding ElementName=CombinedSpeedTitle}">
                                         <ui:CardExpander.Header>
                                             <StackPanel>
@@ -2501,9 +2500,9 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <TextBlock x:Name="FailuresTitle" Grid.Row="2" Style="{StaticResource GroupHeader}" Margin="2,0,0,10"
+                        <TextBlock x:Name="FailuresTitle" Style="{StaticResource GroupHeader}" Margin="2,0,0,10"
                                    Text="AI cleanup failures, last 7 days"/>
-                        <ui:Card Grid.Row="3" Padding="0" Style="{StaticResource FillCard}">
+                        <ui:Card Padding="0" Style="{StaticResource FillCard}">
                             <Grid>
                                 <DataGrid x:Name="FailuresGrid"
                                           AutoGenerateColumns="False" IsReadOnly="True"
@@ -2523,10 +2522,12 @@
                                            Visibility="Collapsed"/>
                             </Grid>
                         </ui:Card>
-                        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                             <ui:Button x:Name="ClearFailuresButton" Content="Clear failures"
                                        MinWidth="120" Click="ClearFailuresButton_Click"/>
                         </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
                     </Grid>
 
                     <!-- ============================ About ============================ -->
@@ -2569,7 +2570,7 @@
                                 <ui:Card Style="{StaticResource SettingCard}">
                                     <StackPanel>
                                         <TextBlock Text="Private by design" Style="{StaticResource SettingTitle}"
-                                                   Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
                                                    Text="Speech recognition runs on this PC, and audio never leaves it. Cloud AI is optional: it sends text, never audio, and only while you have a remote provider turned on or use a feature that needs one."/>
                                         <ui:Button Content="Read privacy policy" HorizontalAlignment="Left"
@@ -2589,11 +2590,11 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" Margin="0,0,20,0">
-                                            <TextBlock Text="Report an AI result" Style="{StaticResource SettingTitle}"/>
+                                            <TextBlock Text="Report an AI result..." Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
-                                                       Text="If AI cleanup or a rewrite produced something inappropriate, tell us. Scribe opens your mail app with the report so you can read it before sending; nothing is transmitted on its own. You can also report a specific result from the History page."/>
+                                                       Text="If AI cleanup wrote something inappropriate, tell us. Your mail app opens with the report so you can read it first. Scribe sends nothing by itself. You can also report a result from History."/>
                                         </StackPanel>
-                                        <ui:Button Grid.Column="1" Content="Report AI content"
+                                        <ui:Button Grid.Column="1" Content="Report an AI result..."
                                                    VerticalAlignment="Center" MinWidth="150"
                                                    Click="AboutReportAiContent_Click"/>
                                     </Grid>
@@ -2777,7 +2778,7 @@
                 <!-- Footer: explicit save model, always visible -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <ui:Button x:Name="SaveButton" Content="Save" Appearance="Primary"
-                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click" IsDefault="True"
+                               MinWidth="96" Margin="0,0,8,0" Click="SaveButton_Click"
                                ToolTip="Save your changes and keep this window open."/>
                     <ui:Button x:Name="SaveCloseButton" Content="Save and close"
                                MinWidth="120" Margin="0,0,8,0" Click="SaveCloseButton_Click"

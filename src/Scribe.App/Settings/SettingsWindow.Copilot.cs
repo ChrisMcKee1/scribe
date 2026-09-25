@@ -244,15 +244,8 @@ public partial class SettingsWindow
                         CopilotModelCombo.ItemsSource = models.Select(m => m.Id).ToArray();
                         CopilotModelCombo.Text = typed;
 
-                        var withEfforts = models
-                            .Where(m => m.SupportedReasoningEfforts.Count > 0)
-                            .Select(m => $"{m.Id} ({string.Join('/', m.SupportedReasoningEfforts)})")
-                            .Take(4)
-                            .ToArray();
-
-                        CopilotModelHint.Text = withEfforts.Length > 0
-                            ? $"{models.Count} model(s) available. Reasoning levels: {string.Join(", ", withEfforts)}."
-                            : $"{models.Count} model(s) available. Leave blank to use your account's default.";
+                        CopilotModelHint.Text =
+                            $"{models.Count} model(s) available. Leave blank to use your account's default.";
                     });
                 },
                 TaskScheduler.Default);

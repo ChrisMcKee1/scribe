@@ -85,9 +85,9 @@
                                        VerticalAlignment="Top" Margin="0,2,14,0"
                                        Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Style="{StaticResource TipTitle}" Text="Private by design"/>
+                            <TextBlock Style="{StaticResource TipTitle}" Text="Audio stays on this PC"/>
                             <TextBlock Style="{StaticResource TipBody}"
-                                       Text="Everything runs on your PC. Your audio never leaves the machine."/>
+                                       Text="Speech recognition runs on your PC, and your audio never leaves it."/>
                         </StackPanel>
                     </Grid>
                 </ui:Card>
