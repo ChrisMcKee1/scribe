@@ -73,9 +73,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private readonly Action<OverlayPosition> _previewOverlay;
     private readonly Action<AppSettings> _applySettings;
     private readonly Action _reloadVocabulary;
-    // The library selection of the settings dictation runs on, for the usage report: after a failed Save _settings holds
-    // unsaved library switches, and a fresh read of the stored document may find it unreadable.
-    private readonly Func<IReadOnlyList<string>> _enabledLibrariesInUse;
+
+    // The committed library vocabulary dictation uses, which the usage report's library selection comes from: never the
+    // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
+    // stored document, which may have turned unreadable.
+    private readonly ILibraryVocabularySource _libraryVocabulary;
     private readonly Action<bool> _setHotkeyCaptureMode;
     private readonly UpdateService? _updates;
     private StoreUpdateService? _storeUpdates;
@@ -115,6 +117,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private string _statsSummaryEmptyText = string.Empty;
 
     private UsageAnalyzer.Snapshot? _usageSnapshot;
+
+    // The library scope of the usage report the shown snapshot came from (UsageReport.Result.LibraryScope), set and
+    // cleared with the snapshot: the usage insight is handed over only under it, so its library labels never go once
+    // their library's AI permission narrowed or its content changed after the report was built (contract 3.3.6).
+    private AiVocabularyScope _usageLibraryScope = AiVocabularyScope.None;
     private bool _usageInsightRunning;
     private readonly LatestRequestCoalescer<UsagePeriodChoice> _usageLoads = new();
     private int _azureDeploymentLoadVersion;
@@ -185,7 +192,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         Action<OverlayPosition> previewOverlay,
         Action<AppSettings> applySettings,
         Action reloadVocabulary,
-        Func<IReadOnlyList<string>> enabledLibrariesInUse,
+        ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
         SessionDiagnostics? diagnostics = null)
@@ -206,7 +213,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         _previewOverlay = previewOverlay;
         _applySettings = applySettings;
         _reloadVocabulary = reloadVocabulary;
-        _enabledLibrariesInUse = enabledLibrariesInUse;
+        _libraryVocabulary = libraryVocabulary;
         _setHotkeyCaptureMode = setHotkeyCaptureMode ?? (_ => { });
         _updates = updates;
         _diagnostics = diagnostics;
@@ -6057,6 +6064,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         // The shown snapshot no longer matches the request, so the insight button must not send it.
         _usageSnapshot = null;
+        _usageLibraryScope = AiVocabularyScope.None;
         RefreshUsageInsightAvailability();
 
         if (_usageLoads.Submit(period) is { } work)
@@ -6075,10 +6083,24 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             {
                 var request = work;
                 var now = DateTimeOffset.UtcNow;
-                var libraryIds = _enabledLibrariesInUse();
                 result = await Task.Run(
-                    () => UsageReport.Build(
-                        _history, _dictionary, _libraries, libraryIds, request.Value.Days, now, request.Cancellation),
+                    () =>
+                    {
+                        // Once the library service is the vocabulary source (the W1b integration), the report takes its
+                        // library entries and its shareable labels from one Current snapshot and ignores these ids
+                        // (contract 3.3.6). Until then it reads the libraries by id, as release 0.4.4 did, and shares no
+                        // library label (UsageReport's fail-closed path): the ids of the committed vocabulary, which are
+                        // the libraries the settings in use enable, never the window's unsaved switches.
+                        var vocabulary = _libraryVocabulary.Current;
+                        return UsageReport.Build(
+                            _history,
+                            _dictionary,
+                            _libraries,
+                            [.. vocabulary.AiScope.PermittedLibraryIds],
+                            request.Value.Days,
+                            now,
+                            request.Cancellation);
+                    },
                     request.Cancellation);
             }
             catch (OperationCanceledException) when (work.Cancellation.IsCancellationRequested)
@@ -6116,6 +6138,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void ShowUsage(UsagePeriodChoice period, UsageReport.Result result)
     {
         _usageSnapshot = result.Snapshot;
+        _usageLibraryScope = result.LibraryScope;
         var snapshot = _usageSnapshot;
 
         UsageCoverageText.Text = result.PeriodCapped
@@ -6167,6 +6190,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private void ShowUsageFailure(Exception failure)
     {
         _usageSnapshot = null;
+        _usageLibraryScope = AiVocabularyScope.None;
         UsageCoverageText.Text = "Usage is temporarily unavailable.";
         UsageInsightText.Text = failure.Message;
         UsageInsightButton.IsEnabled = false;
@@ -6230,6 +6254,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             return;
         }
 
+        // Taken with the snapshot, so the summary goes under the scope of the report it was built from.
+        var libraryScope = _usageLibraryScope;
+
         if (_cleanup.Recipient is not { } recipient)
         {
             UsageInsightText.Text = "Configure a ready AI cleanup model to generate an insight.";
@@ -6241,18 +6268,26 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UsageInsightText.Text = "Generating insight…";
         try
         {
+            // Every request, the first attempt and each retry, goes only while the report's library scope is still
+            // permitted and its libraries' content is unchanged.
             var completion = await _cleanup.CompleteAsync(
                 UsageInsight.SystemPrompt,
                 UsageInsight.BuildSummary(snapshot),
-                recipient);
+                recipient,
+                libraryScope);
             if (!InsightStillApplies(snapshot))
             {
                 return;
             }
 
-            UsageInsightText.Text = completion.Outcome == CompletionOutcome.RecipientChanged
-                ? "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again."
-                : UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.";
+            UsageInsightText.Text = completion.Outcome switch
+            {
+                ScopedCompletionOutcome.RecipientChanged =>
+                    "Your AI cleanup provider changed before the insight was requested, so nothing was sent. Try again.",
+                ScopedCompletionOutcome.LibraryScopeNarrowed =>
+                    "Usage changed while the insight was being prepared. Generate it again.",
+                _ => UsageInsight.Parse(completion.Text) ?? "The configured model did not return an insight.",
+            };
         }
         catch (Exception ex)
         {

@@ -1,4 +1,5 @@
 ﻿using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -12,6 +13,7 @@ using OpenAI;
 using OpenAI.Chat;
 using OpenAI.Responses;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using FoundryConfiguration = Microsoft.AI.Foundry.Local.Configuration;
 using FoundryLogLevel = Microsoft.AI.Foundry.Local.LogLevel;
@@ -270,6 +272,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     private readonly IFoundryLocalHost _foundryHost;
 
+    // The library vocabulary's admission point (contract 2.10): every request this service makes is handed over only
+    // through it, each attempt with the scope its vocabulary was admitted under. Null where no library vocabulary can
+    // reach the service (tests and tools that build it directly).
+    private readonly ILibraryVocabularySource? _vocabularySource;
+
+    // The agents built for an admitted vocabulary's glossary (AdmittedCleanup), by the system prompt they carry, so every
+    // dictation of one generation shares one. Bounded, because each new generation brings a new glossary. Guarded by
+    // _gate and dropped with the other agents whenever the factory changes.
+    private const int MaxAdmittedAgents = 8;
+    private readonly Dictionary<string, AIAgent> _admittedAgents = new(StringComparer.Ordinal);
+
+    // The hand-off transport over InnerHttpHandlerForTesting, built once. Guarded by _gate.
+    private HttpClientPipelineTransport? _testTransport;
+
     // Null disarms storage reclaim entirely. Only the app's own instance (constructed with its real
     // AppPaths) arms it; harnesses and tests that construct the service directly never delete files.
     private readonly FoundryLocalStorage? _foundryStorage;
@@ -340,8 +356,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      *
      * Typed as object rather than CopilotClient on purpose. A field's type is part of this class's
      * metadata and is resolved when the class is first loaded, so naming the type here would load
-     * Microsoft.Agents.AI.GitHub.Copilot on every launch and undo the lazy loading that keeping the
-     * references inside InitGitHubCopilotAsync exists to buy.
+     * GitHub.Copilot.SDK on every launch and undo the lazy loading that keeping the references inside
+     * InitGitHubCopilotAsync exists to buy.
      */
     private object? _copilotClientHandle; // guarded by _gate
     private readonly Dictionary<string, AIAgent> _styleAgents = new(StringComparer.Ordinal);
@@ -412,13 +428,25 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // Test-only: lets a test put a fake transport under every OpenAI client this service builds (the
     // custom endpoint, Foundry Local's loopback client, and both Azure surfaces), so the privacy,
     // lifetime and storage paths run against the real OpenAI client and agent without any network.
+    // It runs after the vocabulary hand-off transport is set, so a test that replaces the transport
+    // takes the hand-off out with it; InnerHttpHandlerForTesting keeps it.
     internal Action<OpenAIClientOptions>? OpenAIClientOptionsOverride { get; set; }
+
+    // Test-only: the network under the vocabulary hand-off handler, in place of the HttpClientHandler every client
+    // shares in production, so the canary tests run the production transport, admission point included, end to end.
+    internal HttpMessageHandler? InnerHttpHandlerForTesting { get; set; }
 
     // Test-only: stands in for the provider-specific half of initialization (the Copilot CLI handshake,
     // the Azure client construction) and returns the agent factory it would have built. Everything
     // provider-agnostic around it (the readiness probe, publication, the prompt-only rebuild) still
     // runs for real, so those paths are testable for every provider without the CLI or the network.
     internal Func<CleanupOptions, CancellationToken, Task<Func<string, AIAgent>>>? ProviderFactoryForTesting { get; set; }
+
+    // Test-only: the address of a Copilot runtime in the test process for the SDK to connect to
+    // (RuntimeConnection.ForUri) in place of the CLI it would detect and start, so the provider's own
+    // client, session configuration and agent, admission point included, run end to end without the CLI.
+    // A string, so nothing on this class names a Copilot type (see InitGitHubCopilotAsync).
+    internal string? CopilotRuntimeUrlForTesting { get; set; }
 
     // Test-only: the most recently scheduled background storage work, so a test can wait for it
     // deterministically instead of sleeping.
@@ -457,20 +485,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     /// <summary>What the last disposal did. Test-only observability for the release-or-leak decision.</summary>
     internal CleanupDisposalOutcome DisposalOutcome { get; private set; }
 
-    public TextCleanupService(ILogger<TextCleanupService> log, AppPaths? paths = null)
+    public TextCleanupService(
+        ILogger<TextCleanupService> log, AppPaths? paths = null, ILibraryVocabularySource? vocabularySource = null)
         : this(
             log,
             paths,
             new FoundryLocalSdkHost(),
-            paths is null ? null : FoundryLocalStorage.For(paths))
+            paths is null ? null : FoundryLocalStorage.For(paths),
+            vocabularySource)
     {
     }
 
+    /// <param name="vocabularySource">
+    /// The admission point every request is handed over through (<see cref="ILibraryVocabularySource.TryHandOff"/>).
+    /// Null only where no library vocabulary can reach the service (tests, tools): then there is no permission to check.
+    /// </param>
     internal TextCleanupService(
         ILogger<TextCleanupService> log,
         AppPaths? paths,
         IFoundryLocalHost foundryHost,
-        FoundryLocalStorage? foundryStorage)
+        FoundryLocalStorage? foundryStorage,
+        ILibraryVocabularySource? vocabularySource = null)
     {
         var resolvedPaths = paths ?? new AppPaths();
         _log = log;
@@ -478,6 +513,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         _foundryDemotionsPath = Path.Combine(resolvedPaths.RootDir, "foundry-local-demotions.json");
         _foundryHost = foundryHost;
         _foundryStorage = foundryStorage;
+        _vocabularySource = vocabularySource;
 
         // The directory reclaim may delete under is, by construction, the one the SDK is told to use.
         _foundryAppDataDir = foundryStorage?.AppDataDir ?? FoundryLocalStorage.ResolveAppDataDir(resolvedPaths);
@@ -521,7 +557,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return;
         }
 
-        var requested = Normalize(options ?? CleanupOptions.Disabled);
+        var requested = WithoutUnadmittedGlossary(Normalize(options ?? CleanupOptions.Disabled));
         var effective = ApplyPersistedFoundryDemotion(requested);
 
         // Read before _gate: the first read loads the Foundry Local assembly, and that is not work to
@@ -736,6 +772,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         _styleAgents.Clear();
+        _admittedAgents.Clear();
         return true;
     }
 
@@ -859,10 +896,23 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         _agent = null;
         _agentFactory = null;
         _styleAgents.Clear();
+        _admittedAgents.Clear();
     }
 
-    public async Task<CleanupResult> CleanAsync(
-        string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null)
+    public Task<CleanupResult> CleanAsync(
+        string text, CancellationToken cancellationToken = default, string? writingStyleOverride = null) =>
+        CleanCoreAsync(text, vocabulary: null, cancellationToken, writingStyleOverride);
+
+    public AdmittedCleanup Admit(CleanupVocabulary vocabulary)
+    {
+        ArgumentNullException.ThrowIfNull(vocabulary);
+        return new AdmittedCleanup(vocabulary, (text, ct, style) => CleanCoreAsync(text, vocabulary, ct, style));
+    }
+
+    // One cleanup, with the vocabulary its dictation was admitted with, or, for the admission-free overload, whatever
+    // the service was configured with (no library vocabulary where there is an admission point).
+    private async Task<CleanupResult> CleanCoreAsync(
+        string text, CleanupVocabulary? vocabulary, CancellationToken cancellationToken, string? writingStyleOverride)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -915,7 +965,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // override matching the configured style falls through to the default agent, and a
             // missing factory (shouldn't happen when Ready) safely degrades to the default too.
             var style = string.IsNullOrWhiteSpace(writingStyleOverride) ? null : writingStyleOverride.Trim();
-            if (style is not null &&
+            if (vocabulary is not null && _agentFactory is { } admittedFactory)
+            {
+                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary);
+            }
+            else if (style is not null &&
                 !string.Equals(style, CleanupPrompt.ResolveWritingStyle(options.WritingStyle), StringComparison.Ordinal) &&
                 _agentFactory is { } factory)
             {
@@ -929,6 +983,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 agent = styled;
             }
         }
+
+        // Every attempt below, each chunk, a stall retry, a retry after a model reload and the client's own retries, is
+        // handed over through this admission: under the scope the dictation's vocabulary was cut by, or no library
+        // scope for the admission-free overload, whose requests carry no library vocabulary (WithoutUnadmittedGlossary).
+        var admission = new CleanupAdmission(
+            CleanupRequestKind.Dictation, vocabulary?.Scope ?? AiVocabularyScope.None, _vocabularySource);
+        using var entered = admission.Enter();
 
         // Capable frontier models should see the complete dictation so they can make coherent sentence
         // and paragraph decisions. Local-prompt models keep bounded chunks because their context and
@@ -944,6 +1005,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var builder = new StringBuilder(text.Length + 16);
         var failures = 0;
+        var heldBack = 0;
         CleanupReason? firstFailure = null;
         var reloadBudget = new ReloadBudget();
 
@@ -961,9 +1023,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         {
             string cleanedChunk;
             CleanupReason? error;
+            bool refused;
             try
             {
-                (cleanedChunk, error) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token)
+                (cleanedChunk, error, refused) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -990,7 +1053,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 break;
             }
 
-            if (error is not null)
+            if (refused)
+            {
+                // Not handed over: the library vocabulary this dictation was admitted with is no longer permitted. The
+                // segment keeps its text as dictated and local rules finish it; a permission change is not a failure.
+                heldBack++;
+            }
+            else if (error is not null)
             {
                 failures++;
                 firstFailure ??= error;
@@ -1004,12 +1073,24 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             builder.Append(cleanedChunk);
         }
 
+        if (heldBack > 0)
+        {
+            LogHeldBack(admission, heldBack, chunks.Count, options.Provider);
+        }
+
+        // Nothing was handed over: the dictation goes out exactly as dictated, as if cleanup had not run.
+        if (heldBack == chunks.Count)
+        {
+            return CleanupResult.Skip(text);
+        }
+
         // Every cleaned segment failed; the user effectively got raw text back (any overflow tail is
         // raw too), so this is a hard failure that drives the visible "intelligence failed" feedback
         // and is recorded to the failure log. This must take precedence over the partial/overflow
         // classification below; otherwise a total failure on an over-length capture would be silently
         // reported as a successful partial clean (no red flash, and a log entry claiming success).
-        if (failures == chunks.Count)
+        // Segments held back for a permission change are not counted as attempts that failed.
+        if (failures == chunks.Count - heldBack)
         {
             var failure = firstFailure ?? CleanupReason.Same("AI cleanup failed.");
             return new CleanupResult(text, CleanupOutcome.Failed, failure.Diagnostic)
@@ -1063,6 +1144,69 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         return new CleanupResult(combined, outcome);
     }
 
+    // Must be called under _gate, while serving. The agent for this vocabulary's glossary, at the term budget the
+    // configuration being served uses, and this call's writing style: pure object construction against the connected
+    // client, as for a per-app writing style, kept for every dictation that shares both.
+    private AIAgent AdmittedAgentLocked(
+        Func<string, AIAgent> factory, CleanupOptions options, string? style, CleanupVocabulary vocabulary)
+    {
+        var glossary = vocabulary.GlossaryFor(CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider));
+        var prompt = BuildSystemPrompt(options with { WritingStyle = style ?? options.WritingStyle, Glossary = glossary });
+        if (_admittedAgents.TryGetValue(prompt, out var cached))
+        {
+            return cached;
+        }
+
+        // Dropped, not disposed, as a rebuild drops the style agents: they share the client, and a dictation still
+        // holding one finishes on it.
+        if (_admittedAgents.Count >= MaxAdmittedAgents)
+        {
+            _admittedAgents.Clear();
+        }
+
+        var agent = factory(prompt);
+        _admittedAgents[prompt] = agent;
+        return agent;
+    }
+
+    // Counts and a generation only: never which libraries, and never a term.
+    private void LogHeldBack(CleanupAdmission admission, int heldBack, int segments, CleanupProvider provider)
+    {
+        try
+        {
+            _log.LogInformation(
+                "AI cleanup held back {HeldBack} of {Segments} segment(s) ({Provider}): the library vocabulary the " +
+                "dictation was admitted with (library generation {Generation}, {Libraries} librar(ies)) is no longer " +
+                "permitted, so local rules finish them.",
+                heldBack,
+                segments,
+                provider,
+                admission.Scope.Generation,
+                admission.Scope.PermittedLibraryIds.Count);
+        }
+        catch (Exception)
+        {
+            // Logging must never turn a held-back request into a failed dictation.
+        }
+    }
+
+    private void LogCompletionHeldBack(AiVocabularyScope scope, int handedOver)
+    {
+        try
+        {
+            _log.LogInformation(
+                "An AI completion was held back: the library vocabulary it carries (library generation {Generation}, " +
+                "{Libraries} librar(ies)) is no longer permitted; {HandedOver} request(s) had been handed over before.",
+                scope.Generation,
+                scope.PermittedLibraryIds.Count,
+                handedOver);
+        }
+        catch (Exception)
+        {
+            // Logging must never turn a held-back request into a thrown one.
+        }
+    }
+
     public CleanupRecipient? Recipient
     {
         get
@@ -1079,16 +1223,46 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     public async Task<CompletionResult> CompleteAsync(
         string systemPrompt, string userMessage, CleanupRecipient recipient, CancellationToken cancellationToken = default)
     {
+        // No library vocabulary of its own: the dictionary suggester's history sample goes under no library scope.
+        var scoped = await CompleteCoreAsync(systemPrompt, userMessage, recipient, AiVocabularyScope.None, cancellationToken)
+            .ConfigureAwait(false);
+        return scoped.Outcome switch
+        {
+            ScopedCompletionOutcome.Completed => new CompletionResult(CompletionOutcome.Completed, scoped.Text),
+            ScopedCompletionOutcome.NotReady => CompletionResult.NotReady,
+            ScopedCompletionOutcome.RecipientChanged => CompletionResult.RecipientChanged,
+            _ => CompletionResult.Failed,
+        };
+    }
+
+    public Task<ScopedCompletionResult> CompleteAsync(
+        string systemPrompt,
+        string userMessage,
+        CleanupRecipient recipient,
+        AiVocabularyScope libraryScope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(libraryScope);
+        return CompleteCoreAsync(systemPrompt, userMessage, recipient, libraryScope, cancellationToken);
+    }
+
+    private async Task<ScopedCompletionResult> CompleteCoreAsync(
+        string systemPrompt,
+        string userMessage,
+        CleanupRecipient recipient,
+        AiVocabularyScope libraryScope,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(recipient);
         if (string.IsNullOrWhiteSpace(systemPrompt) || string.IsNullOrWhiteSpace(userMessage))
         {
-            return CompletionResult.Failed;
+            return new ScopedCompletionResult(ScopedCompletionOutcome.Failed);
         }
 
         using var lease = _operations.TryEnter();
         if (lease is null)
         {
-            return CompletionResult.NotReady;
+            return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
         }
 
         AIAgent agent;
@@ -1100,7 +1274,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // callers get a clean refusal (and can fall back) rather than an exception when AI is off.
             if (_status != CleanupStatus.Ready || _agentFactory is not { } factory)
             {
-                return CompletionResult.NotReady;
+                return new ScopedCompletionResult(ScopedCompletionOutcome.NotReady);
             }
 
             /*
@@ -1115,13 +1289,18 @@ internal sealed partial class TextCleanupService : ITextCleanupService
              */
             if (!recipient.Matches(_options))
             {
-                return CompletionResult.RecipientChanged;
+                return new ScopedCompletionResult(ScopedCompletionOutcome.RecipientChanged);
             }
 
             options = _options;
             agent = factory(BuildAuxiliarySystemPrompt(options, systemPrompt)); // pure object construction against the initialized client
         }
 
+        // Each attempt, the first and any retry the client makes, is handed over only while the published scope still
+        // covers libraryScope; the recipient needs no second check, since every attempt goes through the client of the
+        // recipient checked above.
+        var admission = new CleanupAdmission(CleanupRequestKind.Completion, libraryScope, _vocabularySource);
+        using var entered = admission.Enter();
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
@@ -1142,18 +1321,23 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // covered by TrySanitize, which this path deliberately skips (it has no raw transcript to
             // compare against), so without this the house style would hold for dictation but not here.
             return SanitizeAuxiliaryCompletion(result.Text) is { } text
-                ? new CompletionResult(CompletionOutcome.Completed, text)
-                : CompletionResult.Failed;
+                ? new ScopedCompletionResult(ScopedCompletionOutcome.Completed, text, admission.HandedOver)
+                : new ScopedCompletionResult(ScopedCompletionOutcome.Failed, null, admission.HandedOver);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (Exception ex) when (VocabularyHandOffRefusedException.Find(ex) is { Admitted: true })
+        {
+            LogCompletionHeldBack(libraryScope, admission.HandedOver);
+            return new ScopedCompletionResult(ScopedCompletionOutcome.LibraryScopeNarrowed, null, admission.HandedOver);
+        }
         catch (Exception ex)
         {
             // The message is a known historical log format (LogLineRedactor), so it keeps its wording.
             LogProviderFailure(LogLevel.Warning, options.Provider, ex, "Auxiliary AI completion failed; returning null.");
-            return CompletionResult.Failed;
+            return new ScopedCompletionResult(ScopedCompletionOutcome.Failed, null, admission.HandedOver);
         }
     }
 
@@ -1237,8 +1421,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Cleans a single chunk. Returns the cleaned text and a null error on success, or the raw chunk and
     // a human-readable error when the model call throws, times out, or returns nothing usable. Never
-    // throws; a failed segment falls back to its raw text so dictation is never lost.
-    private async Task<(string Text, CleanupReason? Error)> CleanChunkAsync(
+    // throws; a failed segment falls back to its raw text so dictation is never lost. Refused is true when an
+    // attempt was not handed over because the dictation's library vocabulary is no longer permitted: the raw chunk
+    // comes back with no error, and nothing is retried, since a retry would be judged by the same scope.
+    private async Task<(string Text, CleanupReason? Error, bool Refused)> CleanChunkAsync(
         AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
@@ -1277,6 +1463,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var attempt = await RunChunkAttemptAsync(
             agent, options, chunk, firstAttempt, cancellationToken).ConfigureAwait(false);
+        if (attempt.Refused)
+        {
+            return (attempt.Text, null, true);
+        }
 
         // Foundry Local evicts a resident model under memory pressure, and any other model load on the
         // machine evicts it too. The agent keeps working against a model id the runtime no longer has,
@@ -1317,7 +1507,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         if (!attempt.Stalled || !retryOnStall)
         {
-            return (attempt.Text, attempt.Error);
+            return (attempt.Text, attempt.Refused ? null : attempt.Error, attempt.Refused);
         }
 
         _log.LogWarning(
@@ -1327,7 +1517,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         var remaining = budget - firstAttempt;
         var retry = await RunChunkAttemptAsync(
             agent, options, chunk, remaining, cancellationToken).ConfigureAwait(false);
-        return (retry.Text, retry.Error);
+        return (retry.Text, retry.Refused ? null : retry.Error, retry.Refused);
     }
 
     /// <summary>
@@ -1465,6 +1655,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // per-segment timeout; otherwise we'd keep calling the model after the user gave up.
             throw;
         }
+        catch (Exception ex) when (VocabularyHandOffRefusedException.Find(ex) is not null)
+        {
+            // Not handed over, so nothing was sent; the segment keeps its text and nothing is counted as failing.
+            return new ChunkAttempt(chunk, null, false, false, Refused: true);
+        }
         catch (OperationCanceledException ex)
         {
             LogProviderFailure(LogLevel.Debug, options.Provider, ex, "AI cleanup timed out for a segment.");
@@ -1477,7 +1672,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
     }
 
-    private readonly record struct ChunkAttempt(string Text, CleanupReason? Error, bool Stalled, bool Evicted);
+    private readonly record struct ChunkAttempt(
+        string Text, CleanupReason? Error, bool Stalled, bool Evicted, bool Refused = false);
 
     // Splits text into chunks no longer than <paramref name="targetChars"/>, breaking on the last
     // sentence-ending punctuation in the back of each window when possible, else the last whitespace,
@@ -2682,6 +2878,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 _agent = agent;
                 _agentFactory = _pendingFactory;
                 _styleAgents.Clear();
+                _admittedAgents.Clear();
                 _foundryInUse = options.Provider == CleanupProvider.FoundryLocal ? _pendingFoundryInUse : null;
                 inUse = _foundryInUse;
             }
@@ -2813,7 +3010,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             var openAiClient = useKey
                 ? AzureOpenAIResponsesClientFactory.CreateClientWithApiKey(
-                    accountHost, options.AzureApiKey!, configure: OpenAIClientOptionsOverride)
+                    accountHost, options.AzureApiKey!, configure: ConfigureClient)
                 : AzureOpenAIResponsesClientFactory.CreateClientWithTokenCredential(
                     accountHost,
                     AzureCredentialFactory.Create(new AzureCredentialRequest(
@@ -2822,7 +3019,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                         options.AzureSubscriptionId,
                         options.AzureClientId,
                         options.AzureClientSecret)),
-                    configure: OpenAIClientOptionsOverride);
+                    configure: ConfigureClient);
 
             var deployment = openAiClient.GetChatClient(options.AzureDeployment!);
             // Carries the same wrapper as the Responses path; on this surface it keeps "store" unset,
@@ -2889,6 +3086,31 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     private static IChatClient DisableStoredOutput(IChatClient client) =>
         new StoredOutputDisabledChatClient(client);
+
+    /*
+     * Every OpenAI client this service builds sends through the vocabulary hand-off transport: the custom endpoint,
+     * Foundry Local's loopback client and both Azure surfaces. Its handler sits just before the network handler, so
+     * each attempt, the client's own retries included, is handed over only through the admission point (contract 2.10).
+     * A test's options override runs last, as it always has.
+     */
+    private void ConfigureClient(OpenAIClientOptions options)
+    {
+        options.Transport = HandOffTransport();
+        OpenAIClientOptionsOverride?.Invoke(options);
+    }
+
+    private HttpClientPipelineTransport HandOffTransport()
+    {
+        if (InnerHttpHandlerForTesting is not { } network)
+        {
+            return VocabularyHandOffHandler.SharedTransport;
+        }
+
+        lock (_gate)
+        {
+            return _testTransport ??= VocabularyHandOffHandler.CreateTransport(network);
+        }
+    }
 
     /// <summary>
     /// The Azure Chat Completions fallback's agent, exactly as <see cref="TryAzureChatCompletionsAsync"/>
@@ -3081,6 +3303,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
+
+            // Through the admission point like every request, with no library scope: the probe carries no vocabulary.
+            using var entered = new CleanupAdmission(CleanupRequestKind.Probe, AiVocabularyScope.None, _vocabularySource)
+                .Enter();
             _ = await agent.RunAsync(BuildUserMessage("ok"), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
             return null;
@@ -3534,13 +3760,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      *
      * ## Why the types only appear inside this method
      *
-     * Every reference to CopilotClient is local to this body, or to GitHubCopilotAgentFactory, which
-     * only this body calls, and that is load-bearing rather than
+     * Every reference to CopilotClient is local to this body, or to GitHubCopilotAgentFactory and
+     * GitHubCopilotCleanupAgent, which only this body reaches, and that is load-bearing rather than
      * tidiness. The CLR resolves an assembly the first time a method that references it is JIT
-     * compiled, so a user who never selects this provider never loads
-     * Microsoft.Agents.AI.GitHub.Copilot at all: no startup cost, no memory cost, and no Copilot
-     * runtime touched. Hoisting the client into a field, or naming the type in a signature on a
-     * class built during startup, would pull the assembly in on every launch and quietly undo that.
+     * compiled, so a user who never selects this provider never loads GitHub.Copilot.SDK at all: no
+     * startup cost, no memory cost, and no Copilot runtime touched. Hoisting the client into a field,
+     * or naming the type in a signature on a class built during startup, would pull the assembly in on
+     * every launch and quietly undo that.
      *
      * ## Why the CLI is checked here as well as in Settings
      *
@@ -3570,16 +3796,23 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         ct.ThrowIfCancellationRequested();
 
-        // Cancellation reaches the version probe, which kills the child it started rather than
-        // leaving it for the probe's own deadline.
-        var cli = await GitHubCopilotCli.DetectAsync(ct).ConfigureAwait(false);
-        ct.ThrowIfCancellationRequested();
-        if (!cli.Found)
+        var runtimeUrl = CopilotRuntimeUrlForTesting;
+        string? cliPath = null;
+        if (runtimeUrl is null)
         {
-            SetInitStatus(
-                CleanupStatus.Unavailable,
-                "The GitHub Copilot CLI is not installed. Install it from Settings, then turn AI cleanup back on.");
-            return null;
+            // Cancellation reaches the version probe, which kills the child it started rather than
+            // leaving it for the probe's own deadline.
+            var cli = await GitHubCopilotCli.DetectAsync(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            if (!cli.Found)
+            {
+                SetInitStatus(
+                    CleanupStatus.Unavailable,
+                    "The GitHub Copilot CLI is not installed. Install it from Settings, then turn AI cleanup back on.");
+                return null;
+            }
+
+            cliPath = cli.Path!;
         }
 
         var model = string.IsNullOrWhiteSpace(options.CopilotModel) ? null : options.CopilotModel.Trim();
@@ -3610,7 +3843,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
          */
         var client = new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions
         {
-            Connection = GitHub.Copilot.RuntimeConnection.ForStdio(cli.Path!),
+            Connection = runtimeUrl is null
+                ? GitHub.Copilot.RuntimeConnection.ForStdio(cliPath!)
+                : GitHub.Copilot.RuntimeConnection.ForUri(runtimeUrl),
             Environment = GitHubCopilotCli.BuildRuntimeEnvironment(model),
         });
         try
@@ -3659,9 +3894,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         await DisposeCopilotSessionAsync(previous).ConfigureAwait(false);
 
-        // ownsClient stays false: the session is disposed through _copilotClientHandle, and letting
-        // the agent own it too would double-dispose it every time the user changes a setting. Each
-        // call builds a fresh SessionConfig, so no two per-style agents share a mutable instance.
+        // The agent never owns the client: it is disposed through _copilotClientHandle, and an owning
+        // agent would dispose it every time the user changes a setting. Each call builds a fresh
+        // SessionConfig, so no two per-style agents share a mutable instance. Every agent this factory
+        // builds, the probe's, the serving one, a writing style's, an admitted dictation's and a one-off
+        // completion's, hands the session's creation and its send over through the library vocabulary's
+        // admission point (GitHubCopilotCleanupAgent; an HTTP provider's is its transport's handler).
         _pendingFactory = instructions => GitHubCopilotAgentFactory.Create(client, instructions, model, AgentName);
         return _pendingFactory(BuildSystemPrompt(options));
     }
@@ -3692,7 +3930,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var key = string.IsNullOrWhiteSpace(options.CustomApiKey) ? "not-needed" : options.CustomApiKey!;
         var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
-        OpenAIClientOptionsOverride?.Invoke(clientOptions);
+        ConfigureClient(clientOptions);
         var client = new OpenAIClient(new ApiKeyCredential(key), clientOptions);
         var chatClient = client.GetChatClient(options.CustomModel!.Trim());
         _pendingFactory = instructions => chatClient.AsAIAgent(instructions: instructions, name: AgentName);
@@ -3734,7 +3972,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 options.AzureApiKey!,
                 networkTimeout,
                 DisableRetries,
-                OpenAIClientOptionsOverride)
+                ConfigureClient)
             : AzureOpenAIResponsesClientFactory.CreateWithTokenCredential(
                 endpointUri,
                 AzureCredentialFactory.Create(new AzureCredentialRequest(
@@ -3745,7 +3983,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     options.AzureClientSecret)),
                 networkTimeout,
                 DisableRetries,
-                OpenAIClientOptionsOverride);
+                ConfigureClient);
         _pendingFactory = i => CreateAzureResponsesAgent(responses, options.AzureDeployment!, i);
 #pragma warning restore OPENAI001
         var agent = _pendingFactory(instructions);
@@ -4089,7 +4327,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         // Foundry Local does not require a real API key; the credential is a placeholder.
         var clientOptions = new OpenAIClientOptions { Endpoint = new Uri(endpoint) };
-        OpenAIClientOptionsOverride?.Invoke(clientOptions);
+        ConfigureClient(clientOptions);
         _openAiClient = new OpenAIClient(new ApiKeyCredential("foundry-local"), clientOptions);
         _managerReady = true;
     }
@@ -4464,6 +4702,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         return set;
     }
+
+    /*
+     * With an admission point, the only glossary a request carries is the one its dictation was admitted with.
+     *
+     * A glossary in the options would be built into the default agent and sent with every request that uses it, with
+     * no library scope behind it: nothing could say which libraries its terms came from, so a revoked library's terms
+     * would keep going out. So it is dropped (fail closed), and a dictation's vocabulary arrives through Admit, with its
+     * scope. The dictation controller configures no glossary; without an admission point (tests, tools) nothing changes.
+     */
+    private CleanupOptions WithoutUnadmittedGlossary(CleanupOptions options) =>
+        _vocabularySource is not null && options.Glossary is not null ? options with { Glossary = null } : options;
 
     private static CleanupOptions Normalize(CleanupOptions options)
     {
@@ -5387,13 +5636,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // pick them up; they are disposed only after every operation that captured one has finished.
     private List<AIAgent> DetachAgents()
     {
-        var agents = new List<AIAgent>(_styleAgents.Count + 1);
+        var agents = new List<AIAgent>(_styleAgents.Count + _admittedAgents.Count + 1);
         if (_agent is not null)
         {
             agents.Add(_agent);
         }
 
-        foreach (var styled in _styleAgents.Values)
+        foreach (var styled in _styleAgents.Values.Concat(_admittedAgents.Values))
         {
             if (!agents.Contains(styled))
             {

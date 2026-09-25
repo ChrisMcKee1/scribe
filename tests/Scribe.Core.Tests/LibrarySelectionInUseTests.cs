@@ -9,16 +9,21 @@ using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.Vocabulary;
 
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// Dictation's library selection is the one in the settings it runs on. Both vocabulary consumers, the post-processor
-/// and the AI cleanup glossary, used to read it again from the stored document on every rebuild, and a document that
-/// turns unreadable mid-session reads as the defaults standing in for it. So the vocabulary-only reload after the Usage
-/// page's Add (<see cref="StoredSettingsReapply"/>) switched off the libraries the user had chosen, switched on the default
-/// AI libraries, and sent their terms to a remote provider with every later dictation. These cases run the real library
-/// service and post-processor over a real settings file, and a real cleanup service over a recording fake provider.
+/// Dictation's library vocabulary is the committed one the library vocabulary source publishes, never a fresh read of the
+/// stored settings document. Release 0.4.4 passed the enabled ids of the settings in use to the library service
+/// (<c>GetEnabledLibraryEntries(ids)</c>, <c>ITextPostProcessor.Reload(ids)</c>) for the same reason: a document that turns
+/// unreadable mid-session reads as the defaults, which switched the user's libraries off and the default AI libraries on
+/// and sent their terms to a remote provider. Stream W-V replaced that seam with the vocabulary source: every dictation
+/// is admitted with a vocabulary generation built from one <c>Current</c> snapshot, and its post-processing and its
+/// cleanup glossary both come from it. The seam's two guarantees now hold by construction, and these cases pin both: no
+/// consumer re-reads the stored document per request, and a dictionary-only reload keeps the library vocabulary. Until the
+/// W1b integration the source is <see cref="InterimLibraryVocabularySource"/>, over the real library service and settings
+/// file here, and the cleanup service runs over a recording fake provider.
 /// </summary>
 public sealed class LibrarySelectionInUseTests : IDisposable
 {
@@ -70,16 +75,23 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         saved.EnabledDictionaryLibraryIds = ["dotnet-development"];
         _settings.Save(saved);
 
-        // Dictation starts on the stored settings, the way DictationController.Start applies them.
+        // Dictation starts on the stored settings, the way DictationController.Start and the app's composition root do:
+        // the vocabulary source reads the library selection of the settings in use, and the first generation is built.
         var inUse = _settings.Load();
+        var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
+        using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
+        var generation = publisher.Start();
         await using var harness = new CleanupHarness();
         var provider = new RecordingProvider();
         harness.Service.ProviderFactoryForTesting = provider.Connect;
-        ApplyVocabulary(inUse, harness.Service);
+        harness.Service.Configure(OptionsFor(inUse));
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
-        Assert.Equal(DotnetWritten, _processor.Process(DotnetDictated));
-        Assert.Equal(DefaultAiDictated, _processor.Process(DefaultAiDictated));
-        await harness.Service.CleanAsync(Dictated).WaitAsync(Bound);
+
+        var dictation = new DictationPostProcessor(_processor);
+        dictation.Use(generation);
+        Assert.Equal(DotnetWritten, dictation.ProcessDetailed(DotnetDictated).Text);
+        Assert.Equal(DefaultAiDictated, dictation.ProcessDetailed(DefaultAiDictated).Text);
+        await harness.Service.Admit(generation.Cleanup).CleanAsync(Dictated).WaitAsync(Bound);
         var before = provider.Client.Instructions[^1];
         Assert.Contains(DotnetGlossaryLine, before, StringComparison.Ordinal);
         Assert.DoesNotContain(DefaultAiGlossaryLine, before, StringComparison.Ordinal);
@@ -89,20 +101,23 @@ public sealed class LibrarySelectionInUseTests : IDisposable
 
         // The Add stores an entry, and with no usable stored settings only the vocabulary reloads, on the settings in use.
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor")]);
+        Task<VocabularyGeneration>? reloaded = null;
         var outcome = StoredSettingsReapply.Reapply(
             _settings,
             _ => Assert.Fail("Stored settings that cannot be read are never applied."),
-            () => ApplyVocabulary(inUse, harness.Service));
+            () => reloaded = publisher.RefreshAsync());
         Assert.Equal(StoredSettingsReapplied.VocabularyOnly, outcome);
+        var next = await reloaded!.WaitAsync(Bound);
 
         // Locally the selection holds: the .NET library still applies, the default AI library stays off, the entry applies.
-        Assert.Equal(DotnetWritten, _processor.Process(DotnetDictated));
-        Assert.Equal(DefaultAiDictated, _processor.Process(DefaultAiDictated));
-        Assert.Equal("Quillmoor", _processor.Process("quillmoor"));
+        dictation.Use(next);
+        Assert.Equal(DotnetWritten, dictation.ProcessDetailed(DotnetDictated).Text);
+        Assert.Equal(DefaultAiDictated, dictation.ProcessDetailed(DefaultAiDictated).Text);
+        Assert.Equal("Quillmoor", dictation.ProcessDetailed("quillmoor").Text);
 
         // The next cleanup prompt is the one before with the new entry's line added, and nothing else changed.
         Assert.Equal(CleanupStatus.Ready, harness.Service.Status);
-        await harness.Service.CleanAsync(Dictated).WaitAsync(Bound);
+        await harness.Service.Admit(next.Cleanup).CleanAsync(Dictated).WaitAsync(Bound);
         var after = provider.Client.Instructions[^1];
         Assert.DoesNotContain(DefaultAiGlossaryLine, after, StringComparison.Ordinal);
         Assert.Contains(DotnetGlossaryLine, after, StringComparison.Ordinal);
@@ -114,6 +129,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
     [Fact]
     public void The_library_service_selects_by_the_ids_it_is_given_whatever_the_stored_document_says()
     {
+        // Release 0.4.4's seam, which the interim vocabulary source adapts and J keeps as it is until the integration.
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
 
         var entries = _libraries.GetEnabledLibraryEntries(["dotnet-development"]);
@@ -146,35 +162,52 @@ public sealed class LibrarySelectionInUseTests : IDisposable
     }
 
     [Fact]
-    public void A_dictionary_only_reload_keeps_the_selection_dictation_named()
+    public void A_dictionary_only_reload_keeps_the_library_vocabulary()
     {
         var saved = AppSettings.CreateDefault();
         saved.EnabledDictionaryLibraryIds = ["dotnet-development"];
         _settings.Save(saved);
-        _processor.Reload(saved.EnabledDictionaryLibraryIds);
+        var inUse = _settings.Load();
+        var source = new InterimLibraryVocabularySource(_libraries, () => inUse.EnabledDictionaryLibraryIds);
+        using var publisher = new VocabularyPublisher(source, _dictionary, _processor, NullLogger<VocabularyPublisher>.Instance, work => work());
+        var before = publisher.Start();
         _settings.Set(SettingsRepository.SettingsKey, "{ this is not a settings document");
         _dictionary.AddRange([DictionaryEntry.New("quillmoor", "Quillmoor")]);
 
-        // What quick add and learning from history call once they have stored an entry.
+        // What quick add and learning from history call once they have stored an entry; the publisher answers it.
         _processor.Reload();
+        var after = publisher.Current;
 
+        Assert.NotSame(before, after);
+        Assert.Equal(before.Libraries.Entries.Select(Describe), after.Libraries.Entries.Select(Describe));
+        var dictation = new DictationPostProcessor(_processor);
+        dictation.Use(after);
+        Assert.Equal(DotnetWritten, dictation.ProcessDetailed(DotnetDictated).Text);
+        Assert.Equal(DefaultAiDictated, dictation.ProcessDetailed(DefaultAiDictated).Text);
+        Assert.Equal("Quillmoor", dictation.ProcessDetailed("quillmoor").Text);
+
+        // Release 0.4.4's own overloads keep compiling as J leaves them, and keep what they promised.
+        _processor.Reload(saved.EnabledDictionaryLibraryIds);
+        _processor.Reload();
         Assert.Equal(DotnetWritten, _processor.Process(DotnetDictated));
         Assert.Equal(DefaultAiDictated, _processor.Process(DefaultAiDictated));
-        Assert.Equal("Quillmoor", _processor.Process("quillmoor"));
     }
 
     [Fact]
-    public void Production_code_selects_libraries_only_from_the_settings_dictation_runs_on()
+    public void Production_code_takes_every_library_vocabulary_from_the_vocabulary_source()
     {
         var root = RepositoryRoot();
 
-        // The stored selection is asked for only where it is defined and by the post-processor before any owner has
-        // named a selection. Every other caller passes the ids of the settings in use.
+        // The stored selection is asked for only where it is defined and by the post-processor before any owner has named
+        // a selection; release 0.4.4's ids overload only where it is defined, where the post-processor's legacy reload
+        // reads it, in the interim vocabulary source that adapts it, and in the usage report's path for a library service
+        // that is not a vocabulary source.
         var parameterless = new Regex(@"\bGetEnabledLibraryEntries\b(?!\s*\(\s*[^\s)])");
-        var uses = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+        var withIds = new Regex(@"\bGetEnabledLibraryEntries\s*\(\s*[^\s)]");
+        var lines = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .SelectMany(file => File.ReadAllLines(file)
-                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal) && parameterless.IsMatch(line))
-                .Select(line => $"{Path.GetFileName(file)}: {line.Trim()}"))
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Select(line => (File: Path.GetFileName(file), Line: line.Trim())))
             .ToList();
         Assert.Equal(
             [
@@ -182,47 +215,101 @@ public sealed class LibrarySelectionInUseTests : IDisposable
                 "IDictionaryLibraryService.cs: IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries();",
                 "TextPostProcessor.cs: : _libraries.GetEnabledLibraryEntries();",
             ],
-            uses.Order(StringComparer.Ordinal).ToList());
+            lines.Where(l => parameterless.IsMatch(l.Line)).Select(l => $"{l.File}: {l.Line}").Order(StringComparer.Ordinal).ToList());
+        Assert.Equal(
+            ["DictionaryLibraryService.cs", "IDictionaryLibraryService.cs", "InterimLibraryVocabularySource.cs", "TextPostProcessor.cs", "UsageReport.cs"],
+            lines.Where(l => withIds.IsMatch(l.Line) && !l.Line.StartsWith("///", StringComparison.Ordinal))
+                .Select(l => l.File).Distinct().Order(StringComparer.Ordinal).ToList());
+        Assert.DoesNotContain(lines, l => l.Line.Contains(".Reload(settings.EnabledDictionaryLibraryIds)", StringComparison.Ordinal));
 
-        // Both vocabulary consumers take the same selection: the settings being applied, or those in use.
+        // Dictation: the generation is taken with the recording's settings at its admission, and that one generation feeds
+        // both the cleanup (its glossary and scope) and the dictionary pass. The options carry no glossary of their own.
         var controller = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Dictation", "DictationController.cs"));
-        Assert.DoesNotMatch(@"_postProcessor\.Reload\(\s*\)", controller);
-        Assert.Equal(3, Regex.Matches(controller, Regex.Escape("_postProcessor.Reload(settings.EnabledDictionaryLibraryIds);")).Count);
-        Assert.Contains("_libraries.GetEnabledLibraryEntries(settings.EnabledDictionaryLibraryIds)", controller, StringComparison.Ordinal);
-        var reload = controller.IndexOf("public void ReloadVocabulary()", StringComparison.Ordinal);
-        var body = controller[reload..controller.IndexOf("\n    }", reload, StringComparison.Ordinal)];
-        Assert.Contains("var settings = CurrentSettings;", body, StringComparison.Ordinal);
-        Assert.Contains("_postProcessor.Reload(settings.EnabledDictionaryLibraryIds);", body, StringComparison.Ordinal);
-        Assert.Contains("ReconfigureCleanup(settings);", body, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"_postProcessor\.Reload\(", controller);
+        Assert.DoesNotContain("GetEnabledLibraryEntries", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("IDictionaryLibraryService", controller, StringComparison.Ordinal);
+        Assert.DoesNotContain("BuildGlossary", controller, StringComparison.Ordinal);
+        Assert.Contains("Glossary: null,", controller, StringComparison.Ordinal);
+        var factory = controller.IndexOf("return new CaptureContext(", StringComparison.Ordinal);
+        Assert.True(factory > 0, "The capture context is not created where the recording is admitted.");
+        Assert.Contains("_vocabulary.Current);", controller[factory..controller.IndexOf("},", factory, StringComparison.Ordinal)], StringComparison.Ordinal);
+        Assert.Contains("capture.Vocabulary);", controller, StringComparison.Ordinal);
+        var cleanup = controller.IndexOf("cleanup = await _cleanup.Admit(session.Vocabulary.Cleanup)", StringComparison.Ordinal);
+        Assert.True(cleanup > 0, "The cleanup is not admitted with the dictation's vocabulary.");
+        Assert.StartsWith(
+            ".CleanAsync(recognized, cancellationToken, cleanupWritingStyle)",
+            controller[(controller.IndexOf('\n', cleanup) + 1)..].TrimStart(),
+            StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(controller, Regex.Escape(".CleanAsync(")));
+        var use = controller.IndexOf("_postProcessor.Use(session.Vocabulary);", StringComparison.Ordinal);
+        var process = controller.IndexOf("_postProcessor.ProcessDetailed(recognized, result.Text)", StringComparison.Ordinal);
+        Assert.InRange(use, cleanup, process);
+        Assert.Single(Regex.Matches(controller, Regex.Escape("_postProcessor.ProcessDetailed(")));
+        Assert.Single(Regex.Matches(controller, @"_vocabulary\.Current\b"));
 
-        // Quick add's conflict check and the usage report take the selection in use from the shell.
+        // Settings and the stored-settings reapply ask for a new generation; the first one is built at Start.
+        foreach (var method in new[] { "public void ApplySettings(AppSettings settings)", "public void ReloadVocabulary()" })
+        {
+            var start = controller.IndexOf(method, StringComparison.Ordinal);
+            var body = controller[start..controller.IndexOf("\n    }", start, StringComparison.Ordinal)];
+            Assert.Contains("_postProcessor.ReloadSnippets();", body, StringComparison.Ordinal);
+            Assert.Contains("_ = _vocabulary.RefreshAsync();", body, StringComparison.Ordinal);
+        }
+
+        var startMethod = controller.IndexOf("public void Start()", StringComparison.Ordinal);
+        Assert.Contains("_vocabulary.Start();", controller[startMethod..controller.IndexOf("\n    }", startMethod, StringComparison.Ordinal)], StringComparison.Ordinal);
+
+        // The composition root: the vocabulary source, which AI cleanup and the publisher take, and until the W1b
+        // integration it is the interim one over the settings in use. Quick add's conflict check reads its committed
+        // vocabulary, and the usage report's selection comes from it, never from the ids of the settings.
         var app = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "App.xaml.cs"));
-        Assert.Contains(".GetEnabledLibraryEntries(controller.CurrentSettings.EnabledDictionaryLibraryIds)", app, StringComparison.Ordinal);
-        Assert.Contains("() => [.. _controller!.CurrentSettings.EnabledDictionaryLibraryIds],", app, StringComparison.Ordinal);
+        Assert.Contains("AddSingleton<ILibraryVocabularySource>(sp => new InterimLibraryVocabularySource(", app, StringComparison.Ordinal);
+        Assert.Contains("() => _controller?.CurrentSettings.EnabledDictionaryLibraryIds));", app, StringComparison.Ordinal);
+        Assert.Contains("builder.Services.AddSingleton<VocabularyPublisher>();", app, StringComparison.Ordinal);
+        Assert.Contains("services.GetRequiredService<VocabularyPublisher>(),", app, StringComparison.Ordinal);
+        Assert.Contains("baseEntries, services.GetRequiredService<ILibraryVocabularySource>().Current.Entries);", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetEnabledLibraryEntries", app, StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(app, Regex.Escape("EnabledDictionaryLibraryIds")));
         var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
-        Assert.Contains("var libraryIds = _enabledLibrariesInUse();", window, StringComparison.Ordinal);
-        Assert.Contains("_history, _dictionary, _libraries, libraryIds, request.Value.Days", window, StringComparison.Ordinal);
+        Assert.Contains("var vocabulary = _libraryVocabulary.Current;", window, StringComparison.Ordinal);
+        Assert.Contains("[.. vocabulary.AiScope.PermittedLibraryIds],", window, StringComparison.Ordinal);
+        Assert.DoesNotContain("_enabledLibrariesInUse", window, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetEnabledLibraryEntries", window, StringComparison.Ordinal);
+
+        // The usage insight goes under the scope of the report its snapshot came from (contract 3.3.6): the scope is set
+        // wherever the snapshot is, cleared wherever it is, taken with it when the button is pressed and handed to the
+        // scoped CompleteAsync. The window's only other completion is the dictionary suggester's, which sends history and
+        // no library vocabulary, so it goes under no library scope.
+        Assert.Equal(
+            Regex.Matches(window, @"_usageSnapshot = result\.Snapshot;").Count,
+            Regex.Matches(window, @"_usageSnapshot = result\.Snapshot;\r?\n\s*_usageLibraryScope = result\.LibraryScope;").Count);
+        Assert.Equal(
+            Regex.Matches(window, @"_usageSnapshot = null;").Count,
+            Regex.Matches(window, @"_usageSnapshot = null;\r?\n\s*_usageLibraryScope = AiVocabularyScope\.None;").Count);
+        Assert.Single(Regex.Matches(window, @"_usageSnapshot = result\.Snapshot;"));
+        var click = window.IndexOf("private async void UsageInsightButton_Click(", StringComparison.Ordinal);
+        Assert.True(click > 0, "The usage insight's handler was not found.");
+        var handler = window[click..window.IndexOf("\n    }", click, StringComparison.Ordinal)];
+        Assert.Contains("var libraryScope = _usageLibraryScope;", handler, StringComparison.Ordinal);
+        Assert.Matches(@"CompleteAsync\(\s*UsageInsight\.SystemPrompt,\s*UsageInsight\.BuildSummary\(snapshot\),\s*recipient,\s*libraryScope\);", handler);
+        Assert.Equal(
+            ["_cleanup.CompleteAsync(", "_cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);"],
+            Regex.Matches(window, @"_cleanup\.CompleteAsync\([^\r\n]*").Select(match => match.Value.Trim()).Order(StringComparer.Ordinal).ToList());
     }
 
-    // What DictationController.Start and ReloadVocabulary do with the settings in use: the post-processor and the
-    // glossary, both from that one library selection, the glossary composed and budgeted as BuildGlossary does it.
-    private void ApplyVocabulary(AppSettings settingsInUse, TextCleanupService cleanup)
-    {
-        _processor.Reload(settingsInUse.EnabledDictionaryLibraryIds);
-        var vocabulary = CleanupPrompt.ComposeVocabulary(
-            _dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries(settingsInUse.EnabledDictionaryLibraryIds));
-        var glossary = CleanupPrompt.BuildGlossary(
-            vocabulary, CleanupPrompt.GlossaryTermBudget(settingsInUse.AiCleanupPromptStyle, settingsInUse.AiCleanupProvider));
-        cleanup.Configure(new CleanupOptions(
-            settingsInUse.EnableAiCleanup,
-            settingsInUse.AiCleanupProvider,
-            settingsInUse.AiCleanupModel,
-            settingsInUse.AiCleanupAzureEndpoint,
-            settingsInUse.AiCleanupAzureDeployment,
-            WritingStyle: settingsInUse.AiCleanupWritingStyle,
-            Glossary: string.IsNullOrEmpty(glossary) ? null : glossary,
-            PromptStyle: settingsInUse.AiCleanupPromptStyle));
-    }
+    // The fields that decide where a request goes, mapped the way DictationController.BuildCleanupOptions maps them: no
+    // glossary, which each dictation's admission carries.
+    private static CleanupOptions OptionsFor(AppSettings settings) => new(
+        settings.EnableAiCleanup,
+        settings.AiCleanupProvider,
+        settings.AiCleanupModel,
+        settings.AiCleanupAzureEndpoint,
+        settings.AiCleanupAzureDeployment,
+        WritingStyle: settings.AiCleanupWritingStyle,
+        Glossary: null,
+        PromptStyle: settings.AiCleanupPromptStyle);
+
+    private static string Describe(DictionaryEntry entry) => $"{entry.Pattern}|{entry.Replacement}|{entry.WholeWord}|{entry.Enabled}";
 
     private static string RepositoryRoot()
     {

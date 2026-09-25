@@ -16,6 +16,7 @@ using Scribe.Core.Settings;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
+using Scribe.Core.Vocabulary;
 
 namespace Scribe.App.Dictation;
 
@@ -34,12 +35,17 @@ internal sealed class DictationController : IDisposable
     private readonly IAudioCaptureService _audio;
     private readonly IVadService _vad;
     private readonly ITranscriptionService _transcription;
-    private readonly ITextPostProcessor _postProcessor;
+
+    // The dictionary pass over the vocabulary generation of the dictation being processed (DictationPostProcessor).
+    private readonly DictationPostProcessor _postProcessor;
     private readonly ITextCleanupService _cleanup;
     private readonly ITextInjector _injector;
     private readonly IHistoryWriter _historyWriter;
-    private readonly IDictionaryRepository _dictionary;
-    private readonly IDictionaryLibraryService _libraries;
+
+    // Every dictation takes the publisher's current generation when its recording is admitted and uses that one for
+    // its cleanup and its post-processing; saves, library changes and dictionary changes publish newer ones off the
+    // dispatcher (plan 3.8, R6).
+    private readonly VocabularyPublisher _vocabulary;
     private readonly ICleanupFailureLog _failureLog;
     private readonly LastTranscriptStore _lastTranscript;
     private readonly ISettingsRepository _settingsRepository;
@@ -88,8 +94,7 @@ internal sealed class DictationController : IDisposable
         ITextCleanupService cleanup,
         ITextInjector injector,
         IHistoryWriter historyWriter,
-        IDictionaryRepository dictionary,
-        IDictionaryLibraryService libraries,
+        VocabularyPublisher vocabulary,
         ICleanupFailureLog failureLog,
         LastTranscriptStore lastTranscript,
         ISettingsRepository settingsRepository,
@@ -99,12 +104,11 @@ internal sealed class DictationController : IDisposable
         _audio = audio;
         _vad = vad;
         _transcription = transcription;
-        _postProcessor = postProcessor;
+        _postProcessor = new DictationPostProcessor(postProcessor);
         _cleanup = cleanup;
         _injector = injector;
         _historyWriter = historyWriter;
-        _dictionary = dictionary;
-        _libraries = libraries;
+        _vocabulary = vocabulary;
         _failureLog = failureLog;
         _lastTranscript = lastTranscript;
         _settingsRepository = settingsRepository;
@@ -198,7 +202,11 @@ internal sealed class DictationController : IDisposable
         var settings = _settingsRepository.Load();
         Volatile.Write(ref _settings, settings);
         _unavailableMicrophone.SelectionCommitted(settings.InputDeviceId);
-        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
+
+        // The first generation is built here, before the hotkey is live, so the first dictation after startup never runs
+        // without its vocabulary; later ones are built off the dispatcher.
+        _postProcessor.ReloadSnippets();
+        _vocabulary.Start();
         var startupOptions = BuildCleanupOptions(settings);
         lock (_announceGate)
         {
@@ -348,9 +356,9 @@ internal sealed class DictationController : IDisposable
     /// <summary>
     /// Replaces the live settings with settings as stored: the settings window's document right after its save stored
     /// it, the stored settings after a dictionary change the window stored on its own (<see cref="StoredSettingsReapply"/>),
-    /// and the tray's change once it is stored. Re-binds the hotkey and reloads the post-processor so changes take
-    /// effect on the next capture without a restart. Decode-thread changes still require a restart (the recognizer is
-    /// warm-loaded).
+    /// and the tray's change once it is stored. Re-binds the hotkey, reloads the snippets and asks for a new vocabulary
+    /// generation (built off the dispatcher) so changes take effect on the next capture without a restart. Decode-thread
+    /// changes still require a restart (the recognizer is warm-loaded).
     /// </summary>
     public void ApplySettings(AppSettings settings)
     {
@@ -366,7 +374,8 @@ internal sealed class DictationController : IDisposable
         {
             _hotkeys.UpdateBindings(settings.Hotkey, settings.DictationOnlyHotkey);
         }
-        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
+        _postProcessor.ReloadSnippets();
+        _ = _vocabulary.RefreshAsync();
         ReconfigureCleanup(settings);
         RescheduleIdleRelease(); // pick up a changed ReleaseModelsAfterIdleMinutes immediately
         _log.LogInformation("Applied updated settings; binding = {Binding}.", HotkeyText.Describe(settings.Hotkey));
@@ -374,16 +383,15 @@ internal sealed class DictationController : IDisposable
 
     /// <summary>
     /// Puts a dictionary change the settings window stored on its own into effect when the stored settings cannot be
-    /// applied (<see cref="StoredSettingsReapply"/>): the post-processor reloads, and cleanup is handed its glossary again,
-    /// both from the library selection of the settings in use, which changes what the prompt says and nothing else. No
+    /// applied (<see cref="StoredSettingsReapply"/>): the snippets reload, and a new vocabulary generation is built from
+    /// the dictionary as stored and the library vocabulary in use, which a dictionary-only reload never changes. No
     /// settings are applied, so the provider, the hotkeys, the libraries and everything else stay as they are: the stored
     /// document is not read again, since the defaults standing in for it are not the user's.
     /// </summary>
     public void ReloadVocabulary()
     {
-        var settings = CurrentSettings;
-        _postProcessor.Reload(settings.EnabledDictionaryLibraryIds);
-        ReconfigureCleanup(settings);
+        _postProcessor.ReloadSnippets();
+        _ = _vocabulary.RefreshAsync();
         _log.LogInformation("Reloaded the dictionary on the settings in use; no settings were applied.");
     }
 
@@ -500,7 +508,12 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public void SetHotkeyCaptureMode(bool enabled) => _hotkeys.SetCaptureMode(enabled);
 
-    /// <summary>Maps persisted AppSettings into the cleanup service's provider-agnostic options.</summary>
+    /// <summary>
+    /// Maps persisted AppSettings into the cleanup service's provider-agnostic options. They carry no glossary: each
+    /// dictation's requests carry the glossary of the vocabulary generation it was admitted with
+    /// (<see cref="ITextCleanupService.Admit"/>), judged by that generation's library scope, so a vocabulary change is
+    /// never a configuration change and a request never carries vocabulary no admission stands behind.
+    /// </summary>
     private CleanupOptions BuildCleanupOptions(AppSettings settings) => new(
         settings.EnableAiCleanup,
         settings.AiCleanupProvider,
@@ -518,7 +531,7 @@ internal sealed class DictationController : IDisposable
                 settings.AiCleanupAzureSubscriptionTenantId,
                 settings.AiCleanupAzureTenantId),
         settings.AiCleanupWritingStyle,
-        BuildGlossary(settings),
+        Glossary: null,
         settings.AiCleanupCustomEndpoint,
         settings.AiCleanupCustomModel,
         settings.AiCleanupCustomApiKey,
@@ -530,39 +543,6 @@ internal sealed class DictationController : IDisposable
         settings.AiCleanupAzureClientId,
         settings.AiCleanupAzureClientSecret,
         settings.AiCleanupCopilotModel);
-
-    // Renders the user's enabled dictionary entries into a glossary block appended to the cleanup
-    // prompt. Built here (not in the service) so it refreshes whenever settings are (re)applied,
-    // i.e. right after the dictionary editor saves, and so the value lives on the value-equality
-    // CleanupOptions record, which lets the service detect the change and rebuild its agent. Enabled
-    // dictionary libraries are layered on top of the base dictionary, the base winning on conflict.
-    //
-    // The term budget follows the resolved prompt style, not a single global number. A cloud endpoint
-    // is a text service with a huge context window and no reason to drop vocabulary; a 1-2B on-device
-    // model has to fit the guardrails, style, transcript and its own output into a few thousand
-    // tokens, so there the list stays short. Merge order matters either way: the user's own entries
-    // come first, because those are the terms a model cannot infer and must survive truncation. The
-    // libraries are those these settings enable, the same selection the post-processor was given.
-    private string? BuildGlossary(AppSettings settings)
-    {
-        try
-        {
-            // Composed and budgeted by the same Core code the dictionary page counts with (GlossaryHint).
-            var effective = CleanupPrompt.ComposeVocabulary(
-                _dictionary.GetEnabled(), _libraries.GetEnabledLibraryEntries(settings.EnabledDictionaryLibraryIds));
-            var maxTerms = CleanupPrompt.GlossaryTermBudget(settings.AiCleanupPromptStyle, settings.AiCleanupProvider);
-
-            var glossary = CleanupPrompt.BuildGlossary(effective, maxTerms);
-            return string.IsNullOrEmpty(glossary) ? null : glossary;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(
-                "Failed to build the AI glossary from the dictionary; continuing without it: {Failure}",
-                FailureShape.DescribeWithStack(ex));
-            return null;
-        }
-    }
 
     /// <summary>Suspends or resumes dictation without removing the keyboard hook.</summary>
     public void SetPaused(bool paused)
@@ -602,22 +582,26 @@ internal sealed class DictationController : IDisposable
 
     private void OnActivated(object? sender, HotkeyTriggerEventArgs e)
     {
-        // Resolved before the lifecycle's gate is taken; the factory below only reads cheap platform state under it,
-        // so the target window it records is the one focused at the exact moment the recording began. A press turned away
-        // because the previous dictation is still processing releases its own latch (see DictationStartPolicy), so a
-        // toggle's next tap starts a dictation instead of ending one that never began.
+        // Resolved before the lifecycle's gate is taken; the factory below only reads cheap platform state and the current
+        // vocabulary generation under it, so the target window it records is the one focused at the exact moment the
+        // recording began. A press turned away because the previous dictation is still processing releases its own latch
+        // (see DictationStartPolicy), so a toggle's next tap starts a dictation instead of ending one that never began.
         var current = CurrentSettings;
         var activation = DictationStartPolicy.BeginRecording(
             _lifecycle,
             () =>
             {
                 var targetWindow = GetForegroundWindow();
+
+                // The vocabulary generation is taken here, at the recording's admission, with its settings: a lock-free
+                // read of the newest complete generation, so a Save while this dictation runs changes nothing it uses.
                 return new CaptureContext(
                     DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
                     targetWindow,
                     ProcessNameForWindow(targetWindow),
                     Stopwatch.GetTimestamp(),
-                    e.Activation);
+                    e.Activation,
+                    _vocabulary.Current);
             },
             () => _hotkeys.CancelToggle(e.Activation));
 
@@ -929,7 +913,8 @@ internal sealed class DictationController : IDisposable
             capture.TargetWindow,
             capture.TargetApp,
             capture.StartedTimestamp,
-            reason);
+            reason,
+            capture.Vocabulary);
 
         // Everything from here to the hand-off is guarded: the admission is ended only by the processing task, so a
         // throw before that task starts would leave the controller Processing for good.
@@ -1206,7 +1191,10 @@ internal sealed class DictationController : IDisposable
             {
                 currentStage = "AI cleanup";
                 var cleanupTimer = Stopwatch.StartNew();
-                cleanup = await _cleanup
+
+                // With the vocabulary this dictation was admitted with: its glossary, and every request handed over only
+                // while that vocabulary's library scope is still permitted, so local rules finish a revoked one.
+                cleanup = await _cleanup.Admit(session.Vocabulary.Cleanup)
                     .CleanAsync(recognized, cancellationToken, cleanupWritingStyle)
                     .ConfigureAwait(false);
                 cleanupTimer.Stop();
@@ -1276,6 +1264,9 @@ internal sealed class DictationController : IDisposable
 
             currentStage = "Dictionary and snippets";
             var postTimer = Stopwatch.StartNew();
+
+            // The same generation the cleanup above ran with, never a newer one a Save published meanwhile.
+            _postProcessor.Use(session.Vocabulary);
             var postProcessing = settings.ApplyPostProcessing
                 ? _postProcessor.ProcessDetailed(recognized, result.Text)
                 : new TextPostProcessingResult(recognized, []);
@@ -1799,17 +1790,20 @@ internal sealed class DictationController : IDisposable
         nint TargetWindow,
         string? TargetApp,
         long StartedTimestamp,
-        DictationStopReason StopReason);
+        DictationStopReason StopReason,
+        VocabularyGeneration Vocabulary);
 
     // Everything a recording needs to remember from the moment it started, captured under the lifecycle's gate
     // atomically with the phase change. Settings already carry the per-trigger overrides. HotkeyActivation is the press
     // that started it, the only one a stop Scribe makes itself may release (see DictationStopPolicy.BeginStop).
+    // Vocabulary is the generation the dictation was admitted with, the one its cleanup and its post-processing use.
     private sealed record CaptureContext(
         AppSettings Settings,
         nint TargetWindow,
         string? TargetApp,
         long StartedTimestamp,
-        long HotkeyActivation);
+        long HotkeyActivation,
+        VocabularyGeneration Vocabulary);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

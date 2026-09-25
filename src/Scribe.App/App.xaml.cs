@@ -16,12 +16,14 @@ using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Hotkeys;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 using Scribe.Core.Vad;
+using Scribe.Core.Vocabulary;
 using Wpf.Ui.Appearance;
 
 namespace Scribe.App;
@@ -150,6 +152,15 @@ public partial class App : Application
         builder.Services.AddSingleton<AzureCliInstaller>();
         builder.Services.AddSingleton<StartupRegistration>();
         builder.Services.AddSingleton<SessionDiagnostics>();
+
+        // The library vocabulary's source and admission point. Until the W1b integration commit this is stream W-V's
+        // stand-in over release 0.4.4's selection seam, with the libraries the settings dictation runs on; the
+        // integration deletes it and registers the library service (DictionaryLibraryService) as the source instead.
+        // AI cleanup takes it through its constructor, and the publisher builds every dictation's vocabulary from it.
+        builder.Services.AddSingleton<ILibraryVocabularySource>(sp => new InterimLibraryVocabularySource(
+            sp.GetRequiredService<IDictionaryLibraryService>(),
+            () => _controller?.CurrentSettings.EnabledDictionaryLibraryIds));
+        builder.Services.AddSingleton<VocabularyPublisher>();
 
         builder.Services.AddScribeTelemetry();
         builder.Logging.ClearProviders();
@@ -323,8 +334,7 @@ public partial class App : Application
             services.GetRequiredService<ITextCleanupService>(),
             services.GetRequiredService<ITextInjector>(),
             services.GetRequiredService<IHistoryWriter>(),
-            services.GetRequiredService<IDictionaryRepository>(),
-            services.GetRequiredService<IDictionaryLibraryService>(),
+            services.GetRequiredService<VocabularyPublisher>(),
             services.GetRequiredService<ICleanupFailureLog>(),
             services.GetRequiredService<LastTranscriptStore>(),
             services.GetRequiredService<ISettingsRepository>(),
@@ -1221,7 +1231,7 @@ public partial class App : Application
                     _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
                 },
                 () => _controller!.ReloadVocabulary(),
-                () => [.. _controller!.CurrentSettings.EnabledDictionaryLibraryIds],
+                services.GetRequiredService<ILibraryVocabularySource>(),
                 capturing => _controller?.SetHotkeyCaptureMode(capturing),
                 _updates,
                 services.GetRequiredService<SessionDiagnostics>());
@@ -1498,18 +1508,14 @@ public partial class App : Application
                         ? settings.CurrentDictionaryEntries()
                         : services.GetRequiredService<IDictionaryRepository>().GetAll();
 
-                    // Compose in the enabled libraries. The popup shows finished text, so the term a
-                    // user reaches for is often a shipped library's output; without these the
-                    // single-pass conflict check misses the very case that is easiest to walk into.
-                    // The selection dictation runs on, not a fresh read of the stored document.
+                    // Compose in the committed library vocabulary. The popup shows finished text, so the term a user
+                    // reaches for is often a shipped library's output; without these the single-pass conflict check
+                    // misses the very case that is easiest to walk into. The vocabulary dictation applies, never a
+                    // draft or a fresh read of the stored document.
                     try
                     {
-                        return _controller is { } controller
-                            ? DictionaryLibraryComposer.Merge(
-                                baseEntries,
-                                services.GetRequiredService<IDictionaryLibraryService>()
-                                    .GetEnabledLibraryEntries(controller.CurrentSettings.EnabledDictionaryLibraryIds))
-                            : baseEntries;
+                        return DictionaryLibraryComposer.Merge(
+                            baseEntries, services.GetRequiredService<ILibraryVocabularySource>().Current.Entries);
                     }
                     catch
                     {
