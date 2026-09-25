@@ -218,21 +218,43 @@ public sealed class LibraryCsvManagedTests
     [InlineData("\"pattern\",\"replacement\",\"whole_word\"")]
     [InlineData("pattern,\"replacement\",whole_word,enabled")]
     [InlineData("\"pattern\",replacement,whole_word,enabled")]
-    public void A_marked_file_counts_only_an_unquoted_header_while_an_import_also_counts_a_quoted_one(string header)
+    [InlineData("\"pattern\",\"replacement\",\"whole_word\",\"enabled\",,")]
+    public void A_quoted_header_of_three_or_four_columns_counts_in_a_marked_file_as_in_an_import(string header)
     {
-        // Contract 6.4: in a file with the format marker the header counts only unquoted, as every file this version
-        // writes has it, so a quoted header-shaped first record is a row, reported because "whole_word" is not a flag.
-        // An import also counts a quoted header of three or four columns (3.4.4), which a spreadsheet that quotes every
-        // text cell writes.
+        // One header predicate for both reads (ILibraryCsvCodec, fcf7707): a header of three or four columns counts quoted
+        // or not, because its third field, whole_word, is never a valid flag, so the record could only ever be a row error.
+        // A managed file a spreadsheet re-quoted therefore stays editable instead of turning partly readable.
         var csv = "# name: Quoted header\n# scribe-format: 2\n" + header + "\nx,X,true,true\n";
 
         var managed = Codec.ReadManaged(CsvTestData.Utf8(csv));
         var imported = Codec.ReadImport(CsvTestData.Utf8(csv));
 
-        Assert.Equal([new TermValues("x", "X")], managed.Terms);
-        Assert.Equal([new LibraryCsvRowError(3, LibraryCsvRowErrorKind.InvalidWholeWord, "whole_word")], managed.Errors);
-        Assert.Equal([new TermValues("x", "X")], imported.Terms);
-        Assert.Empty(imported.Errors);
+        foreach (var read in new[] { managed, imported })
+        {
+            Assert.Equal([new TermValues("x", "X")], read.Terms);
+            Assert.Empty(read.Errors);
+        }
+    }
+
+    [Theory]
+    [InlineData("\"pattern\",\"replacement\"")]
+    [InlineData("\"pattern\",replacement")]
+    [InlineData("pattern,\"replacement\"")]
+    [InlineData("\"pattern\",\"replacement\",,")]
+    public void A_quoted_two_column_record_stays_a_row_in_a_marked_file_as_in_an_import(string first)
+    {
+        // A quoted two-column record could be a real row, "pattern" written "replacement", so neither read takes it for the
+        // header; the header counts in two columns only unquoted.
+        var csv = "# scribe-format: 2\n" + first + "\nx,X\n";
+
+        var managed = Codec.ReadManaged(CsvTestData.Utf8(csv));
+        var imported = Codec.ReadImport(CsvTestData.Utf8(csv));
+
+        foreach (var read in new[] { managed, imported })
+        {
+            Assert.Equal([new TermValues("pattern", "replacement"), new TermValues("x", "X")], read.Terms);
+            Assert.Empty(read.Errors);
+        }
     }
 
     [Fact]

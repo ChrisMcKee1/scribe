@@ -41,9 +41,8 @@ namespace Scribe.Core.Libraries;
 /// </para>
 /// <para>
 /// The column header counts only as the first data record and only by its shape (<c>pattern</c> and a prefix of
-/// <c>replacement</c>, <c>whole_word</c>, <c>enabled</c>). In a managed file with the format marker it must be unquoted
-/// (6.4), as in every file this version writes; an import also counts a quoted one of three or four columns (3.4.4),
-/// which can never be a real row because <c>whole_word</c> is not a flag.
+/// <c>replacement</c>, <c>whole_word</c>, <c>enabled</c>), by one predicate for both reads: a header of three or four
+/// columns counts quoted or not, because its third field is never a valid flag, and a quoted two-column record is data.
 /// </para>
 /// </remarks>
 public sealed class LibraryCsvCodec : ILibraryCsvCodec
@@ -312,7 +311,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
 
                 beforeData = false;
                 reverseGuard = ParseVersion(header.FormulaGuard) == LibraryFormulaGuard.Version;
-                if (IsHeader(record, quotedAllowed: true))
+                if (IsHeader(record))
                 {
                     continue;
                 }
@@ -354,7 +353,7 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
             if (firstDataRecord)
             {
                 firstDataRecord = false;
-                if (IsHeader(record, quotedAllowed: false))
+                if (IsHeader(record))
                 {
                     continue;
                 }
@@ -431,12 +430,11 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
     }
 
     // "pattern" and then a prefix of "replacement", "whole_word", "enabled", at least two columns, compared trimmed and
-    // without case, with a spreadsheet's trailing empty fields ignored. In a managed file with the format marker only an
-    // unquoted record counts (6.4): every file this version writes has one, so a quoted record there is a row. An import
-    // also counts a quoted one of three or four columns (3.4.4): it can never be a real row, because "whole_word" is not
-    // a flag, and a spreadsheet that quotes every text cell writes one. A quoted two-column record could be a real row
-    // ("pattern" written "replacement"), so it never counts.
-    private static bool IsHeader(CsvRecord record, bool quotedAllowed)
+    // without case, with a spreadsheet's trailing empty fields ignored. One predicate for both reads (ILibraryCsvCodec):
+    // a quoted two-column record could be a real row ("pattern" written "replacement"), so it must be unquoted; with a
+    // third column it cannot be one, because "whole_word" is not a flag, so it counts quoted or not, and a file a
+    // spreadsheet saved with every text cell quoted keeps its header, a managed one included.
+    private static bool IsHeader(CsvRecord record)
     {
         var fields = record.Fields;
         var count = fields.Count;
@@ -450,18 +448,15 @@ public sealed class LibraryCsvCodec : ILibraryCsvCodec
             return false;
         }
 
-        var quoted = false;
         for (var i = 0; i < count; i++)
         {
             if (!string.Equals(fields[i].Text.Trim(), HeaderColumns[i], StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
-
-            quoted |= fields[i].Quoted;
         }
 
-        return !quoted || (quotedAllowed && count > 2);
+        return count > 2 || (!fields[0].Quoted && !fields[1].Quoted);
     }
 
     // A metadata record's line is its fields rejoined with commas, less the trailing unquoted empty fields a spreadsheet

@@ -132,12 +132,16 @@ public sealed class LibraryCsvImportTests
         var bom = Codec.ReadImport([0xEF, 0xBB, 0xBF, .. Encoding.UTF8.GetBytes(csv)]);
         var little = Codec.ReadImport([0xFF, 0xFE, .. Encoding.Unicode.GetBytes(csv)]);
         var big = Codec.ReadImport([0xFE, 0xFF, .. Encoding.BigEndianUnicode.GetBytes(csv)]);
+        var utf32Little = Codec.ReadImport([0xFF, 0xFE, 0x00, 0x00, .. new UTF32Encoding(bigEndian: false, byteOrderMark: false).GetBytes(csv)]);
+        var utf32Big = Codec.ReadImport([0x00, 0x00, 0xFE, 0xFF, .. new UTF32Encoding(bigEndian: true, byteOrderMark: false).GetBytes(csv)]);
 
         Assert.Equal(new LibraryTextEncoding(65001, false, false, false), plain.Encoding);
         Assert.Equal(new LibraryTextEncoding(65001, true, false, false), bom.Encoding);
         Assert.Equal(new LibraryTextEncoding(1200, true, false, false), little.Encoding);
         Assert.Equal(new LibraryTextEncoding(1201, true, false, false), big.Encoding);
-        foreach (var read in new[] { plain, bom, little, big })
+        Assert.Equal(new LibraryTextEncoding(12000, true, false, false), utf32Little.Encoding);
+        Assert.Equal(new LibraryTextEncoding(12001, true, false, false), utf32Big.Encoding);
+        foreach (var read in new[] { plain, bom, little, big, utf32Little, utf32Big })
         {
             Assert.Equal("\u00C9quipe \u4E2D", read.Name);
             Assert.Equal([new TermValues("\u00E9t\u00E9", "Summer")], read.Terms);
