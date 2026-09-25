@@ -122,36 +122,82 @@
 
         <!-- WPF-UI 4.3.0 writes every badge in its text-on-accent colour, white in the light theme and black in the
              dark one, whatever the badge's own fill, so the light theme drew the coverage badges white on the
-             palette's orange (2.16:1) and light blue (2.63:1). Each palette fill takes the foreground
-             AccentContrastResources chose for it; a badge on the accent keeps WPF-UI's. -->
+             palette's orange (2.16:1) and light blue (2.63:1). In a light or dark theme each palette fill takes the
+             foreground AccentContrastResources chose for it; a badge on the accent keeps WPF-UI's, and in a contrast
+             theme the flag is off and every badge draws the theme's own. -->
         <Style TargetType="ui:Badge" BasedOn="{StaticResource {x:Type ui:Badge}}">
+            <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
             <Style.Triggers>
-                <Trigger Property="Appearance" Value="Caution">
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                        <Condition Property="Appearance" Value="Caution"/>
+                    </MultiTrigger.Conditions>
                     <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.CautionBadgeForeground}}"/>
-                </Trigger>
-                <Trigger Property="Appearance" Value="Info">
+                </MultiTrigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                        <Condition Property="Appearance" Value="Info"/>
+                    </MultiTrigger.Conditions>
                     <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.InfoBadgeForeground}}"/>
-                </Trigger>
-                <Trigger Property="Appearance" Value="Danger">
+                </MultiTrigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                        <Condition Property="Appearance" Value="Danger"/>
+                    </MultiTrigger.Conditions>
                     <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.DangerBadgeForeground}}"/>
-                </Trigger>
-                <Trigger Property="Appearance" Value="Success">
+                </MultiTrigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                        <Condition Property="Appearance" Value="Success"/>
+                    </MultiTrigger.Conditions>
                     <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SuccessBadgeForeground}}"/>
-                </Trigger>
+                </MultiTrigger>
             </Style.Triggers>
         </Style>
 
         <!-- The rail and the Snippets and Profiles lists mark the selected item only with the accent fill, which with a
              dark accent in the dark theme (or a light one in the light theme) is under the 3:1 a state needs against
-             the page (1.93:1 for #0E0E70). There its text is also SemiBold, so the selection shows without the fill;
-             AccentContrastResources decides, and leaves it Normal wherever the fill is strong and in contrast themes.
-             The rail's own item style is based on this one. -->
+             the page (1.93:1 for #0E0E70). There the selected item also gets a 1 DIP outline in its own text colour,
+             drawn over the transparent ring WPF-UI's template already reserves round every item, so selecting an item
+             changes no width: a SemiBold label did, and a phrase that nearly filled the Snippets list then needed a
+             horizontal scroll bar once selected. AccentContrastResources decides, and leaves the outline transparent
+             wherever the fill stands out and in contrast themes. Otherwise WPF-UI 4.3.0's own template
+             (ListBoxItem.xaml). The rail's item style is based on this one: its BasedOn resolves to the implicit style
+             defined here, in the same window's resources, before WPF-UI's. -->
         <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
-            <Style.Triggers>
-                <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="FontWeight" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemWeight}}"/>
-                </Trigger>
-            </Style.Triggers>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Grid>
+                            <Border x:Name="Border"
+                                    Margin="0"
+                                    Padding="{TemplateBinding Padding}"
+                                    Background="Transparent"
+                                    BorderThickness="1"
+                                    CornerRadius="{TemplateBinding Border.CornerRadius}">
+                                <ContentPresenter/>
+                            </Border>
+                            <Border x:Name="SelectionOutline" BorderThickness="1"
+                                    CornerRadius="{TemplateBinding Border.CornerRadius}"
+                                    IsHitTestVisible="False" SnapsToDevicePixels="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource MenuBarItemBackgroundSelected}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource ListBoxItemSelectedBackgroundThemeBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource ListBoxItemSelectedForegroundThemeBrush}"/>
+                                <Setter TargetName="SelectionOutline" Property="BorderBrush" Value="{DynamicResource {x:Static infra:AccentContrastKeys.SelectedItemOutline}}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!-- Check boxes in the editable grids. Outside edit mode a check box cell shows a box that takes

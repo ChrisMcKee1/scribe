@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Scribe.App"
              xmlns:infra="clr-namespace:Scribe.App.Infrastructure"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <Application.Resources>
         <ResourceDictionary>
@@ -11,17 +12,50 @@
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
 
-            <!-- Scribe's own keys for foregrounds on coloured fills and for its selection cues. AccentContrastResources
-                 writes them for every theme before the first window; until then they hold no selection cue, and black
-                 on WPF-UI's palette fills, which reads on each of them in both themes. -->
+            <!-- Scribe's own keys for colours on coloured fills, for links and for its selection cues.
+                 AccentContrastResources writes them for every theme before the first window. Until then the flag is off,
+                 so no Scribe trigger that replaces a WPF-UI or WPF colour is active; the keys hold no selection cue, and
+                 black on WPF-UI's palette fills, which reads on each of them in both themes. -->
+            <sys:Boolean x:Key="{x:Static infra:AccentContrastKeys.Applies}">False</sys:Boolean>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.CautionBadgeForeground}" Color="#FF000000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.InfoBadgeForeground}" Color="#FF000000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.DangerBadgeForeground}" Color="#FF000000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SuccessBadgeForeground}" Color="#FF000000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.DangerButtonForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.PrimaryPressedForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.DangerPressedForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SecondaryPressedForeground}" Color="#FF000000"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.HyperlinkForeground}" Color="#FF0066CC"/>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.HyperlinkHoverForeground}" Color="#FFFF0000"/>
             <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedRowOutline}" Color="Transparent"/>
             <FontWeight x:Key="{x:Static infra:AccentContrastKeys.SelectedRowNameWeight}">Normal</FontWeight>
-            <FontWeight x:Key="{x:Static infra:AccentContrastKeys.SelectedItemWeight}">Normal</FontWeight>
+            <SolidColorBrush x:Key="{x:Static infra:AccentContrastKeys.SelectedItemOutline}" Color="Transparent"/>
+
+            <!-- A link. WPF-UI 4.3.0 has no style for Hyperlink, so a link draws in WPF's own: SystemColors.HotTrackColor
+                 at rest, #0066CC, which is 2.93:1 on the dark page whatever the accent, and red while hovered, 4.07:1
+                 there and 3.60:1 on the light page. In a light or dark theme it takes the lightness
+                 AccentContrastResources corrected; in a contrast theme the flag is off and WPF's style draws the
+                 theme's link colours, as before. No BasedOn: WPF's own style still applies under this one. -->
+            <Style TargetType="Hyperlink">
+                <Setter Property="infra:AccentContrastFlag.Applies" Value="{DynamicResource {x:Static infra:AccentContrastKeys.Applies}}"/>
+                <Style.Triggers>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                            <Condition Property="IsEnabled" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.HyperlinkForeground}}"/>
+                    </MultiTrigger>
+                    <MultiTrigger>
+                        <MultiTrigger.Conditions>
+                            <Condition Property="infra:AccentContrastFlag.Applies" Value="True"/>
+                            <Condition Property="IsEnabled" Value="True"/>
+                            <Condition Property="IsMouseOver" Value="True"/>
+                        </MultiTrigger.Conditions>
+                        <Setter Property="Foreground" Value="{DynamicResource {x:Static infra:AccentContrastKeys.HyperlinkHoverForeground}}"/>
+                    </MultiTrigger>
+                </Style.Triggers>
+            </Style>
 
             <!-- Don't add an implicit style for a type X here with BasedOn="{StaticResource {x:Type X}}". In this
                  compiled application dictionary that reference resolves to the style being defined, which WPF returns

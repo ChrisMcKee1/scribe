@@ -31,8 +31,10 @@ public readonly record struct SrgbColor(byte A, byte R, byte G, byte B)
     }
 
     /// <summary>
-    /// The opaque colour this one shows as when drawn over <paramref name="background"/>: straight-alpha "over", per
-    /// 8-bit sRGB channel, which is how WPF blends a translucent brush. A hover fill at 90% is measured as it is drawn.
+    /// The opaque colour this one shows as when drawn over <paramref name="background"/>, as WPF blends it: the colour is
+    /// premultiplied by its alpha and rounded to 8 bits first, then the background is added under it, so a hover fill at
+    /// alpha 229 is measured as drawn. Blending exactly instead is off by one level where the premultiplied value rounds
+    /// up: the pressed accent fill of #0E0E70 in the dark theme is #4D4D82 in WPF's render, not #4E4E82.
     /// </summary>
     public SrgbColor Over(SrgbColor background)
     {
@@ -46,11 +48,86 @@ public readonly record struct SrgbColor(byte A, byte R, byte G, byte B)
             return this;
         }
 
-        var alpha = A / 255.0;
-        return FromRgb(Blend(R, background.R, alpha), Blend(G, background.G, alpha), Blend(B, background.B, alpha));
+        var alpha = A;
+        return FromRgb(Blend(R, background.R), Blend(G, background.G), Blend(B, background.B));
 
-        static byte Blend(byte top, byte bottom, double alpha) =>
-            (byte)Math.Round((top * alpha) + (bottom * (1 - alpha)), MidpointRounding.AwayFromZero);
+        byte Blend(byte top, byte bottom)
+        {
+            var premultiplied = Math.Round(top * alpha / 255.0);
+            return (byte)Math.Round(premultiplied + (bottom * (255 - alpha) / 255.0), MidpointRounding.AwayFromZero);
+        }
+    }
+    /// <summary>
+    /// Hue in degrees from 0 to 360, saturation and lightness from 0 to 1, as HSL writes them. Alpha is not part of it.
+    /// </summary>
+    public (double Hue, double Saturation, double Lightness) ToHsl()
+    {
+        double r = R / 255.0, g = G / 255.0, b = B / 255.0;
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var lightness = (max + min) / 2;
+        if (max == min)
+        {
+            return (0, 0, lightness);
+        }
+
+        var delta = max - min;
+        var saturation = lightness > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+        double hue;
+        if (max == r)
+        {
+            hue = ((g - b) / delta) + (g < b ? 6 : 0);
+        }
+        else if (max == g)
+        {
+            hue = ((b - r) / delta) + 2;
+        }
+        else
+        {
+            hue = ((r - g) / delta) + 4;
+        }
+
+        return (hue * 60, saturation, lightness);
+    }
+
+    /// <summary>The colour with the given HSL values, rounded to 8-bit channels.</summary>
+    public static SrgbColor FromHsl(double hue, double saturation, double lightness, byte alpha = 255)
+    {
+        saturation = Math.Clamp(saturation, 0, 1);
+        lightness = Math.Clamp(lightness, 0, 1);
+        if (saturation == 0)
+        {
+            var grey = ToByte(lightness);
+            return new SrgbColor(alpha, grey, grey, grey);
+        }
+
+        var q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - (lightness * saturation);
+        var p = (2 * lightness) - q;
+        var h = (((hue % 360) + 360) % 360) / 360;
+        return new SrgbColor(alpha, ToByte(Channel(h + (1.0 / 3))), ToByte(Channel(h)), ToByte(Channel(h - (1.0 / 3))));
+
+        double Channel(double t)
+        {
+            if (t < 0)
+            {
+                t += 1;
+            }
+
+            if (t > 1)
+            {
+                t -= 1;
+            }
+
+            return t switch
+            {
+                < 1.0 / 6 => p + ((q - p) * 6 * t),
+                < 0.5 => q,
+                < 2.0 / 3 => p + ((q - p) * ((2.0 / 3) - t) * 6),
+                _ => p,
+            };
+        }
+
+        static byte ToByte(double value) => (byte)Math.Round(value * 255, MidpointRounding.AwayFromZero);
     }
 
     /// <summary>Reads <c>#RRGGBB</c> or <c>#AARRGGBB</c>, the forms XAML and this type's own text use.</summary>

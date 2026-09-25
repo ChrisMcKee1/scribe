@@ -77,7 +77,12 @@ public sealed class SrgbColorTests
     {
         // AccentFillColorSecondary (the dark accent fill at alpha 229) over the dark page: what a hovered button shows.
         Assert.Equal(SrgbColor.Parse("#53538E"), SrgbColor.Parse("#E559599B").Over(SrgbColor.Parse("#202020")));
-        Assert.Equal(SrgbColor.Parse("#4E4E82"), SrgbColor.Parse("#CC59599B").Over(SrgbColor.Parse("#202020")));
+        Assert.Equal(SrgbColor.Parse("#4D4D82"), SrgbColor.Parse("#CC59599B").Over(SrgbColor.Parse("#202020")));
+
+        // The pressed accent fill of #0E0E70 in the light theme, and a danger button pressed in the dark one, as WPF's
+        // own renders measure them.
+        Assert.Equal(SrgbColor.Parse("#3A3A77"), SrgbColor.Parse("#CC0B0B57").Over(SrgbColor.Parse("#F3F3F3")));
+        Assert.Equal(SrgbColor.Parse("#B53930"), SrgbColor.Parse("#F44336").WithOpacity(0.7).Over(SrgbColor.Parse("#202020")));
     }
 
     [Fact]
@@ -101,6 +106,57 @@ public sealed class SrgbColorTests
         Assert.Equal(0, SrgbColor.White.WithOpacity(-1).A);
         Assert.Equal(255, SrgbColor.White.WithOpacity(double.NaN).A);
         Assert.Equal(0x80, SrgbColor.Black.WithAlpha(0x80).A);
+    }
+
+    [Fact]
+    public void Brush_opacity_0_9_and_alpha_229_are_different_fills()
+    {
+        // The About mark is AccentFillColorSecondaryBrush, the accent fill with brush opacity 0.9, which WPF draws as
+        // #53538F over the dark page; a hovered accent button is AccentFillColorSecondary, alpha 229, #53538E.
+        var page = SrgbColor.Parse("#202020");
+
+        Assert.Equal(SrgbColor.Parse("#53538F"), SrgbColor.Parse("#59599B").WithOpacity(0.9).Over(page));
+        Assert.Equal(SrgbColor.Parse("#53538E"), SrgbColor.Parse("#59599B").WithAlpha(229).Over(page));
+    }
+
+    [Theory]
+    [InlineData("#FF0000", 0, 1, 0.5)]
+    [InlineData("#0066CC", 210, 1, 0.4)]
+    [InlineData("#808080", 0, 0, 0.50196)]
+    [InlineData("#42429B", 240, 0.40271, 0.43333)]
+    [InlineData("#E6A700", 43.565, 1, 0.45098)]
+    public void Known_colours_have_the_HSL_CSS_gives_them(string hex, double hue, double saturation, double lightness)
+    {
+        var (h, s, l) = SrgbColor.Parse(hex).ToHsl();
+
+        Assert.Equal(hue, h, 3);
+        Assert.Equal(saturation, s, 4);
+        Assert.Equal(lightness, l, 4);
+    }
+
+    [Fact]
+    public void Hsl_round_trips_every_colour_on_a_grid()
+    {
+        for (var r = 0; r <= 255; r += 17)
+        {
+            for (var g = 0; g <= 255; g += 17)
+            {
+                for (var b = 0; b <= 255; b += 17)
+                {
+                    var color = SrgbColor.FromRgb((byte)r, (byte)g, (byte)b);
+                    var (h, s, l) = color.ToHsl();
+                    Assert.Equal(color, SrgbColor.FromHsl(h, s, l));
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void From_hsl_keeps_the_alpha_it_is_given_and_clamps_the_rest()
+    {
+        Assert.Equal(SrgbColor.Parse("#80FF0000"), SrgbColor.FromHsl(360, 1, 0.5, 0x80));
+        Assert.Equal(SrgbColor.White, SrgbColor.FromHsl(120, 2, 1.5));
+        Assert.Equal(SrgbColor.Black, SrgbColor.FromHsl(-30, -1, -0.5));
     }
 
     [Theory]

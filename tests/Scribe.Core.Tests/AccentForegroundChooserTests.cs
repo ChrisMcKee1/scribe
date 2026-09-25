@@ -66,8 +66,9 @@ public sealed class AccentForegroundChooserTests
     [Fact]
     public void Legible_at_rest_beats_legible_only_in_passing()
     {
-        // WPF-UI's light-theme fills for Windows' default blue: white reads at rest and hovered but not on the
-        // pressed tone (3.96:1), and black would fail at rest (3.78:1), so white stays.
+        // A foreground that serves several states through one brush: white reads at rest and hovered but not on the
+        // third fill (3.96:1), and black would fail at rest (3.78:1), so white stays. Where a template draws a state
+        // with a brush of its own, the planner gives that state a role of its own instead.
         var choice = AccentForegroundChooser.Choose([C("#006ABB")], [C("#1978C1"), C("#3185C6")], SrgbColor.White);
 
         Assert.Equal(SrgbColor.White, choice.Foreground);
@@ -91,6 +92,70 @@ public sealed class AccentForegroundChooserTests
     }
 
     [Fact]
+    public void A_translucent_theme_foreground_is_measured_over_the_fill_it_is_drawn_on()
+    {
+        // A danger button pressed in the dark theme: the palette red at brush opacity 0.7 over the page, #B53930. The
+        // style's pressed tone #C5FFFFFF, drawn over it, is 4.11:1, so the same hue at full opacity, white, is tried
+        // next (5.85:1) before black (3.59:1).
+        var pressed = C("#F44336").WithOpacity(0.7).Over(C("#202020"));
+        var choice = AccentForegroundChooser.Choose([pressed], [], C("#C5FFFFFF"));
+
+        Assert.Equal(C("#B53930"), pressed);
+        Assert.Equal(4.11, Math.Round(WcagContrast.Ratio(C("#C5FFFFFF").Over(pressed), pressed), 2));
+        Assert.Equal(SrgbColor.White, choice.Foreground);
+        Assert.False(choice.IsThemeForeground);
+        Assert.Equal(5.85, Math.Round(choice.RestRatio, 2));
+    }
+
+    [Fact]
+    public void A_translucent_theme_foreground_that_reads_is_kept_with_its_alpha()
+    {
+        // A standard button pressed in the dark theme, #272727: the theme's pressed tone reads, and stays translucent.
+        var pressed = C("#08FFFFFF").Over(C("#202020"));
+        var choice = AccentForegroundChooser.Choose([pressed], [], C("#C5FFFFFF"));
+
+        Assert.Equal(C("#C5FFFFFF"), choice.Foreground);
+        Assert.True(choice.IsThemeForeground);
+        Assert.True(choice.MeetsAtRest);
+    }
+
+    [Fact]
+    public void Preferred_foregrounds_are_tried_in_order_before_black_and_white()
+    {
+        // A pressed accent button with Windows' default blue in the light theme, #3186C7 in WPF's render: what WPF-UI
+        // 4.3.0 draws today is black (5.37:1), and the white its template means to draw would be 3.91:1, so black, the
+        // first preference, stays.
+        var bluePressed = C("#CC006ABB").Over(C("#F3F3F3"));
+        var blue = AccentForegroundChooser.Choose([bluePressed], [], [SrgbColor.Black, SrgbColor.White]);
+
+        Assert.Equal(C("#3186C7"), bluePressed);
+        Assert.Equal(SrgbColor.Black, blue.Foreground);
+        Assert.True(blue.IsThemeForeground);
+        Assert.Equal(5.37, Math.Round(blue.RestRatio, 2));
+
+        // With the maintainer's accent the same black is 2.05:1, so the second preference, white, is chosen.
+        var navyPressed = C("#CC0B0B57").Over(C("#F3F3F3"));
+        var navy = AccentForegroundChooser.Choose([navyPressed], [], [SrgbColor.Black, SrgbColor.White]);
+
+        Assert.Equal(SrgbColor.White, navy.Foreground);
+        Assert.False(navy.IsThemeForeground);
+        Assert.True(navy.MeetsAtRest);
+    }
+
+    [Fact]
+    public void A_preference_that_does_not_read_gives_way_to_one_later_in_the_list()
+    {
+        // A standard button pressed in the dark theme: today's black is about 1.4:1 on #272727, the theme's pressed tone
+        // #C5FFFFFF reads, and is preferred over plain white because it comes first.
+        var pressed = C("#08FFFFFF").Over(C("#202020"));
+        var choice = AccentForegroundChooser.Choose([pressed], [], [SrgbColor.Black, C("#C5FFFFFF")]);
+
+        Assert.True(WcagContrast.Ratio(SrgbColor.Black, pressed) < 1.5);
+        Assert.Equal(C("#C5FFFFFF"), choice.Foreground);
+        Assert.False(choice.IsThemeForeground);
+    }
+
+    [Fact]
     public void Every_opaque_fill_gets_a_foreground_that_reaches_the_text_minimum()
     {
         // Black and white tie at 4.58:1 where a fill's relative luminance is about 0.179 and one of them does better
@@ -106,7 +171,7 @@ public sealed class AccentForegroundChooserTests
                     var best = Math.Max(WcagContrast.Ratio(SrgbColor.Black, fill), WcagContrast.Ratio(SrgbColor.White, fill));
                     Assert.True(best >= 4.58, $"{fill}: {best:F3}:1 at best");
 
-                    foreach (var theme in new[] { SrgbColor.Black, SrgbColor.White })
+                    foreach (var theme in new[] { SrgbColor.Black, SrgbColor.White, SrgbColor.Parse("#9E000000"), SrgbColor.Parse("#C5FFFFFF") })
                     {
                         var choice = AccentForegroundChooser.Choose([fill], [], theme);
                         Assert.True(choice.MeetsAtRest, $"{fill} with {theme} chose {choice.Foreground} at {choice.RestRatio:F2}:1");
@@ -125,8 +190,9 @@ public sealed class AccentForegroundChooserTests
         Assert.Throws<ArgumentException>(() => AccentForegroundChooser.Choose([], [], SrgbColor.White));
         Assert.Throws<ArgumentException>(() => AccentForegroundChooser.Choose([C("#E559599B")], [], SrgbColor.White));
         Assert.Throws<ArgumentException>(() => AccentForegroundChooser.Choose([C("#42429B")], [C("#80000000")], SrgbColor.White));
-        Assert.Throws<ArgumentException>(() => AccentForegroundChooser.Choose([C("#42429B")], [], C("#1A1A1A")));
+        Assert.Throws<ArgumentException>(() => AccentForegroundChooser.Choose([C("#42429B")], [], Array.Empty<SrgbColor>()));
         Assert.Throws<ArgumentOutOfRangeException>(() => AccentForegroundChooser.Choose([C("#42429B")], [], SrgbColor.White, 1));
         Assert.Throws<ArgumentNullException>(() => AccentForegroundChooser.Choose(null!, [], SrgbColor.White));
+        Assert.Throws<ArgumentNullException>(() => AccentForegroundChooser.Choose([C("#42429B")], [], (IReadOnlyList<SrgbColor>)null!));
     }
 }

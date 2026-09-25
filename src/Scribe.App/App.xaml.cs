@@ -78,6 +78,7 @@ public partial class App : Application
 
         // Before any window exists, the already-running notice below included.
         TitleBarButtonNames.Apply(Resources);
+        ButtonLabelContrast.Apply(Resources);
 
         _singleInstanceMutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out var isNew);
         if (!isNew)

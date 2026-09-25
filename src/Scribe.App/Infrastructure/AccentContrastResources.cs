@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Appearance;
@@ -9,16 +10,36 @@ using Wpf.Ui.Appearance;
 namespace Scribe.App.Infrastructure;
 
 /// <summary>
-/// The resource keys Scribe's own XAML reads for foregrounds on coloured fills and for its selection cues.
+/// The resource keys Scribe's own styles read for foregrounds on coloured fills and for its selection cues.
 /// <see cref="AccentContrastResources"/> writes them after every theme change; App.xaml holds what they are before that.
 /// </summary>
 internal static class AccentContrastKeys
 {
+    /// <summary>A boxed bool: true in a light or dark theme once planned, false in a contrast theme and before.</summary>
+    public const string Applies = "ScribeAccentContrastApplies";
+
     public const string CautionBadgeForeground = "ScribeCautionBadgeForeground";
     public const string InfoBadgeForeground = "ScribeInfoBadgeForeground";
     public const string DangerBadgeForeground = "ScribeDangerBadgeForeground";
     public const string SuccessBadgeForeground = "ScribeSuccessBadgeForeground";
+
+    /// <summary>A danger button's label at rest and hovered.</summary>
     public const string DangerButtonForeground = "ScribeDangerButtonForeground";
+
+    /// <summary>A pressed accent button's label.</summary>
+    public const string PrimaryPressedForeground = "ScribePrimaryPressedForeground";
+
+    /// <summary>A pressed danger button's label.</summary>
+    public const string DangerPressedForeground = "ScribeDangerPressedForeground";
+
+    /// <summary>A pressed standard or transparent button's label or icon.</summary>
+    public const string SecondaryPressedForeground = "ScribeSecondaryPressedForeground";
+
+    /// <summary>A link at rest.</summary>
+    public const string HyperlinkForeground = "ScribeHyperlinkForeground";
+
+    /// <summary>A link while hovered.</summary>
+    public const string HyperlinkHoverForeground = "ScribeHyperlinkHoverForeground";
 
     /// <summary>The outline of the selected library row: the strong control stroke, or transparent.</summary>
     public const string SelectedRowOutline = "ScribeSelectedRowOutline";
@@ -26,29 +47,45 @@ internal static class AccentContrastKeys
     /// <summary>The weight of the selected library row's name: SemiBold, or Normal.</summary>
     public const string SelectedRowNameWeight = "ScribeSelectedRowNameWeight";
 
-    /// <summary>The weight of a selected list item's text: SemiBold where its accent fill is faint, else Normal.</summary>
-    public const string SelectedItemWeight = "ScribeSelectedItemWeight";
+    /// <summary>The outline of a selected list item where its accent fill is faint, else transparent.</summary>
+    public const string SelectedItemOutline = "ScribeSelectedItemOutline";
 }
 
 /// <summary>
-/// Keeps text and glyphs on accent and palette fills legible whatever accent the user picked. After every theme or
-/// accent change WPF-UI makes, and whenever Windows turns a contrast theme on or off, it reads the fills the theme now
-/// has, asks <see cref="AccentContrastPlanner"/> which foreground each needs, and writes application-level brushes,
-/// which take precedence over the theme dictionary's.
+/// Whether Scribe's accent contrast overrides apply to an element. Scribe's styles set it from
+/// <see cref="AccentContrastKeys.Applies"/> and add it to the conditions of every trigger that replaces a colour WPF-UI
+/// or WPF draws, so in a contrast theme none of those triggers is active and the theme draws exactly what it drew
+/// before: a trigger that is not active sets nothing, whatever its precedence.
+/// </summary>
+internal static class AccentContrastFlag
+{
+    public static readonly DependencyProperty AppliesProperty = DependencyProperty.RegisterAttached(
+        "Applies", typeof(bool), typeof(AccentContrastFlag), new FrameworkPropertyMetadata(false));
+
+    public static bool GetApplies(DependencyObject element) => (bool)element.GetValue(AppliesProperty);
+
+    public static void SetApplies(DependencyObject element, bool value) => element.SetValue(AppliesProperty, value);
+}
+
+/// <summary>
+/// Keeps text, glyphs and state indicators legible whatever accent the user picked. After every theme or accent change
+/// WPF-UI makes, and whenever Windows turns a contrast theme on or off, it reads the colours the theme now has, asks
+/// <see cref="AccentContrastPlanner"/> what each needs, and writes application-level brushes, which take precedence
+/// over the theme dictionary's.
 /// </summary>
 /// <remarks>
 /// <para>
 /// WPF-UI 4.3.0's theme dictionaries define every text-on-accent brush with a StaticResource to the theme's own colour,
 /// black in the dark theme and white in the light one, so its accent manager, which does rewrite that colour for the
 /// accent, never reaches the brushes the controls draw with: with the accent #0E0E70 the dark theme drew black on
-/// #42429B (2.48:1) on selected items and checked boxes and on #59599B (3.33:1) on Save.
+/// #42429B (2.48:1) on selected items and checked boxes and on #59599B (3.33:1) on Save. Its accent text brushes are the
+/// accent's own shades whatever the page (#59599B, 2.58:1 on the dark page), and WPF's link colours are fixed.
 /// </para>
 /// <para>
-/// Only brushes are written, and only where the theme's own foreground does not read: elsewhere WPF-UI's brush stays,
-/// so an accent that never needed this draws exactly as before. The colour keys stay WPF-UI's own (its accent manager
-/// rewrites them on every change), and in a contrast theme every brush this class set is taken back, so the theme's
-/// system pairs are exactly what they were. Scribe's own keys then show what their controls showed before the keys
-/// existed.
+/// Only brushes are written, and only where the theme's own does not read: elsewhere the theme's brush stays, so an
+/// accent that never needed this draws exactly as before. The colour keys stay WPF-UI's own. In a contrast theme every
+/// brush this class set is taken back and <see cref="AccentContrastKeys.Applies"/> turns Scribe's own triggers off, so
+/// the theme's system pairs are exactly what they were.
 /// </para>
 /// </remarks>
 internal static class AccentContrastResources
@@ -58,9 +95,14 @@ internal static class AccentContrastResources
     private static readonly (ThemeColor Color, string Key)[] ColorKeys =
     [
         (ThemeColor.Surface, "SolidBackgroundFillColorBase"),
+        (ThemeColor.WindowBackground, "ApplicationBackgroundColor"),
+        (ThemeColor.CardBackground, "CardBackgroundFillColorDefault"),
+        (ThemeColor.ControlFill, "ControlFillColorDefault"),
+        (ThemeColor.ControlFillSecondary, "ControlFillColorSecondary"),
+        (ThemeColor.StrongStroke, "ControlStrongStrokeColorDefault"),
+        (ThemeColor.BodyText, "TextFillColorPrimary"),
+        (ThemeColor.BodyTextSecondary, "TextFillColorSecondary"),
         (ThemeColor.AccentPrimary, "SystemAccentColorPrimary"),
-        (ThemeColor.AccentSecondary, "SystemAccentColorSecondary"),
-        (ThemeColor.AccentTertiary, "SystemAccentColorTertiary"),
         (ThemeColor.AccentFill, "AccentFillColorDefault"),
         (ThemeColor.AccentFillHover, "AccentFillColorSecondary"),
         (ThemeColor.AccentFillPressed, "AccentFillColorTertiary"),
@@ -70,29 +112,42 @@ internal static class AccentContrastResources
         (ThemeColor.PaletteGreen, "PaletteGreenColor"),
     ];
 
-    // The WPF-UI 4.3.0 brushes each role is drawn with, and whether a brush takes the fainter secondary tone.
-    private static readonly (AccentForegroundRole Role, string Key, bool Secondary)[] WpfUiBrushes =
+    // Brushes the theme dictionary owns, overridden at application level only while the plan changes them: the
+    // foreground roles, then the switch tracks the plan moves in lightness.
+    private static readonly (AccentForegroundRole Role, string Key)[] DictionaryForegrounds =
     [
-        (AccentForegroundRole.AccentButton, "AccentButtonForeground", false),
-        (AccentForegroundRole.AccentButton, "AccentButtonForegroundPointerOver", false),
-        (AccentForegroundRole.AccentButton, "AccentButtonForegroundPressed", true),
-        (AccentForegroundRole.AccentFill, "TextOnAccentFillColorPrimaryBrush", false),
-        (AccentForegroundRole.AccentFill, "TextOnAccentFillColorSecondaryBrush", true),
-        (AccentForegroundRole.SelectedItem, "ListBoxItemSelectedForegroundThemeBrush", false),
-        (AccentForegroundRole.CheckedToggleButton, "ToggleButtonForegroundChecked", false),
-        (AccentForegroundRole.CheckedToggleButton, "ToggleButtonForegroundCheckedPressed", true),
-        (AccentForegroundRole.CalendarToday, "CalendarViewTodayForeground", false),
-        (AccentForegroundRole.CheckGlyph, "CheckBoxCheckGlyphForeground", false),
-        (AccentForegroundRole.RadioGlyph, "RadioButtonCheckGlyphFill", false),
-        (AccentForegroundRole.SwitchKnob, "ToggleSwitchKnobFillOn", false),
-        (AccentForegroundRole.SwitchKnob, "ToggleSwitchKnobFillOnPointerOver", false),
-        (AccentForegroundRole.SwitchKnob, "ToggleSwitchKnobFillOnPressed", false),
+        (AccentForegroundRole.AccentButton, "AccentButtonForeground"),
+        (AccentForegroundRole.AccentFill, "TextOnAccentFillColorPrimaryBrush"),
+        (AccentForegroundRole.SelectedItem, "ListBoxItemSelectedForegroundThemeBrush"),
+        (AccentForegroundRole.CheckGlyph, "CheckBoxCheckGlyphForeground"),
+        (AccentForegroundRole.SwitchKnob, "ToggleSwitchKnobFillOn"),
+        (AccentForegroundRole.SwitchKnobHover, "ToggleSwitchKnobFillOnPointerOver"),
+        (AccentForegroundRole.SwitchKnobPressed, "ToggleSwitchKnobFillOnPressed"),
+    ];
+
+    private static readonly (AccentShadeRole Role, string Key)[] DictionaryShades =
+    [
+        (AccentShadeRole.SwitchTrack, "ToggleSwitchFillOn"),
+        (AccentShadeRole.SwitchTrackHover, "ToggleSwitchFillOnPointerOver"),
+        (AccentShadeRole.SwitchTrackPressed, "ToggleSwitchFillOnPressed"),
+    ];
+
+    // CheckBox.xaml draws a checked box's border with this brush, transparent in the light and dark themes.
+    private const string CheckedBorderKey = "CheckBoxCheckBorderBrush";
+
+    // Brushes WPF-UI's accent manager writes into the application dictionary itself on every theme or accent change, so
+    // they are read as they are now, and what it wrote is kept to put back.
+    private static readonly (AccentShadeRole Role, ThemeColor Color, string Key)[] ManagerShades =
+    [
+        (AccentShadeRole.AccentTextPrimary, ThemeColor.AccentTextPrimary, "AccentTextFillColorPrimaryBrush"),
+        (AccentShadeRole.AccentTextSecondary, ThemeColor.AccentTextSecondary, "AccentTextFillColorSecondaryBrush"),
+        (AccentShadeRole.AccentTextTertiary, ThemeColor.AccentTextTertiary, "AccentTextFillColorTertiaryBrush"),
     ];
 
     // WPF-UI draws these roles with a brush it shares across fills (every badge appearance uses BadgeForeground, a
-    // danger button the ordinary ButtonForeground), so Scribe's styles point them at keys of their own. Without a
-    // choice a key holds the brush the control used before, from the theme now loaded.
-    private static readonly (AccentForegroundRole Role, string Key, string ThemeKey)[] ScribeBrushes =
+    // danger button the ordinary ButtonForeground), so Scribe's styles point them at keys of their own. Where the plan
+    // keeps the theme's own, a key holds the theme's brush itself.
+    private static readonly (AccentForegroundRole Role, string Key, string ThemeKey)[] ScribeForegrounds =
     [
         (AccentForegroundRole.CautionBadge, AccentContrastKeys.CautionBadgeForeground, "BadgeForeground"),
         (AccentForegroundRole.InfoBadge, AccentContrastKeys.InfoBadgeForeground, "BadgeForeground"),
@@ -101,11 +156,23 @@ internal static class AccentContrastResources
         (AccentForegroundRole.DangerButton, AccentContrastKeys.DangerButtonForeground, "ButtonForeground"),
     ];
 
-    private const string StrongStrokeKey = "ControlStrongStrokeColorDefaultBrush";
+    // The pressed labels ButtonLabelContrast's triggers draw. Always the plan's choice, even where it is what shows
+    // today, because what shows today is a binding that never resolves (see ThemeColor.ControlText).
+    private static readonly (AccentForegroundRole Role, string Key)[] PressedForegrounds =
+    [
+        (AccentForegroundRole.AccentButtonPressed, AccentContrastKeys.PrimaryPressedForeground),
+        (AccentForegroundRole.DangerButtonPressed, AccentContrastKeys.DangerPressedForeground),
+        (AccentForegroundRole.SecondaryButtonPressed, AccentContrastKeys.SecondaryPressedForeground),
+    ];
 
-    // What this class last wrote to each key, so an unchanged plan writes nothing (every write re-resolves every
-    // DynamicResource in every window) and a contrast theme knows which WPF-UI brushes to take back.
+    private const string StrongStrokeKey = "ControlStrongStrokeColorDefaultBrush";
+    private const string ButtonPressedFillKey = "ButtonBackgroundPressed";
+
+    // What this class last wrote to each key it overrides, so it knows which of the values now there are its own.
     private static readonly Dictionary<string, object> Written = new(StringComparer.Ordinal);
+
+    // What WPF-UI's accent manager last wrote to its accent text keys, to plan from and to put back.
+    private static readonly Dictionary<string, object?> ManagerWritten = new(StringComparer.Ordinal);
 
     private static Application? _app;
     private static ILogger? _log;
@@ -115,7 +182,7 @@ internal static class AccentContrastResources
     /// <summary>
     /// Starts following WPF-UI's theme changes and Windows' contrast setting. Call once, before the first theme is
     /// applied: the first plan is made for that theme, when WPF-UI raises Changed for it, and until then Scribe's own
-    /// keys hold App.xaml's defaults. Later calls only replace the logger.
+    /// triggers are off. Later calls only replace the logger.
     /// </summary>
     public static void Attach(Application app, ILogger? log)
     {
@@ -189,58 +256,174 @@ internal static class AccentContrastResources
         {
             if (resources[key] is Color value)
             {
-                colors[color] = new SrgbColor(value.A, value.R, value.G, value.B);
+                colors[color] = From(value);
+            }
+        }
+
+        if (BrushColor(resources[ButtonPressedFillKey]) is { } pressedFill)
+        {
+            colors[ThemeColor.ButtonPressedFill] = pressedFill;
+        }
+
+        // WPF-UI 4.3.0's ui:Button template sets a pressed button's Foreground with a binding to PressedForeground whose
+        // source is the button's TemplatedParent, which a button in a window does not have, so the binding fails and
+        // the label takes Foreground's default: the colour a pressed label actually shows in today.
+        if (BrushColor(Control.ForegroundProperty.GetMetadata(typeof(Wpf.Ui.Controls.Button)).DefaultValue) is { } drawn)
+        {
+            colors[ThemeColor.ControlText] = drawn;
+        }
+
+        // WPF's own Hyperlink style: HotTrackBrush at rest and a literal red while hovered.
+        colors[ThemeColor.Hyperlink] = From(SystemColors.HotTrackColor);
+        colors[ThemeColor.HyperlinkHover] = From(Colors.Red);
+
+        foreach (var (_, color, key) in ManagerShades)
+        {
+            if (BrushColor(ManagerValue(resources, key)) is { } text)
+            {
+                colors[color] = text;
             }
         }
 
         var plan = AccentContrastPlanner.Plan(theme, SystemParameters.HighContrast, colors);
 
-        // A role whose theme foreground is legible keeps the theme's own brush, so an accent that never needed this
-        // draws exactly as WPF-UI draws it.
-        foreach (var (role, key, secondary) in WpfUiBrushes)
+        // Off first when leaving a light or dark theme, so no trigger meets a value already taken back.
+        if (!plan.Applies)
         {
-            if (plan.For(role) is { Choice.IsThemeForeground: false } planned)
-            {
-                Write(resources, key, Frozen(secondary ? planned.SecondaryForeground : planned.Foreground));
-            }
-            else if (Written.Remove(key))
-            {
-                resources.Remove(key);
-            }
+            WriteScribe(resources, AccentContrastKeys.Applies, false);
         }
 
-        foreach (var (role, key, themeKey) in ScribeBrushes)
+        foreach (var (role, key) in DictionaryForegrounds)
         {
-            object value = plan.For(role) is { Choice.IsThemeForeground: false } planned
+            WriteOverride(resources, key, plan.For(role) is { Choice.IsThemeForeground: false } planned ? Frozen(planned.Foreground) : null);
+        }
+
+        foreach (var (role, key) in DictionaryShades)
+        {
+            WriteOverride(resources, key, plan.For(role) is { Changed: true } shade ? Frozen(shade.Color) : null);
+        }
+
+        WriteOverride(resources, CheckedBorderKey, plan.CheckBoxPerimeter is { } perimeter ? Frozen(perimeter.Color) : null);
+
+        foreach (var (role, _, key) in ManagerShades)
+        {
+            WriteManaged(resources, key, plan.For(role) is { Changed: true } shade ? Frozen(shade.Color) : null);
+        }
+
+        foreach (var (role, key, themeKey) in ScribeForegrounds)
+        {
+            WriteScribe(resources, key, plan.For(role) is { Choice.IsThemeForeground: false } planned
                 ? Frozen(planned.Foreground)
-                : resources[themeKey] ?? Brushes.Black;
-            Write(resources, key, value);
+                : resources[themeKey] ?? Brushes.Black);
         }
 
-        Write(resources, AccentContrastKeys.SelectedRowOutline,
-            plan.SelectedRowCue ? resources[StrongStrokeKey] ?? Brushes.Transparent : Brushes.Transparent);
-        Write(resources, AccentContrastKeys.SelectedRowNameWeight, plan.SelectedRowCue ? FontWeights.SemiBold : FontWeights.Normal);
-        Write(resources, AccentContrastKeys.SelectedItemWeight, plan.SelectedItemWeightCue ? FontWeights.SemiBold : FontWeights.Normal);
+        // Without a plan the triggers are off; the keys then hold what the failed binding draws, as a default.
+        var controlTextDefault = Control.ForegroundProperty.GetMetadata(typeof(Wpf.Ui.Controls.Button)).DefaultValue ?? Brushes.Black;
+        foreach (var (role, key) in PressedForegrounds)
+        {
+            WriteScribe(resources, key, plan.For(role) is { } planned ? Frozen(planned.Foreground) : controlTextDefault);
+        }
 
-        LogOutcome(plan, plan.Mode == AccentContrastMode.Applied ? MissingWpfUiKeys(resources) : 0);
+        WriteScribe(resources, AccentContrastKeys.HyperlinkForeground,
+            plan.For(AccentShadeRole.Hyperlink) is { Changed: true } link ? Frozen(link.Color) : SystemColors.HotTrackBrush);
+        WriteScribe(resources, AccentContrastKeys.HyperlinkHoverForeground,
+            plan.For(AccentShadeRole.HyperlinkHover) is { Changed: true } hover ? Frozen(hover.Color) : Brushes.Red);
+
+        WriteScribe(resources, AccentContrastKeys.SelectedRowOutline,
+            plan.SelectedRowCue ? resources[StrongStrokeKey] ?? Brushes.Transparent : Brushes.Transparent);
+        WriteScribe(resources, AccentContrastKeys.SelectedRowNameWeight, plan.SelectedRowCue ? FontWeights.SemiBold : FontWeights.Normal);
+        WriteScribe(resources, AccentContrastKeys.SelectedItemOutline,
+            plan.SelectedItemOutline is { } outline ? Frozen(outline.Color) : Brushes.Transparent);
+
+        // On last when entering one, once every value its triggers read is in place.
+        if (plan.Applies)
+        {
+            WriteScribe(resources, AccentContrastKeys.Applies, true);
+        }
+
+        LogOutcome(plan, plan.Applies ? MissingWpfUiKeys(resources) : 0);
         return plan;
     }
 
-    private static void Write(ResourceDictionary resources, string key, object value)
+    // A theme dictionary brush: overridden in the application dictionary while the plan changes it, and the override
+    // removed when it does not, so the theme's own shows again. Compared with the value there now, not only with what
+    // was last written, so nothing is written twice and nothing another writer put there is taken for Scribe's.
+    private static void WriteOverride(ResourceDictionary resources, string key, SolidColorBrush? desired)
     {
-        if (Written.TryGetValue(key, out var previous) && SameValue(previous, value))
+        var current = resources[key];
+        var mine = Written.TryGetValue(key, out var written) && ReferenceEquals(current, written);
+        if (desired is not null)
         {
+            if (!SameValue(current, desired))
+            {
+                resources[key] = desired;
+                Written[key] = desired;
+            }
+
             return;
         }
 
-        resources[key] = value;
-        Written[key] = value;
+        if (mine)
+        {
+            resources.Remove(key);
+        }
+
+        Written.Remove(key);
     }
 
-    private static bool SameValue(object previous, object value) => (previous, value) switch
+    // A brush WPF-UI's accent manager writes into the application dictionary on every Apply. An identical theme
+    // applied again writes a new, uncorrected brush over Scribe's, so the value there now is compared with the one
+    // wanted, never only the one last written; what the manager wrote is kept to plan from and to put back.
+    private static void WriteManaged(ResourceDictionary resources, string key, SolidColorBrush? desired)
+    {
+        var current = resources[key];
+        var mine = Written.TryGetValue(key, out var written) && ReferenceEquals(current, written);
+        if (desired is not null)
+        {
+            if (!SameValue(current, desired))
+            {
+                resources[key] = desired;
+                Written[key] = desired;
+            }
+
+            return;
+        }
+
+        if (mine && ManagerWritten.TryGetValue(key, out var managers) && managers is not null)
+        {
+            resources[key] = managers;
+        }
+
+        Written.Remove(key);
+    }
+
+    // The accent manager's value for a key: what is there now, unless that is Scribe's own correction, in which case
+    // the manager has not written since, and what it wrote then still stands.
+    private static object? ManagerValue(ResourceDictionary resources, string key)
+    {
+        var current = resources[key];
+        if (Written.TryGetValue(key, out var written) && ReferenceEquals(current, written))
+        {
+            return ManagerWritten.GetValueOrDefault(key);
+        }
+
+        ManagerWritten[key] = current;
+        return current;
+    }
+
+    // Scribe's own keys, always written, and only when the value there differs from the one wanted.
+    private static void WriteScribe(ResourceDictionary resources, string key, object value)
+    {
+        if (!SameValue(resources[key], value))
+        {
+            resources[key] = value;
+        }
+    }
+
+    private static bool SameValue(object? current, object value) => (current, value) switch
     {
         (SolidColorBrush a, SolidColorBrush b) => ReferenceEquals(a, b) || (a.IsFrozen && b.IsFrozen && a.Color == b.Color && a.Opacity == b.Opacity),
-        _ => Equals(previous, value),
+        _ => Equals(current, value),
     };
 
     private static SolidColorBrush Frozen(SrgbColor color)
@@ -250,8 +433,14 @@ internal static class AccentContrastResources
         return brush;
     }
 
+    private static SrgbColor From(Color color) => new(color.A, color.R, color.G, color.B);
+
+    // A solid brush's colour as it draws, its opacity folded into the alpha as WPF does.
+    private static SrgbColor? BrushColor(object? value) =>
+        value is SolidColorBrush brush ? From(brush.Color).WithOpacity(brush.Opacity) : null;
+
     // A WPF-UI upgrade that renames one of these brushes would quietly bring back its old foreground, so the theme
-    // dictionary is checked for every key this class overrides.
+    // dictionary is checked for every key this class overrides or reads.
     private static int MissingWpfUiKeys(ResourceDictionary resources)
     {
         if (FindThemeDictionary(resources) is not { } theme)
@@ -259,7 +448,11 @@ internal static class AccentContrastResources
             return 0;
         }
 
-        return WpfUiBrushes.Count(entry => !theme.Contains(entry.Key));
+        return DictionaryForegrounds.Select(entry => entry.Key)
+            .Concat(DictionaryShades.Select(entry => entry.Key))
+            .Append(CheckedBorderKey)
+            .Append(ButtonPressedFillKey)
+            .Count(key => !theme.Contains(key));
     }
 
     private static ResourceDictionary? FindThemeDictionary(ResourceDictionary resources)
@@ -280,8 +473,9 @@ internal static class AccentContrastResources
         return null;
     }
 
-    // Shapes only: the theme, how many roles needed the other foreground, and the lowest ratios, never a colour of
-    // the user's personalisation. Logged once per distinct outcome, because Windows sends several messages per change.
+    // Shapes only: the theme, how many roles and shades needed a colour of their own, and the lowest ratios, never a
+    // colour of the user's personalisation. Logged once per distinct outcome, because Windows sends several messages
+    // per change.
     private static void LogOutcome(AccentContrastPlan plan, int missing)
     {
         if (_log is not { } log)
@@ -297,38 +491,42 @@ internal static class AccentContrastResources
                 if (missing > 0)
                 {
                     log.LogWarning(
-                        "{Missing} WPF-UI brush(es) for text on accent fills are missing from the theme dictionary; those controls keep WPF-UI's own foreground.",
+                        "{Missing} WPF-UI brush(es) for text and state on accent fills are missing from the theme dictionary; those controls keep WPF-UI's own colours.",
                         missing);
                 }
             }
 
             var changed = plan.Foregrounds.Count(f => !f.Choice.IsThemeForeground);
-            var restLowest = plan.Foregrounds.Count == 0 ? 0 : plan.Foregrounds.Min(f => f.Choice.RestRatio);
-            var anyLowest = plan.Foregrounds.Count == 0 ? 0 : plan.Foregrounds.Min(f => f.Choice.AllStatesRatio);
-            var belowAtRest = plan.Foregrounds.Count(f => !f.Choice.MeetsAtRest);
+            var shadesChanged = plan.Shades.Count(s => s.Changed);
+            var belowMinimum = plan.Foregrounds.Count(f => !f.Choice.MeetsInEveryState) + plan.Shades.Count(s => !s.Meets);
+            var lowest = plan.Foregrounds.Count == 0 ? 0 : plan.Foregrounds.Min(f => f.Choice.AllStatesRatio);
+            var lowestShade = plan.Shades.Count == 0 ? 0 : plan.Shades.Min(s => s.Ratio);
             var outcome = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
-                $"{plan.Mode}|{plan.Foregrounds.Count}|{changed}|{belowAtRest}|{restLowest:F2}|{anyLowest:F2}|{plan.SelectedRowCue}|{plan.SelectedItemWeightCue}");
+                $"{plan.Mode}|{plan.Foregrounds.Count}|{changed}|{plan.Shades.Count}|{shadesChanged}|{belowMinimum}|{lowest:F2}|{lowestShade:F2}|{plan.CheckBoxPerimeter is not null}|{plan.SelectedItemOutline is not null}");
             if (outcome == _lastOutcome)
             {
                 return;
             }
 
             _lastOutcome = outcome;
-            if (plan.Mode != AccentContrastMode.Applied)
+            if (!plan.Applies)
             {
-                log.LogInformation("Foregrounds on accent fills left to the theme ({Mode}).", plan.Mode);
+                log.LogInformation("Colours on accent fills left to the theme ({Mode}).", plan.Mode);
                 return;
             }
 
             log.LogInformation(
-                "Foregrounds on accent fills: {Changed} of {Planned} roles use the opposite of the theme's own, {BelowAtRest} below 4.5:1 at rest; lowest {RestLowest:F2}:1 at rest and {AnyLowest:F2}:1 hovered or pressed; selected items weighted {WeightCue} (fill {FillRatio:F2}:1).",
+                "Colours on accent fills: {Changed} of {Planned} foregrounds and {ShadesChanged} of {Shades} shades differ from the theme's own, {Below} below their minimum; lowest {Lowest:F2}:1 for a foreground in any state and {LowestShade:F2}:1 for a shade; checked-box border {Perimeter}, selected-item outline {Outline} (fill {FillRatio:F2}:1).",
                 changed,
                 plan.Foregrounds.Count,
-                belowAtRest,
-                restLowest,
-                anyLowest,
-                plan.SelectedItemWeightCue,
+                shadesChanged,
+                plan.Shades.Count,
+                belowMinimum,
+                lowest,
+                lowestShade,
+                plan.CheckBoxPerimeter is not null,
+                plan.SelectedItemOutline is not null,
                 plan.SelectedItemFillRatio ?? 0);
         }
         catch
@@ -342,7 +540,7 @@ internal static class AccentContrastResources
         try
         {
             _log?.LogWarning(
-                "Could not choose the foregrounds on accent fills; the theme's own stay ({Failure}).",
+                "Could not choose the colours on accent fills; the theme's own stay ({Failure}).",
                 FailureShape.Describe(ex));
         }
         catch
