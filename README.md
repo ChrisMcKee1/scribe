@@ -234,6 +234,21 @@ the pill and where it appears, voice-activity detection, line-break handling, pe
 snippets, post-processing, start-with-Windows (applied the moment you flip it), how text is
 inserted, and the space Scribe adds after each dictation.
 
+### Remote Desktop and virtual machines
+
+Dictating into a Remote Desktop, Azure Virtual Desktop, Windows 365, Hyper-V, VMware, VirtualBox
+or Citrix window works as it does anywhere else, with three things Scribe does for you there. A
+remote client can install a keyboard hook of its own, which would see your push-to-talk key before
+Scribe does, so while its window is in front Scribe keeps its own hook ahead of the client's, and
+never moves it while you are holding the key, so the remote session always gets both halves of any
+keystroke it saw begin. Text is typed into the remote session in small batches with a short pause
+between them, never hundreds of keystrokes at once, which adds about a quarter of a second to a
+180-character dictation and about a second to a 770-character one. And the keys Scribe presses for
+you (Shift+Enter for a line break, Ctrl+V for a paste) carry the real key codes remote clients
+forward. Typing, the default insertion method, suits remote sessions best: a paste is read from
+your clipboard over the connection only when the remote app pastes, which can come after Scribe has
+already put your clipboard back.
+
 ## 📚 The full feature catalog
 
 **Dictation core**
@@ -245,9 +260,9 @@ inserted, and the space Scribe adds after each dictation.
 | Silence auto-stop | Toggle-mode dictation ends itself when you go quiet, adapting to a quiet microphone and to steady background noise |
 | On-device speech recognition | Bundled NVIDIA Parakeet TDT 0.6b v3 handles ~25 European languages automatically; optional verified Moonshine Base and Tiny downloads provide fast English-only alternatives |
 | Recording pill | A glass WinUI 3 overlay with a live level meter, placeable on any of 9 screen anchors with an on-screen preview |
-| Smart text injection | Unicode or clipboard insertion with automatic fallback, and terminal-aware line-break flattening so newlines never fire Enter |
+| Smart text injection | Unicode or clipboard insertion with automatic fallback, terminal-aware line-break flattening so newlines never fire Enter, and typing paced for Remote Desktop and virtual machine sessions |
 | Space after each dictation | On by default, so back-to-back dictations don't run together: Scribe types one space after your text unless it already ends in white space, such as a space, a tab or a line break. History and the tray's copies keep the text without it; switch it off under Settings, Dictation |
-| Hotkey self-healing | Detects and repairs stuck modifiers, and restores the keyboard and mouse hooks Windows removes silently, so push-to-talk keeps working across long sessions |
+| Hotkey self-healing | Detects and repairs stuck modifiers, restores the keyboard and mouse hooks Windows removes silently, and keeps its keyboard hook ahead of a Remote Desktop client's, so push-to-talk keeps working across long sessions |
 
 **Text quality**
 
