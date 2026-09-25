@@ -235,12 +235,13 @@ public sealed class HotkeyCaptureSessionTests
     {
         var settings = AppSettings.CreateDefault();
         settings.Hotkey = HotkeyCaptureSession.Build([Back], HotkeyMode.Hold);
+        settings.EnableAiCleanup = true;
         settings.DictationOnlyHotkey = HotkeyCaptureSession.Build([LeftCtrl, Middle], HotkeyMode.Toggle);
 
         var (title, body) = HotkeyText.Gesture(settings);
 
-        Assert.Equal("Hold, speak, release", title);
-        Assert.StartsWith("Hold Mouse Back (button 4) and start talking.", body);
+        Assert.Equal("Hold, speak, let go", title);
+        Assert.StartsWith("Hold Mouse Back (button 4) and start talking. Let go when you're done", body);
         Assert.Contains("Press Left Ctrl+Middle mouse button instead to dictate without AI cleanup.", body);
         Assert.DoesNotContain("Fn", body);
     }

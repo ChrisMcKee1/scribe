@@ -138,6 +138,30 @@ public sealed class LastTranscriptStore
             .FirstOrDefault(text => !string.IsNullOrWhiteSpace(text));
     }
 
+
+    /// <summary>Removes every retained transcript.</summary>
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _entries.Clear();
+        }
+    }
+
+    /// <summary>Removes every retained copy of one transcript.</summary>
+    public bool Forget(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return _entries.RemoveAll(entry => string.Equals(entry, text, StringComparison.Ordinal)) > 0;
+        }
+    }
+
     /// <summary>
     /// Returns an immutable snapshot of the retained transcripts, most recent first.
     /// The snapshot never changes after it is returned, even if more dictations arrive.

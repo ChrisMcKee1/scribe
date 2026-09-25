@@ -11,9 +11,9 @@ public sealed class StartupFailureNoticeTests
     {
         var text = StartupFailureNotice.Compose("  " + LogFile + "  ");
 
-        Assert.StartsWith("Scribe could not start and will close.", text);
-        Assert.Contains("Details were saved to the log:\n" + LogFile + "\n", text);
-        Assert.EndsWith("Try restarting your PC. If this keeps happening, reinstall Scribe.", text);
+        Assert.StartsWith("Scribe couldn't start and will close.", text);
+        Assert.Contains("If you report this, attach the log file:\n" + LogFile, text);
+        Assert.Contains("Try starting it again. If this keeps happening, restart your PC, then reinstall Scribe.", text);
     }
 
     [Theory]
@@ -24,7 +24,7 @@ public sealed class StartupFailureNoticeTests
     {
         var text = StartupFailureNotice.Compose(logFile);
 
-        Assert.Equal("Scribe could not start and will close.\n\nTry restarting your PC. If this keeps happening, reinstall Scribe.", text);
+        Assert.Equal("Scribe couldn't start and will close.\n\nTry starting it again. If this keeps happening, restart your PC, then reinstall Scribe.", text);
         Assert.DoesNotContain("log", text, StringComparison.OrdinalIgnoreCase);
     }
 

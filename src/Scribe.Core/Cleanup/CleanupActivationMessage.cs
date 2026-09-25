@@ -25,18 +25,35 @@ public static class CleanupActivationMessage
         return options.Provider switch
         {
             CleanupProvider.FoundryLocal =>
-                $"AI cleanup is running on this device with {Describe(options.FoundryModelAlias)}.",
+                $"AI cleanup is on. Scribe uses {Describe(options.FoundryModelAlias)} on this PC. Your text stays on this PC.",
             CleanupProvider.AzureFoundry =>
-                $"AI cleanup is running on Microsoft Foundry with {Describe(options.AzureDeployment)}.",
+                $"AI cleanup is on. Scribe uses {Describe(options.AzureDeployment)} in Microsoft Foundry. Your text goes to your Azure resource.",
             CleanupProvider.OpenAiCompatible =>
-                $"AI cleanup is running on {DescribeHost(options.CustomEndpoint)} with {Describe(options.CustomModel)}.",
+                $"AI cleanup is on. {CustomEndpointBody(options)}",
+            CleanupProvider.GitHubCopilot => $"AI cleanup is on. Scribe uses GitHub Copilot{CopilotModel(options.CopilotModel)}. Your text goes to GitHub.",
             _ => null,
         };
     }
 
     /// <summary>Message for cleanup being switched off, or null when it was not a deliberate disable.</summary>
     public static string? ForDisabled(CleanupOptions? options) =>
-        options is not null && !options.Enabled ? "AI cleanup is off. Dictations are inserted as transcribed." : null;
+        options is not null && !options.Enabled ? "AI cleanup is off. Scribe types what it hears, with your dictionary and snippets." : null;
+
+
+    private static string CustomEndpointBody(CleanupOptions options)
+    {
+        var host = DescribeHost(options.CustomEndpoint);
+        var model = Describe(options.CustomModel);
+        return IsLocalHost(options.CustomEndpoint)
+            ? $"Scribe uses {model} in {host}. Your text stays on this PC."
+            : $"Scribe uses {model} at {host}. Your text goes to {host}.";
+    }
+
+    private static string CopilotModel(string? model) => string.IsNullOrWhiteSpace(model) ? string.Empty : $" with {model.Trim()}";
+
+    private static bool IsLocalHost(string? endpoint) =>
+        Uri.TryCreate(endpoint?.Trim(), UriKind.Absolute, out var uri)
+        && (uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase));
 
     private static string Describe(string? name) =>
         string.IsNullOrWhiteSpace(name) ? "the selected model" : name.Trim();
@@ -51,7 +68,7 @@ public static class CleanupActivationMessage
         var value = endpoint?.Trim();
         if (string.IsNullOrEmpty(value))
         {
-            return "your OpenAI-compatible endpoint";
+            return "the server you entered";
         }
 
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
@@ -69,7 +86,7 @@ public static class CleanupActivationMessage
             {
                 11434 => "Ollama",
                 1234 => "LM Studio",
-                _ => $"your local server on port {uri.Port}",
+                _ => $"a server on this PC (port {uri.Port})",
             };
         }
 

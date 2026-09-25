@@ -9,12 +9,12 @@ public sealed class SavedSettingsNoticeTests
     {
         // The tray shows every message after "Scribe: "; the Settings window shows a whole sentence.
         Assert.Equal(
-            "couldn't use your saved settings. Open Settings, review them and save before changing AI cleanup.",
+            "Scribe couldn't use your saved settings, so it's using defaults. Open Settings, review them and choose Save. Then you can change AI cleanup here.",
             SavedSettingsNotice.FromTray("AI cleanup"));
         Assert.Equal(
             "Scribe couldn't use your saved settings. Review them and save before changing Start with Windows.",
             SavedSettingsNotice.InSettings("Start with Windows"));
-        Assert.Equal("couldn't use your saved settings. Open Settings, review them and save.", SavedSettingsNotice.AtStartup);
+        Assert.Equal("Scribe couldn't use your saved settings, so it's using defaults for now. Open Settings, review them and choose Save to keep them.", SavedSettingsNotice.AtStartup);
     }
 
     [Fact]

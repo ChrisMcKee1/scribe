@@ -15,6 +15,9 @@ namespace Scribe.Core.Cleanup;
 /// </summary>
 public static class CleanupDisclosure
 {
+    /// <summary>The Add to dictionary line shown while AI cleanup is on.</summary>
+    public const string AddToDictionaryVocabularyLine = "AI cleanup also receives your words and word pack words as vocabulary.";
+
     /// <summary>
     /// The "What leaves this PC" card on the AI cleanup page: what every cleanup request carries, and
     /// where it goes.
