@@ -54,6 +54,23 @@ public static partial class DictionaryUsageAnalyzer
         IReadOnlyList<DictionaryEntry> baseEntries,
         IReadOnlyList<DictionaryLibrary> enabledLibraries,
         int minimumTranscripts = MinimumTranscripts,
+        int minimumWords = MinimumWords) =>
+        Analyze(transcripts, baseEntries, enabledLibraries, aiExcludedLibraryIds: null, minimumTranscripts, minimumWords);
+
+    /// <summary>
+    /// <see cref="Analyze(IReadOnlyList{string}, IReadOnlyList{DictionaryEntry}, IReadOnlyList{DictionaryLibrary}, int, int)"/>
+    /// with the libraries AI cleanup may not receive (plan 3.7, Astra on S10). Switching a library off copies the terms it
+    /// still uses into the dictionary, which every AI cleanup request carries, so a library in
+    /// <paramref name="aiExcludedLibraryIds"/> is marked <see cref="LibraryUsage.AiExcluded"/>: its used terms are not
+    /// offered for copying, and the summary says that switching it off stops applying them.
+    /// </summary>
+    /// <param name="aiExcludedLibraryIds">Ids of the libraries kept from AI cleanup, compared without case; null for none.</param>
+    public static DictionaryUsageReport Analyze(
+        IReadOnlyList<string> transcripts,
+        IReadOnlyList<DictionaryEntry> baseEntries,
+        IReadOnlyList<DictionaryLibrary> enabledLibraries,
+        IReadOnlySet<string>? aiExcludedLibraryIds,
+        int minimumTranscripts = MinimumTranscripts,
         int minimumWords = MinimumWords)
     {
         ArgumentNullException.ThrowIfNull(transcripts);
@@ -96,8 +113,9 @@ public static partial class DictionaryUsageAnalyzer
             .OrderBy(u => u.Entry.Pattern, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
 
+        var excluded = new HashSet<string>(aiExcludedLibraryIds ?? new HashSet<string>(), StringComparer.OrdinalIgnoreCase);
         var libraries = enabledLibraries
-            .Select(library => ScoreLibrary(corpus, library))
+            .Select(library => ScoreLibrary(corpus, library, excluded.Contains(library.Id)))
             .Where(l => l.Actionable)
             .OrderByDescending(l => l.UnusedCount)
             .ToList();
@@ -149,7 +167,7 @@ public static partial class DictionaryUsageAnalyzer
         return new TermUsage(entry, patternHits, replacementHits);
     }
 
-    private static LibraryUsage ScoreLibrary(string corpus, DictionaryLibrary library)
+    private static LibraryUsage ScoreLibrary(string corpus, DictionaryLibrary library, bool aiExcluded)
     {
         var keep = new List<DictionaryEntry>();
         var unused = 0;
@@ -169,7 +187,11 @@ public static partial class DictionaryUsageAnalyzer
             }
         }
 
-        return new LibraryUsage(library.Id, library.Name, keep, unused, library.BuiltIn);
+        return new LibraryUsage(library.Id, library.Name, keep, unused, library.BuiltIn)
+        {
+            FileName = library.BuiltIn ? null : library.FileName,
+            AiExcluded = aiExcluded,
+        };
     }
 
     private static int Count(string corpus, string term, bool wholeWord)
@@ -218,10 +240,20 @@ public static partial class DictionaryUsageAnalyzer
 
         // The glossary cap only bites once the dictionary is bigger than it, so the number is only
         // worth raising when it is actually costing the user something.
-        return examined > Cleanup.CleanupPrompt.MaxGlossaryTermsLocal
+        var summary = examined > Cleanup.CleanupPrompt.MaxGlossaryTermsLocal
             ? headline + " Turning them off frees room in the vocabulary list Scribe sends to a local "
                 + $"AI model, which fits {Cleanup.CleanupPrompt.MaxGlossaryTermsLocal} terms."
             : headline;
+
+        // A library kept from AI cleanup must not have its terms moved into the dictionary, which every AI cleanup
+        // request carries, so switching it off drops the terms it still uses, and the user has to know that first.
+        var excluded = libraries.Count(l => l.AiExcluded && l.KeepTerms.Count > 0);
+        return excluded == 0
+            ? summary
+            : summary + $" {excluded:N0} {(excluded == 1 ? "library is" : "libraries are")} kept from AI cleanup, so the "
+                + $"terms {(excluded == 1 ? "it" : "they")} still use{(excluded == 1 ? "s" : string.Empty)} are not copied "
+                + "into your dictionary, which AI cleanup always receives. Switching "
+                + $"{(excluded == 1 ? "it" : "them")} off stops applying those terms.";
     }
 }
 
@@ -266,6 +298,24 @@ public sealed record LibraryUsage(
 
     /// <summary>There is something to gain by switching this library off.</summary>
     public bool Actionable => UnusedCount > 0;
+
+    /// <summary>
+    /// For a custom library, the physical file name it ranks by among custom libraries
+    /// (<see cref="Libraries.LibraryPrecedence"/>), which differs from <c>Id + ".csv"</c> only for a hand-placed file
+    /// remapped away from a built-in id (review finding A16); null for a built-in, and null for a custom library means
+    /// <c>Id + ".csv"</c>.
+    /// </summary>
+    public string? FileName { get; init; }
+
+    /// <summary>
+    /// The library is kept from AI cleanup. Its <see cref="KeepTerms"/> are still the terms it uses, but they are not
+    /// offered for copying into the dictionary, which every AI cleanup request carries (plan 3.7), so switching it off
+    /// stops applying them; <see cref="CopyTerms"/> is empty.
+    /// </summary>
+    public bool AiExcluded { get; init; }
+
+    /// <summary>The terms to copy into the dictionary if the library is switched off: none for a library kept from AI cleanup.</summary>
+    public IReadOnlyList<DictionaryEntry> CopyTerms => AiExcluded ? [] : KeepTerms;
 }
 
 /// <summary>The result of scanning dictation history for dictionary decay.</summary>

@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Infrastructure;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
@@ -127,6 +129,45 @@ internal sealed class LibraryFixture : IDisposable
         settings.EnabledDictionaryLibraryIds.AddRange(ids);
         Settings.Save(settings);
     }
+
+    /// <summary>
+    /// The catalog the library model gives this fixture at the first start of the library editor's version, for the
+    /// enabled list 0.4.3 left: every library <see cref="DictionaryLibraryService.GetLibraries"/> returns (built-ins as
+    /// shipped rows, custom files as custom rows under their own file names, with the hash of their bytes), the list read
+    /// with no library state stored yet, and the state the first-start adoption records, legacy markers included.
+    /// </summary>
+    public LibraryCatalog AdoptedCatalog(IReadOnlyCollection<string> enabledIds)
+    {
+        var libraries = Service.GetLibraries()
+            .Select(library => new CatalogLibrary(
+                new LibraryContent(
+                    library.Id,
+                    library.BuiltIn,
+                    library.Name,
+                    library.Category,
+                    library.Description,
+                    [.. library.Entries.Select(entry => Row(library.BuiltIn, entry))]),
+                LibraryFileState.Available,
+                library.BuiltIn ? null : library.FileName ?? library.Id + ".csv",
+                library.BuiltIn ? null : Hash(Path.Combine(Paths.LibrariesDir, library.FileName ?? library.Id + ".csv"))))
+            .ToList();
+        var identities = libraries.Select(l => new LibraryIdentity(l.Content.Id, l.Content.BuiltIn, l.FileName)).ToList();
+        var firstStart = new LibraryStateContext(RunningOnDefaults: false, DatabaseRepaired: false, GenerationStored: false);
+        var read = LibraryComposer.Instance.ReadLocalState([.. enabledIds], storedState: null, identities, firstStart);
+        var adoption = LibraryComposer.Instance.PlanAdoption(new LibraryCatalog(0, libraries, read, [], [], 0), firstStart);
+        return new LibraryCatalog(0, libraries, adoption?.State ?? read, [], [], 0);
+    }
+
+    private static LibraryRow Row(bool builtIn, DictionaryEntry entry)
+    {
+        var values = TermValues.FromEntry(entry);
+        return builtIn
+            ? new LibraryRow(LibraryTermKey.From(values.Spoken), values, TermOrigin.Shipped, Shipped: values)
+            : LibraryRow.Custom(values);
+    }
+
+    private static LibraryContentHash Hash(string path) =>
+        new(Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))));
 
     public void Dispose()
     {
