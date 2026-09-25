@@ -16,9 +16,11 @@ namespace Scribe.Core.Hotkeys;
 /// which a state clear empties, and such an event is no evidence that any key leaked (review round 8, A9). The request
 /// is one word, set by the callback before the event and taken by the pass, so a repair asked for is never lost to a
 /// sync-only signal that coalesced with it. The word holds the key view epoch the repair was asked for at
-/// (<see cref="HotkeyEngine.KeyViewEpoch"/>, never zero), so the pass judges only that view (review round 10, A12);
-/// requests that coalesce leave the latest, whose view is the newest, and an older one would be stopped at its first
-/// check if the view had changed since.
+/// (<see cref="HotkeyEngine.KeyViewEpoch"/>, never zero), so the pass judges only that view (review round 10, A12).
+/// Coalesced requests leave the latest, and that is the newest only because one signal serves one hook installation and
+/// only that installation's hook thread asks through it, one request after another (review round 11, A14): a shared
+/// signal let a callback of a replaced installation, resuming after the reinstall, replace the replacement's pending
+/// request with its own, which the pass then refused.
 /// </summary>
 internal sealed class HotkeyReconcileSignal : IDisposable
 {
@@ -29,6 +31,9 @@ internal sealed class HotkeyReconcileSignal : IDisposable
     // The key view epoch of the latest request for the leaked-key repair since the last pass, or 0 when none asked for it.
     // Set before the event, taken by the pass.
     private long _repairAt;
+
+    // Every repair this signal has been asked for, counted on the asking thread as it is asked; for tests.
+    private long _repairRequests;
 
     /// <param name="onSignaled">
     /// The pass, on a pool thread: the key view epoch to repair keys at, or 0 for the mouse hook's sync alone.
@@ -45,13 +50,23 @@ internal sealed class HotkeyReconcileSignal : IDisposable
             executeOnlyOnce: false);
     }
 
+    /// <summary>Any thread: how many repairs this signal has been asked for, counted as each is asked; for tests.</summary>
+    internal long RepairRequests => Interlocked.Read(ref _repairRequests);
+
+    /// <summary>
+    /// Test seam, null in production: the pool callback waits on it before it takes the request, so a test can publish
+    /// several requests before any pass takes one.
+    /// </summary>
+    internal ManualResetEventSlim? HoldBeforeTakingForTests { get; set; }
+
     /// <summary>
     /// Any thread, including the hook callbacks: asks for a pass that repairs leaked keys too, judging the key view whose
-    /// epoch is <paramref name="keyViewEpoch"/>. An interlocked exchange and a SetEvent; it waits for no other thread and
+    /// epoch is <paramref name="keyViewEpoch"/>. Interlocked operations and a SetEvent; it waits for no other thread and
     /// never throws.
     /// </summary>
     public void Signal(long keyViewEpoch)
     {
+        Interlocked.Increment(ref _repairRequests);
         Interlocked.Exchange(ref _repairAt, keyViewEpoch);
         Set();
     }
@@ -69,7 +84,20 @@ internal sealed class HotkeyReconcileSignal : IDisposable
     }
 
     // Pool thread: the request is taken as the pass starts, so a signal made while it runs gets a pass of its own.
-    private void RunPass() => _onSignaled(Interlocked.Exchange(ref _repairAt, 0));
+    private void RunPass()
+    {
+        try
+        {
+            HoldBeforeTakingForTests?.Wait();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A test released and disposed its hold while this callback was still on its way; an exception escaping a
+            // pool callback would take the whole process down.
+        }
+
+        _onSignaled(Interlocked.Exchange(ref _repairAt, 0));
+    }
 
     private void Set()
     {
