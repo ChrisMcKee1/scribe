@@ -82,11 +82,12 @@ public class CleanupActivationMessageTests
     }
 
     [Fact]
-    public void ForReady_announces_github_copilot()
+    public void Copilot_is_announced()
     {
         var options = new CleanupOptions(true, CleanupProvider.GitHubCopilot, "unused", null, null, CopilotModel: "gpt-5.4");
 
         Assert.Equal("AI cleanup is on. Scribe uses GitHub Copilot with gpt-5.4. Your text goes to GitHub.", CleanupActivationMessage.ForReady(options));
+        Assert.Equal("AI cleanup is on. Scribe uses GitHub Copilot. Your text goes to GitHub.", CleanupActivationMessage.ForReady(options with { CopilotModel = null }));
     }
 
     [Fact]

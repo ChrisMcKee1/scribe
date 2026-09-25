@@ -144,16 +144,16 @@ public static class QuickDictionaryAdd
 
     public static Plan Build(QuickAddRequest request, QuickAddVocabulary vocabulary)
     {
-        if (!request.ReferencesAvailable)
-        {
-            return new Plan(PlanKind.ReferencesUnavailable, null, "Couldn't check your dictionary. Try again.", PlanSeverity.Error, PlanAction.TryAgain);
-        }
-
         var heard = (request.Heard ?? string.Empty).Trim();
         var written = (request.Writes ?? string.Empty).Trim();
         if (heard.Length == 0)
         {
             return new Plan(PlanKind.Empty, null, string.Empty, PlanSeverity.None);
+        }
+
+        if (!request.ReferencesAvailable)
+        {
+            return new Plan(PlanKind.ReferencesUnavailable, null, "Couldn't check your dictionary. Try again.", PlanSeverity.Error, PlanAction.TryAgain);
         }
 
         if (heard.Contains('\n') || heard.Contains('\r'))

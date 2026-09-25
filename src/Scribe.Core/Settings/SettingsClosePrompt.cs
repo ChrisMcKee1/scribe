@@ -23,6 +23,6 @@ public sealed record SettingsClosePrompt(string Title, string Body, string Prima
             CloseTrigger.RestartToUpdate => "Save and restart",
             _ => "Save and close",
         };
-        return new SettingsClosePrompt(title, "Your changes haven't been saved. Actions already completed, such as deleting history or importing a word pack, aren't undone.", primary, "Discard changes", "Keep editing", "Keep editing");
+        return new SettingsClosePrompt(title, "Your changes haven't been saved. Things that already happened, such as deleting history, aren't undone.", primary, "Discard changes", "Keep editing", "Keep editing");
     }
 }

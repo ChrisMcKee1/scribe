@@ -97,6 +97,7 @@ public sealed class TrayCoreRedesignT0Tests
         var quickAddPrompt = QuickAddClosePrompt.ForUnsavedWord();
 
         Assert.Equal("Save changes before restarting?", settingsPrompt.Title);
+        Assert.Equal("Your changes haven't been saved. Things that already happened, such as deleting history, aren't undone.", settingsPrompt.Body);
         Assert.Equal("Keep editing", settingsPrompt.DefaultButton);
         Assert.Equal("Save this word before closing?", quickAddPrompt.Title);
         Assert.Equal(SecondLaunchAction.OpenSettingsInRunningInstance, SecondLaunch.Decide(signalRaised: true));
@@ -113,12 +114,14 @@ public sealed class TrayCoreRedesignT0Tests
         var blocked = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("draft", "Draft", false, true), vocabulary);
         var pack = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("cloud pilot", "GitHub Copilot", false, true, "ask cloud pilot", true), vocabulary);
         var failed = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("cloud", "Copilot", false, true, ReferencesAvailable: false), vocabulary);
+        var emptyBeforeFailedReferences = QuickDictionaryAdd.Build(new QuickDictionaryAdd.QuickAddRequest("", "Copilot", false, true, ReferencesAvailable: false), vocabulary);
 
         Assert.Equal(QuickDictionaryAdd.PlanKind.BlockedBySettings, blocked.Kind);
         Assert.Equal("Show in Settings", ActionText(blocked.Action));
         Assert.Equal(QuickDictionaryAdd.PlanKind.OverridesWordPack, pack.Kind);
         Assert.Contains("The \"AI\" word pack writes \"cloud pilot\" as \"Copilot\"", pack.Message);
         Assert.Equal("Couldn't check your dictionary. Try again.", failed.Message);
+        Assert.Equal(QuickDictionaryAdd.PlanKind.Empty, emptyBeforeFailedReferences.Kind);
     }
 
     [Fact]
@@ -131,6 +134,7 @@ public sealed class TrayCoreRedesignT0Tests
 
         Assert.Equal(new QuickDictionaryAdd.WordRange(1, 2), result.State.Selection);
         Assert.Equal("Arrow keys move between words. Space selects a word. Shift and an arrow key select several.", QuickAddHint.For(result.State.Selection, keyboardFocusInWords: true, hasDictation: true));
+        Assert.Equal("Your correction is still here. Try again before saving.", QuickAddHint.For(result.State.Selection, keyboardFocusInWords: false, hasDictation: true, referencesUnavailable: true));
         Assert.Equal(QuickAddAnnouncementTiming.Delayed, QuickAddAnnouncement.ShouldAnnounce(prior, next));
         Assert.Equal(QuickDictionaryAdd.WordRange.None, QuickAddSelection.Reconcile("typed", "selected", result.State.Selection));
         Assert.Equal(TimeSpan.FromMilliseconds(700), QuickAddAnnouncement.AnnouncementDelay);
