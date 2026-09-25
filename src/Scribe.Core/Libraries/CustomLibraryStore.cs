@@ -21,8 +21,9 @@ internal sealed record LibraryFileRead(
         new(name, bytes, LibraryContentHashing.Of(bytes), LibraryIoFailure.None, awaitingRelease);
 
     /// <summary>
-    /// A pending manifest's committed bytes for this file, which cannot be read right now (round 3, A13): the library is
-    /// held back, never read from the file on disk, which may still hold what the committed generation replaced.
+    /// The committed generation's bytes for this file, which cannot be read right now (round 3, A13: a pending manifest's
+    /// redo image), or cannot be told (round 4, A15: the pending manifests cannot be listed and none is held): the library
+    /// is held back, never read from the file on disk, which may still hold what the committed generation replaced.
     /// </summary>
     public static LibraryFileRead Unavailable(string name, LibraryIoFailure failure) =>
         new(name, null, null, failure == LibraryIoFailure.None ? LibraryIoFailure.Other : failure, AwaitingRelease: true, CommittedUnavailable: true);
@@ -157,10 +158,14 @@ internal sealed class LibraryFolderSnapshot
     public bool EditsUnlisted { get; set; }
 
     /// <summary>
-    /// The committed generation's manifest could not be read, and nothing of it is known: every library is held back,
-    /// custom and built-in, since any of them may be one it wrote (round 3, A13).
+    /// What the committed generation holds cannot be told right now (its manifest could not be read, round 3, A13, or
+    /// the pending manifests could not be listed, round 4, A15) and nothing of it is known: every library is held back,
+    /// custom and built-in, since any of them may be one it wrote.
     /// </summary>
     public bool CommittedContentUnavailable { get; set; }
+
+    /// <summary>Libraries this read holds back because the committed generation's bytes for them cannot be read right now.</summary>
+    public int HeldBack { get; set; }
 }
 
 /// <summary>

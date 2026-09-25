@@ -314,6 +314,37 @@ public sealed class LibraryCommitUnknownTests : IDisposable
         Assert.Empty(Directory.GetFiles(_fixture.Paths.LibraryJournalDir, "*" + LibraryJournalNames.ManifestSuffix));
     }
 
+    [Fact]
+    public void An_unknown_outcome_settles_while_only_set_aside_manifests_cannot_be_listed()
+    {
+        // Round 4: set-aside manifests are never applied, so a failed listing of them says nothing about the unknown Save.
+        // Recovery sees it, installs it and settles it, so its grant is in force; commits wait for that listing to work.
+        var files = new FaultingFileSystem();
+        var (service, settings, start, _) = Arrange(files);
+        settings.FailAfterCommit = true;
+        var (prepared, outcome, _) = Changes.Save(service, settings, GrantRevokeAndDelete(start));
+        Assert.Equal(LibrarySaveStatus.CommitUnknown, outcome!.Status);
+        files.EnumerateFault = (directory, pattern) =>
+            IsJournal(directory) && pattern.Contains("set-aside", StringComparison.OrdinalIgnoreCase) ? FaultingFileSystem.SharingViolation() : null;
+        settings.Failing = false;
+
+        var settled = service.LoadCatalog();
+
+        Assert.Equal(prepared.Save!.Generation, settled.Generation);
+        Assert.Equal(LibraryStorageFixture.Managed(Edited), File.ReadAllBytes(_fixture.PathOf("team.csv")));
+        Assert.Empty(Directory.GetFiles(_fixture.Paths.LibraryJournalDir, "*" + LibraryJournalNames.ManifestSuffix));
+        Assert.True(service.TryHandOff(Holding(settled, "newly"), () => { }), "the settled Save's grant is not in force");
+        Assert.Equal(
+            LibraryPrepareStatus.PreviousSaveUnfinished,
+            service.PrepareSave(Changes.Of(settled, state: Changes.With(settled.LocalState, disable: ["other"]))).Status);
+
+        files.EnumerateFault = null;
+        var listed = service.LoadCatalog();
+        Assert.Equal(
+            LibraryPrepareStatus.Prepared,
+            service.PrepareSave(Changes.Of(listed, state: Changes.With(listed.LocalState, disable: ["other"]))).Status);
+    }
+
     /// <summary>
     /// The real repository, except that every read of the library generation fails while <see cref="Failing"/> is set,
     /// and that with <see cref="FailAfterCommit"/> the next library commit (a SaveBundle with a library payload, or

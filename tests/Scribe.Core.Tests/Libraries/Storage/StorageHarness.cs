@@ -134,6 +134,73 @@ internal sealed class JsonEditsOverlay : IBuiltInLibraryOverlay
         node["wholeWord"]?.GetValue<bool>() ?? true, node["enabled"]?.GetValue<bool>() ?? true);
 }
 
+/// <summary>The overlay double, recording every <c>Apply</c> made with no document, by library.</summary>
+internal sealed class RecordingOverlay : IBuiltInLibraryOverlay
+{
+    private readonly IBuiltInLibraryOverlay _inner = JsonEditsOverlay.Instance;
+    private readonly List<string> _nullApplies = [];
+
+    /// <summary>Every <c>Apply(shipped, null)</c> so far, of any library.</summary>
+    public int NullApplyCount
+    {
+        get
+        {
+            lock (_nullApplies)
+            {
+                return _nullApplies.Count;
+            }
+        }
+    }
+
+    public int NullApplies(string libraryId)
+    {
+        lock (_nullApplies)
+        {
+            return _nullApplies.Count(id => string.Equals(id, libraryId, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public void Reset()
+    {
+        lock (_nullApplies)
+        {
+            _nullApplies.Clear();
+        }
+    }
+
+    public IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits)
+    {
+        if (edits is null)
+        {
+            lock (_nullApplies)
+            {
+                _nullApplies.Add(shipped.Id);
+            }
+        }
+
+        return _inner.Apply(shipped, edits);
+    }
+
+    public BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes) => _inner.ReadEdits(libraryId, bytes);
+
+    public byte[] WriteEdits(BuiltInLibraryEdits edits) => _inner.WriteEdits(edits);
+
+    public LibraryRow Edit(LibraryRow row, TermValues values) => _inner.Edit(row, values);
+
+    public LibraryRow SetEnabled(LibraryRow row, bool enabled) => _inner.SetEnabled(row, enabled);
+
+    public LibraryRow? RestoreShipped(LibraryRow row) => _inner.RestoreShipped(row);
+
+    public LibraryRow Add(TermValues values) => _inner.Add(values);
+
+    public LibraryRow ResolveReview(LibraryRow row, TermReviewChoice choice) => _inner.ResolveReview(row, choice);
+
+    public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows) =>
+        _inner.Collect(shipped, committed, rows);
+
+    public IReadOnlyList<TermValues> AuthoredTerms(BuiltInLibraryEdits edits) => _inner.AuthoredTerms(edits);
+}
+
 /// <summary>Records every log call at every level, with its structured values, thread-safely.</summary>
 internal sealed class StorageLog<T> : ILogger<T>
 {

@@ -24,19 +24,23 @@ internal sealed class LibraryRecoveryOutcome
     /// <summary>A manifest of the stored generation still pending: the libraries are unresolved and it is read logically.</summary>
     public LibraryManifest? Unresolved { get; set; }
 
+    /// <summary>The stored generation this attempt ran against (0 when the row is absent or unparsable).</summary>
+    public long Generation { get; set; }
+
     /// <summary>
     /// The stored generation's own manifest, the only one of it, which this attempt found but could not read whole right
     /// now: its content, or a redo image it needs (round 3, A13). It is committed and trusted, so it is neither set aside
     /// nor resumed on that failure, and readers keep its logical result: with its content read it is
-    /// <see cref="Unresolved"/>; without, the service applies what it last read of it, or holds back what it cannot vouch
+    /// <see cref="Unresolved"/>; without, the service applies what it holds of it, or holds back what it cannot vouch
     /// for (<see cref="StoredContentUnavailable"/>). Never a held manifest, which is one to set aside or discard.
     /// </summary>
     public LibraryJournalName? StoredUnreadable { get; set; }
 
     /// <summary>
-    /// The stored generation's manifest could not be read and this process has not read it before, so which libraries
-    /// it wrote is unknown: every library is held back until it can be read (round 3, A13), never read from files that
-    /// may be older than the committed generation.
+    /// What the committed generation (<see cref="Generation"/>) holds cannot be told: its own manifest could not be read
+    /// (round 3, A13), or the pending manifests could not be listed so whether one of it is pending is unknown (round 4,
+    /// A15), and the service holds none of it. Every library is held back until an attempt lists and reads the journal,
+    /// never read from files that may still hold what that generation's Save replaced. Set by the service.
     /// </summary>
     public bool StoredContentUnavailable { get; set; }
 
@@ -45,6 +49,13 @@ internal sealed class LibraryRecoveryOutcome
     /// which fences every commit, and no orphan was removed (review finding A2 of round 2).
     /// </summary>
     public bool InventoryIncomplete { get; set; }
+
+    /// <summary>
+    /// The listing of pending manifests failed, so this attempt saw none of them, the committed generation's own included
+    /// (round 4, A15). A failed listing of set-aside manifests alone leaves this false: those are never applied, so what
+    /// is committed is still known, and only commits and orphan removal wait.
+    /// </summary>
+    public bool PendingUnlisted { get; set; }
 
     /// <summary>Whether anything on disk changed, so the service publishes again.</summary>
     public bool ChangedFiles => Completed > 0 || Discarded > 0 || SetAside > 0;
@@ -516,7 +527,7 @@ internal sealed class LibraryJournal
         long storedGeneration, bool generationLost, string? liveManifestId, bool runningOnDefaults, DateTimeOffset now,
         List<LibraryKeptVersion> kept)
     {
-        var outcome = new LibraryRecoveryOutcome();
+        var outcome = new LibraryRecoveryOutcome { Generation = generationLost ? 0 : storedGeneration };
         var names = ListManifests(out var listFailure)
             .Where(name => liveManifestId is null || !string.Equals(name.ManifestId, liveManifestId, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -525,6 +536,7 @@ internal sealed class LibraryJournal
         {
             // Unresolved storage until both inventories succeed: nothing may commit past a manifest this attempt cannot see.
             outcome.InventoryIncomplete = true;
+            outcome.PendingUnlisted = listFailure != LibraryIoFailure.None;
             outcome.Held++;
             outcome.NoteFailure(listFailure);
             outcome.NoteFailure(setAsideListFailure);

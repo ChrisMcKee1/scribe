@@ -67,6 +67,12 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     // against S (round 3, A13): redo images are immutable until retirement (rule R2), so a read of them that fails later
     // reuses these bytes instead of letting the older files stand for the committed generation.
     private PendingImages? _pendingImages;
+
+    // Under _libraryLock. Whether the vocabulary last offered for publication held a library back because the committed
+    // generation's content could not be read or told (round 3, A13; round 4, A15). Recover and the janitor publish again
+    // whenever it did, even when their attempt changes no file, so a hold-back ends with the attempt that can list and
+    // read the journal again rather than at the next load.
+    private bool _publishedHeldBack;
     private readonly List<LibraryKeptVersion> _keptVersions = [];
     private readonly Dictionary<string, CustomRead> _lastCustom = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, BuiltInRead> _lastBuiltIn = new(StringComparer.OrdinalIgnoreCase);
@@ -281,7 +287,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                 var context = KeepWitnessInvariant(settings, ContextFor(settings));
                 var kept = new List<LibraryKeptVersion>();
                 var outcome = RecoverCore(settings, context, kept);
-                if (outcome.ChangedFiles)
+                if (outcome.ChangedFiles || _publishedHeldBack)
                 {
                     TryPublish();
                 }
@@ -446,6 +452,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         if (publish)
         {
             Publish(read.Catalog, stored);
+            _publishedHeldBack = read.Folder.HeldBack > 0;
         }
 
         return read;
@@ -483,12 +490,19 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         var outcome = _journal.Recover(
             settings.Generation, settings.GenerationLost, _live?.Manifest.Id, context.RunningOnDefaults, _parts.Time.GetUtcNow(), kept);
 
-        // An attempt that could not list the journal, or could not read the committed generation's own manifest right now
-        // (round 3, A13), cannot see that manifest, but it is still there and still committed: readers keep applying it
-        // whole from what this process read of it (an earlier attempt's, or a Save whose outcome was unknown), with its
-        // redo images from the last complete read of them when they cannot be read either, never a mix of the new state
-        // and the old files (contract 6.6.5). One this process never read holds every library back.
-        if (outcome is { Unresolved: null } && !settings.GenerationLost && (outcome.InventoryIncomplete || outcome.StoredUnreadable is not null))
+        // Readers need the committed generation's logical result (contract 6.6.5), so an attempt that did not see that
+        // generation's own manifest is never taken to mean there is none. It did not see it when the pending-manifest
+        // listing failed (round 4, A15), when it found the manifest but could not read it (round 3, A13), and never while
+        // this process's own preparation of that generation is live after its commit (recovery skips it; ReadCatalog
+        // applies it first). A manifest of that generation this process holds is applied whole: an earlier attempt's
+        // unresolved one, or a Save whose outcome was unknown, with its redo images from the last complete read of them
+        // when they cannot be read either (ApplyPending). Holding none, the service cannot tell whether a Save of that
+        // generation is still pending or what it wrote, so every library is held back until an attempt lists and reads
+        // the journal: the files as they stand may still hold what that Save replaced. A failed listing of set-aside
+        // manifests alone says nothing about what is committed: it fences commits and orphan removal, and holds nothing back.
+        var liveCommitted = _live is { } live && !settings.GenerationLost && live.Save.Generation == settings.Generation;
+        if (outcome is { Unresolved: null } && !settings.GenerationLost && !liveCommitted &&
+            (outcome.PendingUnlisted || outcome.StoredUnreadable is not null))
         {
             var id = outcome.StoredUnreadable?.ManifestId;
             bool Matches(LibraryManifest manifest) =>
@@ -505,7 +519,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                 outcome.Unresolved = committed.Manifest;
                 outcome.FilesAwaitingRelease = Math.Max(outcome.FilesAwaitingRelease, Math.Max(1, committed.Manifest.Operations.Count));
             }
-            else if (id is not null)
+            else
             {
                 outcome.StoredContentUnavailable = true;
             }
@@ -513,14 +527,17 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
         // A Save whose outcome was unknown is settled once recovery, with the generation read, has finished it, discarded
         // it or left it unresolved; a manifest recovery could not reach yet, or could not read whole, keeps it unsettled.
-        if (_unsettled is { } unsettled && !outcome.InventoryIncomplete && outcome.StoredUnreadable is null &&
+        if (_unsettled is { } unsettled && !outcome.PendingUnlisted && outcome.StoredUnreadable is null &&
             (outcome.Unresolved?.Id == unsettled.Manifest.Id || !ManifestPending(unsettled.Manifest)))
         {
             _unsettled = null;
         }
 
-        // What was read of a manifest that is no longer pending is spare.
-        if (_pendingImages is { } cached && !outcome.InventoryIncomplete && outcome.StoredUnreadable is null &&
+        // What was read of a manifest that is no longer pending is spare: this attempt listed every pending manifest and
+        // the one read is neither unresolved, unreadable nor live, so recovery retired, discarded or set it aside just now,
+        // or it left outside Scribe. Completion releases its own at once (ReleasePendingImages).
+        if (_pendingImages is { } cached && !outcome.PendingUnlisted &&
+            !string.Equals(outcome.StoredUnreadable?.ManifestId, cached.Manifest.Id, StringComparison.OrdinalIgnoreCase) &&
             !SameManifest(cached.Manifest, outcome.Unresolved) && !SameManifest(cached.Manifest, _live?.Manifest))
         {
             _pendingImages = null;
@@ -546,8 +563,10 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         var folder = _store.Read();
 
         // A pending manifest of the stored generation is applied whole: this process's live preparation once its commit
-        // has happened, or one recovery could not finish. A held manifest is never applied (contract 6.6.7). A committed
-        // manifest nothing of which can be read now holds every library back (round 3, A13).
+        // has happened, or one recovery could not finish. A held manifest is never applied (contract 6.6.7). When what
+        // the stored generation holds cannot be told (round 3, A13; round 4, A15), every library is held back; that
+        // verdict belongs to the generation it was reached for, so a later commit, this process's own Save included,
+        // never inherits it.
         var pending = _live is { } live && !settings.GenerationLost && live.Save.Generation == settings.Generation
             ? live.Manifest
             : recovery?.Unresolved is { } unresolved && unresolved.Generation == settings.Generation ? unresolved : null;
@@ -555,7 +574,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         {
             ApplyPending(folder, pending);
         }
-        else if (recovery is { StoredContentUnavailable: true })
+        else if (recovery is { StoredContentUnavailable: true } && !settings.GenerationLost && recovery.Generation == settings.Generation)
         {
             folder.CommittedContentUnavailable = true;
             foreach (var name in folder.Custom.Keys.ToList())
@@ -563,10 +582,21 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                 folder.Custom[name] = LibraryFileRead.Unavailable(name, recovery.Failure);
             }
 
-            TryLog(
-                LogLevel.Warning,
-                "The committed library manifest could not be read right now ({Failure}); {Libraries} librar(ies) held back until it can.",
-                recovery.Failure, folder.Custom.Count + BuiltInDictionaryLibraries.All.Count);
+            folder.HeldBack = folder.Custom.Count + BuiltInDictionaryLibraries.All.Count;
+            if (recovery.PendingUnlisted)
+            {
+                TryLog(
+                    LogLevel.Warning,
+                    "The pending library manifests could not be listed right now ({Failure}); {Libraries} librar(ies) held back until they can.",
+                    recovery.Failure, folder.HeldBack);
+            }
+            else
+            {
+                TryLog(
+                    LogLevel.Warning,
+                    "The committed library manifest could not be read right now ({Failure}); {Libraries} librar(ies) held back until it can.",
+                    recovery.Failure, folder.HeldBack);
+            }
         }
 
         var recentlyDeleted = RecentlyDeletedStore.List(folder, _parts.Codec);
@@ -724,6 +754,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
         if (heldBack > 0)
         {
+            folder.HeldBack += heldBack;
             TryLog(
                 LogLevel.Warning,
                 "A pending library manifest's redo image(s) could not be read right now ({Failure}); {Libraries} librar(ies) held back until they can.",
@@ -751,13 +782,25 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     private static bool SameManifest(LibraryManifest manifest, LibraryManifest? other) =>
         other is not null && manifest.Generation == other.Generation && string.Equals(manifest.Id, other.Id, StringComparison.OrdinalIgnoreCase);
 
+    // The redo images read of a pending manifest leave with it, on every path it leaves the pending state by: completion
+    // releases its own here, and recovery's retirements, discards and set-asides release in RecoverCore. Never while the
+    // manifest may still be the committed generation's: unresolved, live, or a Save whose outcome is unknown.
+    private void ReleasePendingImages(LibraryManifest manifest)
+    {
+        if (_pendingImages is { } cached && SameManifest(cached.Manifest, manifest))
+        {
+            _pendingImages = null;
+        }
+    }
+
     private CatalogLibrary ReadCustom(string id, string fileName, LibraryFileRead file)
     {
         var fallbackName = BuiltInDictionaryLibraries.Humanize(CustomLibraryStore.Stem(fileName));
         if (file.CommittedUnavailable)
         {
-            // The committed generation's bytes for this file cannot be read right now (round 3, A13): held back, with no
-            // rows, out of replacement and AI, and never the file on disk, which may still hold what that Save replaced.
+            // The committed generation's bytes for this file cannot be read right now, or whether that generation wrote it
+            // cannot be told (round 3, A13; round 4, A15): held back, with no rows, out of replacement and AI, and never the
+            // file on disk, which may still hold what that Save replaced.
             return new CatalogLibrary(Empty(id, false, fallbackName, "Custom"), LibraryFileState.AwaitingRelease, fileName, null);
         }
 
@@ -793,8 +836,9 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         if (folder.CommittedContentUnavailable ||
             (folder.Edits.TryGetValue(shipped.Id, out var committed) && committed.CommittedUnavailable))
         {
-            // Its committed document, or whether the committed generation wrote one, cannot be read right now (round 3,
-            // A13): no rows at all, as for a lock at a fresh start, so neither older rows nor shipped ones stand in for it.
+            // Its committed document, or whether the committed generation wrote one, cannot be read or told right now (round
+            // 3, A13; round 4, A15): no rows at all, as for a lock at a fresh start, so neither older rows nor shipped ones
+            // stand in for it, and Apply(shipped, null) is never called for a document that may exist.
             return new CatalogLibrary(BuiltInContent(shipped, []), LibraryFileState.AwaitingRelease, null, null, PreviousEditsAvailable: previous);
         }
 
@@ -1244,6 +1288,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             LogKept(kept);
             if (completion.Retired)
             {
+                ReleasePendingImages(live.Manifest);
                 var counts = prepared.Counts;
                 TryLog(
                     wrapper ? LogLevel.Debug : LogLevel.Information,
@@ -1276,6 +1321,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         // Not committed: the preparation, which never installed anything, is discarded, and the committed scope is back.
         _live = null;
         var discarded = _journal.Discard(live.Manifest, kept, out _);
+        ReleasePendingImages(live.Manifest);
         NoteKept(kept);
         var notCommitted = stored == prepared.BaseGeneration;
         TryLog(
@@ -1420,7 +1466,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
         // Retries an unresolved committed manifest and every held one first; recovery follows the defaults rules itself.
         var recovery = RecoverCore(settings, context, []);
-        if (recovery.ChangedFiles)
+        if (recovery.ChangedFiles || _publishedHeldBack)
         {
             TryPublish();
         }

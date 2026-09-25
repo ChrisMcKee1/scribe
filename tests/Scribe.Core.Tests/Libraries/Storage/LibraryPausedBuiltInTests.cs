@@ -235,61 +235,6 @@ public sealed class LibraryPausedBuiltInTests : IDisposable
         }
     }
 
-    /// <summary>The overlay double, recording every <c>Apply</c> made with no document, by library.</summary>
-    private sealed class RecordingOverlay : IBuiltInLibraryOverlay
-    {
-        private readonly IBuiltInLibraryOverlay _inner = JsonEditsOverlay.Instance;
-        private readonly List<string> _nullApplies = [];
-
-        public int NullApplies(string libraryId)
-        {
-            lock (_nullApplies)
-            {
-                return _nullApplies.Count(id => string.Equals(id, libraryId, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-
-        public void Reset()
-        {
-            lock (_nullApplies)
-            {
-                _nullApplies.Clear();
-            }
-        }
-
-        public IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits)
-        {
-            if (edits is null)
-            {
-                lock (_nullApplies)
-                {
-                    _nullApplies.Add(shipped.Id);
-                }
-            }
-
-            return _inner.Apply(shipped, edits);
-        }
-
-        public BuiltInEditsReadResult ReadEdits(string libraryId, ReadOnlySpan<byte> bytes) => _inner.ReadEdits(libraryId, bytes);
-
-        public byte[] WriteEdits(BuiltInLibraryEdits edits) => _inner.WriteEdits(edits);
-
-        public LibraryRow Edit(LibraryRow row, TermValues values) => _inner.Edit(row, values);
-
-        public LibraryRow SetEnabled(LibraryRow row, bool enabled) => _inner.SetEnabled(row, enabled);
-
-        public LibraryRow? RestoreShipped(LibraryRow row) => _inner.RestoreShipped(row);
-
-        public LibraryRow Add(TermValues values) => _inner.Add(values);
-
-        public LibraryRow ResolveReview(LibraryRow row, TermReviewChoice choice) => _inner.ResolveReview(row, choice);
-
-        public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows) =>
-            _inner.Collect(shipped, committed, rows);
-
-        public IReadOnlyList<TermValues> AuthoredTerms(BuiltInLibraryEdits edits) => _inner.AuthoredTerms(edits);
-    }
-
     /// <summary>The real file system, except that one folder cannot be listed while <see cref="Unlistable"/> is set.</summary>
     private sealed class UnlistableFolder(string folder) : ILibraryFileSystem
     {
