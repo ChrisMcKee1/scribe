@@ -131,12 +131,9 @@ public static class SettingsChangeTracker
         IReadOnlyList<DictionaryDraftRow>? rows,
         IReadOnlyList<LoadedDictionaryDraftRow>? loadedRows)
     {
-        var loaded = (loadedRows ?? LoadedFrom(rows, row => new LoadedDictionaryDraftRow(
-                row.RowKey,
-                row.LoadedPattern,
-                row.LoadedReplacement,
-                row.WholeWord,
-                row.Enabled)))
+        RequireLoadedSnapshot(rows, loadedRows, "loadedDictionaryRows");
+
+        var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
             .Where(row => !IsEmptyNewDictionary(row))
@@ -165,11 +162,9 @@ public static class SettingsChangeTracker
         IReadOnlyList<SnippetDraftRow>? rows,
         IReadOnlyList<LoadedSnippetDraftRow>? loadedRows)
     {
-        var loaded = (loadedRows ?? LoadedFrom(rows, row => new LoadedSnippetDraftRow(
-                row.RowKey,
-                row.LoadedPhrase,
-                row.LoadedTemplate,
-                row.Enabled)))
+        RequireLoadedSnapshot(rows, loadedRows, "loadedSnippetRows");
+
+        var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
             .Where(row => !IsEmptyNewSnippet(row))
@@ -197,12 +192,9 @@ public static class SettingsChangeTracker
         IReadOnlyList<ProfileDraftRow>? rows,
         IReadOnlyList<LoadedProfileDraftRow>? loadedRows)
     {
-        var loaded = (loadedRows ?? LoadedFrom(rows, row => new LoadedProfileDraftRow(
-                row.RowKey,
-                row.LoadedName,
-                row.LoadedApps,
-                row.LoadedWritingStyle,
-                row.LoadedNewlineHandling)))
+        RequireLoadedSnapshot(rows, loadedRows, "loadedProfileRows");
+
+        var loaded = (loadedRows ?? [])
             .ToDictionary(row => row.RowKey, StringComparer.Ordinal);
         var draft = (rows ?? [])
             .Where(row => !IsEmptyNewProfile(row))
@@ -262,20 +254,16 @@ public static class SettingsChangeTracker
     private static bool SameKeys(IEnumerable<string> left, IEnumerable<string> right) =>
         new HashSet<string>(left, StringComparer.Ordinal).SetEquals(right);
 
-    private static IReadOnlyList<TLoaded> LoadedFrom<TRow, TLoaded>(
+    private static void RequireLoadedSnapshot<TRow, TLoaded>(
         IReadOnlyList<TRow>? rows,
-        Func<TRow, TLoaded> select)
-        where TRow : notnull =>
-        rows is null ? [] : [.. rows.Where(IsSaved).Select(select)];
-
-    private static bool IsSaved<T>(T row) =>
-        row switch
+        IReadOnlyList<TLoaded>? loadedRows,
+        string parameterName)
+    {
+        if (rows is not null && loadedRows is null)
         {
-            DictionaryDraftRow dictionary => dictionary.Origin == DraftRowOrigin.Saved,
-            SnippetDraftRow snippet => snippet.Origin == DraftRowOrigin.Saved,
-            ProfileDraftRow profile => profile.Origin == DraftRowOrigin.Saved,
-            _ => false,
-        };
+            throw new ArgumentException("A loaded row snapshot is required when draft rows are supplied.", parameterName);
+        }
+    }
 
     private static bool IsEmptyNewDictionary(DictionaryDraftRow row) =>
         row.Origin == DraftRowOrigin.New &&

@@ -30,6 +30,30 @@ public sealed class SettingsDraftValidatorTests
     }
 
     [Fact]
+    public void Untouched_new_row_with_content_is_validated_not_dropped()
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            DictionaryRows: [new("suggested", DraftRowOrigin.New, Touched: false, "", "Suggested")]));
+
+        Assert.Equal(ValidationCode.DictionarySpokenEmpty, issue.Code);
+        Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Unchanged_saved_dictionary_empty_spoken_form_warns(bool touched)
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            DictionaryRows: [new("saved", DraftRowOrigin.Saved, touched, "", "value", LoadedPattern: "", LoadedReplacement: "value")]));
+
+        Assert.Equal(ValidationCode.DictionarySpokenEmpty, issue.Code);
+        Assert.Equal(ValidationSeverity.Warning, issue.Severity);
+    }
+
+    [Fact]
     public void Dictionary_duplicates_report_the_spoken_form()
     {
         var issue = Single(new SettingsDraft(
@@ -42,6 +66,38 @@ public sealed class SettingsDraftValidatorTests
 
         Assert.Equal(ValidationCode.DictionaryDuplicate, issue.Code);
         Assert.Equal("\"dot net\" is already in your dictionary. Keep one of the two rows.", issue.Message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Unchanged_saved_dictionary_duplicates_warn_even_when_touched(bool touched)
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            DictionaryRows:
+            [
+                new("a", DraftRowOrigin.Saved, touched, "dot net", ".NET", LoadedPattern: "dot net", LoadedReplacement: ".NET"),
+                new("b", DraftRowOrigin.Saved, touched, "dot net", "DotNet", LoadedPattern: "dot net", LoadedReplacement: "DotNet"),
+            ]));
+
+        Assert.Equal(ValidationCode.DictionaryDuplicate, issue.Code);
+        Assert.Equal(ValidationSeverity.Warning, issue.Severity);
+    }
+
+    [Fact]
+    public void Edited_dictionary_duplicate_blocks()
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            DictionaryRows:
+            [
+                new("a", DraftRowOrigin.Saved, Touched: false, "dot net", ".NET", LoadedPattern: "dot net", LoadedReplacement: ".NET"),
+                new("b", DraftRowOrigin.Saved, Touched: true, "dot net", "DotNet", LoadedPattern: "different", LoadedReplacement: "DotNet"),
+            ]));
+
+        Assert.Equal(ValidationCode.DictionaryDuplicate, issue.Code);
+        Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
     }
 
     [Fact]
@@ -60,6 +116,38 @@ public sealed class SettingsDraftValidatorTests
         Assert.Contains(issues, issue => issue.Code == ValidationCode.SnippetTriggerEmpty && issue.Message == "Type the words you'll say, or delete this snippet.");
         Assert.Contains(issues, issue => issue.Code == ValidationCode.SnippetTextEmpty && issue.Message == "Type the text this snippet adds, or delete it.");
         Assert.Contains(issues, issue => issue.Code == ValidationCode.SnippetDuplicate && issue.Message == "Another snippet already uses \"hello\". Use different words for one of them.");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Unchanged_saved_snippet_duplicates_warn_even_when_touched(bool touched)
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            SnippetRows:
+            [
+                new("a", DraftRowOrigin.Saved, touched, "hello", "one", LoadedPhrase: "hello", LoadedTemplate: "one"),
+                new("b", DraftRowOrigin.Saved, touched, "hello", "two", LoadedPhrase: "hello", LoadedTemplate: "two"),
+            ]));
+
+        Assert.Equal(ValidationCode.SnippetDuplicate, issue.Code);
+        Assert.Equal(ValidationSeverity.Warning, issue.Severity);
+    }
+
+    [Fact]
+    public void Edited_snippet_duplicate_blocks()
+    {
+        var issue = Single(new SettingsDraft(
+            AppSettings.CreateDefault(),
+            SnippetRows:
+            [
+                new("a", DraftRowOrigin.Saved, Touched: false, "hello", "one", LoadedPhrase: "hello", LoadedTemplate: "one"),
+                new("b", DraftRowOrigin.Saved, Touched: true, "hello", "two", LoadedPhrase: "different", LoadedTemplate: "two"),
+            ]));
+
+        Assert.Equal(ValidationCode.SnippetDuplicate, issue.Code);
+        Assert.Equal(ValidationSeverity.Blocking, issue.Severity);
     }
 
     [Fact]
@@ -152,7 +240,7 @@ public sealed class SettingsDraftValidatorTests
         var issues = SettingsDraftValidator.Validate(new SettingsDraft(settings));
 
         Assert.Contains(issues, issue => issue.Code == ValidationCode.CustomEndpointInvalid && issue.Message == "Enter the service's address, such as http://localhost:11434/v1.");
-        Assert.Contains(issues, issue => issue.Code == ValidationCode.DeploymentEmpty && issue.Message == "Enter the name of the model deployment.");
+        Assert.Contains(issues, issue => issue.Code == ValidationCode.CustomModelEmpty && issue.Message == "Enter the name of the model.");
     }
 
     [Fact]
@@ -180,6 +268,7 @@ public sealed class SettingsDraftValidatorTests
 
         Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(AppSettings.CreateDefault(), DictionaryRows: [row])));
         Assert.True(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(row));
+        Assert.True(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(row with { Touched = false }));
         Assert.Equal("Leave \"um\" out of what you dictate?", SettingsDraftValidator.DictionaryRemovalTitle("um"));
     }
 
@@ -192,6 +281,8 @@ public sealed class SettingsDraftValidatorTests
             new DictionaryDraftRow("placeholder", DraftRowOrigin.New, Touched: false, Pattern: "", Replacement: "")));
         Assert.False(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(
             new DictionaryDraftRow("saved", DraftRowOrigin.Saved, Touched: true, Pattern: "um", Replacement: "", LoadedReplacement: "")));
+        Assert.False(SettingsDraftValidator.NeedsDictionaryRemovalConfirmation(
+            new DictionaryDraftRow("saved", DraftRowOrigin.Saved, Touched: false, Pattern: "um", Replacement: "", LoadedReplacement: "")));
     }
 
     [Fact]

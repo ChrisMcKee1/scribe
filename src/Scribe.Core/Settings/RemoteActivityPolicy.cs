@@ -42,11 +42,11 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
         _azureAuthMode = settings.AiCleanupAzureAuthMode;
         _azureTenantId = EmptyToNull(settings.AiCleanupAzureTenantId);
         _azureClientId = EmptyToNull(settings.AiCleanupAzureClientId);
-        _azureClientSecret = EmptyToNull(settings.AiCleanupAzureClientSecret);
-        _azureApiKey = EmptyToNull(settings.AiCleanupAzureApiKey);
+        _azureClientSecret = RawEmptyToNull(settings.AiCleanupAzureClientSecret);
+        _azureApiKey = RawEmptyToNull(settings.AiCleanupAzureApiKey);
         _customEndpoint = EmptyToNull(settings.AiCleanupCustomEndpoint);
         _customModel = EmptyToNull(settings.AiCleanupCustomModel);
-        _customApiKey = EmptyToNull(settings.AiCleanupCustomApiKey);
+        _customApiKey = RawEmptyToNull(settings.AiCleanupCustomApiKey);
         _copilotModel = EmptyToNull(settings.AiCleanupCopilotModel);
     }
 
@@ -100,6 +100,9 @@ internal sealed class RemoteActivityFingerprint : IEquatable<RemoteActivityFinge
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? RawEmptyToNull(string? value) =>
+        string.IsNullOrEmpty(value) ? null : value;
 
     private static bool Same(string? left, string? right) =>
         string.Equals(left, right, StringComparison.Ordinal);

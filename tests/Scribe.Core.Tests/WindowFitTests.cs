@@ -47,4 +47,14 @@ public sealed class WindowFitTests
         Assert.Equal(10, fit.Left);
         Assert.Equal(48, fit.Top, precision: 2);
     }
+
+    [Theory]
+    [InlineData(double.NaN, 600)]
+    [InlineData(double.PositiveInfinity, 600)]
+    [InlineData(800, double.NaN)]
+    [InlineData(800, double.PositiveInfinity)]
+    public void Compute_rejects_non_finite_work_area_dimensions(double width, double height)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => WindowFit.Compute(new WorkArea(0, 0, width, height)));
+    }
 }

@@ -116,6 +116,25 @@ public sealed class SettingsChangeTrackerTests
     }
 
     [Fact]
+    public void Draft_rows_require_explicit_loaded_snapshots()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        Assert.Throws<ArgumentException>(() => SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            dictionaryRows: []));
+        Assert.Throws<ArgumentException>(() => SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            snippetRows: []));
+        Assert.Throws<ArgumentException>(() => SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            profileRows: []));
+    }
+
+    [Fact]
     public void Flag_only_row_changes_are_dirty()
     {
         var settings = AppSettings.CreateDefault();
@@ -129,6 +148,28 @@ public sealed class SettingsChangeTrackerTests
             loadedSnippetRows: [new("s", "a", "b", Enabled: true)]);
 
         Assert.Equal([SettingsPage.Dictionary, SettingsPage.VoiceSnippets], changes.Pages);
+    }
+
+    [Fact]
+    public void Flag_changes_revert_cleanly_for_each_row_type()
+    {
+        var settings = AppSettings.CreateDefault();
+
+        Assert.False(SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            dictionaryRows: [new("d", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b", WholeWord: true, Enabled: true)],
+            loadedDictionaryRows: [new("d", "a", "b", WholeWord: true, Enabled: true)]).IsDirty);
+        Assert.False(SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            snippetRows: [new("s", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b", Enabled: true)],
+            loadedSnippetRows: [new("s", "a", "b", Enabled: true)]).IsDirty);
+        Assert.False(SettingsChangeTracker.Compare(
+            settings,
+            settings.Clone(),
+            profileRows: [new("p", DraftRowOrigin.Saved, Touched: true, "a", "b", "a", "b", WritingStyle: "style", LoadedWritingStyle: "style", NewlineHandling: NewlineInjectionMode.KeepNewlines, LoadedNewlineHandling: NewlineInjectionMode.KeepNewlines)],
+            loadedProfileRows: [new("p", "a", "b", "style", NewlineInjectionMode.KeepNewlines)]).IsDirty);
     }
 
     [Fact]
@@ -158,6 +199,19 @@ public sealed class SettingsChangeTrackerTests
         saved.EnableAiCleanup = true;
 
         Assert.False(SettingsChangeTracker.Compare(saved, saved.Clone()).IsDirty);
+    }
+
+    [Fact]
+    public void Save_finishing_after_newer_edits_does_not_mark_the_newer_edits_saved()
+    {
+        var saved = AppSettings.CreateDefault();
+        saved.EnableAiCleanup = true;
+        var newerDraft = saved.Clone();
+        newerDraft.HistoryRetentionDays = 30;
+
+        var changes = SettingsChangeTracker.Compare(saved, newerDraft);
+
+        Assert.Equal([SettingsPage.History], changes.Pages);
     }
 
     [Fact]

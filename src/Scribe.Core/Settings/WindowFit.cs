@@ -31,14 +31,14 @@ public static class WindowFit
         double? requestedLeft = null,
         double? requestedTop = null)
     {
-        if (workArea.Width <= 0)
+        if (!double.IsFinite(workArea.Width) || workArea.Width <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(workArea), workArea.Width, "Work area width must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(workArea), workArea.Width, "Work area width must be finite and positive.");
         }
 
-        if (workArea.Height <= 0)
+        if (!double.IsFinite(workArea.Height) || workArea.Height <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(workArea), workArea.Height, "Work area height must be positive.");
+            throw new ArgumentOutOfRangeException(nameof(workArea), workArea.Height, "Work area height must be finite and positive.");
         }
 
         var effectiveMinWidth = Math.Min(minimumWidth, workArea.Width);

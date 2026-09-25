@@ -21,6 +21,7 @@ public enum ValidationCode
     ShortcutsIdentical,
     FoundryEndpointInvalid,
     CustomEndpointInvalid,
+    CustomModelEmpty,
     DeploymentEmpty,
     TenantEmpty,
     ClientIdEmpty,
@@ -100,6 +101,7 @@ public static class SettingsDraftValidator
     public const string ShortcutsIdenticalMessage = "Both shortcuts use the same key. Choose a different key for one of them.";
     public const string FoundryEndpointInvalidMessage = "Enter the address of your Microsoft Foundry resource. It starts with https://.";
     public const string CustomEndpointInvalidMessage = "Enter the service's address, such as http://localhost:11434/v1.";
+    public const string CustomModelEmptyMessage = "Enter the name of the model.";
     public const string DeploymentEmptyMessage = "Enter the name of the model deployment.";
     public const string TenantEmptyMessage = "Enter the tenant ID.";
     public const string ClientIdEmptyMessage = "Enter the client ID.";
@@ -141,31 +143,26 @@ public static class SettingsDraftValidator
                 var pattern = Trim(row.Pattern);
                 if (pattern.Length == 0)
                 {
-                    if (row.Touched || row.Origin == DraftRowOrigin.New)
-                    {
-                        Add(
-                            ValidationCode.DictionarySpokenEmpty,
-                            SettingsPage.Dictionary,
-                            "DictionaryPattern",
-                            row.RowKey,
-                            DictionarySpokenEmptyMessage,
-                            Severity(row, pattern, Trim(row.Replacement), Trim(row.LoadedPattern), Trim(row.LoadedReplacement)));
-                    }
+                    Add(
+                        ValidationCode.DictionarySpokenEmpty,
+                        SettingsPage.Dictionary,
+                        "DictionaryPattern",
+                        row.RowKey,
+                        DictionarySpokenEmptyMessage,
+                        Severity(row, pattern, Trim(row.Replacement), Trim(row.LoadedPattern), Trim(row.LoadedReplacement)));
 
                     continue;
                 }
 
                 if (seen.TryGetValue(pattern, out var first))
                 {
-                    if (row.Touched || first.Touched || row.Origin == DraftRowOrigin.New || first.Origin == DraftRowOrigin.New)
-                    {
-                        Add(
-                            ValidationCode.DictionaryDuplicate,
-                            SettingsPage.Dictionary,
-                            "DictionaryPattern",
-                            row.RowKey,
-                            $"\"{pattern}\" is already in your dictionary. Keep one of the two rows.");
-                    }
+                    Add(
+                        ValidationCode.DictionaryDuplicate,
+                        SettingsPage.Dictionary,
+                        "DictionaryPattern",
+                        row.RowKey,
+                        $"\"{pattern}\" is already in your dictionary. Keep one of the two rows.",
+                        DuplicateSeverity(first, row));
                 }
                 else
                 {
@@ -219,15 +216,13 @@ public static class SettingsDraftValidator
 
                 if (seen.TryGetValue(phrase, out var first))
                 {
-                    if (row.Touched || first.Touched || row.Origin == DraftRowOrigin.New || first.Origin == DraftRowOrigin.New)
-                    {
-                        Add(
-                            ValidationCode.SnippetDuplicate,
-                            SettingsPage.VoiceSnippets,
-                            "SnippetPhrase",
-                            row.RowKey,
-                            $"Another snippet already uses \"{phrase}\". Use different words for one of them.");
-                    }
+                    Add(
+                        ValidationCode.SnippetDuplicate,
+                        SettingsPage.VoiceSnippets,
+                        "SnippetPhrase",
+                        row.RowKey,
+                        $"Another snippet already uses \"{phrase}\". Use different words for one of them.",
+                        DuplicateSeverity(first, row));
                 }
                 else
                 {
@@ -300,7 +295,7 @@ public static class SettingsDraftValidator
 
                     if (string.IsNullOrWhiteSpace(settings.AiCleanupCustomModel))
                     {
-                        Add(ValidationCode.DeploymentEmpty, SettingsPage.AiCleanup, "CustomModelBox", null, DeploymentEmptyMessage);
+                        Add(ValidationCode.CustomModelEmpty, SettingsPage.AiCleanup, "CustomModelBox", null, CustomModelEmptyMessage);
                     }
 
                     break;
@@ -362,7 +357,6 @@ public static class SettingsDraftValidator
         $"Enter a number from {minimum} to {maximum}.";
 
     public static bool NeedsDictionaryRemovalConfirmation(DictionaryDraftRow row) =>
-        row.Touched &&
         !string.IsNullOrWhiteSpace(row.Pattern) &&
         string.IsNullOrWhiteSpace(row.Replacement) &&
         (row.Origin == DraftRowOrigin.New || !string.IsNullOrWhiteSpace(row.LoadedReplacement));
@@ -375,6 +369,9 @@ public static class SettingsDraftValidator
         bool touched,
         string? first,
         string? second) =>
+        // Touched is not a license to drop content: app-authored suggestions and imports can add
+        // populated New rows before the user focuses them. Only a blank untouched New row is a
+        // placeholder that Save may ignore.
         origin == DraftRowOrigin.New &&
         !touched &&
         string.IsNullOrWhiteSpace(first) &&
@@ -398,6 +395,20 @@ public static class SettingsDraftValidator
 
     private static ValidationSeverity Severity(DraftRowOrigin origin, bool unchanged) =>
         origin == DraftRowOrigin.Saved && unchanged ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
+
+    private static ValidationSeverity DuplicateSeverity(DictionaryDraftRow first, DictionaryDraftRow second) =>
+        Unchanged(first) && Unchanged(second) ? ValidationSeverity.Warning : ValidationSeverity.Blocking;
+
+    private static ValidationSeverity DuplicateSeverity(SnippetDraftRow first, SnippetDraftRow second) =>
+        IsUnchanged(first, Trim(first.Phrase), Trim(first.Template)) &&
+        IsUnchanged(second, Trim(second.Phrase), Trim(second.Template))
+            ? ValidationSeverity.Warning
+            : ValidationSeverity.Blocking;
+
+    private static bool Unchanged(DictionaryDraftRow row) =>
+        row.Origin == DraftRowOrigin.Saved &&
+        IsSame(Trim(row.Pattern), Trim(row.LoadedPattern)) &&
+        IsSame(Trim(row.Replacement), Trim(row.LoadedReplacement));
 
     private static bool IsUnchanged(SnippetDraftRow row, string phrase, string template) =>
         IsSame(phrase, Trim(row.LoadedPhrase)) &&

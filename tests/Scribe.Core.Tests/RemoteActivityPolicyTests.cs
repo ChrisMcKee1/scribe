@@ -86,6 +86,30 @@ public sealed class RemoteActivityPolicyTests
         Assert.False(RemoteActivityPolicy.MayContact(saved, draft, RemoteActivityTrigger.WindowOpen));
     }
 
+    [Theory]
+    [InlineData(nameof(AppSettings.AiCleanupAzureClientSecret), " secret")]
+    [InlineData(nameof(AppSettings.AiCleanupAzureClientSecret), "secret ")]
+    [InlineData(nameof(AppSettings.AiCleanupAzureApiKey), " azure-key")]
+    [InlineData(nameof(AppSettings.AiCleanupAzureApiKey), "azure-key ")]
+    [InlineData(nameof(AppSettings.AiCleanupCustomApiKey), " key")]
+    [InlineData(nameof(AppSettings.AiCleanupCustomApiKey), "key ")]
+    public void Secret_whitespace_changes_block_automatic_contact_until_reverted(string field, string changed)
+    {
+        foreach (var trigger in new[] { RemoteActivityTrigger.WindowOpen, RemoteActivityTrigger.PageSwitch })
+        {
+            var saved = Complete(field == nameof(AppSettings.AiCleanupCustomApiKey)
+                ? CleanupProvider.OpenAiCompatible
+                : CleanupProvider.AzureFoundry);
+            var draft = saved.Clone();
+            SetSecret(draft, field, changed);
+
+            Assert.False(RemoteActivityPolicy.MayContact(saved, draft, trigger));
+
+            SetSecret(draft, field, CurrentSecret(saved, field));
+            Assert.True(RemoteActivityPolicy.MayContact(saved, draft, trigger));
+        }
+    }
+
     private static AppSettings Complete(CleanupProvider provider)
     {
         var settings = AppSettings.CreateDefault();
@@ -148,4 +172,28 @@ public sealed class RemoteActivityPolicyTests
                 break;
         }
     }
+
+    private static void SetSecret(AppSettings settings, string field, string? value)
+    {
+        switch (field)
+        {
+            case nameof(AppSettings.AiCleanupAzureClientSecret):
+                settings.AiCleanupAzureClientSecret = value;
+                break;
+            case nameof(AppSettings.AiCleanupAzureApiKey):
+                settings.AiCleanupAzureApiKey = value;
+                break;
+            case nameof(AppSettings.AiCleanupCustomApiKey):
+                settings.AiCleanupCustomApiKey = value;
+                break;
+        }
+    }
+
+    private static string? CurrentSecret(AppSettings settings, string field) => field switch
+    {
+        nameof(AppSettings.AiCleanupAzureClientSecret) => settings.AiCleanupAzureClientSecret,
+        nameof(AppSettings.AiCleanupAzureApiKey) => settings.AiCleanupAzureApiKey,
+        nameof(AppSettings.AiCleanupCustomApiKey) => settings.AiCleanupCustomApiKey,
+        _ => null,
+    };
 }
