@@ -76,6 +76,26 @@ public class HistoryRowFormatTests
         Assert.Equal(HistoryRowFormat.NotApplicable, HistoryRowFormat.Audio(0));
     }
 
+    [Fact]
+    public void Details_line_uses_attempted_wording_for_cleanup_time()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal(
+            "Recorded 12.0 s. Recognized in 0.4 s. AI cleanup was attempted for 0.9 s.",
+            HistoryRowFormat.Details(12_000, 400, 900));
+    }
+
+    [Fact]
+    public void Details_line_says_when_cleanup_time_was_not_recorded()
+    {
+        using var _ = new CultureScope("en-US");
+
+        Assert.Equal(
+            "Recorded 12.0 s. Recognized in 0.4 s. No AI cleanup time was recorded.",
+            HistoryRowFormat.Details(12_000, 400, null));
+    }
+
     /// <summary>Pins the thread culture for one assertion and restores it afterwards.</summary>
     private sealed class CultureScope : IDisposable
     {

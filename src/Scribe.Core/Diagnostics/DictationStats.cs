@@ -21,6 +21,9 @@ public static class DictationStats
     public sealed record Snapshot(
         int Count,
         TimeSpan TotalAudio,
+        string CurrentModelId,
+        string CurrentModelName,
+        bool HasEarlierModelDictations,
         int ParakeetDecodeCount,
         MetricSummary? ParakeetDecodeMs,
         int CleanupCount,
@@ -37,15 +40,21 @@ public static class DictationStats
     /// non-positive audio length are skipped (RTF would be undefined). Returns null when nothing
     /// qualifies, so the panel can show a friendly empty state instead of zeros.
     /// </summary>
-    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since)
+    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since) =>
+        Compute(entries, since, TranscriptionModelCatalog.DefaultId);
+
+    public static Snapshot? Compute(IEnumerable<HistoryEntry> entries, DateTimeOffset since, string? currentModelId)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
+        var currentModel = TranscriptionModelCatalog.Resolve(currentModelId);
         var decodeMs = new List<double>();
         var rtf = new List<double>();
         var cleanupMs = new List<double>();
         var combinedMs = new List<double>();
         var count = 0;
+        var allModelsCount = 0;
+        var otherModelCount = 0;
         long totalAudioMs = 0;
         double longestAudioMs = 0;
 
@@ -56,15 +65,19 @@ public static class DictationStats
                 continue;
             }
 
-            count++;
-            if (string.Equals(
+            allModelsCount++;
+            if (!string.Equals(
                     entry.TranscriptionModelId,
-                    TranscriptionModelCatalog.DefaultId,
+                    currentModel.Id,
                     StringComparison.OrdinalIgnoreCase))
             {
-                decodeMs.Add(entry.DecodeMilliseconds);
-                rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
+                otherModelCount++;
+                continue;
             }
+
+            count++;
+            decodeMs.Add(entry.DecodeMilliseconds);
+            rtf.Add(entry.DecodeMilliseconds / (double)entry.AudioMilliseconds);
 
             if (entry.CleanupMilliseconds is > 0)
             {
@@ -76,7 +89,7 @@ public static class DictationStats
             longestAudioMs = Math.Max(longestAudioMs, entry.AudioMilliseconds);
         }
 
-        if (totalAudioMs == 0)
+        if (count == 0)
         {
             return null;
         }
@@ -89,6 +102,9 @@ public static class DictationStats
         return new Snapshot(
             Count: count,
             TotalAudio: TimeSpan.FromMilliseconds(totalAudioMs),
+            CurrentModelId: currentModel.Id,
+            CurrentModelName: currentModel.DisplayName,
+            HasEarlierModelDictations: otherModelCount > 0 && allModelsCount > count,
             ParakeetDecodeCount: decodeMs.Count,
             ParakeetDecodeMs: decodeMs.Count > 0 ? Summarize(decodeMs) : null,
             CleanupCount: cleanupMs.Count,

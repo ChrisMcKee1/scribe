@@ -41,4 +41,25 @@ public static class HistoryRowFormat
     /// </param>
     public static string Latency(int? milliseconds) =>
         milliseconds is { } value && value >= 0 ? $"{value:N0} ms" : NotApplicable;
+
+    public static string Details(int audioMilliseconds, int decodeMilliseconds, int? cleanupMilliseconds)
+    {
+        var recorded = Audio(audioMilliseconds);
+        var recognized = Seconds(decodeMilliseconds);
+        var cleanup = cleanupMilliseconds is { } value and >= 0
+            ? $"AI cleanup was attempted for {Seconds(value)}."
+            : "No AI cleanup time was recorded.";
+        return $"Recorded {recorded}. Recognized in {recognized}. {cleanup}";
+    }
+
+    private static string Seconds(int milliseconds)
+    {
+        if (milliseconds <= 0)
+        {
+            return "0.0 s";
+        }
+
+        var seconds = milliseconds / 1000.0;
+        return seconds < 0.1 ? "0.1 s" : $"{seconds:0.0} s";
+    }
 }

@@ -18,6 +18,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowDiscovery);
         Assert.False(state.ShowConfiguration);
         Assert.True(state.ShowManualConfigurationAction);
+        Assert.False(state.ShowManualDetails);
+        Assert.False(state.ManualDetailsExpanded);
         Assert.True(state.CanStartSignIn);
         Assert.False(state.HasUsableAuthentication);
     }
@@ -35,6 +37,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
         Assert.False(state.ShowManualConfigurationAction);
+        Assert.False(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.False(state.CanStartSignIn);
     }
 
@@ -50,6 +54,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
         Assert.False(state.ShowManualConfigurationAction);
+        Assert.True(state.ShowManualDetails);
+        Assert.False(state.ManualDetailsExpanded);
         Assert.True(state.HasUsableAuthentication);
     }
 
@@ -64,6 +70,8 @@ public sealed class AzureSettingsAccessTests
 
         Assert.False(state.ShowDiscovery);
         Assert.True(state.ShowConfiguration);
+        Assert.False(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.True(state.HasUsableAuthentication);
     }
 
@@ -200,6 +208,8 @@ public sealed class AzureSettingsAccessTests
         Assert.False(state.ShowCliSetup);
         Assert.False(state.CanStartSignIn);
         Assert.True(state.ShowServicePrincipalFields);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
         Assert.False(state.ShowDiscovery);
         Assert.False(state.HasUsableAuthentication);
     }
@@ -243,6 +253,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowConfiguration);
         Assert.True(state.HasUsableAuthentication);
         Assert.True(state.ShowServicePrincipalFields);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
     }
 
     [Fact]
@@ -261,6 +273,8 @@ public sealed class AzureSettingsAccessTests
         Assert.True(state.ShowConfiguration);
         Assert.True(state.HasUsableAuthentication);
         Assert.True(state.CanStartSignIn);
+        Assert.True(state.ShowManualDetails);
+        Assert.True(state.ManualDetailsExpanded);
     }
 
     [Fact]
