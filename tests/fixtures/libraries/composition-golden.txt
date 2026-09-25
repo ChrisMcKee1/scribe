@@ -56,6 +56,12 @@ kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 tailspin => Tailspin Toys [Zulu Notes]
 
+[shipped and custom: sources of the on-device glossary's 80 lines]
+your dictionary x6, ai-terminology x74
+
+[shipped and custom: shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form]
+(none)
+
 [shipped and custom: Dictionary page library badges (what covers each personal entry)]
 azure: not covered
 contoso: "Zeta words" writes "CONTOSO"
@@ -262,6 +268,21 @@ retro => Retro [release-10]
 kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 tailspin => Tailspin Toys [Zulu Notes]
+
+[everything: sources of the on-device glossary's 80 lines]
+your dictionary x6, ai-terminology x74
+
+[everything: shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form]
+(none)
+
+[everything: sources of the cloud glossary's included lines]
+your dictionary x6, ai-terminology x196, ai-model-names x274, data-and-ai x94, data-engineering x67, data-science-machine-learning x30, github x19
+
+[everything: eligible lines past the cloud glossary's 24,000 characters]
+656 of 1342 eligible lines cut
+
+[everything: lines past the cloud glossary's 24,000 characters, by library]
+github x37, microsoft-365 x109, microsoft-azure x130, dotnet-development x88, modern-developer-stack x138, software-development x149, release-10 x2, team-terms-2 x2, Zulu Notes x1
 
 [everything: Dictionary page library badges (what covers each personal entry)]
 azure: "Microsoft Azure" writes "Azure"

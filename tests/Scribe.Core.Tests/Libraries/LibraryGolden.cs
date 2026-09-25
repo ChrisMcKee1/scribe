@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Cleanup;
@@ -101,6 +102,41 @@ internal static class LibraryGolden
                 // Which library the on-device glossary's terms come from: the order decides who fills the 80 slots.
                 Section(text, $"{name}: sources of the first {CleanupPrompt.MaxGlossaryTermsLocal} effective rules");
                 Line(text, RunLengths(effective.Take(CleanupPrompt.MaxGlossaryTermsLocal).Select(Source)));
+            }
+
+            if (name is "shipped and custom" or "everything")
+            {
+                // Where shipped and custom libraries are both on, the order libraries compete in decides which terms fill
+                // the glossary's budgets, so these sections pin the source of every line the glossary carries. The
+                // displacement is measured against 0.4.3's order, composed here on its own, so it lists exactly the shipped
+                // terms a change of order takes out of the on-device model's list.
+                var local = GlossarySelection(effective, CleanupPrompt.MaxGlossaryTermsLocal);
+                Section(text, $"{name}: sources of the on-device glossary's {CleanupPrompt.MaxGlossaryTermsLocal} lines");
+                Line(text, RunLengths(local.Included.Select(Source)));
+
+                var legacy = GlossarySelection(
+                    DictionaryLibraryComposer.Merge(personalEnabled, DictionaryLibraryComposer.ComposeLibraries(enabledLibraries)),
+                    CleanupPrompt.MaxGlossaryTermsLocal);
+                var displaced = legacy.Included
+                    .Where(entry => enabledLibraries.Any(l => l.BuiltIn && l.Id == Source(entry)) && !local.Included.Contains(entry))
+                    .Select(entry => entry.Pattern.Trim())
+                    .ToList();
+                Section(text, $"{name}: shipped terms displaced from the on-device glossary's {CleanupPrompt.MaxGlossaryTermsLocal} lines, by shipped spoken form");
+                Line(text, displaced.Count == 0 ? "(none)" : string.Join(", ", displaced));
+            }
+
+            if (name == "everything")
+            {
+                // Every shipped row is on here, and their lines alone pass the cloud glossary's character budget, so the cut
+                // is real: which libraries fill the budget, and which libraries' lines fall past it.
+                var budget = CleanupPrompt.MaxGlossaryChars.ToString("N0", CultureInfo.InvariantCulture);
+                var cloud = GlossarySelection(effective, CleanupPrompt.MaxGlossaryTermsCloud);
+                Section(text, $"{name}: sources of the cloud glossary's included lines");
+                Line(text, RunLengths(cloud.Included.Select(Source)));
+                Section(text, $"{name}: eligible lines past the cloud glossary's {budget} characters");
+                Line(text, $"{cloud.Cut.Count} of {cloud.Included.Count + cloud.Cut.Count} eligible lines cut");
+                Section(text, $"{name}: lines past the cloud glossary's {budget} characters, by library");
+                Line(text, RunLengths(cloud.Cut.Select(Source)));
             }
 
             Section(text, $"{name}: Dictionary page library badges (what covers each personal entry)");
@@ -207,6 +243,63 @@ internal static class LibraryGolden
         {
             Line(text, line);
         }
+    }
+
+    /// <summary>
+    /// The entries whose lines the glossary carries within <paramref name="maxTerms"/> and its character budget, and the
+    /// eligible entries the budget leaves out, found through the real renderer: an entry's line is what
+    /// <see cref="CleanupPrompt.BuildGlossary"/> renders for it alone, and the glossary walks the entries in order, keeps
+    /// the first line of each key and stops at the budget. Checked against the renderer and the counter on the whole list,
+    /// so a change in how the glossary selects lines fails here rather than mislabelling a source.
+    /// </summary>
+    private static (List<DictionaryEntry> Included, List<DictionaryEntry> Cut) GlossarySelection(
+        IReadOnlyList<DictionaryEntry> entries, int maxTerms)
+    {
+        var rendered = GlossaryLines(CleanupPrompt.BuildGlossary(entries, maxTerms));
+        var count = CleanupPrompt.CountGlossary(entries, maxTerms);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var included = new List<DictionaryEntry>();
+        var cut = new List<DictionaryEntry>();
+        var includedLines = new List<string>();
+        foreach (var entry in entries)
+        {
+            var line = GlossaryLines(CleanupPrompt.BuildGlossary([entry], 1)).SingleOrDefault();
+            if (line is null || !seen.Add(GlossaryKey(line)))
+            {
+                continue;
+            }
+
+            if (included.Count < rendered.Count)
+            {
+                included.Add(entry);
+                includedLines.Add(line);
+            }
+            else
+            {
+                cut.Add(entry);
+            }
+        }
+
+        Assert.Equal(rendered, includedLines);
+        Assert.Equal(count.Included, included.Count);
+        Assert.Equal(count.Eligible, included.Count + cut.Count);
+        return (included, cut);
+    }
+
+    // The rendered glossary is one header line and then one line per term.
+    private static List<string> GlossaryLines(string glossary) =>
+        string.IsNullOrEmpty(glossary) ? [] : [.. glossary.Split('\n').Skip(1)];
+
+    // The key the glossary de-duplicates lines by: the written form, and the spoken form when the line shows one. Neither
+    // can hold a double quote (the renderer drops them), so the first " (transcribed as " is always the separator.
+    private static string GlossaryKey(string line)
+    {
+        const string separator = " (transcribed as \"";
+        var body = line[2..];
+        var at = body.IndexOf(separator, StringComparison.Ordinal);
+        return at >= 0 && body.EndsWith("\")", StringComparison.Ordinal)
+            ? body[..at] + "|" + body[(at + separator.Length)..^2]
+            : body;
     }
 
     private static void Section(StringBuilder text, string title) => text.Append('\n').Append("[").Append(title).Append("]\n");
