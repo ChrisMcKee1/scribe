@@ -1000,8 +1000,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   space collapsed to one space), so for everything written from now on the key and a collapsing comparison agree. The
   key keeps the spelling it was made from and its `ToString()` shows only the length, so a key handed to a log template
   leaks nothing. The personal dictionary's merge trims and compares case-insensitively too.
-  `tests/fixtures/libraries/term-keys.json` pins the key and the commit form for the macOS port, including the letters
-  where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s, final sigma).
+  `tests/fixtures/libraries/term-keys.json` pins the key and the commit form for the macOS port to read in stream M1 (it
+  reads no fixture yet), including the letters where Swift's `lowercased()` disagrees (the Kelvin sign, capital sharp s,
+  final sigma).
 - **Library metadata stays readable by 0.4.3.** A managed library file stores its name, category and description as raw
   `# key: value` comment lines, and 0.4.3's CSV reader treats a double quote on them as a quoted field, so an unpaired
   quote hides every row from it. `LibraryMetadata` holds the rule (refuse a typed double quote; a header 0.4.3 reads back
