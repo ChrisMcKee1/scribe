@@ -229,6 +229,80 @@ public sealed class MouseButtonRecoveryTests
         Assert.True(removed.ButtonUp(Forward).Suppress);
     }
 
+    public static TheoryData<string> EveryStateClear => new()
+    {
+        "a desktop switch", "a rebind", "entering Set", "entering and leaving Set", "the dictation-only trigger removed",
+        "a lost mouse hook", "a reinstall",
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryStateClear))]
+    public void Every_state_clear_keeps_a_swallowed_button_s_release_from_the_app_once(string clear)
+    {
+        // Each path that clears the machines' state (ChordStateMachine.ClearState, or a new engine whose state starts
+        // over): Back held and swallowed, then the clear, then Back's release is still swallowed and starts nothing.
+        using var h = new HotkeyEngineHarness(Bare(Back), Bare(Forward));
+        Assert.True(h.ButtonDown(Back).Suppress);
+        h.TakeTransitions();
+
+        var engine = h.Engine;
+        switch (clear)
+        {
+            case "a desktop switch":
+                h.Engine.OnDesktopSwitch();
+                break;
+            case "a rebind":
+                h.Router.UpdateBindings(Bare(Back, HotkeyMode.Toggle), Bare(Forward));
+                h.Engine.OnWake();
+                break;
+            case "entering Set":
+                h.Router.SetCaptureMode(true);
+                h.Engine.OnWake();
+                break;
+            case "entering and leaving Set":
+                h.Router.SetCaptureMode(true);
+                h.Router.SetCaptureMode(false);
+                h.Engine.OnWake();
+                break;
+            case "the dictation-only trigger removed":
+                h.Router.UpdateBindings(Bare(Back), null);
+                h.Engine.OnWake();
+                break;
+            case "a lost mouse hook":
+                h.Engine.OnMouseHookLost();
+                break;
+            case "a reinstall":
+                engine = h.Router.BeginEngine(h.Transitions).Engine;
+                break;
+        }
+
+        h.TakeTransitions();
+        Assert.True(engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
+        Assert.Empty(h.TakeTransitions());
+
+        // Exactly once: a second release, with no press between, is nobody's.
+        Assert.False(engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
+    }
+
+    [Fact]
+    public void A_reinstall_hands_the_replacement_only_the_releases_still_owed()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back), Bare(Middle));
+        Assert.True(h.ButtonDown(Back).Suppress);
+        h.Click(Middle); // pressed and released before the reinstall: nothing owed
+        h.TakeTransitions();
+
+        var (replacement, _) = h.Router.BeginEngine(h.Transitions);
+
+        Assert.Equal(1 << (int)Back, replacement.OwedButtonReleases);
+        Assert.True(replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
+        Assert.Equal(0, replacement.OwedButtonReleases);
+
+        // The replacement dictates as usual: its first press is its own.
+        Assert.True(replacement.OnMouseButtonEvent(Middle, isDown: true).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
     // A3: the leak check repairs a button only on the evidence of a release the hook swallowed.
 
     [Fact]

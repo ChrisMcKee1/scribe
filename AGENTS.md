@@ -776,15 +776,19 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   to any event.
 - **A swallowed button press owes its release.** The engine, not the machines whose resets forget,
   keeps the buttons whose press it swallowed until their release comes, and swallows that release
-  whatever happened in between: a desktop switch, capture, new bindings, a dictation-only trigger
-  removed, a mouse hook found removed. DefWindowProc makes a side button's lone release a
+  once, whatever happened in between: every path that clears the machines' state (a desktop switch,
+  capture, new bindings, a dictation-only trigger removed, a mouse hook found removed), and a reinstall,
+  whose new engine takes the debts from the retired one (`HotkeyCommandRouter.BeginEngine`,
+  `HotkeyEngine.OwedButtonReleases`). DefWindowProc makes a side button's lone release a
   `WM_APPCOMMAND` (Back or Forward), so passing it on navigated the app under the pointer. A new press
   of the button retires the debt (buttons never repeat, so its release went up where no hook could
-  see it) and is judged afresh. Keys keep the reset they had: a key's lone release does nothing
+  see it) and is judged afresh; nothing is ever injected for it. `MouseButtonRecoveryTests` pins each
+  path. Keys keep the reset they had: a key's lone release does nothing
   documented (`TranslateMessage` makes characters from key-down and key-up combinations, and
   `WM_APPCOMMAND` comes from a key only when it is typed), and Windows' own state for it is already up.
-  Not covered: a reinstall (a new engine starts with no debts) and new bindings that need no mouse hook
-  at all, which remove it.
+  Not covered: new bindings that need no mouse hook at all, which remove it, and a release made while
+  no mouse hook exists (Windows removed it, or a reinstall is between the old thread's exit and the new
+  one's install), which goes to the app.
 - **The leaked-input check releases a button only on evidence.** It releases a bound button Windows
   still holds with a marked button-up (`NativeMethods.MarkedMouseButtonUp`), as it releases a key, but
   only on the engine's evidence of a release it swallowed (`HotkeyEngine.ClaimButtonReleaseEvidence`):
@@ -1179,8 +1183,11 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   hint (`HotkeyCaptureSession.MouseButtonsHint`) says, as the maintainer put it: Middle, Back and Forward buttons bind
   directly; for other mouse buttons, set the button to a key such as F13 in your mouse's software, then press it
   here. It also says a bound button stops doing its job in other apps (Back stops going back) unless pressed with a
-  modifier; that holds through desktop switches, capture and rebinding (the owed release above), and not while
-  Windows has removed the mouse hook, when a press or release no hook sees reaches the app until the renewal.
+  modifier; that holds through desktop switches, capture, rebinding and a reinstall (the owed release above), and not
+  while Windows has removed the mouse hook, when a press or release no hook sees reaches the app until the renewal.
+  It says a game that reads the mouse directly may still see a bound button: no Microsoft document says whether a
+  press a low-level hook swallows still reaches an app reading Raw Input, and it was not measured (that needs a window),
+  so the text promises no more than that. The same holds for a swallowed key.
 
 ## Startup (read before touching OnStartup)
 

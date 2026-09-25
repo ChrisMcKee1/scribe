@@ -172,16 +172,23 @@ internal sealed class HotkeyCommandRouter
     /// the held key's eventual release can no longer be matched to the new engine's fresh state.
     /// Requests that were queued on the replaced engine but never applied are covered, because every
     /// sticky setting is read from the published configuration, and the retired engine can no longer
-    /// act on them.
+    /// act on them. The one thing the new engine takes from the old is the releases still owed to
+    /// mouse button presses the old one swallowed (<see cref="HotkeyEngine.OwedButtonReleases"/>), read
+    /// after the retirement, from which the old engine changes them no more (short of a callback its
+    /// thread was already inside, which a reinstall has asked to quit and joined by then): DefWindowProc
+    /// makes a side button's lone release a Back or Forward command, so a button held through a
+    /// reinstall must still reach no app.
     /// </summary>
     public (HotkeyEngine Engine, HotkeyTrigger? Interrupted) BeginEngine(HotkeyTransitionQueue transitions)
     {
         ArgumentNullException.ThrowIfNull(transitions);
         lock (_gate)
         {
-            var interrupted = _engine?.Retire();
+            var previous = _engine;
+            var interrupted = previous?.Retire();
             var engine = new HotkeyEngine(
-                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown);
+                _binding, _dictationOnlyBinding, _captureMode, _paused, AdvanceGeneration(), transitions, _isLogicallyDown,
+                previous?.OwedButtonReleases ?? 0);
             Volatile.Write(ref _engine, engine);
             return (engine, interrupted);
         }

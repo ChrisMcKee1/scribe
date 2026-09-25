@@ -70,8 +70,9 @@ internal sealed class HotkeyEngine
 
     // The mouse buttons whose press was swallowed and whose release has not been seen since. A release owed here is
     // swallowed too, whatever happened in between: a desktop switch, capture, new bindings or a lost mouse hook reset the
-    // machines, and DefWindowProc turns a side button's lone release into a Back or Forward command. A new press of the
-    // button retires it, since buttons never repeat: the release went up where no hook could see it. Owner thread only.
+    // machines, a reinstall hands these to the replacement engine (OwedButtonReleases), and DefWindowProc turns a side
+    // button's lone release into a Back or Forward command. A new press of the button retires it, since buttons never
+    // repeat: the release went up where no hook could see it. Owner thread only.
     private readonly KeySet _owedButtonReleases = new();
 
     // Per bindable button (Middle, Back, Forward): the number of the last release the hook swallowed, or zero, which the
@@ -97,6 +98,11 @@ internal sealed class HotkeyEngine
     /// Windows' view of a key, which each binding's machine asks about a modifier its own view holds (see
     /// <see cref="ChordStateMachine"/>). Null trusts the hook's view alone.
     /// </param>
+    /// <param name="owedButtonReleases">
+    /// The releases still owed to button presses the engine this one replaces had swallowed
+    /// (<see cref="OwedButtonReleases"/>), so a reinstall, whose state otherwise starts over, still keeps them from the
+    /// app. Zero for none.
+    /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
         HotkeyBinding? dictationOnlyBinding,
@@ -104,7 +110,8 @@ internal sealed class HotkeyEngine
         bool paused,
         long generation,
         HotkeyTransitionQueue transitions,
-        Func<uint, bool>? isLogicallyDown = null)
+        Func<uint, bool>? isLogicallyDown = null,
+        int owedButtonReleases = 0)
     {
         _transitions = transitions;
         _isLogicallyDown = isLogicallyDown;
@@ -114,7 +121,29 @@ internal sealed class HotkeyEngine
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
         _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
+        OweRelease(MouseButtons.Middle, owedButtonReleases);
+        OweRelease(MouseButtons.Back, owedButtonReleases);
+        OweRelease(MouseButtons.Forward, owedButtonReleases);
     }
+
+    // Constructor only, before any owner thread exists.
+    private void OweRelease(uint button, int owedButtonReleases)
+    {
+        if ((owedButtonReleases & (1 << (int)button)) != 0)
+        {
+            _owedButtonReleases.Add(button);
+        }
+    }
+
+    /// <summary>
+    /// Any thread, once this engine is retired (the router reads it for the replacement): the buttons whose press this
+    /// engine swallowed and whose release it has not seen, as bits by code (1 &lt;&lt; <see cref="MouseButtons.Back"/>
+    /// and so on).
+    /// </summary>
+    public int OwedButtonReleases =>
+        (_owedButtonReleases.Contains(MouseButtons.Middle) ? 1 << (int)MouseButtons.Middle : 0) |
+        (_owedButtonReleases.Contains(MouseButtons.Back) ? 1 << (int)MouseButtons.Back : 0) |
+        (_owedButtonReleases.Contains(MouseButtons.Forward) ? 1 << (int)MouseButtons.Forward : 0);
 
     /// <summary>The owner's thread id once it has attached, otherwise zero. Any thread.</summary>
     public uint OwnerThreadId => Volatile.Read(ref _ownerThreadId);

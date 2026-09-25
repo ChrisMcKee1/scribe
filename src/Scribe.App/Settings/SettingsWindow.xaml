@@ -621,7 +621,7 @@
                                                       AutomationProperties.Name="Dictation with AI cleanup, hold or toggle"/>
                                         </Grid>
                                         <TextBlock Style="{StaticResource SettingHint}"
-                                                   Text="Uses your current AI cleanup setting. Hold: keep the key, the mouse button or the whole two-part chord down while speaking. Toggle: press once to start, again to stop."/>
+                                                   Text="Uses your current AI cleanup setting. Hold: keep the key, mouse button, chord or shortcut down while speaking. Toggle: press once to start, again to stop."/>
                                         <TextBlock x:Name="DictationOnlyTitle" Text="Dictation only" Style="{StaticResource SettingTitle}" Margin="0,16,0,0"/>
                                         <Grid Margin="0,10,0,0">
                                             <Grid.ColumnDefinitions>
