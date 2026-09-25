@@ -1144,65 +1144,48 @@ public sealed class LibraryWorkspace
         var actions = new List<RecentlyDeletedAction>();
         foreach (var lib in Ordered(_state))
         {
-            var change = diff.Libraries[lib.Header.Id];
             var header = lib.Header;
-            if (change.Untouched)
+            var steps = StepsOf(lib, diff.Libraries[header.Id]);
+            if (steps.HasFlag(SaveSteps.NotSaveable))
             {
-                continue;
+                issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.ContentNotSaveable, TermFields.None));
             }
 
-            if (header.BuiltIn)
+            if (steps.HasFlag(SaveSteps.Delete))
             {
-                if (header.Recovery != BuiltInEditsRecovery.None)
-                {
-                    writes.Add(new LibraryWrite(
-                        header.Id, true, LibraryOrigin.Existing, header.Committed?.ContentHash, Recovery: header.Recovery));
-                }
-                else if (change.ContentChanged)
-                {
-                    ValidateRows(lib, issues);
-                    writes.Add(new LibraryWrite(
-                        header.Id, true, LibraryOrigin.Existing, header.Committed?.ContentHash, Edits: change.Edits));
-                }
-
-                continue;
+                deletions.Add(new LibraryDeletion(header.Id, header.FileName ?? header.Id + ".csv", header.Committed!.ContentHash!.Value));
             }
 
-            if (header.PendingDelete)
+            if (steps.HasFlag(SaveSteps.Restore))
             {
-                if (header.Committed?.ContentHash is { } preImage)
-                {
-                    deletions.Add(new LibraryDeletion(header.Id, header.FileName ?? header.Id + ".csv", preImage));
-                }
-                else
-                {
-                    issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.ContentNotSaveable, TermFields.None));
-                }
-
-                continue;
-            }
-
-            if (header.RestoredFrom is { } restored)
-            {
+                var restored = header.RestoredFrom!;
                 actions.Add(new RecentlyDeletedAction(
                     RecentlyDeletedActionKind.Restore, restored.Entry.EntryName, restored.Entry.ContentHash, header.Id));
             }
 
-            if (!change.ContentChanged)
+            if (!steps.HasFlag(SaveSteps.Write))
             {
                 continue;
             }
 
-            if (!ContentEditable(lib))
+            if (header.BuiltIn && header.Recovery != BuiltInEditsRecovery.None)
             {
-                issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.ContentNotSaveable, TermFields.None));
-                continue;
+                writes.Add(new LibraryWrite(
+                    header.Id, true, LibraryOrigin.Existing, header.Committed?.ContentHash, Recovery: header.Recovery));
             }
-
-            ValidateRows(lib, issues);
-            ValidateMetadata(lib, issues);
-            var preImageOfWrite = header.RestoredFrom is { } source ? source.Entry.ContentHash : header.Committed?.ContentHash;
-            writes.Add(new LibraryWrite(header.Id, false, header.Origin, preImageOfWrite, Content: ContentOf(lib)));
+            else if (header.BuiltIn)
+            {
+                ValidateRows(lib, issues);
+                writes.Add(new LibraryWrite(
+                    header.Id, true, LibraryOrigin.Existing, header.Committed?.ContentHash, Edits: diff.Libraries[header.Id].Edits));
+            }
+            else
+            {
+                ValidateRows(lib, issues);
+                ValidateMetadata(lib, issues);
+                var preImage = header.RestoredFrom is { } source ? source.Entry.ContentHash : header.Committed?.ContentHash;
+                writes.Add(new LibraryWrite(header.Id, false, header.Origin, preImage, Content: ContentOf(lib)));
+            }
         }
 
         foreach (var purge in _state.Local.Purges.Values)
@@ -1985,6 +1968,43 @@ public sealed class LibraryWorkspace
         return new LibraryChange(false, contentChanged, edits, localChanged, unsaved);
     }
 
+    // What the Save of the draft at this revision does with one library, decided once: the capture builds its change set
+    // from it, and the draft tells previews from it whether the library's content is written (WritesContent), so the two
+    // can never disagree and no preview has to infer a write from what the rows show (a built-in's document can change
+    // with no row changing: Restore all removes an off intent for a term this version does not ship).
+    private SaveSteps StepsOf(Lib lib, LibraryChange change)
+    {
+        var header = lib.Header;
+        if (IsReadOnly || change.Untouched)
+        {
+            return SaveSteps.None;
+        }
+
+        if (header.BuiltIn)
+        {
+            // A recovery counts as changed content (Analyze); which of the two the write carries is the capture's detail.
+            return change.ContentChanged ? SaveSteps.Write : SaveSteps.None;
+        }
+
+        if (header.PendingDelete)
+        {
+            return header.Committed?.ContentHash is null ? SaveSteps.NotSaveable : SaveSteps.Delete;
+        }
+
+        var steps = header.RestoredFrom is null ? SaveSteps.None : SaveSteps.Restore;
+        if (!change.ContentChanged)
+        {
+            return steps;
+        }
+
+        return steps | (ContentEditable(lib) ? SaveSteps.Write : SaveSteps.NotSaveable);
+    }
+
+    // Whether the Save writes the library's content: a file or an edits document written or removed, a recovery, or a
+    // restore of its Recently deleted entry. Not a change of its enabled state or AI permission alone, a pending deletion,
+    // an untouched new library, or anything while the state is read-only.
+    private static bool WritesContent(SaveSteps steps) => (steps & (SaveSteps.Write | SaveSteps.Restore)) != 0;
+
     private bool IsUntouched(Lib lib)
     {
         var header = lib.Header;
@@ -2355,12 +2375,18 @@ public sealed class LibraryWorkspace
             .ToList();
         var draft = new LibraryDraft(_revision, _committed.Generation, libraries, state, recentlyDeleted);
         var rowIds = new Dictionary<string, long[]>(StringComparer.OrdinalIgnoreCase);
+        var writes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var lib in ordered)
         {
             rowIds[lib.Header.Id] = lib.Rows.Where(row => !IsBlank(row)).Select(row => row.RowId).ToArray();
+            if (WritesContent(StepsOf(lib, diff.Libraries[lib.Header.Id])))
+            {
+                writes.Add(lib.Header.Id);
+            }
         }
 
         DraftRowIds.AddOrUpdate(draft, rowIds);
+        DraftWrites.AddOrUpdate(draft, writes);
         return draft;
     }
 
@@ -2374,6 +2400,20 @@ public sealed class LibraryWorkspace
         DraftRowIds.TryGetValue(draft, out var ids) && ids.TryGetValue(libraryId, out var rows) && index >= 0 && index < rows.Length
             ? rows[index]
             : null;
+
+    // Which libraries the Save of a draft's revision writes the content of (StepsOf, the capture's own decision). The
+    // surface's DraftLibrary is gaining WritesContent for it (the ruling on the verification of sub-stream C); until that
+    // lands, previews and tests read it here, and then it moves into the record the draft is built from.
+    private static readonly ConditionalWeakTable<LibraryDraft, HashSet<string>> DraftWrites = new();
+
+    /// <summary>
+    /// Whether the Save of <paramref name="draft"/>'s revision writes the library's content: a custom file written, a
+    /// built-in's edits document written or removed (a reset of intents no row shows included) or recovered, a library
+    /// created, imported, duplicated, kept or restored. False for a change of enabled state or AI permission alone and for
+    /// a pending deletion, and for a draft no workspace built.
+    /// </summary>
+    internal static bool WritesContentIn(LibraryDraft draft, string libraryId) =>
+        DraftWrites.TryGetValue(draft, out var ids) && ids.Contains(libraryId);
 
     // The draft of a catalog with nothing changed. Rows keep the ids they had in mapFrom where they are the same rows
     // (MapRowIds: a custom row by its values or its one spoken form, a built-in's rows by their key), so a Save or a reload
@@ -2788,6 +2828,25 @@ public sealed class LibraryWorkspace
 
     private sealed record LibraryChange(
         bool Untouched, bool ContentChanged, BuiltInLibraryEdits? Edits, bool LocalChanged, bool Unsaved);
+
+    // What a Save does with one library (StepsOf).
+    [Flags]
+    private enum SaveSteps
+    {
+        None = 0,
+
+        // A LibraryWrite: a custom library's file, a built-in's edits document written or removed, or a recovery.
+        Write = 1,
+
+        // A restore of the library's Recently deleted entry.
+        Restore = 2,
+
+        // The library's file moves to Recently deleted.
+        Delete = 4,
+
+        // Its content changed but cannot be saved here (ContentNotSaveable), which blocks the Save.
+        NotSaveable = 8,
+    }
 
     private sealed record Creation(string Name, bool Ai);
 

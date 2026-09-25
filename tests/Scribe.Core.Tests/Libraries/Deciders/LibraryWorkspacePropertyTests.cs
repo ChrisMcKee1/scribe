@@ -58,30 +58,7 @@ public sealed class LibraryWorkspacePropertyTests
     private static void Run(int seed, Coverage totals)
     {
         var random = new Random(seed);
-        var gone = Deleted("20260901T100000Z.gone.csv", "gone", "Gone", new TermValues("gone term", "Gone term"));
-        var scratch = Deleted("20260902T100000Z.scratch.csv", "scratch", "Scratch", new TermValues("scratch term", "Scratch term"));
-        var store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase)
-        {
-            [gone.Entry.EntryName] = gone,
-            [scratch.Entry.EntryName] = scratch,
-        };
-        var edits = new BuiltInLibraryEdits(GitHubId,
-        [
-            new BuiltInTermEdit(LibraryTermKey.From("copilot"), BuiltInTermIntent.Edited,
-                new TermValues("copilot", "Copilot"), new TermValues("copilot", "GitHub Copilot")),
-            new BuiltInTermEdit(LibraryTermKey.From("gh cli"), BuiltInTermIntent.Added, null, new TermValues("gh cli", "GitHub CLI")),
-        ]);
-        var catalog = Catalog(
-            [
-                BuiltIn(GitHubId, edits),
-                BuiltIn(AzureId),
-                Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes"), new TermValues("um", "")]),
-                Custom("notes", "Notes", [new TermValues("vm", "VM")], category: "Work", description: "Mine"),
-            ],
-            [GitHubId, "team-terms"],
-            ai: [new("team-terms", true), new("notes", false)],
-            recentlyDeleted: [gone.Entry, scratch.Entry],
-            retired: [new RetiredBuiltInEdits("data-and-ai", [new TermValues("llm", "LLM")], Hash("retired"))]);
+        var catalog = StartingCatalog(out var store);
         var workspace = Workspace(catalog);
         var counter = 0;
         string Fresh(string prefix) => $"{prefix} {seed} {++counter}";
@@ -108,6 +85,120 @@ public sealed class LibraryWorkspacePropertyTests
         workspace.MarkSaved(final.DraftRevision, reloaded);
         Assert.False(workspace.HasUnsavedChanges, $"seed {seed}: unsaved after the final save");
         Assert.Equal(expected, Content(workspace));
+    }
+
+    [Fact]
+    public void WritesContent_is_exactly_what_the_captured_change_set_writes_at_every_revision()
+    {
+        // The ruling on GPT-6 Astra's verification of sub-stream C: the draft tells a preview which libraries its Save
+        // writes, and that is the capture's own answer at every revision, never an inference from what the rows show.
+        var checks = 0;
+        var writing = 0;
+        var invisible = 0;
+        for (var seed = 1; seed <= 80; seed++)
+        {
+            var random = new Random(seed * 7919);
+            var catalog = StartingCatalog(out var store);
+            var workspace = Workspace(catalog);
+            var counter = 0;
+            string Fresh(string prefix) => $"{prefix} {seed} {++counter}";
+
+            for (var step = 0; step < 40; step++)
+            {
+                var choice = random.Next(24);
+                if (choice == 19 && workspace.CaptureChangeSet().ChangeSet is { } saving)
+                {
+                    catalog = Apply(catalog, saving, store);
+                    workspace.MarkSaved(saving.DraftRevision, catalog);
+                }
+                else if (choice >= 20 && workspace.CanEditContent(GitHubId))
+                {
+                    // Every row of GitHub back to its shipped values, saved, then Restore all: the document the Save
+                    // removes may then hold only an off intent for a term no row shows, a write nothing visible reveals.
+                    foreach (var row in workspace.RowsOf(GitHubId).ToList())
+                    {
+                        if (row.Row.Shipped is null)
+                        {
+                            workspace.DeleteTerm(GitHubId, row.RowId);
+                        }
+                        else if (row.Row.Origin != TermOrigin.Shipped)
+                        {
+                            workspace.RestoreBuiltInValues(GitHubId, row.RowId);
+                        }
+                    }
+
+                    if (workspace.CaptureChangeSet().ChangeSet is { } cleaned)
+                    {
+                        catalog = Apply(catalog, cleaned, store);
+                        workspace.MarkSaved(cleaned.DraftRevision, catalog);
+                    }
+
+                    workspace.RestoreAllBuiltInValues(GitHubId);
+                }
+                else
+                {
+                    Operate(workspace, Math.Min(choice, 18), random, store, Fresh);
+                }
+
+                if (workspace.CaptureChangeSet().ChangeSet is not { } changes)
+                {
+                    continue;
+                }
+
+                foreach (var library in workspace.Draft.Libraries)
+                {
+                    var id = library.Content.Id;
+                    var writes = Writes(changes, id);
+                    Assert.True(writes == WritesContent(workspace, id), $"seed {seed} step {step}: {id} writes={writes}");
+                    checks++;
+                    if (writes)
+                    {
+                        writing++;
+                        if (library.Content.BuiltIn
+                            && catalog.Find(id) is { } committed
+                            && committed.Content.Rows.SequenceEqual(library.Content.Rows))
+                        {
+                            invisible++;
+                        }
+                    }
+                }
+            }
+        }
+
+        Assert.True(checks > 5000, $"libraries checked {checks}");
+        Assert.True(writing > 1000, $"libraries written {writing}");
+        Assert.True(invisible > 10, $"built-in documents written with no row changed {invisible}");
+    }
+
+    // The catalog every sequence starts from: both fake built-ins (GitHub with an edit, an addition and an off intent for a
+    // term this version does not ship), two custom libraries, two Recently deleted entries and a retired built-in.
+    private static LibraryCatalog StartingCatalog(out Dictionary<string, RecentlyDeletedContent> store)
+    {
+        var gone = Deleted("20260901T100000Z.gone.csv", "gone", "Gone", new TermValues("gone term", "Gone term"));
+        var scratch = Deleted("20260902T100000Z.scratch.csv", "scratch", "Scratch", new TermValues("scratch term", "Scratch term"));
+        store = new Dictionary<string, RecentlyDeletedContent>(StringComparer.OrdinalIgnoreCase)
+        {
+            [gone.Entry.EntryName] = gone,
+            [scratch.Entry.EntryName] = scratch,
+        };
+        var edits = new BuiltInLibraryEdits(GitHubId,
+        [
+            new BuiltInTermEdit(LibraryTermKey.From("copilot"), BuiltInTermIntent.Edited,
+                new TermValues("copilot", "Copilot"), new TermValues("copilot", "GitHub Copilot")),
+            new BuiltInTermEdit(LibraryTermKey.From("gh cli"), BuiltInTermIntent.Added, null, new TermValues("gh cli", "GitHub CLI")),
+            new BuiltInTermEdit(LibraryTermKey.From("retired row"), BuiltInTermIntent.Off, new TermValues("retired row", "Retired"), null),
+        ]);
+        return Catalog(
+            [
+                BuiltIn(GitHubId, edits),
+                BuiltIn(AzureId),
+                Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes"), new TermValues("um", "")]),
+                Custom("notes", "Notes", [new TermValues("vm", "VM")], category: "Work", description: "Mine"),
+            ],
+            [GitHubId, "team-terms"],
+            ai: [new("team-terms", true), new("notes", false)],
+            recentlyDeleted: [gone.Entry, scratch.Entry],
+            retired: [new RetiredBuiltInEdits("data-and-ai", [new TermValues("llm", "LLM")], Hash("retired"))]);
     }
 
     // A Save: capture, commit through the fake store, mark saved. Half of them let the user go on working while the Save

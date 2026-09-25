@@ -150,6 +150,20 @@ internal static class DeciderFixture
     public static IReadOnlyList<TermValues> ValuesOf(LibraryWorkspace workspace, string libraryId) =>
         workspace.Draft.Find(libraryId)!.Content.Rows.Select(row => row.Values).ToList();
 
+    /// <summary>
+    /// Whether the draft at the workspace's revision says its Save writes the library's content, read from the draft, where
+    /// a preview reads it.
+    /// </summary>
+    public static bool WritesContent(LibraryWorkspace workspace, string libraryId) =>
+        LibraryWorkspace.WritesContentIn(workspace.Draft, libraryId);
+
+    /// <summary>Whether a change set writes the library's content: a write for it, or a restore of its Recently deleted entry.</summary>
+    public static bool Writes(LibraryChangeSet changes, string libraryId) =>
+        changes.Writes.Any(write => string.Equals(write.LibraryId, libraryId, StringComparison.OrdinalIgnoreCase))
+        || changes.RecentlyDeletedActions.Any(action =>
+            action.Kind == RecentlyDeletedActionKind.Restore
+            && string.Equals(action.RestoreAsId, libraryId, StringComparison.OrdinalIgnoreCase));
+
     public static LibraryChangeSet Capture(LibraryWorkspace workspace)
     {
         var result = workspace.CaptureChangeSet();
