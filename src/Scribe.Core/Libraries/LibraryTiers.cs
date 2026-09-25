@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
+using Scribe.Core.PostProcessing;
 
 namespace Scribe.Core.Libraries;
 
@@ -167,13 +170,71 @@ internal static class LibraryTiers
         builtIn ? null : fileName ?? id + ".csv";
 
     /// <summary>
-    /// What the running version ships for every built-in spoken form, from the built-ins' shipped values (an edited row
-    /// still carries them; an added row has none): the base legacy markers are computed against, as at the upgrade, when
-    /// no built-in had edits.
+    /// What legacy markers compare spoken forms by: <see cref="SpokenFormFold"/> of the trimmed form, which is broader
+    /// than every comparison dictation makes. Two spoken forms the matcher can take for one text (the Kelvin sign and a k,
+    /// under different keys), or the composer for one key (a final sigma and a sigma), fold alike (round 2, review
+    /// finding A3); so do forms only the fold links (the dotted and dotless i with i).
     /// </summary>
-    public static Dictionary<LibraryTermKey, List<TermValues>> ShippedValues(IEnumerable<LibraryContent> builtIns)
+    public static string MarkerFold(string? spoken) => SpokenFormFold.Fold((spoken ?? string.Empty).Trim());
+
+    /// <summary>
+    /// Whether <paramref name="custom"/>, applied where <paramref name="builtIn"/> applies, writes exactly what it writes in
+    /// any text, so a legacy row needs no marker to keep 0.4.3's result: the same written form and word boundaries, and a
+    /// spoken form the matcher reads as the same text that is also the same ignoring case, which is what the
+    /// post-processor's guard against expanding a written form that already holds its spoken form compares with. A final
+    /// sigma or a dotless i is read differently by the matcher, and a Kelvin sign by the guard, so each is marked even with
+    /// the same written form (round 2, A3).
+    /// </summary>
+    public static bool AppliesAlike(TermValues builtIn, TermValues custom) =>
+        SameResult(builtIn, custom) &&
+        string.Equals(builtIn.Spoken, custom.Spoken, StringComparison.OrdinalIgnoreCase) &&
+        MatcherReadsAlike(builtIn.Spoken, custom.Spoken);
+
+    /// <summary>
+    /// Whether the matcher, which compiles every spoken form as an escaped literal with
+    /// <see cref="TextPostProcessor.DictionaryMatchOptions"/>, matches exactly the same text for both: one character against
+    /// one, each pair the same or equivalent to the regex engine itself.
+    /// </summary>
+    public static bool MatcherReadsAlike(string a, string b)
     {
-        var shipped = new Dictionary<LibraryTermKey, List<TermValues>>();
+        if (a.Length != b.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < a.Length; i++)
+        {
+            if (a[i] != b[i] && !CharactersMatchAlike(a[i], b[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static readonly ConcurrentDictionary<int, bool> s_charactersMatchAlike = new();
+
+    // Two different characters the matcher treats as one, asked of the regex engine both ways and remembered.
+    private static bool CharactersMatchAlike(char a, char b) =>
+        s_charactersMatchAlike.GetOrAdd(Math.Min(a, b) << 16 | Math.Max(a, b), static pair =>
+        {
+            var low = ((char)(pair >> 16)).ToString();
+            var high = ((char)(pair & 0xFFFF)).ToString();
+            return MatchesWhole(low, high) && MatchesWhole(high, low);
+        });
+
+    private static bool MatchesWhole(string pattern, string text) =>
+        Regex.IsMatch(text, $@"\A{Regex.Escape(pattern)}\z", TextPostProcessor.DictionaryMatchOptions);
+
+    /// <summary>
+    /// What the running version ships for every built-in spoken form, from the built-ins' shipped values (an edited row
+    /// still carries them; an added row has none), by <see cref="MarkerFold"/>: the base legacy markers are computed
+    /// against, as at the upgrade, when no built-in had edits.
+    /// </summary>
+    public static Dictionary<string, List<TermValues>> ShippedValues(IEnumerable<LibraryContent> builtIns)
+    {
+        var shipped = new Dictionary<string, List<TermValues>>(StringComparer.Ordinal);
         foreach (var library in builtIns)
         {
             foreach (var row in library.Rows)
@@ -184,15 +245,15 @@ internal static class LibraryTiers
                     continue;
                 }
 
-                var key = LibraryTermKey.From(values.Spoken);
-                if (key.IsEmpty)
+                var fold = MarkerFold(values.Spoken);
+                if (fold.Length == 0)
                 {
                     continue;
                 }
 
-                if (!shipped.TryGetValue(key, out var list))
+                if (!shipped.TryGetValue(fold, out var list))
                 {
-                    shipped[key] = list = [];
+                    shipped[fold] = list = [];
                 }
 
                 list.Add(values);
@@ -204,12 +265,14 @@ internal static class LibraryTiers
 
     /// <summary>
     /// The legacy markers of a custom library as at the upgrade (Decision 1, plan 3.2): one for each spoken form of an
-    /// enabled row for which some built-in ships an enabled row with a different result. Built-ins that are off count
-    /// too, since turning one on later must still give its result; an inactive marker changes nothing. In row order,
-    /// each spoken form once.
+    /// enabled row for which some built-in ships an enabled row whose spoken form folds alike (<see cref="MarkerFold"/>)
+    /// and which the row would not apply exactly alike (<see cref="AppliesAlike"/>): a different written form or word
+    /// boundaries, or a spoken form the matcher or the expansion guard reads differently. Built-ins that are off count
+    /// too, since turning one on later must still give its result; an inactive marker changes nothing, and neither does a
+    /// marker on a row the matcher never takes for the built-in's text. In row order, each spoken form once.
     /// </summary>
     public static IEnumerable<LegacyMarker> UpgradeMarkers(
-        LibraryContent custom, IReadOnlyDictionary<LibraryTermKey, List<TermValues>> shipped)
+        LibraryContent custom, IReadOnlyDictionary<string, List<TermValues>> shipped)
     {
         var seen = new HashSet<LibraryTermKey>();
         foreach (var row in custom.Rows)
@@ -220,7 +283,9 @@ internal static class LibraryTiers
             }
 
             var key = CompetingKey(row);
-            if (key.IsEmpty || !shipped.TryGetValue(key, out var builtIn) || !builtIn.Any(values => !SameResult(values, row.Values)))
+            if (key.IsEmpty ||
+                !shipped.TryGetValue(MarkerFold(row.Values.Spoken), out var builtIn) ||
+                builtIn.All(values => AppliesAlike(values, row.Values)))
             {
                 continue;
             }

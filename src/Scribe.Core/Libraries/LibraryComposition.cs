@@ -18,10 +18,12 @@ namespace Scribe.Core.Libraries;
 /// drop out first; then authored rows come before shipped rows; inside a tier, built-ins in
 /// <see cref="LibraryPrecedence.BuiltInOrder"/>, then custom libraries by physical file name (review finding A16), and
 /// rows in saved order; one rule per <see cref="LibraryTermKey"/>, 0.4.3's key (A10). A legacy marker (L, K) is active
-/// while some enabled, usable built-in has an enabled row for K whose written form (ordinal) or word-boundary flag differs
-/// from L's row; an active marked row competes after every shipped row, which reproduces 0.4.3's result for every spoken
-/// form at the upgrade (decision 3). Where an unmarked authored row gives the same result as the old shipped winner, it
-/// now supplies it, which changes no output.
+/// while some enabled, usable built-in has an enabled row whose spoken form folds alike (<see cref="PostProcessing.SpokenFormFold"/>,
+/// broader than every comparison dictation makes) and which L's row would not apply exactly alike: a different written
+/// form or word boundaries, or a spoken form the matcher reads differently (round 2, review finding A3). An active marked
+/// row competes after every shipped row, which keeps what dictation writes at the upgrade exactly as 0.4.3 wrote it
+/// (decision 3), for rows with one key and for rows the matcher takes for one text under different keys. Where an
+/// unmarked authored row applies exactly as the old shipped winner did, it now supplies it, which changes no output.
 /// </para>
 /// <para>
 /// Immutable and safe to share. Built in one pass over the rows; the statuses' indexes and the glossary inclusion are
@@ -199,7 +201,7 @@ public sealed class LibraryComposition
         ArgumentNullException.ThrowIfNull(dictionary);
         var state = catalog.LocalState;
         var markers = MarkersByLibrary(state);
-        Dictionary<LibraryTermKey, List<TermValues>>? shipped = null;
+        Dictionary<string, List<TermValues>>? shipped = null;
         var sources = new List<Source>(catalog.Libraries.Count);
         foreach (var library in catalog.Libraries)
         {
@@ -413,20 +415,29 @@ public sealed class LibraryComposition
                 group => (IReadOnlySet<LibraryTermKey>)group.Select(marker => marker.Key).ToHashSet(),
                 StringComparer.OrdinalIgnoreCase);
 
-    // A marked row's marker is active while an enabled, usable built-in has an enabled row for its spoken form with a
-    // different result. Rows of libraries not in use never compete, so their markers stay inactive.
+    // A marked row's marker is active while an enabled, usable built-in has an enabled row whose spoken form folds alike
+    // and which the marked row would not apply exactly alike (LibraryTiers.AppliesAlike): the rule the marker was made by,
+    // so the marked row competes after the shipped rows the matcher can take for its text, whatever their keys (round 2,
+    // review finding A3). Rows of libraries not in use never compete, so their markers stay inactive.
     private void MarkActiveLegacyRows()
     {
-        var builtInRows = new Dictionary<LibraryTermKey, List<(Source Source, int Row)>>();
+        var marked = _sources.Where(source => source.Participates && source.MarkedKeys.Count > 0).ToList();
+        if (marked.Count == 0)
+        {
+            return;
+        }
+
+        var builtInRows = new Dictionary<string, List<(Source Source, int Row)>>(StringComparer.Ordinal);
         foreach (var source in _sources.Where(source => source.Participates && source.BuiltIn))
         {
             for (var row = 0; row < source.Keys.Length; row++)
             {
                 if (source.Content.Rows[row].Values.Enabled && !source.Keys[row].IsEmpty)
                 {
-                    if (!builtInRows.TryGetValue(source.Keys[row], out var list))
+                    var fold = LibraryTiers.MarkerFold(source.Content.Rows[row].Values.Spoken);
+                    if (!builtInRows.TryGetValue(fold, out var list))
                     {
-                        builtInRows[source.Keys[row]] = list = [];
+                        builtInRows[fold] = list = [];
                     }
 
                     list.Add((source, row));
@@ -434,7 +445,7 @@ public sealed class LibraryComposition
             }
         }
 
-        foreach (var source in _sources.Where(source => source.Participates && source.MarkedKeys.Count > 0))
+        foreach (var source in marked)
         {
             for (var row = 0; row < source.Keys.Length; row++)
             {
@@ -442,10 +453,10 @@ public sealed class LibraryComposition
                 source.MarkerActive[row] =
                     values.Enabled &&
                     source.MarkedKeys.Contains(source.Keys[row]) &&
-                    builtInRows.TryGetValue(source.Keys[row], out var competing) &&
+                    builtInRows.TryGetValue(LibraryTiers.MarkerFold(values.Spoken), out var competing) &&
                     competing.Any(other =>
                         !(ReferenceEquals(other.Source, source) && other.Row == row) &&
-                        !LibraryTiers.SameResult(other.Source.Content.Rows[other.Row].Values, values));
+                        !LibraryTiers.AppliesAlike(other.Source.Content.Rows[other.Row].Values, values));
             }
         }
     }

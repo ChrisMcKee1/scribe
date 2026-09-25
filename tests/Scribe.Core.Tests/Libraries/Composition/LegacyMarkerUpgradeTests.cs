@@ -7,11 +7,11 @@ using Scribe.Core.PostProcessing;
 namespace Scribe.Core.Tests.Libraries.Composition;
 
 /// <summary>
-/// Legacy markers reproduce 0.4.3's result, written form and word boundaries, for every spoken form at the upgrade
-/// (acceptance C-3, decision 3): random custom libraries written to a real folder, 0.4.3's own selection over that folder
-/// and the enabled list it left (<see cref="Legacy043LibrarySelection"/>), against the composition of the catalog the
-/// first start adopts. The folders hold hand-placed twins of built-in ids beside custom files whose names sort on either
-/// side of them (review finding A16), so a twin ranked by its logical id instead of its file name moves winners.
+/// Legacy markers keep what dictation writes at the upgrade exactly as 0.4.3 wrote it (acceptance C-3, decision 3):
+/// random custom libraries written to a real folder, 0.4.3's own selection over that folder and the enabled list it left
+/// (<see cref="Legacy043LibrarySelection"/>), against the composition of the catalog the first start adopts, both through
+/// the real matcher. The folders hold hand-placed twins of built-in ids beside custom files whose names sort on either
+/// side of them (review finding A16), and spellings the matcher takes for a shipped form under another key (round 2, A3).
 /// </summary>
 public sealed class LegacyMarkerUpgradeTests : IDisposable
 {
@@ -38,8 +38,11 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
     }
 
     [Fact]
-    public void Across_random_libraries_every_winner_at_the_upgrade_gives_0_4_3s_result()
+    public void Across_random_libraries_at_the_upgrade_dictation_writes_what_0_4_3_writes()
     {
+        // The oracle is finished text through the real matcher (round 2, Astra A3), not winners per key: rows whose keys
+        // differ can still match one text (the Kelvin sign), and rows with one key can match different texts (a final
+        // sigma, which the shipped data has none of, so the deterministic cases above cover it).
         var shipped = BuiltInDictionaryLibraries.All.SelectMany(library => library.Entries).ToList();
         var random = new Random(20260925);
         for (var round = 0; round < 120; round++)
@@ -47,9 +50,10 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
             var folder = Path.Combine(_root, "round-" + round);
             Directory.CreateDirectory(folder);
             var stems = FileStems.OrderBy(_ => random.Next()).Take(random.Next(2, 7)).ToList();
+            var forms = new List<string>();
             foreach (var stem in stems)
             {
-                var rows = Enumerable.Range(0, random.Next(1, 9)).Select(_ => RandomRow(random, shipped)).ToList();
+                var rows = Enumerable.Range(0, random.Next(1, 9)).Select(_ => RandomRow(random, shipped, forms)).ToList();
                 File.WriteAllText(Path.Combine(folder, stem + ".csv"), Legacy043LibraryCsv.Export(stem, "Custom", null, rows));
             }
 
@@ -57,14 +61,15 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
                 .Concat(stems.Where(_ => random.Next(10) < 7))
                 .OrderBy(_ => random.Next())
                 .ToList();
+            string[] sentences = [.. forms.Distinct(StringComparer.Ordinal).SelectMany(form => new[] { form, $"we said {form} twice, {form.ToLowerInvariant()}" })];
 
-            var old = Results(Legacy043LibrarySelection.EnabledEntries(enabled, folder));
-            var composition = AdoptAndCompose(folder, enabled, rankTwinsByLogicalId: false);
-            var ours = Results(composition.LibraryEntries);
+            var old = Dictation.Write([], Legacy043LibrarySelection.EnabledEntries(enabled, folder), sentences);
+            var ours = Dictation.Write([], AdoptAndCompose(folder, enabled, rankTwinsByLogicalId: false).LibraryEntries, sentences);
 
-            Assert.True(
-                old.Count == ours.Count && old.All(pair => ours.TryGetValue(pair.Key, out var result) && result == pair.Value),
-                $"Round {round}: the winners differ from 0.4.3's.\n{Describe(folder, enabled, old, ours)}");
+            var differences = Enumerable.Range(0, sentences.Length).Where(i => old[i] != ours[i])
+                .Select(i => $"\"{sentences[i]}\": 0.4.3 \"{old[i]}\", now \"{ours[i]}\"").ToList();
+            Assert.True(differences.Count == 0,
+                $"Round {round}: dictation writes differently.\n{string.Join("\n", differences)}\n{Describe(folder, enabled)}");
         }
     }
 
@@ -87,6 +92,82 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
         Assert.Equal(("Twin", true), byLogicalId[LibraryTermKey.From("project token")]);
     }
 
+    // --- Markers by what the matcher can take for the same text (round 2, Astra A3) ---
+
+    [Theory]
+    [InlineData("kelvin", "\u212Aubernetes", "TeamCluster", "kubernetes", "Kubernetes")]          // one text, two keys
+    [InlineData("kelvin, same written form", "\u212Aubernetes", "Kubernetes", "kubernetes", "Kubernetes")]
+    [InlineData("final sigma, same written form", "bio\u03C2", "Bios", "bio\u03C3", "Bios")]      // one key, two texts
+    [InlineData("final sigma", "bio\u03C2", "Custom Bios", "bio\u03C3", "Bios")]
+    [InlineData("dotless i", "\u0131nfo", "Custom Info", "info", "Info")]                        // the fold alone
+    [InlineData("dotless i, same written form", "\u0131nfo", "Info", "info", "Info")]
+    [InlineData("case only, same written form", "Get Hub", "GitHub", "get hub", "GitHub")]
+    public void A_legacy_row_the_matcher_can_take_for_a_built_ins_text_keeps_0_4_3s_finished_text(
+        string scenario, string customSpoken, string customWritten, string shippedSpoken, string shippedWritten)
+    {
+        var builtIn = new DictionaryLibrary("github", "GitHub", "Microsoft", null, true, [DictionaryEntry.New(shippedSpoken, shippedWritten)]);
+        var custom = new DictionaryLibrary("team", "Team", "Custom", null, false, [DictionaryEntry.New(customSpoken, customWritten)]);
+
+        var (old, ours) = FinishedText([builtIn, custom], ["github", "team"], Variants(customSpoken, shippedSpoken));
+
+        Assert.True(old.SequenceEqual(ours), $"{scenario}: 0.4.3 wrote [{string.Join(" | ", old)}], now [{string.Join(" | ", ours)}]");
+    }
+
+    [Fact]
+    public void A_same_result_row_the_matcher_reads_differently_is_marked_too()
+    {
+        // Two custom libraries share "İnfo" (a dotted capital I), which the fold links with the built-in's "info" but the
+        // matcher never takes for it. 0.4.3 applies alpha's, the first file. Marking only rows whose written form differs
+        // would leave zeta's "Info" unmarked, let it take the spoken form from alpha, and change what dictation writes.
+        var builtIn = new DictionaryLibrary("github", "GitHub", "Microsoft", null, true, [DictionaryEntry.New("info", "Info")]);
+        var alpha = new DictionaryLibrary("alpha", "Alpha", "Custom", null, false, [DictionaryEntry.New("\u0130nfo", "Alpha")]);
+        var zeta = new DictionaryLibrary("zeta", "Zeta", "Custom", null, false, [DictionaryEntry.New("\u0130nfo", "Info")]);
+
+        var (old, ours) = FinishedText([builtIn, alpha, zeta], ["github", "alpha", "zeta"], ["\u0130nfo", "info", "an \u0130nfo desk"]);
+
+        Assert.Equal(["Alpha", "Info", "an Alpha desk"], old);
+        Assert.Equal(old, ours);
+    }
+
+    [Fact]
+    public void A_same_result_row_the_expansion_guard_reads_differently_is_marked_too()
+    {
+        // The Kelvin-sign "Kafka" writes what the shipped "kafka" writes, and the matcher takes both for the same text, but
+        // TextPostProcessor's guard against expanding a written form that already holds its spoken form compares ignoring
+        // case, where the Kelvin sign is not a k. Supplied by the custom row, "kafka Streams" would become "kafka Streams
+        // Streams".
+        var builtIn = new DictionaryLibrary("github", "GitHub", "Microsoft", null, true, [DictionaryEntry.New("kafka", "kafka Streams")]);
+        var custom = new DictionaryLibrary("team", "Team", "Custom", null, false, [DictionaryEntry.New("\u212Aafka", "kafka Streams")]);
+
+        var (old, ours) = FinishedText([builtIn, custom], ["github", "team"], ["kafka Streams", "use kafka", "\u212Aafka"]);
+
+        Assert.Equal("kafka Streams", old[0]);
+        Assert.Equal(old, ours);
+    }
+
+    // What 0.4.3 and the first start of the library editor's version write for these sentences: 0.4.3's composition of the
+    // enabled libraries (built-ins first, first wins by key) and the adopted composition, each through the real matcher.
+    private static (string[] Old, string[] Ours) FinishedText(
+        IReadOnlyList<DictionaryLibrary> libraries, IReadOnlyList<string> enabled, IReadOnlyList<string> sentences)
+    {
+        var old = DictionaryLibraryComposer.ComposeLibraries(LibraryPrecedence.Enabled(libraries, enabled));
+        var catalogLibraries = libraries.Select(library => library.BuiltIn
+            ? Lib.Committed(new LibraryContent(library.Id, true, library.Name, library.Category, null,
+                [.. library.Entries.Select(e => Lib.Shipped(e.Pattern, e.Replacement, e.WholeWord))]))
+            : new CatalogLibrary(Lib.CustomLibrary(library.Id, [.. library.Entries.Select(e => LibraryRow.Custom(TermValues.FromEntry(e)))]),
+                LibraryFileState.Available, library.Id + ".csv", Lib.Hash((char)('a' + library.Id.Length % 6))))
+            .ToList();
+        var identities = catalogLibraries.Select(Lib.IdentityOf).ToList();
+        var firstStart = new LibraryStateContext(false, false, false);
+        var read = LibraryComposer.Instance.ReadLocalState(enabled, null, identities, firstStart);
+        var adoption = LibraryComposer.Instance.PlanAdoption(Lib.Catalog(0, read, [.. catalogLibraries]), firstStart)!;
+        var ours = LibraryComposition.Committed(Lib.Catalog(0, adoption.State, [.. catalogLibraries]), [], new GlossaryBudget(80));
+        return (Dictation.Write([], old, sentences), Dictation.Write([], ours.LibraryEntries, sentences));
+    }
+
+    private static string[] Variants(params string[] forms) =>
+        [.. forms.SelectMany(form => new[] { form, form.ToUpperInvariant(), form.ToLowerInvariant(), $"use {form} today" }).Distinct(StringComparer.Ordinal)];
+
     [Fact]
     public void A_twin_takes_the_enabled_state_its_stem_had_and_its_rows_keep_the_built_ins_result()
     {
@@ -103,20 +184,29 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
         Assert.Contains(composition.EnabledLibraries, library => library.Id == "github");
     }
 
-    private static DictionaryEntry RandomRow(Random random, IReadOnlyList<DictionaryEntry> shipped)
+    // A random legacy row, recording in `forms` the spoken forms whose texts the sentences must hold: its own, and the
+    // shipped form it was drawn from, which a Kelvin-sign or dotless-i spelling of it may or may not match.
+    private static DictionaryEntry RandomRow(Random random, IReadOnlyList<DictionaryEntry> shipped, List<string> forms)
     {
         var pick = random.Next(10);
         string spoken, written;
         if (pick < 6)
         {
             var source = shipped[random.Next(shipped.Count)];
-            spoken = random.Next(4) == 0 ? source.Pattern.ToUpperInvariant() : source.Pattern;
+            spoken = random.Next(5) switch
+            {
+                0 => source.Pattern.ToUpperInvariant(),
+                1 => source.Pattern.Replace('k', '\u212A').Replace('K', '\u212A'),
+                2 => source.Pattern.Replace('i', '\u0131'),
+                _ => source.Pattern,
+            };
             written = random.Next(3) switch
             {
                 0 => source.Replacement,
                 1 => source.Replacement + " Team",
                 _ => "Custom" + random.Next(100),
             };
+            forms.Add(source.Pattern);
         }
         else if (pick < 9)
         {
@@ -129,6 +219,7 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
             written = "Unique";
         }
 
+        forms.Add(spoken);
         return new DictionaryEntry(0, spoken, written, WholeWord: random.Next(7) != 0, Enabled: random.Next(10) != 0);
     }
 
@@ -179,11 +270,7 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
         return results;
     }
 
-    private static string Describe(
-        string folder,
-        IReadOnlyList<string> enabled,
-        IReadOnlyDictionary<LibraryTermKey, (string Written, bool WholeWord)> old,
-        IReadOnlyDictionary<LibraryTermKey, (string Written, bool WholeWord)> ours)
+    private static string Describe(string folder, IReadOnlyList<string> enabled)
     {
         var text = new StringBuilder();
         text.AppendLine("enabled: " + string.Join(", ", enabled));
@@ -192,14 +279,6 @@ public sealed class LegacyMarkerUpgradeTests : IDisposable
             text.AppendLine(Path.GetFileName(path) + ": " + File.ReadAllText(path).ReplaceLineEndings(" | "));
         }
 
-        foreach (var key in old.Keys.Union(ours.Keys).Where(key => !old.TryGetValue(key, out var a) || !ours.TryGetValue(key, out var b) || a != b))
-        {
-            text.AppendLine($"{key.Value}: 0.4.3 {Show(old, key)}, now {Show(ours, key)}");
-        }
-
         return text.ToString();
-
-        static string Show(IReadOnlyDictionary<LibraryTermKey, (string Written, bool WholeWord)> results, LibraryTermKey key) =>
-            results.TryGetValue(key, out var result) ? $"\"{result.Written}\"{(result.WholeWord ? string.Empty : " (substring)")}" : "none";
     }
 }

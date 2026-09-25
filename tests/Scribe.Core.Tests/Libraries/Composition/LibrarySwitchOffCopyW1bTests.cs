@@ -72,6 +72,32 @@ public sealed class LibrarySwitchOffCopyW1bTests
     }
 
     [Fact]
+    public void A_used_authored_copy_of_a_shipped_term_keeps_both_libraries_on()
+    {
+        // Round 2 (Astra A4): dictation applies team's "get hub", which history shows in use; github's copy of the spoken
+        // form is unused. The composition's winner makes team's row the copy, github's row that goes overlaps it, and
+        // both stay on. First-wins winners would name github's unused row: no copy at all, both switched off, and the term
+        // dictation applies gone.
+        var github = BuiltInLibrary("github", Shipped("get hub", "GitHub"));
+        var team = CustomLibrary("team", Custom("get hub", "TeamHub"), Custom("zzz", "Zzz"));
+        var draft = Draft(1, State(enabled: ["github", "team"], ai: [("team", true)]), Draft(github), Draft(team));
+        var composition = Preview(draft);
+        Assert.Equal("TeamHub", Winner(composition, "get hub"));
+        var review = DictionaryUsageAnalyzer.Analyze(
+            ["the TeamHub build"], [], composition.EnabledLibraries, composition.AiExcludedLibraryIds, minimumTranscripts: 1, minimumWords: 1);
+        LibraryUsage[] asked = [.. review.Libraries.OrderBy(l => l.Id, StringComparer.Ordinal)];
+        Assert.Equal(["github", "team"], asked.Select(l => l.Id));
+        Assert.Empty(asked[0].KeepTerms);
+        Assert.Equal(["get hub"], asked[1].KeepTerms.Select(e => e.Pattern));
+
+        var plan = LibrarySwitchOffCopy.Plan([], composition, asked);
+
+        Assert.Equal(["github", "team"], plan.KeptOn.Select(k => k.Id));
+        Assert.Empty(plan.Copies);
+        AssertDictationUnchanged(draft, [], asked, plan, ["get hub zzz"], ["TeamHub Zzz"]);
+    }
+
+    [Fact]
     public void An_authored_built_in_row_that_a_going_row_meets_keeps_that_library_on()
     {
         // The staying built-in's added "kilo" is a rule dictation applies; the going custom "k" sits inside it.

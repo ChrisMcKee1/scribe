@@ -10,7 +10,8 @@ namespace Scribe.Core.Libraries;
 /// <remarks>
 /// Reading never throws and fails closed: anything this version cannot read exactly (not a JSON object, a required member
 /// missing or of the wrong type, a known optional member of the wrong type, a known member given twice, an id both
-/// permitted and denied, an accepted hash that is not 64 lowercase hexadecimal digits) is
+/// permitted and denied, an accepted hash that is not 64 lowercase hexadecimal digits, or any name or string anywhere that
+/// decodes to no string, such as a lone surrogate escape) is
 /// <see cref="LocalStateHealth.Unreadable"/>, because reading such a member as empty could re-grant a permission the user
 /// took away. A version above 1 is <see cref="LocalStateHealth.Newer"/> and is not read further. Unknown members are
 /// ignored, so a later version may add an optional member whose loss to this reader changes nothing without a new
@@ -55,9 +56,10 @@ internal static class LibraryLocalStateJson
         try
         {
             using var document = JsonDocument.Parse(value);
+            EnsureEveryStringDecodes(document.RootElement);
             return Read(document.RootElement);
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
             return (LocalStateHealth.Unreadable, null);
         }
@@ -106,6 +108,35 @@ internal static class LibraryLocalStateJson
     /// <summary>Whether <paramref name="value"/> is a content hash as stored: 64 lowercase hexadecimal digits.</summary>
     public static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+
+    // Decodes every property name and string value in the row, and throws InvalidOperationException for one that decodes
+    // to no string: the parser accepts an escape such as a lone surrogate, and only decoding it fails. Checked up front, so
+    // a row holding one anywhere, in a member this version ignores included, is unreadable rather than half read (round 2,
+    // review finding A2).
+    private static void EnsureEveryStringDecodes(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    _ = property.Name;
+                    EnsureEveryStringDecodes(property.Value);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    EnsureEveryStringDecodes(item);
+                }
+
+                break;
+            case JsonValueKind.String:
+                _ = element.GetString();
+                break;
+        }
+    }
 
     private static (LocalStateHealth Health, Row? Row) Read(JsonElement root)
     {

@@ -39,7 +39,9 @@ public static class AiVocabularyPolicy
     /// <summary>
     /// The scope of <paramref name="catalog"/>: every library that is enabled, usable (available, partly readable, or
     /// awaiting release with its committed content) and permitted by <see cref="IsPermitted"/>, each paired with the
-    /// content its permission covers, its accepted hash (review finding A12). What a request admitted now may carry.
+    /// content its permission covers (review finding A12): the content the catalog holds, which for a permitted library is
+    /// its accepted hash, and for a built-in without an edits document is none, even while the state still holds the hash
+    /// of a document that was deleted outside Scribe (round 2, review finding A1). What a request admitted now may carry.
     /// </summary>
     public static AiVocabularyScope ScopeOf(LibraryCatalog catalog)
     {
@@ -53,7 +55,7 @@ public static class AiVocabularyPolicy
                 LibraryTiers.IsUsable(library.State) &&
                 IsPermitted(state, id, library.Content.BuiltIn, library.ContentHash))
             {
-                permitted.Add(new(id, AcceptedContentOf(state, id)));
+                permitted.Add(new(id, library.ContentHash));
             }
         }
 

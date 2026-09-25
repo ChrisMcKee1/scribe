@@ -303,6 +303,76 @@ public sealed class AiVocabularyPolicyTests
 
     private static readonly DateTimeOffset Now = new(2026, 9, 25, 12, 0, 0, TimeSpan.Zero);
 
+    // --- A built-in edits document deleted outside Scribe (round 2, Astra A1) ---
+
+    [Fact]
+    public void A_request_admitted_for_a_built_ins_edits_is_refused_once_the_edits_document_is_gone()
+    {
+        // github is on and permitted with its edits document H1, whose authored row writes a private term. A request is
+        // admitted with those terms; then the document is deleted outside Scribe and the catalog reloaded.
+        var edited = BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"), Shipped("octo cat", "Octocat"));
+        var shippedOnly = BuiltInLibrary("github", Shipped("get hub", "GitHub"), Shipped("octo cat", "Octocat"));
+        var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
+        var source = new FakeVocabularySource(LibraryComposer.Instance.ComposeVocabulary(Catalog(1, state, Committed(edited, H1))));
+        var admitted = source.Current.AiScope;
+        Assert.Equal(H1, admitted.PermittedContent["github"]);
+        var sent = new List<string>();
+
+        var deleted = Catalog(2, state, Committed(shippedOnly));
+        source.Publish(LibraryComposer.Instance.ComposeVocabulary(deleted));
+
+        // Before any adoption the scope is bound to what is there now, no document, so the old request is refused.
+        Assert.Null(source.Current.AiScope.PermittedContent["github"]);
+        Assert.True(LibraryComposer.Instance.HasNarrowed(admitted, source.Current.AiScope));
+        Assert.False(source.TryHandOff(admitted, () => sent.Add("first attempt")));
+
+        // The adoption reads the vanished document as replaced content: AI permission off, the stale hash gone, still on.
+        var adoption = LibraryComposer.Instance.PlanAdoption(deleted, new LibraryStateContext(false, false, true, true))!;
+        Assert.Equal(LibraryAdoptionReasons.ContentReplaced, adoption.Reasons);
+        Assert.False(adoption.State.AiPermissions["github"]);
+        Assert.False(adoption.State.AcceptedContent.ContainsKey("github"));
+        Assert.Contains("github", adoption.State.EnabledIds);
+        source.Publish(LibraryComposer.Instance.ComposeVocabulary(Catalog(3, adoption.State, Committed(shippedOnly))));
+        Assert.False(source.TryHandOff(admitted, () => sent.Add("retry")));
+        Assert.Empty(source.Current.AiEntries);
+        Assert.Empty(sent);
+
+        // Adopted, the state is settled: the next load has nothing more to record.
+        Assert.Null(LibraryComposer.Instance.PlanAdoption(Catalog(3, adoption.State, Committed(shippedOnly)), new LibraryStateContext(false, false, true, true)));
+    }
+
+    [Fact]
+    public void A_usage_report_cached_for_a_built_ins_edits_is_refused_once_the_edits_document_is_gone()
+    {
+        var edited = BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"));
+        var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
+        var source = new FakeVocabularySource(LibraryComposer.Instance.ComposeVocabulary(Catalog(1, state, Committed(edited, H1))));
+        var history = new[] { Entry(1, "the Nightjar Hub build"), Entry(2, "Nightjar Hub again") };
+        var report = Diagnostics.UsageReport.Build(_ => history, () => [], () => source.Current, periodDays: null, Now, CancellationToken.None);
+        Assert.Contains(report.Snapshot.Terms, term => term is { Text: "Nightjar Hub", Shareable: true });
+        Assert.Equal(H1, report.LibraryScope.PermittedContent["github"]);
+
+        source.Publish(LibraryComposer.Instance.ComposeVocabulary(
+            Catalog(2, state, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))))));
+        var sent = new List<string>();
+
+        Assert.False(source.TryHandOff(report.LibraryScope, () => sent.Add("cached insight")));
+        Assert.Empty(sent);
+    }
+
+    [Fact]
+    public void A_built_in_whose_edits_document_cannot_be_read_is_not_taken_for_one_that_is_gone()
+    {
+        // Only an available built-in with no document has none; a paused or locked one may still have it.
+        var state = State(enabled: ["github"], ai: [("github", true)], accepted: [("github", H1)]);
+        var context = new LibraryStateContext(false, false, true, true);
+        foreach (var fileState in new[] { LibraryFileState.Unreadable, LibraryFileState.AwaitingRelease, LibraryFileState.Newer })
+        {
+            var catalog = Catalog(2, state, Committed(BuiltInLibrary("github"), hash: null, state: fileState));
+            Assert.Null(LibraryComposer.Instance.PlanAdoption(catalog, context));
+        }
+    }
+
     private static HistoryEntry Entry(long id, string text) =>
         new(id, Now.AddHours(-id), text, AudioMilliseconds: 1000, DecodeMilliseconds: 100, TargetApp: "notepad");
 

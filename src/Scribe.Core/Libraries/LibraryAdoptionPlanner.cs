@@ -43,7 +43,7 @@ internal static class LibraryAdoptionPlanner
     // stands for on (ReadLocalState already read an unhealthy state that way), markers as at the upgrade and the content
     // that is there now accepted, which is safe because nothing is permitted.
     private static LibraryAdoption StateLost(
-        LibraryCatalog catalog, LibraryLocalState state, IReadOnlyDictionary<LibraryTermKey, List<TermValues>> shipped)
+        LibraryCatalog catalog, LibraryLocalState state, IReadOnlyDictionary<string, List<TermValues>> shipped)
     {
         var markers = catalog.Libraries
             .Where(library => !library.Content.BuiltIn)
@@ -72,7 +72,7 @@ internal static class LibraryAdoptionPlanner
     private static LibraryAdoption FirstStart(
         LibraryCatalog catalog,
         LibraryLocalState state,
-        IReadOnlyDictionary<LibraryTermKey, List<TermValues>> shipped,
+        IReadOnlyDictionary<string, List<TermValues>> shipped,
         Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission)
     {
         var permissions = new List<KeyValuePair<string, bool>>();
@@ -113,11 +113,12 @@ internal static class LibraryAdoptionPlanner
     // A healthy state: record custom files it never saw (Discovered) and re-record content that changed outside Scribe
     // (ContentReplaced, A4). The enabled state of a discovered file is what reading gave it; a replaced custom file is
     // turned off, because this version cannot tell whose choice its enabled entry was; a built-in whose edits document
-    // was replaced keeps its enabled state, since its shipped rows are Decision 2's, and loses its AI permission.
+    // was replaced or deleted keeps its enabled state, since its shipped rows are Decision 2's, and loses its AI
+    // permission, and a deleted document's hash leaves the state (no entry for a built-in without one).
     private static LibraryAdoption? Update(
         LibraryCatalog catalog,
         LibraryLocalState state,
-        IReadOnlyDictionary<LibraryTermKey, List<TermValues>> shipped,
+        IReadOnlyDictionary<string, List<TermValues>> shipped,
         Func<LibraryOrigin, bool, bool?, bool> defaultAiPermission)
     {
         var permissions = new Dictionary<string, bool>(state.AiPermissions, StringComparer.OrdinalIgnoreCase);
@@ -130,12 +131,22 @@ internal static class LibraryAdoptionPlanner
 
         foreach (var library in catalog.Libraries)
         {
+            var id = library.Content.Id;
             if (library.ContentHash is not { } hash)
             {
+                // A built-in that is available with no edits document has none, so a hash the state still holds for it
+                // belongs to a document deleted outside Scribe: replaced content (round 2, review finding A1). A paused or
+                // locked built-in may still have its document, so only an available one is read this way.
+                if (library.Content.BuiltIn && library.State == LibraryFileState.Available && accepted.Remove(id))
+                {
+                    recorded++;
+                    reasons |= LibraryAdoptionReasons.ContentReplaced;
+                    permissions[id] = false;
+                }
+
                 continue;
             }
 
-            var id = library.Content.Id;
             var known = accepted.TryGetValue(id, out var previous);
             if (known && previous == hash)
             {

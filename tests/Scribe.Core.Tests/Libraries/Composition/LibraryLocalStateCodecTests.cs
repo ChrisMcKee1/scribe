@@ -181,11 +181,37 @@ public sealed class LibraryLocalStateCodecTests
         Assert.True(AiVocabularyPolicy.IsPermitted(firstStart, "github", true, null));
     }
 
+    [Theory]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[""\uD800""],""legacyProjection"":[]}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[""team\uDC00""]}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""ai"":{""on"":[""\uD800""]}}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""ai"":{""\uD800"":[]}}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""legacyMarkers"":[{""library"":""team"",""key"":""\uD800""}]}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""legacyMarkers"":[{""library"":""team"",""key"":""kube"",""\uDBFF"":0}]}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""accepted"":{""\uD800"":""1111111111111111111111111111111111111111111111111111111111111111""}}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""upgradeNotice"":[""\uDBFF""]}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""\uD800"":1}")]
+    [InlineData(@"{""version"":1,""aiPermissionsLost"":false,""enabled"":[],""legacyProjection"":[],""future"":{""deep"":[""\uDC00""]}}")]
+    public void A_row_holding_an_escape_that_decodes_to_no_string_is_unreadable_and_adoption_keeps_the_denial(string value)
+    {
+        // Round 2 (Astra A2): the parser accepts a lone surrogate escape, but decoding it throws, which must not escape.
+        var read = LibraryComposer.Instance.ReadLocalState(["github", "team"], value, Libraries, Stored);
+
+        Assert.Equal(LocalStateHealth.Unreadable, read.Health);
+        var catalog = Catalog(
+            read, Committed(BuiltInLibrary("github", Shipped("get hub", "GitHub"))), Committed(CustomLibrary("team", Custom("kube", "K8s")), H1));
+        var adoption = LibraryComposer.Instance.PlanAdoption(catalog, Stored)!;
+        Assert.Equal(LibraryAdoptionReasons.StateLost, adoption.Reasons);
+        Assert.True(adoption.State.AiPermissionsLost);
+        Assert.False(AiVocabularyPolicy.IsPermitted(adoption.State, "github", true, null));
+        Assert.False(AiVocabularyPolicy.IsPermitted(adoption.State, "team", false, H1));
+    }
+
     [Fact]
     public void Reading_never_throws_on_what_it_is_given()
     {
         var random = new Random(20260928);
-        const string alphabet = "{}[]\":,01aefrstulnv \\";
+        const string alphabet = "{}[]\":,01aefrstulnv \\DC8F9B";
         for (var i = 0; i < 2000; i++)
         {
             var value = new string([.. Enumerable.Range(0, random.Next(0, 60)).Select(_ => alphabet[random.Next(alphabet.Length)])]);
