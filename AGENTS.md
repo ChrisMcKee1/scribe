@@ -11,7 +11,10 @@ Private, **fully offline** push‑to‑talk voice dictation for **Windows 11**. 
 speak, release: punctuated text is typed into whatever app has focus. Audio is captured,
 transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
 online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
-endpoint (sends the *transcribed text only*, never audio, and is strictly opt‑in).
+endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
+text, the cleanup instructions and the vocabulary glossary (every enabled dictionary and library term,
+within its budget), whether or not the dictation mentions them; see
+[What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
@@ -23,7 +26,8 @@ any OpenAI‑compatible endpoint like Ollama/LM Studio/OpenRouter); **silence au
 replacement highlights, and per-step timings across the full pipeline;
 **diagnostics** panel (P50/P95 decode latency + RTF from local history); **usage insights**
 (local totals/trend chart/top apps/recurring terms with one-click dictionary add; opt-in AI
-insight sends aggregate totals + dictionary-covered term labels ONLY; novel mined terms never
+insight sends aggregate totals + dictionary-covered term labels ONLY, and withholds a label whose
+replacement is multi-line or over 100 characters as written; novel mined terms never
 leave the machine); **dictation recovery** (last 5 transcripts in a tray submenu, injection
 failure raises a recovery notification); **tray quick add to dictionary** (chip-style word picker
 over a recent dictation that saves the fix and repairs that transcript in place); **dictionary
@@ -174,6 +178,54 @@ transport; `StoredOutputWireContractTests` pins that the packages do not send `s
 own, which is what makes those wire tests measure Scribe's control; and the fail-closed tests stay. Do
 not relax any of them. Only the Azure agents carry the control: custom OpenAI-compatible endpoints and
 Foundry Local send no `store` field.
+
+### What cleanup sends (keep the disclosure true)
+
+Settings, `PRIVACY.md` and the README make promises about what AI cleanup sends, and the code has to keep
+them. Until this was fixed the AI cleanup page said remote providers get only the terms that matter to a
+dictation, while every request carried the whole glossary and the readiness probe carried it too, before
+anything was dictated.
+
+- **Every cleanup request carries the glossary**: every enabled dictionary and library term, merged
+  personal first (`DictationController.BuildGlossary`), up to 5,000 terms and 24,000 characters (80
+  terms under the Local prompt style), whether or not the dictation mentions them. The libraries are those
+  the settings in use enable, the selection the post-processor was given, never a fresh read of the stored
+  document (see "The library selection is the one in use" below). A template (a written
+  form spanning lines or past 100 characters, judged before trimming) is not vocabulary and stays out,
+  by `CleanupPrompt.IsVocabularyReplacement`, the one rule the usage insight's labels follow too
+  (`GlossaryVocabularyTests`, which also pins that no shipped term is a template, so the eval harness's
+  glossaries are unchanged). There is no relevance filter; do not describe one until there is one, and
+  do not add one without the eval harness showing it does not hurt cleanup.
+- **The readiness probe carries no vocabulary.** `ProbeAgentAsync` builds its own agent from the factory
+  the initialization connected, with `BuildProbeSystemPrompt` (the real guardrails and writing style,
+  without the glossary), so it still reasons like a cleanup call. Never hand it the serving agent.
+  `CleanupProbeVocabularyTests` pins this from the wire for custom endpoints, Foundry Local, Azure
+  Responses and the Chat Completions fallback, and through the factory for Copilot.
+- **The wording lives in Core.** `CleanupDisclosure` holds the AI cleanup page card and the dictionary
+  suggestion consent, and `GlossaryHint` builds the dictionary page's count the way dictation builds the
+  glossary: the rows in the order the saved dictionary comes back (`ORDER BY pattern`, SQLite's BINARY
+  collation, `SqliteBinaryCollation`), the libraries in the order the service loads them, then the shared
+  `CleanupPrompt.ComposeVocabulary`, `GlossaryTermBudget` and `CountGlossary` (the same selection loop as
+  `BuildGlossary`). Every control it reads (the AI switch, provider, prompt style, post-processing switch
+  and the libraries) refreshes it. Both quote their limits from the constants that enforce them.
+  `CleanupDisclosureTests` fails if a limit moves without the text, if `PRIVACY.md` loses a fact, or if a
+  retired claim (that cleanup sends only the transcript, or only the terms that matter to a dictation)
+  comes back in `PRIVACY.md`, the README, this file, the privacy review lens, the Foundry,
+  service-principal or Store docs, or the window's XAML; the phrases it looks for are listed in
+  `No_user_facing_text_claims_cleanup_sends_only_the_transcript_or_only_relevant_terms`.
+- **The suggestion consent is bound to its recipient.** The window captures `ITextCleanupService.Recipient`
+  before it asks, asks unless both that recipient and the saved-provider snapshot (`_savedAiProvider`,
+  which changes only once `SaveBundle` has stored the document) run on this PC (`AiRequestConsent`), and
+  hands the recipient to `CompleteAsync`, which refuses under the service's lock, with
+  `CompletionOutcome.RecipientChanged`, unless it is still serving exactly that configuration. A Save that
+  failed, or one made during the history read, can no longer send the sample somewhere unasked
+  (`CleanupRecipientTests`).
+- **Cleanup goes only where a save sent it.** A change the window stores outside a Save applies the
+  settings as stored (`StoredSettingsReapply`), never the window's editing document, which after a failed
+  Save still names the provider that was picked (see "Settings document" below).
+- If you change what a request carries (a new field, a relevance filter, a new provider), change
+  `CleanupDisclosure`, `PRIVACY.md` and the tests in the same change, and note that the matching macOS
+  disclosure may be stale.
 
 ### GitHub Copilot provider (the parent environment is never touched)
 
@@ -753,15 +805,47 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **Opt-in recordings are stored as 16-bit PCM.** A PCM16 blob opens with a 4-byte header
   (`AudioBlobCodec.Pcm16Magic`) and is marked in `audio_blobs.encoding` (0 is the legacy float32).
   Size things with `AudioBlobCodec.EncodedLength`, which includes the header.
+- **Every connection sets `secure_delete=ON`** (`ScribeDatabase.Configure`). The bundled e_sqlite3 is built
+  without `SQLITE_SECURE_DELETE` and reads 0, which left a deleted transcript's bytes in its page or a
+  freed page. It is per connection, costs one more write of each freed page (as zeros) on delete, and
+  does not reach content deleted before it, stale frames in the WAL before a `TRUNCATE` checkpoint, or
+  copies outside the file. `SecureDeleteTests` pins both the setting and the bytes on disk. Deleting
+  costs about 6.5 ms and one more write per MB freed (measured on the dev box), which is why every bulk
+  delete goes in slices: maintenance's retention slices and Clear history's recordings are at most
+  `BlobBatchBytes` (8 MB) per transaction, so the WAL needs about one slice of room at a time. One
+  recording larger than a slice is still one transaction of its own size (up to the 250 MB cap, about
+  1.6 s), since a row cannot be split.
+- **A deletion owes a `TRUNCATE` checkpoint.** Deleting or clearing history, deleting a recording, and
+  clearing or retiring cleanup failure samples each count a deletion (`StorageMaintenance.NoteDeletion`),
+  and the next pass that reaches reclamation truncates the WAL even with nothing worth reclaiming, so
+  PRIVACY.md's "at the end of its next pass: normally within a minute" holds. It is heavy work: a pass
+  that yields skips it and the pass after the backoff pays it, and a busy checkpoint stays owed.
+  PRIVACY.md quotes the trigger delay, the backoff, `MaxQuickReclaimRetries` and the hourly interval,
+  and `CleanupDisclosureTests` pins them, so change the text with the numbers. Dictionary, snippet and
+  profile deletions owe nothing, and PRIVACY.md says so. `StorageMaintenanceWalTests` reads the WAL
+  after real passes. `HistoryRepository.PruneOlderThan` counts no deletion either: production retention
+  never calls it (maintenance deletes through `DeleteEntriesOlderThan` and counts that itself), only the
+  soak harness does, so nothing PRIVACY.md describes may be routed through it without counting.
+- **The close only tries to empty the WAL.** `ScribeDatabase.Dispose` runs a final `TRUNCATE` checkpoint
+  and, once the pool is cleared, logs its result row's shape (the outcome, SQLite's page counts, and
+  whether the file outlived the close). It skips the checkpoint when the write gate cannot be had within
+  `ShutdownGateTimeout` (3 s); SQLite reports it busy and leaves the log in place when another connection
+  is still using the log once the busy timeout runs out (sqlite.org, `PRAGMA wal_checkpoint`); and SQLite
+  folds the log in and deletes it only when the last connection closes (sqlite.org, `wal.html`), which a
+  connection still open elsewhere prevents. PRIVACY.md therefore says Scribe tries to empty the log when
+  it closes normally, and that contention or a failed checkpoint can leave earlier copies until the log
+  is next emptied. `ShutdownCheckpointTests` reads the files after each kind of close; never make the
+  close wait longer to turn that into a promise.
 - **`StorageMaintenance` owns all retention**: history text follows the retention setting (90 days by
   default), recordings at most 7 days and 250 MB, oldest first, cleanup failure samples 7 days, and
   damaged-copy files 14 days after they are first seen, except that the newest damaged copy is never
   deleted. The cap is re-checked inside each deletion slice's transaction.
-- **When and how it runs:** 30 s after startup, hourly, and 10 s after audio is stored or history is
-  deleted. Deletions go in slices of at most 8 MB per transaction, and free pages come back through
-  `incremental_vacuum` in 4 MB steps and a closing `TRUNCATE` checkpoint. Other writers, settings
-  aside (below), take `ScribeDatabase.EnterWriteScope` (bounded at 2 minutes), never across an await,
-  and a writer waiting on the gate interrupts a preemptible `VACUUM` or incremental step.
+- **When and how it runs:** 30 s after startup, hourly, and 10 s after audio is stored, history is
+  deleted or the cleanup failure samples are cleared. Deletions go in slices of at most 8 MB per
+  transaction, and free pages come back through `incremental_vacuum` in 4 MB steps and a closing
+  `TRUNCATE` checkpoint. Other writers, settings aside (below), take `ScribeDatabase.EnterWriteScope`
+  (bounded at 2 minutes), never across an await, and a writer waiting on the gate interrupts a
+  preemptible `VACUUM` or incremental step.
 - **Settings writes never take the maintenance write gate.** They ask maintenance to yield instead, and
   every read-modify-write goes through `ISettingsRepository.Update`. Yields are sticky, enforced by a
   SQLite progress handler, and each consecutive yield doubles the wait before heavy work returns, from
@@ -806,6 +890,29 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
+- **Only the Save that stored the window's document applies it.** `SettingsWindow._settings` is the
+  editing document: Save writes every field onto it before `SaveBundle`, and a Save that fails leaves them
+  all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. So
+  `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
+  window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
+  stored, or, while `LastLoadFailed`, applies none and has the controller reload only the vocabulary
+  (`DictationController.ReloadVocabulary`), on the settings in use, library selection included, because the
+  defaults standing in are no more the user's choice. The Usage page's Add used to apply `_settings` to
+  reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to the
+  provider nobody saved.
+  `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
+  service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
+  window.
+- **The library selection is the one in use.** The post-processor (`ITextPostProcessor.Reload(ids)`), the AI
+  glossary (`DictationController.BuildGlossary`), the usage report and quick add's conflict check each pass the
+  enabled library ids of the settings dictation runs on to `IDictionaryLibraryService.GetEnabledLibraryEntries(ids)`,
+  never a fresh read of the stored document: a document that turns unreadable mid-session reads as the defaults,
+  which switched the user's libraries off and the default AI libraries on and sent their terms to a remote provider.
+  A parameterless `Reload()` (quick add, learning from history) keeps the last selection; the parameterless
+  `GetEnabledLibraryEntries()` returns none while `LastLoadFailed`, and only a post-processor no owner has given a
+  selection falls back to it. `LibrarySelectionInUseTests` pins both consumers through the real library service and
+  post-processor, and the callers by source. This is the seam the dictionary library program replaces with a
+  vocabulary source.
 
 ## Hotkey defaults and key names (read before touching HotkeyBinding or the hotkey cards)
 
@@ -1436,6 +1543,10 @@ the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the
   under `_gate`, with no I/O, clears the per-style agents and stays Ready: no restart, reconnect, probe or
   new generation. Outside Ready, or if the factory throws, it falls back to a full restart.
   `DictationController.AnnounceCleanupChange` ignores the same fields, so a prompt edit announces nothing.
+- **The readiness probe builds its own agent** from `_pendingFactory`, without the glossary (see
+  [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true)). The serving agent is built by the
+  initializer and published only after that probe passes; the Chat Completions fallback builds its
+  serving agent only once its own probe has passed.
 
 ## Git workflow
 

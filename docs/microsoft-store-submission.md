@@ -242,9 +242,9 @@ per-application profiles to change writing style and line-break behavior. Local 
 recent dictations recoverable and powers private usage insights.
 
 AI cleanup is optional. Use an on-device Foundry Local model, your own Microsoft Foundry
-deployment, or an OpenAI-compatible endpoint that you configure. Remote providers receive
-transcribed text and related instructions, never microphone audio. Turn AI cleanup off at any time
-to keep the complete dictation pipeline local.
+deployment, or an OpenAI-compatible endpoint that you configure. Remote providers receive the
+transcribed text, the cleanup instructions and your enabled vocabulary, never microphone audio.
+Turn AI cleanup off at any time to keep the complete dictation pipeline local.
 
 ### Product features
 

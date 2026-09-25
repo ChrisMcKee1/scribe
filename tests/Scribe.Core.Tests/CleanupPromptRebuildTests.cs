@@ -172,49 +172,153 @@ public sealed class CleanupPromptRebuildTests
         // The options an initialization publishes are the ones it started with, so while one is running
         // the rebuild does not apply; the change restarts it and the result carries the latest prompt.
         await using var harness = new CleanupHarness();
-        var fake = new FakeProvider { HandshakeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var fake = new FakeProvider();
+        var first = fake.Hold(1);
         var svc = harness.Service;
         svc.ProviderFactoryForTesting = fake.Connect;
         svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
-        await fake.HandshakeStarted.Task.WaitAsync(Bound);
+        await first.Started.Task.WaitAsync(Bound);
 
         svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Fabrikam." });
-        fake.HandshakeGate.SetResult();
+        first.Release();
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        // The readiness probe builds an agent of its own without the glossary, so "every agent carries
+        // the new prompt" reads here as "no agent was ever built with the old one": the first handshake
+        // is held until after the change has cancelled it, and it observes that cancellation. A
+        // superseded handshake that completes anyway is
+        // A_prompt_change_after_a_real_reconfiguration_never_brings_back_the_old_agent.
         Assert.Equal(2, fake.Handshakes);
-        Assert.All(fake.Built, built => Assert.Contains("Fabrikam", built, StringComparison.Ordinal));
+        Assert.DoesNotContain(fake.Built, built => built.Contains("Contoso", StringComparison.Ordinal));
+        Assert.Contains(fake.Built, built => built.Contains("Fabrikam", StringComparison.Ordinal));
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", fake.Client.Instructions[^1], StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task A_prompt_change_after_a_real_reconfiguration_never_brings_back_the_old_agent()
+    /// <summary>How far the initialization a prompt change supersedes gets before it stops.</summary>
+    public enum SupersededRun
     {
+        /// <summary>
+        /// Its handshake is held, as if its thread were descheduled, until the change has cancelled it
+        /// and the gate is open (the schedule that used to let it through), and the cancellation stops it.
+        /// </summary>
+        StopsAtItsHandshake,
+
+        /// <summary>
+        /// Its handshake completes after the change anyway, as a real one can when it finishes just as
+        /// the token is cancelled, so it builds an agent from the options the change replaced.
+        /// </summary>
+        FinishesItsHandshake,
+
+        /// <summary>
+        /// The change lands while its readiness probe is in flight and the probe answers anyway, so it
+        /// reaches the point where it would publish what it built.
+        /// </summary>
+        FinishesItsProbe,
+    }
+
+    [Theory]
+    [InlineData(SupersededRun.StopsAtItsHandshake)]
+    [InlineData(SupersededRun.FinishesItsHandshake)]
+    [InlineData(SupersededRun.FinishesItsProbe)]
+    public async Task A_prompt_change_after_a_real_reconfiguration_never_brings_back_the_old_agent(SupersededRun superseded)
+    {
+        const string chatStyle = "Short and casual, for a chat app.";
         await using var harness = new CleanupHarness();
         var fake = new FakeProvider();
         var svc = harness.Service;
         svc.ProviderFactoryForTesting = fake.Connect;
         svc.Configure(Remote(CleanupProvider.GitHubCopilot, model: "model-a") with { Glossary = "Terms: Contoso." });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
-        var builtForA = fake.Built.Count;
+        var builtForA = fake.Agents.Count;
 
-        // Switch model; its initialization is still connecting when the prompt changes too.
-        fake.HandshakeGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        fake.HandshakeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Switch model and hold its initialization, and hold the one the prompt change will start, so
+        // what happens in between is visible. In the probe case the switched model's probe is held too,
+        // and answers when released whatever its token says.
+        var switched = fake.Hold(2, finishesDespiteCancellation: superseded != SupersededRun.StopsAtItsHandshake);
+        var successor = fake.Hold(3);
+        var switchedProbe = fake.Client.Calls + 1;
+        var probeInFlight = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeAnswers = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fake.Client.BeforeAnswer = async (call, _) =>
+        {
+            if (superseded == SupersededRun.FinishesItsProbe && call == switchedProbe)
+            {
+                probeInFlight.TrySetResult();
+                await probeAnswers.Task;
+            }
+        };
         svc.Configure(Remote(CleanupProvider.GitHubCopilot, model: "model-b") with { Glossary = "Terms: Contoso." });
-        await fake.HandshakeStarted.Task.WaitAsync(Bound);
+        await switched.Started.Task.WaitAsync(Bound);
+        if (superseded == SupersededRun.FinishesItsProbe)
+        {
+            switched.Release();
+            await probeInFlight.Task.WaitAsync(Bound);
+        }
+
+        var builtBeforeChange = fake.Agents.Count;
+        var callsBeforeChange = fake.Client.Calls;
         var statuses = new CleanupStatusRecorder(svc);
 
         svc.Configure(Remote(CleanupProvider.GitHubCopilot, model: "model-b") with { Glossary = "Terms: Fabrikam." });
 
+        // The change restarts the initialization: nothing is rebuilt in place from what model-a left.
         Assert.DoesNotContain(statuses.Snapshot(), s => s.Status == CleanupStatus.Ready);
-        Assert.Equal(builtForA, fake.Built.Count);
-        fake.HandshakeGate.SetResult();
-        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(builtBeforeChange, fake.Agents.Count);
 
-        Assert.All(fake.Built.Skip(builtForA), built => Assert.StartsWith("model-b|", built, StringComparison.Ordinal));
-        Assert.Contains("Fabrikam", fake.Built[^1], StringComparison.Ordinal);
-        Assert.Contains("Fabrikam", fake.Client.Instructions[^1], StringComparison.Ordinal);
+        // The superseded run goes on to wherever the case lets it. The successor's handshake starts only
+        // once that run has finished, because both need the init lock, and until the successor publishes
+        // nothing serves and nothing new reaches the provider.
+        switched.Release();
+        probeAnswers.TrySetResult();
+        await successor.Started.Task.WaitAsync(Bound);
+        var fromSuperseded = fake.Agents.Skip(builtForA).ToList();
+        Assert.NotEqual(CleanupStatus.Ready, svc.Status);
+        Assert.Equal(CleanupOutcome.Skipped, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
+        Assert.Equal(callsBeforeChange, fake.Client.Calls);
+
+        successor.Release();
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        var dictation = await svc.CleanAsync(Dictated).WaitAsync(Bound);
+        var styled = await svc.CleanAsync(Dictated, writingStyleOverride: chatStyle).WaitAsync(Bound);
+
+        // Each case got as far as it says, so the contract below is tested against an agent built from
+        // the old glossary wherever the case has one.
+        var builtStale = fromSuperseded.Any(agent => agent.Instructions.Contains("Contoso", StringComparison.Ordinal));
+        Assert.True(
+            builtStale == (superseded != SupersededRun.StopsAtItsHandshake),
+            $"{superseded}: the superseded run {(builtStale ? "built" : "never built")} an agent from the old glossary.");
+
+        // The contract: nothing built since the switch belongs to model-a, anything built from the
+        // replaced options never made a call, the old glossary never reached the provider after the
+        // change, and the only Ready after it is the successor's.
+        var sinceSwitch = fake.Agents.Skip(builtForA).ToList();
+        Assert.All(sinceSwitch, agent => Assert.Equal("model-b", agent.Model));
+        var stale = sinceSwitch
+            .Where(agent => agent.Instructions.Contains("Contoso", StringComparison.Ordinal))
+            .Select(agent => agent.Build)
+            .ToHashSet();
+        Assert.DoesNotContain(fake.Client.Log, call => stale.Contains(call.Agent));
+        Assert.DoesNotContain(
+            fake.Client.Log.Skip(callsBeforeChange),
+            call => call.Instructions.Contains("Contoso", StringComparison.Ordinal));
+        Assert.Single(statuses.Snapshot(), s => s.Status == CleanupStatus.Ready);
+
+        // The dictation and the per-app style dictation (built and cached after Ready) both ran on
+        // agents built for model-b with the new glossary.
+        Assert.Equal(CleanupOutcome.Cleaned, dictation.Outcome);
+        Assert.Equal(CleanupOutcome.Cleaned, styled.Outcome);
+        var served = fake.Client.Log
+            .TakeLast(2)
+            .Select(call => sinceSwitch.Single(agent => agent.Build == call.Agent))
+            .ToList();
+        Assert.All(served, agent =>
+        {
+            Assert.Equal("model-b", agent.Model);
+            Assert.Contains("Fabrikam", agent.Instructions, StringComparison.Ordinal);
+            Assert.DoesNotContain("Contoso", agent.Instructions, StringComparison.Ordinal);
+        });
+        Assert.Contains(chatStyle, served[1].Instructions, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -299,8 +403,10 @@ public sealed class CleanupPromptRebuildTests
     [Fact]
     public async Task A_factory_that_fails_to_rebuild_falls_back_to_reinitializing()
     {
+        // Builds 1 and 2 are the first initialization's serving agent and its probe's own agent, so
+        // build 3 is the in-place rebuild.
         await using var harness = new CleanupHarness();
-        var fake = new FakeProvider { ThrowOnBuild = 2 };
+        var fake = new FakeProvider { ThrowOnBuild = 3 };
         var svc = harness.Service;
         svc.ProviderFactoryForTesting = fake.Connect;
         svc.Configure(Remote(CleanupProvider.GitHubCopilot) with { Glossary = "Terms: Contoso." });
@@ -348,7 +454,10 @@ public sealed class CleanupPromptRebuildTests
         svc.Configure(CleanupHarness.FoundryOn() with { Glossary = "Terms: Fabrikam." });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        // One new probe, which carries no glossary; the next cleanup carries the new one.
         Assert.Equal(probesBefore + 1, bodies.Count);
+        Assert.DoesNotContain("Fabrikam", bodies.Last(), StringComparison.Ordinal);
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync(Dictated).WaitAsync(Bound)).Outcome);
         Assert.Contains("Fabrikam", bodies.Last(), StringComparison.Ordinal);
     }
 
@@ -449,11 +558,12 @@ public sealed class CleanupPromptRebuildTests
     /// <summary>
     /// Stands in for a remote provider's initializer. Each connect is one handshake (the Copilot CLI
     /// start, the Azure client build); the factory it returns builds agents over one recording client
-    /// and notes what each agent was built for.
+    /// and notes what each agent was built for, so every call can be traced to the agent that made it.
     /// </summary>
     private sealed class FakeProvider
     {
-        private readonly ConcurrentQueue<string> _built = new();
+        private readonly ConcurrentQueue<BuiltAgent> _built = new();
+        private readonly ConcurrentDictionary<int, HeldHandshake> _held = new();
         private int _handshakes;
         private int _builds;
 
@@ -462,57 +572,111 @@ public sealed class CleanupPromptRebuildTests
         public int Handshakes => Volatile.Read(ref _handshakes);
 
         /// <summary>"model|instructions" for every agent built, in order.</summary>
-        public IReadOnlyList<string> Built => _built.ToArray();
+        public IReadOnlyList<string> Built => _built.Select(agent => $"{agent.Model}|{agent.Instructions}").ToArray();
 
-        /// <summary>When set, a handshake waits for it, honouring cancellation.</summary>
-        public TaskCompletionSource? HandshakeGate { get; set; }
-
-        public TaskCompletionSource HandshakeStarted { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>Every agent built, in order.</summary>
+        public IReadOnlyList<BuiltAgent> Agents => _built.ToArray();
 
         /// <summary>The 1-based build that throws, or 0 for none.</summary>
         public int ThrowOnBuild { get; init; }
 
+        /// <summary>
+        /// Holds the given 1-based handshake until the test releases it. A held handshake announces
+        /// itself and then goes no further until <see cref="HeldHandshake.Release"/>, whatever its token
+        /// says, and every test that holds one releases it. By default it then stops if it was cancelled
+        /// while held. With <paramref name="finishesDespiteCancellation"/> it goes on however long before
+        /// it was cancelled, the way a real handshake can complete just as its token is cancelled.
+        /// </summary>
+        public HeldHandshake Hold(int handshake, bool finishesDespiteCancellation = false) =>
+            _held[handshake] = new HeldHandshake(finishesDespiteCancellation);
+
         public async Task<Func<string, AIAgent>> Connect(CleanupOptions options, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _handshakes);
-            HandshakeStarted.TrySetResult();
-            if (HandshakeGate is { } gate)
+            var handshake = Interlocked.Increment(ref _handshakes);
+            if (_held.TryGetValue(handshake, out var held))
             {
-                await gate.Task.WaitAsync(cancellationToken);
+                await held.WaitAsync(cancellationToken);
             }
 
             var model = options.Provider == CleanupProvider.GitHubCopilot ? options.CopilotModel : options.AzureDeployment;
             return instructions =>
             {
-                if (Interlocked.Increment(ref _builds) == ThrowOnBuild)
+                var build = Interlocked.Increment(ref _builds);
+                if (build == ThrowOnBuild)
                 {
                     throw new InvalidOperationException("Agent construction failed.");
                 }
 
-                _built.Enqueue($"{model}|{instructions}");
-                return new ChatClientAgent(Client, instructions: instructions, name: "ScribeCleanup");
+                _built.Enqueue(new BuiltAgent(build, model, instructions));
+                return new ChatClientAgent(Client.For(build), instructions: instructions, name: "ScribeCleanup");
             };
         }
     }
 
-    /// <summary>A chat client that answers every call and records the instructions each call carried.</summary>
-    private sealed class RecordingChatClient : IChatClient
+    /// <summary>One agent a factory built: its 1-based build number, the model and the instructions.</summary>
+    private sealed record BuiltAgent(int Build, string? Model, string Instructions);
+
+    /// <summary>
+    /// A handshake the test holds. <see cref="Started"/> is set once it has announced itself, and it goes
+    /// no further until <see cref="Release"/>.
+    /// </summary>
+    private sealed class HeldHandshake(bool finishesDespiteCancellation)
     {
-        private readonly ConcurrentQueue<string> _instructions = new();
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _gate.TrySetResult();
+
+        /*
+         * The wait on the token is registered before the handshake announces itself. Announcing first
+         * was a race: a thread descheduled between the two reached the wait only after the test had
+         * cancelled it and opened the gate, and Task.WaitAsync returns a task that has already completed
+         * without looking at the token, so a superseded initialization got through and built an agent
+         * from its old options. Every held handshake now runs that schedule on purpose: after announcing
+         * itself it does nothing until the gate opens, as if descheduled, and only then looks at the wait
+         * it registered, which kept any cancellation that arrived in between. Whether a superseded
+         * handshake completes anyway is the test's choice, made explicit with finishesDespiteCancellation.
+         */
+        public async Task WaitAsync(CancellationToken cancellationToken)
+        {
+            var released = finishesDespiteCancellation ? _gate.Task : _gate.Task.WaitAsync(cancellationToken);
+            Started.TrySetResult();
+            await _gate.Task;
+            await released;
+        }
+    }
+
+    /// <summary>One provider call: the build number of the agent that made it and the instructions it carried.</summary>
+    private readonly record struct ProviderCall(int Agent, string Instructions);
+
+    /// <summary>
+    /// Answers every call and records, per call, the agent that made it and the instructions it carried.
+    /// Agents call through <see cref="For"/>, so a call is attributed to its agent however alike two
+    /// agents' instructions are.
+    /// </summary>
+    private sealed class RecordingChatClient
+    {
+        private readonly ConcurrentQueue<ProviderCall> _log = new();
         private int _calls;
 
         public int Calls => Volatile.Read(ref _calls);
 
-        public IReadOnlyList<string> Instructions => _instructions.ToArray();
+        public IReadOnlyList<string> Instructions => _log.Select(call => call.Instructions).ToArray();
+
+        /// <summary>Every call, in order.</summary>
+        public IReadOnlyList<ProviderCall> Log => _log.ToArray();
 
         /// <summary>Runs before answering, with the 1-based call number.</summary>
         public Func<int, CancellationToken, Task>? BeforeAnswer { get; set; }
 
-        public async Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        public IChatClient For(int agent) => new AgentClient(this, agent);
+
+        private async Task<ChatResponse> AnswerAsync(
+            int agent, IEnumerable<ChatMessage> messages, ChatOptions? options, CancellationToken cancellationToken)
         {
             var system = messages.Where(m => m.Role == ChatRole.System).Select(m => m.Text);
-            _instructions.Enqueue(string.Join("\n", system.Prepend(options?.Instructions ?? string.Empty)));
+            _log.Enqueue(new ProviderCall(agent, string.Join("\n", system.Prepend(options?.Instructions ?? string.Empty))));
             var call = Interlocked.Increment(ref _calls);
             if (BeforeAnswer is { } before)
             {
@@ -522,14 +686,21 @@ public sealed class CleanupPromptRebuildTests
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, CleanedText));
         }
 
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
+        private sealed class AgentClient(RecordingChatClient owner, int agent) : IChatClient
         {
+            public Task<ChatResponse> GetResponseAsync(
+                IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+                owner.AnswerAsync(agent, messages, options, cancellationToken);
+
+            public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+                IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+                throw new NotSupportedException();
+
+            public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+            public void Dispose()
+            {
+            }
         }
     }
 }

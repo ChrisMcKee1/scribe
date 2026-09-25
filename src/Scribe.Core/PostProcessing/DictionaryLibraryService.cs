@@ -30,13 +30,19 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService
 
     public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries()
     {
-        var enabled = _settings.Load().EnabledDictionaryLibraryIds;
-        if (enabled is null || enabled.Count == 0)
+        var stored = _settings.Load();
+        return _settings.LastLoadFailed ? [] : GetEnabledLibraryEntries(stored.EnabledDictionaryLibraryIds);
+    }
+
+    public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries(IReadOnlyCollection<string> enabledIds)
+    {
+        ArgumentNullException.ThrowIfNull(enabledIds);
+        if (enabledIds.Count == 0)
         {
             return [];
         }
 
-        var ids = new HashSet<string>(enabled, StringComparer.OrdinalIgnoreCase);
+        var ids = new HashSet<string>(enabledIds, StringComparer.OrdinalIgnoreCase);
         var libraries = GetLibraries().Where(l => ids.Contains(l.Id));
         return DictionaryLibraryComposer.ComposeLibraries(libraries);
     }

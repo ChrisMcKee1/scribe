@@ -16,7 +16,7 @@ namespace Scribe.Core.Persistence;
 /// <remarks>
 /// <para>
 /// One pass at a time, never on the caller's thread: shortly after <see cref="Start"/>, then hourly,
-/// and soon after audio is stored or history is deleted.
+/// and soon after audio is stored, history is deleted or the cleanup failure samples are cleared.
 /// </para>
 /// <para>
 /// Writers never queue behind it for long. Deletions run in slices of at most
@@ -31,7 +31,7 @@ namespace Scribe.Core.Persistence;
 /// VACUUM's final copy back into the database file, so a writer arriving in exactly that window
 /// still waits for it. Later passes reclaim with <c>PRAGMA incremental_vacuum</c> in bounded, also
 /// preemptible, steps. The WAL is backfilled by an ungated PASSIVE checkpoint and emptied by a short
-/// TRUNCATE one.
+/// TRUNCATE one, which any deletion of history, a recording or a failure sample owes (NoteDeletion).
 /// </para>
 /// <para>
 /// Heavy work (deleting audio in slices, the cap, reclamation) yields to dictation. A dictation
@@ -55,7 +55,7 @@ public sealed class StorageMaintenance : IDisposable
     private const int SqliteInterrupt = 9;
     private const int MaxRetentionDays = 36_500;
     private const long MinimumStepPages = 64;
-    private const int MaxQuickReclaimRetries = 3;
+    internal const int MaxQuickReclaimRetries = 3;
 
     private readonly ScribeDatabase _database;
     private readonly IHistoryMaintenance _history;
@@ -79,6 +79,7 @@ public sealed class StorageMaintenance : IDisposable
     private bool _running;
     private int _runningThread;
     private bool _reclaimRequested;
+    private long _deletionsNoted;
     private TimeSpan _followUpDelay = TimeSpan.MaxValue;
     private TimeSpan _nextDue = TimeSpan.MaxValue;
     private TimeSpan _lastFinished = TimeSpan.MinValue;
@@ -88,6 +89,7 @@ public sealed class StorageMaintenance : IDisposable
 
     // Touched only by the one pass that holds _running.
     private bool _checkpointPending;
+    private long _truncatedThrough;
     private int _quickReclaimRetries;
     private bool _conversionBlocked;
     private bool _loggedSpaceDeferral;
@@ -368,8 +370,41 @@ public sealed class StorageMaintenance : IDisposable
         }
     }
 
-    private void OnStorageChanged(StorageChange change) =>
+    private void OnStorageChanged(StorageChange change)
+    {
+        if (change is StorageChange.HistoryEntryDeleted or StorageChange.HistoryCleared or StorageChange.CleanupFailuresCleared)
+        {
+            NoteDeletion();
+        }
+
         RequestRun(reclaimEverything: change == StorageChange.HistoryCleared);
+    }
+
+    /*
+     * A deletion the write-ahead log may still hold an earlier copy of.
+     *
+     * Secure delete zeroes what a deletion frees, but the WAL can still hold the pages as they were before
+     * it, until a TRUNCATE checkpoint empties the file, and PRIVACY.md promises that happens soon after
+     * history, a recording or a cleanup failure sample is deleted. Reclaim used to checkpoint only with
+     * enough free pages to be worth reclaiming, or a checkpoint already pending, so deleting one entry
+     * left the WAL as it was until the process exited. Counted rather than flagged, so a deletion that
+     * lands while a pass is checkpointing is still owed to the next one.
+     */
+    private void NoteDeletion()
+    {
+        lock (_lock)
+        {
+            _deletionsNoted++;
+        }
+    }
+
+    private long DeletionsNoted()
+    {
+        lock (_lock)
+        {
+            return _deletionsNoted;
+        }
+    }
 
     private bool TryBeginPassLocked()
     {
@@ -555,6 +590,11 @@ public sealed class StorageMaintenance : IDisposable
                 () => PruneDamagedCopies(path, now));
         }
 
+        if (report.HistoryEntriesRemoved > 0 || report.CleanupFailuresRemoved > 0)
+        {
+            NoteDeletion();
+        }
+
         // Heavy steps: deleting audio in slices, the cap, and giving space back. Each one stops at
         // the next step boundary when foreground activity appears, and after a yield waits out a
         // backoff. The conversion VACUUM also waits for a quiet database and the app's answer.
@@ -568,6 +608,11 @@ public sealed class StorageMaintenance : IDisposable
         if (heavyAllowed && !Stopping)
         {
             report.Evicted = EnforceAudioCap();
+        }
+
+        if (report.Unreferenced.BlobsDeleted > 0 || report.Evicted.BlobsDeleted > 0)
+        {
+            NoteDeletion();
         }
 
         if (!_stopRequested)
@@ -770,7 +815,9 @@ public sealed class StorageMaintenance : IDisposable
             var stats = PageStats.Read(connection);
             var worthReclaiming = stats.FreeBytes >= _options.ReclaimThresholdBytes ||
                                   (reclaimEverything && stats.FreePages > 0);
-            if (!worthReclaiming && !_checkpointPending && !_database.DeferAutoCheckpoint)
+            var deletions = DeletionsNoted();
+            var truncateOwed = deletions > _truncatedThrough;
+            if (!worthReclaiming && !_checkpointPending && !_database.DeferAutoCheckpoint && !truncateOwed)
             {
                 return new ReclaimOutcome(ReclaimMethod.None, stats.FreeBytes, 0, 0, CheckpointBusy: false);
             }
@@ -790,9 +837,14 @@ public sealed class StorageMaintenance : IDisposable
             }
 
             // A yield skips the TRUNCATE, which would hold the gate the dictation is waiting for;
-            // the ungated PASSIVE backfill still runs.
-            var busy = CheckpointWal(connection, truncate: !Stopping);
+            // the ungated PASSIVE backfill still runs. Deletions stay owed until a TRUNCATE completes.
+            var truncate = !Stopping;
+            var busy = CheckpointWal(connection, truncate);
             _checkpointPending = busy || _yieldedThisPass;
+            if (truncate && !busy)
+            {
+                _truncatedThrough = deletions;
+            }
 
             // The one-time conversion leaves a WAL as large as the live database, so a checkpoint a
             // reader blocked is worth retrying soon rather than in an hour. Bounded, so a reader that

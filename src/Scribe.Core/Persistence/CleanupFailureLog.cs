@@ -81,11 +81,23 @@ public sealed class CleanupFailureLog : ICleanupFailureLog
 
     public int Clear()
     {
-        using var writeScope = _database.EnterWriteScope();
-        using var connection = _database.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM cleanup_failures;";
-        return command.ExecuteNonQuery();
+        int removed;
+        using (_database.EnterWriteScope())
+        {
+            using var connection = _database.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM cleanup_failures;";
+            removed = command.ExecuteNonQuery();
+        }
+
+        // Outside the write gate, as the database requires. The samples are dictation text, so storage
+        // maintenance empties the write-ahead log of their earlier copies soon after (StorageMaintenance).
+        if (removed > 0)
+        {
+            _database.NotifyStorageChanged(StorageChange.CleanupFailuresCleared);
+        }
+
+        return removed;
     }
 
     public int PruneOlderThan(DateTimeOffset cutoffUtc)

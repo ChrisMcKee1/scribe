@@ -121,3 +121,8 @@ A focused GPT-5.6 phonetic cleanup benchmark (11 audio-backed cases, including s
 ---
 
 **Privacy, always:** audio is captured, transcribed in memory on your CPU, and discarded. Nothing is uploaded. AI cleanup remains strictly opt-in and sends transcribed text only, to the endpoint you choose.
+
+> **Correction (September 2026):** the last sentence above was wrong when it was written. Each AI cleanup
+> request also carries the cleanup instructions, your writing style and your enabled dictionary and library
+> terms, whether or not the dictation mentions them, and never audio. The
+> [privacy policy](PRIVACY.md#optional-ai-features-and-data-transmission) lists exactly what is sent.

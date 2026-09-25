@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        xmlns:cleanup="clr-namespace:Scribe.Core.Cleanup;assembly=Scribe.Core"
         Title="Scribe Settings"
         Width="1240" Height="900" MinWidth="940" MinHeight="660"
         WindowStartupLocation="CenterScreen"
@@ -740,10 +741,11 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock x:Name="PostTitle" Text="Post-processing" Style="{StaticResource SettingTitle}"/>
                                             <TextBlock Style="{StaticResource SettingHint}"
-                                                       Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text."/>
+                                                       Text="Apply the dictionary, snippets and spacing fix-ups to transcribed text. AI cleanup still receives your vocabulary when this is off."/>
                                         </StackPanel>
                                         <ui:ToggleSwitch x:Name="PostCheck" Grid.Column="1" VerticalAlignment="Center"
-                                                         AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"/>
+                                                         AutomationProperties.LabeledBy="{Binding ElementName=PostTitle}"
+                                                         Checked="PostCheck_Toggled" Unchecked="PostCheck_Toggled"/>
                                     </Grid>
                                 </ui:Card>
 
@@ -917,8 +919,11 @@
                                     <StackPanel>
                                         <TextBlock Text="What leaves this PC" Style="{StaticResource SettingTitle}"
                                                    Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
+                                        <!-- The wording lives in Core (CleanupDisclosure), next to the limits it quotes, so a test holds it to the code. -->
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
-                                                   Text="Foundry Local keeps cleanup on this device. Microsoft Foundry, remote OpenAI-compatible providers, and GitHub Copilot receive transcript text, writing instructions, and relevant dictionary terms when you enable or invoke their features. GitHub Copilot sends them to GitHub under your own Copilot sign-in and GitHub&apos;s terms, and listing its models contacts GitHub too. Audio never leaves this device."/>
+                                                   Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupSends}"/>
+                                        <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
+                                                   Text="{x:Static cleanup:CleanupDisclosure.WhatCleanupNeverSends}"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,8,0,0">
                                             <Hyperlink NavigateUri="https://github.com/ChrisMcKee1/scribe/blob/main/PRIVACY.md"
                                                        RequestNavigate="Hyperlink_RequestNavigate">
@@ -1176,7 +1181,7 @@
                                                             PlaceholderText="Leave blank for local servers like Ollama or LM Studio"
                                                             AutomationProperties.LabeledBy="{Binding ElementName=CustomApiKeyTitle}"/>
                                             <TextBlock Style="{StaticResource SettingHint}" Margin="0,6,0,0"
-                                                       Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Text only: your audio never leaves this device."/>
+                                                       Text="Only needed for hosted services (OpenRouter, OpenAI). Stored encrypted on this PC (Windows DPAPI). Requests carry text, never audio: your audio never leaves this device."/>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
@@ -2345,7 +2350,7 @@
                                         <TextBlock Text="Private by design" Style="{StaticResource SettingTitle}"
                                                    Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}"/>
                                         <TextBlock Style="{StaticResource SettingHint}" Margin="0,4,0,0"
-                                                   Text="Speech recognition runs on this PC, and audio never leaves it. Cloud AI is optional and sends text only when you enable or invoke a remote provider feature."/>
+                                                   Text="Speech recognition runs on this PC, and audio never leaves it. Cloud AI is optional: it sends text, never audio, and only while you have a remote provider turned on or use a feature that needs one."/>
                                         <ui:Button Content="Read privacy policy" HorizontalAlignment="Left"
                                                    Margin="0,12,0,0" MinWidth="150"
                                                    Click="PrivacyPolicyButton_Click"/>

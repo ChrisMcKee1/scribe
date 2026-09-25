@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 
@@ -12,7 +13,18 @@ public static partial class UsageAnalyzer
 
     public sealed record TrendPoint(DateOnly Start, int Dictations, int Words);
 
-    public sealed record TermUsage(string Text, int Dictations, int Occurrences, bool Covered);
+    public sealed record TermUsage(string Text, int Dictations, int Occurrences, bool Covered)
+    {
+        /// <summary>
+        /// Whether <see cref="Text"/> may leave this PC as a term label in the opt-in AI usage insight
+        /// (<see cref="UsageInsight.BuildSummary"/>). True only for a covered term whose every
+        /// replacement is vocabulary as the user wrote it, before it was trimmed into this label
+        /// (<see cref="CleanupPrompt.IsVocabularyReplacement"/>, the rule the AI cleanup glossary applies).
+        /// False by default, so a term built anywhere else shares nothing. The local Usage page shows every
+        /// term either way.
+        /// </summary>
+        public bool Shareable { get; init; }
+    }
 
     /// <summary>Bucket size of the <see cref="Snapshot.Trend"/> points.</summary>
     public enum TrendGranularity
@@ -151,6 +163,10 @@ public static partial class UsageAnalyzer
             .Select(group => new
             {
                 Canonical = group.First().Replacement.Trim(),
+                // Judged on every replacement behind the label as written: the trim above can hide a
+                // trailing line break, or the padding that takes one past the cap, and either one
+                // marks a template (a signature, a footer) rather than a term.
+                Shareable = group.All(entry => CleanupPrompt.IsVocabularyReplacement(entry.Replacement)),
                 Forms = group
                     .SelectMany(entry => new[] { entry.Pattern.Trim(), entry.Replacement.Trim() })
                     .Where(form => form.Length >= 2)
@@ -242,7 +258,10 @@ public static partial class UsageAnalyzer
         {
             if (termDictations[i] > 0)
             {
-                results.Add(new TermUsage(known[i].Canonical, termDictations[i], termOccurrences[i], Covered: true));
+                results.Add(new TermUsage(known[i].Canonical, termDictations[i], termOccurrences[i], Covered: true)
+                {
+                    Shareable = known[i].Shareable,
+                });
             }
         }
 

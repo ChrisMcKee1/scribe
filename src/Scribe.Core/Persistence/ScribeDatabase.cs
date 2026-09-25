@@ -171,6 +171,13 @@ public sealed class ScribeDatabase : IDisposable
     internal TimeSpan ShutdownGateTimeout { get; set; } = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// How long the final checkpoint in <see cref="Dispose"/> waits, like every other statement, for another connection
+    /// to stop using the write-ahead log before SQLite reports it busy and leaves the log in place. Settable for tests,
+    /// which cannot wait that long; the app never changes it.
+    /// </summary>
+    internal TimeSpan ShutdownCheckpointBusyTimeout { get; set; } = TimeSpan.FromMilliseconds(BusyTimeoutMs);
+
+    /// <summary>
     /// Test seam: runs during a startup repair each time a step of the rebuild has committed, with the rebuilt
     /// database's connection and the step: "schema" before anything is recorded or recovered, then the name of each
     /// table salvaged. A test can capture what a crash at that moment leaves on disk, or make the next step fail.
@@ -577,10 +584,19 @@ public sealed class ScribeDatabase : IDisposable
     // process death. Relying on the compiled default left durability to whatever the native bundle
     // was built with. wal_autocheckpoint is per connection and pooled connections are reused, so it
     // is set on every open rather than only when it changes.
+    //
+    // secure_delete=ON for the same reason: the bundled e_sqlite3 is built without
+    // SQLITE_SECURE_DELETE, so a fresh connection reads 0, and SQLite then leaves a deleted
+    // transcript's bytes in the page it lived on, or in a freed page, until something happens to
+    // write over them. On, it overwrites deleted content with zeros as it deletes it. It is a per
+    // connection setting, so every connection sets it, and it costs I/O only when rows are deleted:
+    // a freed page is written once more, as zeros, through the WAL and the checkpoint. It cannot reach
+    // content deleted before it was on, earlier copies of a page still in the WAL until a checkpoint
+    // truncates it, or copies of the file made elsewhere.
     private static void Configure(SqliteConnection connection, bool autoCheckpoint = true) =>
         Execute(connection, string.Create(
             CultureInfo.InvariantCulture,
-            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};"));
+            $"PRAGMA busy_timeout={BusyTimeoutMs}; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON; PRAGMA wal_autocheckpoint={(autoCheckpoint ? WalAutoCheckpointPages : 0)};"));
 
     // sqlite.org: auto_vacuum can change from NONE only while a database is new (before its first
     // page is written, which journal_mode=WAL already does) or through a full VACUUM. A brand-new
@@ -1155,20 +1171,20 @@ public sealed class ScribeDatabase : IDisposable
         // still inside a transaction finishes before the final checkpoint and the keep-alive close.
         // Bounded, and it interrupts a preemptible VACUUM, so exit never waits long on maintenance.
         using var writeScope = EnterWriteScope(ShutdownGateTimeout);
+        ShutdownCheckpoint? checkpoint = null;
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
 
             // Skipped when the gate could not be had: the checkpoint would then sit in the busy
-            // handler behind that writer for up to BusyTimeoutMs. The WAL is folded in on next open.
-            if (_keepAlive is not null && !_isMemory && writeScope.Held)
+            // handler behind that writer for up to BusyTimeoutMs. Whatever the log still holds, SQLite
+            // folds in and deletes the file with it when the last connection closes (sqlite.org,
+            // wal.html), which the pool clear below does unless another connection still has the
+            // database open.
+            if (_keepAlive is not null && !_isMemory)
             {
-                // Fold the WAL back into the main file on clean shutdown so scribe.db alone is a
-                // complete, consistent snapshot; anything that copies or backs up just the main
-                // file (migrations, user backups) then can't capture a torn state.
-                try { Execute(_keepAlive, "PRAGMA wal_checkpoint(TRUNCATE);"); }
-                catch { /* best effort */ }
+                checkpoint = writeScope.Held ? TruncateWalAtShutdown(_keepAlive) : ShutdownCheckpoint.Skipped;
             }
 
             _keepAlive?.Dispose();
@@ -1179,6 +1195,100 @@ public sealed class ScribeDatabase : IDisposable
         {
             SqliteConnection.ClearPool(new SqliteConnection(_connectionString));
         }
+
+        if (checkpoint is { } result)
+        {
+            LogShutdownCheckpoint(result);
+        }
+    }
+
+    // Fold the WAL back into the main file on clean shutdown so scribe.db alone is a complete,
+    // consistent snapshot; anything that copies or backs up just the main file (migrations, user
+    // backups) then can't capture a torn state. Best effort. The result row says whether it emptied
+    // the log (sqlite.org, PRAGMA wal_checkpoint): busy means another connection was still using the
+    // log when the busy timeout ran out, and the log stays as it was, earlier copies of deleted pages
+    // included. Reading the row adds no wait to exit.
+    private ShutdownCheckpoint TruncateWalAtShutdown(SqliteConnection connection)
+    {
+        try
+        {
+            Execute(connection, string.Create(
+                CultureInfo.InvariantCulture,
+                $"PRAGMA busy_timeout={(long)Math.Max(0, ShutdownCheckpointBusyTimeout.TotalMilliseconds)};"));
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return new ShutdownCheckpoint(ShutdownCheckpointOutcome.Failed);
+            }
+
+            return new ShutdownCheckpoint(
+                reader.GetInt64(0) != 0 ? ShutdownCheckpointOutcome.Busy : ShutdownCheckpointOutcome.Emptied,
+                reader.GetInt64(1),
+                reader.GetInt64(2));
+        }
+        catch (Exception ex)
+        {
+            return new ShutdownCheckpoint(ShutdownCheckpointOutcome.Failed, Failure: ex);
+        }
+    }
+
+    // Written after the pool is cleared, since the last connection to close is what deletes the log, so
+    // the line can say whether the file outlived the close. Information, which never waits for the disk,
+    // and shapes only: an outcome, page counts and a byte count, never the path.
+    private void LogShutdownCheckpoint(ShutdownCheckpoint checkpoint)
+    {
+        try
+        {
+            var wal = FilePath is { } path ? new FileInfo(path + "-wal") : null;
+            var logFile = wal is { Exists: true }
+                ? string.Create(CultureInfo.InvariantCulture, $"{wal.Length} bytes")
+                : "gone";
+            switch (checkpoint.Outcome)
+            {
+                case ShutdownCheckpointOutcome.Skipped:
+                    _logger.LogInformation(
+                        "Closed the database without its final write-ahead log checkpoint: a write still held the database. The log file afterwards: {LogFile}.",
+                        logFile);
+                    break;
+
+                case ShutdownCheckpointOutcome.Failed:
+                    _logger.LogInformation(
+                        "Closed the database; its final write-ahead log checkpoint failed ({Failure}). The log file afterwards: {LogFile}.",
+                        checkpoint.Failure is { } failure ? Diagnostics.FailureShape.Describe(failure) : "no result row",
+                        logFile);
+                    break;
+
+                default:
+                    // SQLite's counts as they stand at the end: a truncated log has no pages left to count.
+                    _logger.LogInformation(
+                        "Closed the database; its final write-ahead log checkpoint: {Outcome} ({LogPages} pages left in the log, {CheckpointedPages} of them copied into the database). The log file afterwards: {LogFile}.",
+                        checkpoint.Outcome,
+                        checkpoint.LogPages,
+                        checkpoint.CheckpointedPages,
+                        logFile);
+                    break;
+            }
+        }
+        catch
+        {
+            // Diagnostics must never turn a clean close into a failure.
+        }
+    }
+
+    private enum ShutdownCheckpointOutcome
+    {
+        Emptied,
+        Busy,
+        Skipped,
+        Failed,
+    }
+
+    private readonly record struct ShutdownCheckpoint(
+        ShutdownCheckpointOutcome Outcome, long LogPages = -1, long CheckpointedPages = -1, Exception? Failure = null)
+    {
+        public static ShutdownCheckpoint Skipped => new(ShutdownCheckpointOutcome.Skipped);
     }
 
     private const string SchemaV1 = """
