@@ -79,22 +79,27 @@ public sealed class DictionaryLibraryTests
     }
 
     [Fact]
-    public void ComposeLibraries_dedupes_first_wins_and_skips_disabled_entries()
+    public void ComposeLibraries_dedupes_by_precedence_not_argument_order_and_skips_disabled_entries()
     {
-        var first = new DictionaryLibrary("l1", "L1", "c", null, false,
+        // Two custom libraries, so precedence is file-name order: l1.csv before l2.csv. Their names sort the other way,
+        // so neither the argument order nor the A to Z list can pass for precedence.
+        var earlier = new DictionaryLibrary("l1", "Zulu terms", "c", null, false,
         [
             DictionaryEntry.New("apim", "APIM"),
             DictionaryEntry.New("aks", "AKS") with { Enabled = false },
         ]);
-        var second = new DictionaryLibrary("l2", "L2", "c", null, false,
+        var later = new DictionaryLibrary("l2", "Alpha terms", "c", null, false,
         [
-            DictionaryEntry.New("apim", "APIM-second"),
+            DictionaryEntry.New("apim", "APIM-later"),
             DictionaryEntry.New("acr", "ACR"),
         ]);
 
-        var composed = DictionaryLibraryComposer.ComposeLibraries([first, second]);
+        var composed = DictionaryLibraryComposer.ComposeLibraries([earlier, later]);
+        var swapped = DictionaryLibraryComposer.ComposeLibraries([later, earlier]);
 
-        Assert.Equal("APIM", composed.Single(e => e.Pattern == "apim").Replacement); // first wins
+        Assert.Equal("APIM", composed.Single(e => e.Pattern == "apim").Replacement); // l1.csv precedes l2.csv
+        Assert.Equal("APIM", swapped.Single(e => e.Pattern == "apim").Replacement); // whichever is passed first
+        Assert.Equal(composed, swapped);
         Assert.DoesNotContain(composed, e => e.Pattern == "aks"); // disabled dropped
         Assert.Contains(composed, e => e.Pattern == "acr");
     }

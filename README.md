@@ -62,9 +62,9 @@ key. Measured on a desktop CPU: **~223 ms typical decode, real-time factor ~0.03
   message instead of firing Enter mid-thought. Built by someone who dictates into CLIs all day.
 - **📖 Your vocabulary, your snippets.** A dictionary locks in your jargon (`azure` → `Azure`,
   `dot net` → `.NET`), imports/exports as CSV to share with your team, and even **suggests terms
-  from your own dictation history**. Nine curated opt-in libraries cover Azure, Microsoft 365,
-  GitHub, modern developer tools, .NET and C#, data engineering, data science, machine learning,
-  and more. Say a trigger phrase and a whole saved template types itself.
+  from your own dictation history**. Eleven curated libraries cover AI models and terminology, Azure,
+  Microsoft 365, GitHub, modern developer tools, .NET and C#, data engineering, data science, machine
+  learning, and more. Say a trigger phrase and a whole saved template types itself.
 - **🧹 AI polish on your terms.** Grammar and structure cleaned by an on-device model (fully
   offline), your Azure deployment, **your own GitHub Copilot licence**, or **any
   OpenAI-compatible server you already run** (Ollama,
@@ -254,7 +254,7 @@ inserted, and the space Scribe adds after each dictation.
 | Feature | What it does |
 |---|---|
 | Personal dictionary | Spoken-form to replacement rules with whole-word matching, CSV import/export, and history-mined suggestions |
-| Dictionary libraries | Nine curated opt-in libraries, including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own custom CSV libraries |
+| Dictionary libraries | Eleven curated libraries (the two AI packs are on by default), including dedicated .NET and C#, data engineering, and data science and machine learning packs, plus your own custom CSV libraries, all in one A to Z list |
 | Voice snippets | A spoken trigger phrase expands into a saved multi-line template |
 | Per-app profiles | Writing style and line-break behavior switch automatically based on the focused app |
 | AI cleanup | Optional polish through Foundry Local (fully offline), Microsoft Foundry (your az login or a service principal), your own GitHub Copilot licence via the Copilot CLI, or any OpenAI-compatible endpoint; benchmark-validated prompts, your dictionary as a glossary, and raw-transcript fallback if the model misbehaves |

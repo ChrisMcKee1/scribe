@@ -10,7 +10,11 @@ namespace Scribe.Core.PostProcessing;
 /// </summary>
 public interface IDictionaryLibraryService
 {
-    /// <summary>All libraries, built-in first then custom. Malformed custom files are skipped.</summary>
+    /// <summary>
+    /// All libraries in precedence order (<see cref="Libraries.LibraryPrecedence"/>): built-in first, then custom by
+    /// file name. That is the order they compete for a spoken form in, not the order the Libraries list shows, which
+    /// the view sorts with <see cref="Libraries.LibraryOrdering"/>. Malformed custom files are skipped.
+    /// </summary>
     IReadOnlyList<DictionaryLibrary> GetLibraries();
 
     /// <summary>

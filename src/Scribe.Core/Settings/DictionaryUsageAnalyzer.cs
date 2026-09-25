@@ -169,7 +169,7 @@ public static partial class DictionaryUsageAnalyzer
             }
         }
 
-        return new LibraryUsage(library.Id, library.Name, keep, unused);
+        return new LibraryUsage(library.Id, library.Name, keep, unused, library.BuiltIn);
     }
 
     private static int Count(string corpus, string term, bool wholeWord)
@@ -246,11 +246,17 @@ public sealed record TermUsage(DictionaryEntry Entry, int PatternHits, int Repla
 /// to be carried over into the user's own dictionary or the user silently loses working rules.
 /// </param>
 /// <param name="UnusedCount">Terms with no trace in history. This is the size of the win.</param>
+/// <param name="BuiltIn">
+/// Whether the library ships with the app. With <paramref name="Id"/> it places the library in
+/// <see cref="Libraries.LibraryPrecedence"/>, which decides whose kept term is copied when two libraries switched off
+/// together keep the same spoken form.
+/// </param>
 public sealed record LibraryUsage(
     string Id,
     string Name,
     IReadOnlyList<DictionaryEntry> KeepTerms,
-    int UnusedCount)
+    int UnusedCount,
+    bool BuiltIn)
 {
     /// <summary>Terms in the library, ignoring ones disabled inside the library itself.</summary>
     public int TermCount => KeepTerms.Count + UnusedCount;
