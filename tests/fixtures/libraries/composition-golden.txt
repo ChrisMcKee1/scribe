@@ -28,9 +28,6 @@ Zulu Notes (custom) "alpha notes"
 ai-terminology, ai-model-names, github, alpha, release-10, release-9, team-terms-2, team-terms, Zulu Notes
 
 [shipped and custom: library winners for the fixture's spoken forms, in library composition order]
-llm => LLM [ai-terminology]
-gpt five six terra => GPT-5.6-Terra [ai-model-names]
-get hub => GitHub [github]
 contoso => CONTOSO [alpha]
 fabrikam => Fabrikam [alpha]
 sprint => Sprint 10 [release-10]
@@ -40,6 +37,9 @@ kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 pipeline => Pipelines [team-terms]
 tailspin => Tailspin Toys [Zulu Notes]
+llm => LLM [ai-terminology]
+gpt five six terra => GPT-5.6-Terra [ai-model-names]
+get hub => GitHub [github]
 
 [shipped and custom: effective winners for the fixture's spoken forms, in effective order]
 contoso => Contoso [your dictionary]
@@ -48,13 +48,19 @@ llm => LLM [your dictionary]
 pipeline => Pipelines [your dictionary]
 scribe => Scribe [your dictionary]
 standup => standup [your dictionary]
-gpt five six terra => GPT-5.6-Terra [ai-model-names]
-get hub => GitHub [github]
 sprint => Sprint 10 [release-10]
 retro => Retro [release-10]
 kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 tailspin => Tailspin Toys [Zulu Notes]
+gpt five six terra => GPT-5.6-Terra [ai-model-names]
+get hub => GitHub [github]
+
+[shipped and custom: sources of the on-device glossary's 80 lines]
+your dictionary x6, release-10 x2, team-terms-2 x2, Zulu Notes x1, ai-terminology x69
+
+[shipped and custom: shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form]
+c n n s, r n n, g a n, b e r t, word to vec
 
 [shipped and custom: Dictionary page library badges (what covers each personal entry)]
 azure: not covered
@@ -70,7 +76,7 @@ standup: "Release 9 terms" writes "Stand-up"
 Override contoso -> "Contoso", library writes "CONTOSO", named "Zeta words"
 Redundant fabrikam -> "Fabrikam", library writes "Fabrikam", named "Zeta words"
 Redundant llm -> "LLM", library writes "LLM", named "AI and Machine Learning Terminology"
-Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms v2"
+Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms"
 Override standup -> "standup", library writes "Stand-up", named "Release 9 terms"
 
 [shipped and custom: finished text from the post-processor]
@@ -182,7 +188,7 @@ standup: "Release 9 terms" writes "Stand-up"
 2 redundant, 2 override
 Override contoso -> "Contoso", library writes "CONTOSO", named "Zeta words"
 Redundant fabrikam -> "Fabrikam", library writes "Fabrikam", named "Zeta words"
-Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms v2"
+Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms"
 Override standup -> "standup", library writes "Stand-up", named "Release 9 terms"
 
 [custom only: finished text from the post-processor]
@@ -233,10 +239,6 @@ scribe typed azure for me => Scribe typed azure for me
 ai-terminology, ai-model-names, data-and-ai, data-engineering, data-science-machine-learning, github, microsoft-365, microsoft-azure, dotnet-development, modern-developer-stack, software-development, alpha, release-10, release-9, team-terms-2, team-terms, Zulu Notes
 
 [everything: library winners for the fixture's spoken forms, in library composition order]
-llm => LLM [ai-terminology]
-gpt five six terra => GPT-5.6-Terra [ai-model-names]
-get hub => GitHub [github]
-azure => Azure [microsoft-azure]
 contoso => CONTOSO [alpha]
 fabrikam => Fabrikam [alpha]
 sprint => Sprint 10 [release-10]
@@ -246,6 +248,10 @@ kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 pipeline => Pipelines [team-terms]
 tailspin => Tailspin Toys [Zulu Notes]
+llm => LLM [ai-terminology]
+gpt five six terra => GPT-5.6-Terra [ai-model-names]
+get hub => GitHub [github]
+azure => Azure [microsoft-azure]
 
 [everything: effective winners for the fixture's spoken forms, in effective order]
 contoso => Contoso [your dictionary]
@@ -254,14 +260,29 @@ llm => LLM [your dictionary]
 pipeline => Pipelines [your dictionary]
 scribe => Scribe [your dictionary]
 standup => standup [your dictionary]
-gpt five six terra => GPT-5.6-Terra [ai-model-names]
-get hub => GitHub [github]
-azure => Azure [microsoft-azure]
 sprint => Sprint 10 [release-10]
 retro => Retro [release-10]
 kube => K8s [team-terms-2]
 north star => NorthStar [team-terms-2]
 tailspin => Tailspin Toys [Zulu Notes]
+gpt five six terra => GPT-5.6-Terra [ai-model-names]
+get hub => GitHub [github]
+azure => Azure [microsoft-azure]
+
+[everything: sources of the on-device glossary's 80 lines]
+your dictionary x6, release-10 x2, team-terms-2 x2, Zulu Notes x1, ai-terminology x69
+
+[everything: shipped terms displaced from the on-device glossary's 80 lines, by shipped spoken form]
+c n n s, r n n, g a n, b e r t, word to vec
+
+[everything: sources of the cloud glossary's included lines]
+your dictionary x6, release-10 x2, team-terms-2 x2, Zulu Notes x1, ai-terminology x196, ai-model-names x274, data-and-ai x94, data-engineering x67, data-science-machine-learning x30, github x12
+
+[everything: eligible lines past the cloud glossary's 24,000 characters]
+658 of 1342 eligible lines cut
+
+[everything: lines past the cloud glossary's 24,000 characters, by library]
+github x44, microsoft-365 x109, microsoft-azure x130, dotnet-development x88, modern-developer-stack x138, software-development x149
 
 [everything: Dictionary page library badges (what covers each personal entry)]
 azure: "Microsoft Azure" writes "Azure"
@@ -277,7 +298,7 @@ standup: "Release 9 terms" writes "Stand-up"
 Override contoso -> "Contoso", library writes "CONTOSO", named "Zeta words"
 Redundant fabrikam -> "Fabrikam", library writes "Fabrikam", named "Zeta words"
 Redundant llm -> "LLM", library writes "LLM", named "AI and Machine Learning Terminology"
-Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms v2"
+Redundant pipeline -> "Pipelines", library writes "Pipelines", named "Team terms"
 Override standup -> "standup", library writes "Stand-up", named "Release 9 terms"
 
 [everything: finished text from the post-processor]

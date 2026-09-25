@@ -10,6 +10,13 @@ namespace Scribe.Core.PostProcessing;
 /// enforces in the database. The first occurrence wins, and callers pass the base dictionary first
 /// so the user's own entries always take precedence over a library's.
 /// </summary>
+/// <remarks>
+/// <see cref="ComposeLibraries"/> is 0.4.3's composition: first wins, in precedence order, over whatever libraries it is
+/// given. The library model composes through <see cref="LibraryComposition"/>, with Decision 1's tiers and legacy
+/// markers; this method stays for the library service's interim composer and for the tests that pin 0.4.3's behaviour.
+/// <see cref="Merge"/> serves both: the dictionary wins, keyed by the same trimmed, case-insensitive spoken form as
+/// <see cref="LibraryTermKey"/>.
+/// </remarks>
 public static class DictionaryLibraryComposer
 {
     /// <summary>

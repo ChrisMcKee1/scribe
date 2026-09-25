@@ -1,32 +1,28 @@
+using System.Globalization;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Libraries;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
-using Scribe.Core.Settings;
 
 namespace Scribe.Core.Tests.Libraries;
 
 /// <summary>
 /// Renders what the libraries decide, over <see cref="LibraryFixture"/>, as plain text: the order the service returns
-/// libraries in, the winners dictation applies, the AI cleanup glossary, the Dictionary page's library badges, the
-/// Save prompt about entries a library already covers, and finished text from the real post-processor.
+/// libraries in, the winners dictation applies, the AI cleanup glossary and where its lines come from, the Dictionary
+/// page's library badges, the Save prompt about entries a library already covers, and finished text from the real
+/// post-processor.
 /// </summary>
 /// <remarks>
-/// The badge and prompt inputs are passed in because they come from the Settings window's own code in 0.4.3: the
-/// golden file was rendered from verbatim copies of those two loops, and the test renders it again from the Core calls
-/// that replaced them, so any difference between the two is a behaviour change.
+/// Rendered through <see cref="LibraryComposition"/> over the catalog the first start of the library editor's version
+/// gives the fixture (<see cref="LibraryFixture.AdoptedCatalog"/>, with the legacy markers its adoption records), so the
+/// winners, badges, prompt and finished text are the library model's. The file was first captured at d42d683 from 0.4.3's
+/// composition and the Settings window's own loops; the only lines the library model moved are the ones W1b contracts 9.2
+/// allows (the Save prompt's name, the order of authored and shipped winners, and the glossary sections).
 /// </remarks>
 internal static class LibraryGolden
 {
-    /// <summary>The spoken forms the enabled libraries cover, each with the entry that wins and its library's name.</summary>
-    public delegate IReadOnlyDictionary<string, (DictionaryEntry Entry, string LibraryName)> CoverageMap(
-        IReadOnlyList<DictionaryLibrary> libraries, IReadOnlyCollection<string> enabledIds);
-
-    /// <summary>The report the Save prompt is built from, for the personal dictionary against the enabled libraries.</summary>
-    public delegate DictionaryOverlapReport OverlapPrompt(
-        IReadOnlyList<DictionaryEntry> personal, IReadOnlyList<DictionaryLibrary> libraries, IReadOnlyCollection<string> enabledIds);
-
     public const string UpdateVariable = "SCRIBE_WRITE_LIBRARY_GOLDEN";
 
     public static string GoldenPath =>
@@ -40,7 +36,7 @@ internal static class LibraryGolden
         "# Regenerate only for a change you mean: set SCRIBE_WRITE_LIBRARY_GOLDEN=1, run LibraryCompositionGoldenTests, and\n" +
         "# review the diff.\n";
 
-    public static string Render(LibraryFixture fixture, CoverageMap coverage, OverlapPrompt prompt)
+    public static string Render(LibraryFixture fixture)
     {
         var text = new StringBuilder(Header);
         var libraries = fixture.Service.GetLibraries();
@@ -52,14 +48,24 @@ internal static class LibraryGolden
 
         foreach (var (name, enabledIds) in LibraryFixture.Scenarios)
         {
-            fixture.Enable(enabledIds);
-            var enabled = new HashSet<string>(enabledIds, StringComparer.OrdinalIgnoreCase);
-            var enabledLibraries = libraries.Where(l => enabled.Contains(l.Id)).ToList();
             var personalEnabled = fixture.Dictionary.GetEnabled();
             var personalAll = fixture.Dictionary.GetAll();
-            var libraryEntries = fixture.Service.GetEnabledLibraryEntries();
+            var composition = LibraryComposition.Committed(
+                fixture.AdoptedCatalog(enabledIds), personalEnabled, new GlossaryBudget(CleanupPrompt.MaxGlossaryTermsLocal));
+            var enabledLibraries = composition.EnabledLibraries;
+            var libraryEntries = composition.LibraryEntries;
             var effective = DictionaryLibraryComposer.Merge(personalEnabled, libraryEntries);
-            string Source(DictionaryEntry entry) => SourceOf(entry, personalEnabled, enabledLibraries);
+            var ruleSources = composition.Rules.ToDictionary(
+                rule => rule.Entry, rule => rule.LibraryId, (IEqualityComparer<DictionaryEntry>)ReferenceEqualityComparer.Instance);
+            string Source(DictionaryEntry entry) =>
+                ruleSources.TryGetValue(entry, out var id) ? id
+                : personalEnabled.Contains(entry) ? "your dictionary"
+                : "(unknown)";
+
+            // 0.4.3's composition of the same libraries, the baseline the glossary's displacement is measured against.
+            var enabled = new HashSet<string>(enabledIds, StringComparer.OrdinalIgnoreCase);
+            var legacyLibraries = libraries.Where(l => enabled.Contains(l.Id)).ToList();
+            string LegacySource(DictionaryEntry entry) => SourceOf(entry, personalEnabled, legacyLibraries);
 
             Section(text, $"{name}: enabled libraries in composition order");
             Line(text, string.Join(", ", enabledLibraries.Select(l => l.Id)));
@@ -103,8 +109,43 @@ internal static class LibraryGolden
                 Line(text, RunLengths(effective.Take(CleanupPrompt.MaxGlossaryTermsLocal).Select(Source)));
             }
 
+            if (name is "shipped and custom" or "everything")
+            {
+                // Where shipped and custom libraries are both on, the order libraries compete in decides which terms fill
+                // the glossary's budgets, so these sections pin the source of every line the glossary carries. The
+                // displacement is measured against 0.4.3's order, composed here on its own, so it lists exactly the shipped
+                // terms a change of order takes out of the on-device model's list.
+                var local = GlossarySelection(effective, CleanupPrompt.MaxGlossaryTermsLocal);
+                Section(text, $"{name}: sources of the on-device glossary's {CleanupPrompt.MaxGlossaryTermsLocal} lines");
+                Line(text, RunLengths(local.Included.Select(Source)));
+
+                var legacy = GlossarySelection(
+                    DictionaryLibraryComposer.Merge(personalEnabled, DictionaryLibraryComposer.ComposeLibraries(legacyLibraries)),
+                    CleanupPrompt.MaxGlossaryTermsLocal);
+                var displaced = legacy.Included
+                    .Where(entry => legacyLibraries.Any(l => l.BuiltIn && l.Id == LegacySource(entry)) && !local.Included.Contains(entry))
+                    .Select(entry => entry.Pattern.Trim())
+                    .ToList();
+                Section(text, $"{name}: shipped terms displaced from the on-device glossary's {CleanupPrompt.MaxGlossaryTermsLocal} lines, by shipped spoken form");
+                Line(text, displaced.Count == 0 ? "(none)" : string.Join(", ", displaced));
+            }
+
+            if (name == "everything")
+            {
+                // Every shipped row is on here, and their lines alone pass the cloud glossary's character budget, so the cut
+                // is real: which libraries fill the budget, and which libraries' lines fall past it.
+                var budget = CleanupPrompt.MaxGlossaryChars.ToString("N0", CultureInfo.InvariantCulture);
+                var cloud = GlossarySelection(effective, CleanupPrompt.MaxGlossaryTermsCloud);
+                Section(text, $"{name}: sources of the cloud glossary's included lines");
+                Line(text, RunLengths(cloud.Included.Select(Source)));
+                Section(text, $"{name}: eligible lines past the cloud glossary's {budget} characters");
+                Line(text, $"{cloud.Cut.Count} of {cloud.Included.Count + cloud.Cut.Count} eligible lines cut");
+                Section(text, $"{name}: lines past the cloud glossary's {budget} characters, by library");
+                Line(text, RunLengths(cloud.Cut.Select(Source)));
+            }
+
             Section(text, $"{name}: Dictionary page library badges (what covers each personal entry)");
-            var covering = coverage(libraries, enabledIds);
+            var covering = composition.Coverage();
             foreach (var entry in personalAll)
             {
                 var key = entry.Pattern.Trim();
@@ -114,7 +155,7 @@ internal static class LibraryGolden
             }
 
             Section(text, $"{name}: Save prompt report");
-            var report = prompt(personalAll, libraries, enabledIds);
+            var report = composition.OverlapReport(personalAll);
             Line(text, $"{report.RedundantCount} redundant, {report.OverrideCount} override");
             foreach (var overlap in report.Overlaps)
             {
@@ -122,9 +163,10 @@ internal static class LibraryGolden
                            $"\"{overlap.LibraryReplacement}\", named \"{overlap.LibraryId}\"");
             }
 
+            // The real post-processor, fed the composition's rules exactly as dictation will be fed them.
             Section(text, $"{name}: finished text from the post-processor");
             var processor = new TextPostProcessor(
-                fixture.Dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: fixture.Service);
+                fixture.Dictionary, NullLogger<TextPostProcessor>.Instance, snippets: null, libraries: new ComposedRules(libraryEntries));
             foreach (var sentence in LibraryFixture.Sentences)
             {
                 Line(text, $"{sentence} => {processor.Process(sentence)}");
@@ -209,6 +251,63 @@ internal static class LibraryGolden
         }
     }
 
+    /// <summary>
+    /// The entries whose lines the glossary carries within <paramref name="maxTerms"/> and its character budget, and the
+    /// eligible entries the budget leaves out, found through the real renderer: an entry's line is what
+    /// <see cref="CleanupPrompt.BuildGlossary"/> renders for it alone, and the glossary walks the entries in order, keeps
+    /// the first line of each key and stops at the budget. Checked against the renderer and the counter on the whole list,
+    /// so a change in how the glossary selects lines fails here rather than mislabelling a source.
+    /// </summary>
+    private static (List<DictionaryEntry> Included, List<DictionaryEntry> Cut) GlossarySelection(
+        IReadOnlyList<DictionaryEntry> entries, int maxTerms)
+    {
+        var rendered = GlossaryLines(CleanupPrompt.BuildGlossary(entries, maxTerms));
+        var count = CleanupPrompt.CountGlossary(entries, maxTerms);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var included = new List<DictionaryEntry>();
+        var cut = new List<DictionaryEntry>();
+        var includedLines = new List<string>();
+        foreach (var entry in entries)
+        {
+            var line = GlossaryLines(CleanupPrompt.BuildGlossary([entry], 1)).SingleOrDefault();
+            if (line is null || !seen.Add(GlossaryKey(line)))
+            {
+                continue;
+            }
+
+            if (included.Count < rendered.Count)
+            {
+                included.Add(entry);
+                includedLines.Add(line);
+            }
+            else
+            {
+                cut.Add(entry);
+            }
+        }
+
+        Assert.Equal(rendered, includedLines);
+        Assert.Equal(count.Included, included.Count);
+        Assert.Equal(count.Eligible, included.Count + cut.Count);
+        return (included, cut);
+    }
+
+    // The rendered glossary is one header line and then one line per term.
+    private static List<string> GlossaryLines(string glossary) =>
+        string.IsNullOrEmpty(glossary) ? [] : [.. glossary.Split('\n').Skip(1)];
+
+    // The key the glossary de-duplicates lines by: the written form, and the spoken form when the line shows one. Neither
+    // can hold a double quote (the renderer drops them), so the first " (transcribed as " is always the separator.
+    private static string GlossaryKey(string line)
+    {
+        const string separator = " (transcribed as \"";
+        var body = line[2..];
+        var at = body.IndexOf(separator, StringComparison.Ordinal);
+        return at >= 0 && body.EndsWith("\")", StringComparison.Ordinal)
+            ? body[..at] + "|" + body[(at + separator.Length)..^2]
+            : body;
+    }
+
     private static void Section(StringBuilder text, string title) => text.Append('\n').Append("[").Append(title).Append("]\n");
 
     private static void Line(StringBuilder text, string line) => text.Append(line).Append('\n');
@@ -223,5 +322,19 @@ internal static class LibraryGolden
 
         Assert.NotNull(root);
         return root.FullName;
+    }
+
+    /// <summary>Hands the post-processor the composition's rules, as the library vocabulary will hand dictation them.</summary>
+    private sealed class ComposedRules(IReadOnlyList<DictionaryEntry> rules) : IDictionaryLibraryService
+    {
+        public IReadOnlyList<DictionaryLibrary> GetLibraries() => [];
+
+        public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries() => rules;
+
+        public IReadOnlyList<DictionaryEntry> GetEnabledLibraryEntries(IReadOnlyCollection<string> enabledIds) => rules;
+
+        public DictionaryLibrary Import(string csv, string? suggestedName) => throw new NotSupportedException();
+
+        public void Remove(string id) => throw new NotSupportedException();
     }
 }

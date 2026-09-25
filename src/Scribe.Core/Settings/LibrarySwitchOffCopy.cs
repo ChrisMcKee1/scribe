@@ -11,11 +11,13 @@ namespace Scribe.Core.Settings;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Which libraries are on before and after the switch comes from the Libraries list's rows the way Save stores them, as
-/// ids, and the library service applies every loaded library with a saved id. So a built-in and a hand-placed file that
-/// share an id go on and off together: unticking one while the other's row stays ticked switches nothing off in
-/// dictation, and unticking the last row with the id switches both off, the one whose row was already unticked included.
-/// Every library that goes off keeps what the review kept of it, or every enabled row when the review has no verdict on it.
+/// Two input models decide by the same rules. In 0.4.3's model, which libraries are on before and after the switch comes
+/// from the Libraries list's rows the way Save stores them, as ids, and the library service applies every loaded library
+/// with a saved id. So a built-in and a hand-placed file that share an id go on and off together: unticking one while the
+/// other's row stays ticked switches nothing off in dictation, and unticking the last row with the id switches both off,
+/// the one whose row was already unticked included. Every library that goes off keeps what the review kept of it, or every
+/// enabled row when the review has no verdict on it. In the library editor's model (W1b) the draft's enabled state is by
+/// logical id, so each library goes off alone, and the rule dictation applies comes from the draft's composition.
 /// </para>
 /// <para>
 /// A library that would go off is switched off only when none of its enabled rows, used or not, overlaps a rule that stays
@@ -110,6 +112,12 @@ public static class LibrarySwitchOffCopy
     /// with one whose row is unticked keeps what its verdict kept, or, with no verdict, every enabled row, since the review
     /// then found nothing of it unused.
     /// </param>
+    /// <remarks>
+    /// 0.4.3's model: libraries on and off by saved id, and the rule dictation applies by first-wins precedence over the
+    /// libraries as given (ranked by <see cref="DictionaryLibrary.FileName"/> where it is set). The library editor's model
+    /// is <see cref="Plan(IEnumerable{Row}, LibraryComposition, IEnumerable{LibraryUsage})"/>; both decide by the same
+    /// rules.
+    /// </remarks>
     public static Result Plan(
         IEnumerable<Row> rows,
         IEnumerable<DictionaryLibrary> libraries,
@@ -122,6 +130,59 @@ public static class LibrarySwitchOffCopy
         ArgumentNullException.ThrowIfNull(libraryRows);
         ArgumentNullException.ThrowIfNull(switchingOff);
 
+        var (enabled, staying, goingOff, selected) = Switch(libraries, libraryRows, switchingOff, verdicts);
+
+        // Which row the composer keeps for each spoken form today.
+        return Decide(rows, staying, goingOff, selected, () =>
+            DictionaryLibraryOverlapAnalyzer.Coverage(enabled, enabled.Select(library => library.Id)));
+    }
+
+    /// <summary>
+    /// The plan over the library editor's model (W1b contracts 3.3.6): the same rules, fed from the draft the cleanup runs
+    /// against. Which libraries are on before and after the switch comes from the draft's enabled state by logical id, so
+    /// a hand-placed file remapped away from a built-in id goes off alone and a built-in can go off while that file stays;
+    /// the rule dictation applies for each spoken form is <paramref name="composition"/>'s winner (Decision 1's tiers,
+    /// active legacy markers, authored built-in rows), not first-wins precedence; and libraries rank by their physical
+    /// file name, so the copy, composition and the enabled state agree on which library writes a spoken form. Every row
+    /// of a library in use counts as a rule that stays in effect, an authored built-in row included.
+    /// </summary>
+    /// <param name="rows">The dictionary rows after the cleanup has deleted or switched off its own entries.</param>
+    /// <param name="composition">
+    /// The preview of the draft as it stands before the switch (<see cref="LibraryComposition.Preview"/>); its
+    /// <see cref="LibraryComposition.EnabledLibraries"/> are the libraries dictation applies.
+    /// </param>
+    /// <param name="switchingOff">
+    /// The libraries the cleanup would switch off, by logical id, with the terms the review kept, in any order; a library
+    /// not in use is ignored. The workspace switches off exactly those the result does not keep on
+    /// (<see cref="Result.KeepsOn"/>), and a library kept from AI cleanup has nothing copied
+    /// (<see cref="LibraryUsage.CopyTerms"/>).
+    /// </param>
+    public static Result Plan(IEnumerable<Row> rows, LibraryComposition composition, IEnumerable<LibraryUsage> switchingOff)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(composition);
+        ArgumentNullException.ThrowIfNull(switchingOff);
+
+        var asked = switchingOff.Where(usage => usage is not null).ToList();
+        var enabled = composition.EnabledLibraries;
+        var staying = enabled.Where(library => !asked.Any(usage => IsFor(usage, library))).ToList();
+        var goingOff = enabled
+            .Select(library => (Library: library, Usage: asked.FirstOrDefault(usage => IsFor(usage, library))))
+            .Where(pair => pair.Usage is not null)
+            .Select(pair => (pair.Library, pair.Usage!))
+            .ToList();
+        return Decide(rows, staying, goingOff, [.. goingOff.Select(pair => pair.Item2)], composition.Coverage);
+    }
+
+    // The rules themselves, shared by both input models: what stays in effect, which copies keep what dictation writes,
+    // and which libraries must stay on instead.
+    private static Result Decide(
+        IEnumerable<Row> rows,
+        IReadOnlyList<DictionaryLibrary> staying,
+        IReadOnlyList<(DictionaryLibrary Library, LibraryUsage Usage)> goingOff,
+        IReadOnlyList<LibraryUsage> selected,
+        Func<IReadOnlyDictionary<string, LibraryCoverage>> winners)
+    {
         // The dictionary as Save stores it: both forms trimmed, blank rows skipped. Any row with a spoken form blocks a copy
         // of it, since Save refuses a duplicate whether or not the row is on.
         var dictionary = Stored(rows.Select(row => (row.Pattern, row.Replacement, row.WholeWord, row.Enabled)));
@@ -129,7 +190,6 @@ public static class LibrarySwitchOffCopy
         var dictionaryOn = dictionary.Where(entry => entry.Enabled).ToList();
         var writtenByDictionary = new HashSet<string>(dictionaryOn.Select(entry => entry.Pattern), StringComparer.OrdinalIgnoreCase);
 
-        var (enabled, staying, goingOff, selected) = Switch(libraries, libraryRows, switchingOff, verdicts);
         if (goingOff.Count == 0)
         {
             return new Result([], 0, []);
@@ -146,8 +206,7 @@ public static class LibrarySwitchOffCopy
             return folded;
         }
 
-        // Which row the composer keeps for each spoken form today.
-        var current = DictionaryLibraryOverlapAnalyzer.Coverage(enabled, enabled.Select(library => library.Id));
+        var current = winners();
         var considered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var sides = goingOff.Select(g => Side.For(g.Library, g.Usage, current, writtenByDictionary, blocking, considered, Folded)).ToList();
 
@@ -312,7 +371,8 @@ public static class LibrarySwitchOffCopy
                 .GroupBy(usage => usage.Id, StringComparer.OrdinalIgnoreCase)
                 .SelectMany(sameId => sameId.DistinctBy(usage => usage.BuiltIn)),
             usage => usage.Id,
-            usage => usage.BuiltIn);
+            usage => usage.BuiltIn,
+            usage => usage.FileName);
         return (enabled, staying, goingOff, asked);
     }
 
@@ -420,7 +480,8 @@ public static class LibrarySwitchOffCopy
             var folds = rows.Select(entry => folded(entry.Pattern.Trim())).ToArray();
 
             var candidates = new List<Candidate>();
-            foreach (var term in usage.KeepTerms)
+            // A library kept from AI cleanup copies nothing: the dictionary goes with every AI cleanup request.
+            foreach (var term in usage.CopyTerms)
             {
                 var pattern = term?.Pattern?.Trim();
                 if (term is null || string.IsNullOrEmpty(pattern) || writtenByDictionary.Contains(pattern))
