@@ -232,19 +232,65 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
         var rules = new List<CompiledRule>(entries.Count);
         foreach (var entry in entries)
         {
-            if (string.IsNullOrEmpty(entry.Pattern)) continue;
-            try
+            var rule = TryCompile(entry, out var error);
+            if (rule is not null)
             {
-                rules.Add(new CompiledRule(entry));
+                rules.Add(rule);
             }
-            catch (Exception ex)
+            else if (error is not null)
             {
-                LogSkippedEntry(_logger, entry, ex);
+                LogSkippedEntry(_logger, entry, error);
             }
         }
 
         _logger.LogDebug("Post-processor loaded {Count} dictionary rule(s).", rules.Count);
         return rules.ToArray();
+    }
+
+    /// <summary>
+    /// Compiles <paramref name="entry"/> exactly as a dictation's rule set is built, or returns null for an entry
+    /// dictation skips: one with no spoken form, or one the matcher refuses to compile (then
+    /// <paramref name="error"/> says why).
+    /// </summary>
+    internal static CompiledRule? TryCompile(DictionaryEntry entry, out Exception? error)
+    {
+        error = null;
+        if (string.IsNullOrEmpty(entry.Pattern))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new CompiledRule(entry);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            return null;
+        }
+    }
+
+    /// <summary>The whitespace normalization a dictation applies before any rule runs.</summary>
+    internal static string NormalizeDictated(string text) => NormalizeWhitespace(text);
+
+    /// <summary>
+    /// What <see cref="Process"/> writes for <paramref name="text"/> when the dictionary rules are
+    /// <paramref name="rules"/>, in that order, and there are no snippets: the same normalization, compiled matcher
+    /// and single pass. It exists so code that must know what a dictation would write under rules that do not exist
+    /// yet (the dictionary cleanup deciding whether switching a library off changes a term) runs the real
+    /// implementation, for the reason <see cref="ApplyRule"/> gives. Rules that match nothing in the text can be
+    /// left out without changing the result, because only the relative order of matching rules breaks ties.
+    /// </summary>
+    internal static string ApplyDictionaryPass(string text, IEnumerable<CompiledRule> rules)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = NormalizeWhitespace(text);
+        return ApplySinglePass(normalized, rules.SelectMany((rule, order) => rule.Find(normalized, order)));
     }
 
     // A trigger phrase and a dictionary pattern are the user's own words, and a regex error message
@@ -407,7 +453,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
 
     private static bool IsTightPunctuation(char value) => value is ',' or '.' or '!' or '?' or ';' or ':';
 
-    private sealed record ReplacementCandidate(
+    internal sealed record ReplacementCandidate(
         int Index,
         int Length,
         string Replacement,
@@ -442,7 +488,7 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
     }
 
     /// <summary>A single dictionary substitution, pre-compiled for reuse across captures.</summary>
-    private sealed class CompiledRule
+    internal sealed class CompiledRule
     {
         private readonly Regex _regex;
         private readonly string _pattern;
@@ -490,6 +536,9 @@ public sealed partial class TextPostProcessor : ITextPostProcessor
                     match.Value);
             }
         }
+
+        /// <summary>Whether the rule matches anywhere in <paramref name="text"/>, which is when <see cref="Find"/> yields.</summary>
+        internal bool Matches(string text) => _regex.IsMatch(text);
 
         // Ascending start offsets of every existing occurrence of the replacement. Case-insensitive
         // because the AI may emit a different casing than the canonical form; that casing is left as-is

@@ -10,6 +10,16 @@ public sealed class DictionaryRepository : IDictionaryRepository
 
     public DictionaryRepository(ScribeDatabase database) => _database = database;
 
+    /// <summary>
+    /// The order <see cref="GetEnabled"/> and <see cref="GetAll"/> return entries in: <c>ORDER BY pattern</c> under
+    /// SQLite's default BINARY collation, which compares the UTF-8 bytes (so code point order, not .NET's ordinal
+    /// UTF-16 order). Dictation compiles the dictionary in this order, and rule order breaks ties between rules that
+    /// match the same text, so code that predicts what dictation writes sorts dictionary entries with it.
+    /// </summary>
+    internal static IComparer<string> PatternOrder { get; } = Comparer<string>.Create(
+        (a, b) => System.Text.Encoding.UTF8.GetBytes(a ?? string.Empty).AsSpan()
+            .SequenceCompareTo(System.Text.Encoding.UTF8.GetBytes(b ?? string.Empty)));
+
     public IReadOnlyList<DictionaryEntry> GetAll() => Query(enabledOnly: false);
 
     public IReadOnlyList<DictionaryEntry> GetEnabled() => Query(enabledOnly: true);
