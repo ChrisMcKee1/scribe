@@ -15,10 +15,16 @@ public enum TermCommands
     /// <summary>Turn on term.</summary>
     TurnOn = 2,
 
-    /// <summary>Delete term: only a row the user owns (a custom library's row, or a row added to a built-in).</summary>
+    /// <summary>
+    /// Delete term: only a row the user owns (a custom library's row, or a built-in row with no shipped counterpart:
+    /// added, or no longer shipped).
+    /// </summary>
     Delete = 4,
 
-    /// <summary>Restore built-in values: an edited or pinned built-in row back to what this version ships.</summary>
+    /// <summary>
+    /// Restore built-in values: an authored built-in row with shipped values (edited, pinned, or an addition a later
+    /// version ships) back to what this version ships.
+    /// </summary>
     RestoreBuiltIn = 8,
 
     /// <summary>Show other sources: for a row turned off here, which may still be applied by another library.</summary>
@@ -81,8 +87,10 @@ public static class LibraryEditor
     }
 
     /// <summary>
-    /// The commands a row offers. While the user is typing in a cell or composing with an IME, Delete and the Space
-    /// toggle (Turn off, Turn on) never run: the keys belong to the text.
+    /// The commands a row offers. A row the user owns (a custom library's, or a built-in row with no shipped
+    /// counterpart) is deleted; an authored built-in row with shipped values is restored instead, since deleting its entry
+    /// would only bring the shipped row back at the next load. While the user is typing in a cell or composing with an
+    /// IME, Delete and the Space toggle (Turn off, Turn on) never run: the keys belong to the text.
     /// </summary>
     public static TermCommands AvailableCommands(LibraryRow row, bool editingText)
     {
@@ -93,13 +101,10 @@ public static class LibraryEditor
         switch (row.Origin)
         {
             case TermOrigin.Custom:
-            case TermOrigin.Added:
-            case TermOrigin.NoLongerShipped:
                 commands |= TermCommands.Delete;
                 break;
-            case TermOrigin.Edited:
-            case TermOrigin.Pinned:
-                commands |= TermCommands.RestoreBuiltIn;
+            case TermOrigin.Added or TermOrigin.NoLongerShipped or TermOrigin.Edited or TermOrigin.Pinned:
+                commands |= row.Shipped is null ? TermCommands.Delete : TermCommands.RestoreBuiltIn;
                 break;
         }
 
@@ -114,15 +119,20 @@ public static class LibraryEditor
     /// <summary>
     /// The message shown beside the field an issue is about. <paramref name="spoken"/> is the row's Spoken value, which
     /// the empty-Written and duplicate messages quote; <paramref name="state"/> words a library whose content cannot be
-    /// saved.
+    /// saved; <paramref name="otherSpoken"/> is what the row of <see cref="LibraryValidationIssue.OtherRowId"/> speaks now,
+    /// which a duplicate names when it differs: a renamed built-in row still holds its original form.
     /// </summary>
-    public static string Message(LibraryValidationIssue issue, string? spoken = null, LibraryFileState state = LibraryFileState.Available)
+    public static string Message(
+        LibraryValidationIssue issue, string? spoken = null, LibraryFileState state = LibraryFileState.Available, string? otherSpoken = null)
     {
         ArgumentNullException.ThrowIfNull(issue);
         var quoted = LibraryTermKey.Normalize(spoken);
+        var other = LibraryTermKey.Normalize(otherSpoken);
         return issue.Kind switch
         {
             LibraryValidationKind.WrittenWithoutSpoken => "Type what you say before how it should be written.",
+            LibraryValidationKind.DuplicateSpoken when quoted.Length > 0 && other.Length > 0 && !LibraryTermKey.AreSame(quoted, other) =>
+                $"\"{quoted}\" is already in this library as the term you changed to \"{other}\".",
             LibraryValidationKind.DuplicateSpoken => quoted.Length == 0
                 ? "This term is already in this library."
                 : $"\"{quoted}\" is already in this library.",

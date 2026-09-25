@@ -138,6 +138,39 @@ public sealed class LibraryImportPlannerTests
     }
 
     [Fact]
+    public void D7_a_file_row_saying_a_renamed_built_in_rows_original_form_meets_that_row_and_never_adds_a_second_with_its_key()
+    {
+        LibraryWorkspace Renamed(out long getHub)
+        {
+            var workspace = Workspace(Standard());
+            getHub = RowIdOf(workspace, GitHubId, "get hub");
+            workspace.EditTerm(GitHubId, getHub, new TermValues("git hub", "GitHub"));
+            return workspace;
+        }
+
+        var document = Document(null, new TermValues("get hub", "GitHub!"), new TermValues("git hub", "GitHub"), new TermValues("gh cli", "GitHub CLI"));
+        var keep = Renamed(out var renamedRow);
+        var plan = LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), keep.Draft);
+
+        Assert.Equal(
+            [LibraryImportOperationKind.WrittenDifferently, LibraryImportOperationKind.AlreadyHere, LibraryImportOperationKind.Add],
+            plan.Operations.Select(operation => operation.Kind));
+        Assert.Equal(renamedRow, plan.Operations[0].ExistingRowId);
+        Assert.Equal(new TermValues("git hub", "GitHub"), plan.Operations[0].ExistingValues);
+
+        Assert.True(keep.ApplyImport(plan, ImportConflictChoice.KeepMine).Applied);
+        Assert.Equal("git hub", keep.RowsOf(GitHubId).Single(row => row.RowId == renamedRow).Row.Values.Spoken);
+        Assert.NotNull(keep.CaptureChangeSet().ChangeSet);
+
+        // The file's version of that term is the term as the file says it: its original form comes back.
+        var take = Renamed(out renamedRow);
+        Assert.True(take.ApplyImport(LibraryImportPlanner.Plan(document, new LibraryImportTarget.ExistingLibrary(GitHubId), take.Draft),
+            ImportConflictChoice.UseFilesVersion).Applied);
+        Assert.Equal(new TermValues("get hub", "GitHub!"), take.RowsOf(GitHubId).Single(row => row.RowId == renamedRow).Row.Values);
+        Assert.Equal(2, Assert.Single(Capture(take).Writes).Edits!.Terms.Count);
+    }
+
+    [Fact]
     public void D7b_two_files_that_differ_in_one_added_row_give_different_plans_that_each_add_exactly_their_own_row()
     {
         var catalog = Standard();

@@ -125,14 +125,18 @@ public sealed class LibraryWorkspaceValidationTests
     {
         var workspace = Workspace(Standard());
 
-        // "copilot" is shipped once in GitHub; adding it again is the user's repeat.
+        // "copilot" is shipped once in GitHub, keyed "copilot": adding it again would be a second row with that key,
+        // which no edits document can hold, so the addition is refused and names the row it meets.
         var added = workspace.AddTerm(GitHubId, new TermValues("copilot", "GitHub Copilot"));
-        Assert.Equal(LibraryValidationKind.DuplicateSpoken, added.Issue!.Kind);
-        workspace.DeleteTerm(GitHubId, workspace.RowsOf(GitHubId).Last().RowId);
+        Assert.False(added.Applied);
+        Assert.Equal((LibraryValidationKind.DuplicateSpoken, TermFields.Spoken), (added.Issue!.Kind, added.Issue.Field));
+        Assert.Equal(RowIdOf(workspace, GitHubId, "copilot"), added.Issue.OtherRowId);
+        Assert.False(workspace.HasUnsavedChanges);
 
-        // An edit that makes another row speak a shipped form is the user's repeat too.
+        // An edit that makes another row speak a shipped form is the user's repeat too; the row keeps its own key.
         var renamed = workspace.EditTerm(GitHubId, RowIdOf(workspace, GitHubId, "octo cat"), new TermValues("get hub", "Octocat"));
         Assert.Equal(LibraryValidationKind.DuplicateSpoken, renamed.Issue!.Kind);
+        Assert.Equal(workspace.RowsOf(GitHubId)[0].RowId, renamed.Issue.OtherRowId);
         Assert.Null(workspace.CaptureChangeSet().ChangeSet);
 
         // A committed document that already speaks a shipped form twice (a later version shipped the form an edit
@@ -146,6 +150,98 @@ public sealed class LibraryWorkspaceValidationTests
         var octocat = collided.RowsOf(GitHubId).Single(row => row.Row.Key == LibraryTermKey.From("octo cat")).RowId;
         Assert.Null(collided.EditTerm(GitHubId, octocat, new TermValues("copilot", "The Octocat")).Issue);
         Assert.NotNull(collided.CaptureChangeSet().ChangeSet);
+    }
+
+    [Fact]
+    public void D2_a_renamed_built_in_row_keeps_its_original_form_as_its_key_so_that_form_cannot_be_added_beside_it()
+    {
+        // O's request: after the shipped "get hub" is renamed "git hub", adding "get hub" would give two rows keyed
+        // "get hub", which the overlay's Collect refuses. The addition is refused with its reason.
+        var workspace = Workspace(Standard());
+        var getHub = RowIdOf(workspace, GitHubId, "get hub");
+        Assert.Null(workspace.EditTerm(GitHubId, getHub, new TermValues("git hub", "GitHub")).Issue);
+        var revision = workspace.Revision;
+
+        var refused = workspace.AddTerm(GitHubId, new TermValues(" Get  Hub ", "GitHub"));
+
+        Assert.False(refused.Applied);
+        var issue = refused.Issue!;
+        Assert.Equal((GitHubId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, getHub), (issue.LibraryId, issue.Kind, issue.Field, issue.OtherRowId));
+        Assert.Equal(
+            "\"Get Hub\" is already in this library as the term you changed to \"git hub\".",
+            LibraryEditor.Message(issue, "Get Hub", otherSpoken: "git hub"));
+        Assert.Equal(revision, workspace.Revision);
+        Assert.Equal(3, workspace.RowsOf(GitHubId).Count);
+
+        // The rename itself saves (one row per key), and restoring the renamed row gives the form back.
+        Assert.NotNull(workspace.CaptureChangeSet().ChangeSet);
+        workspace.RestoreBuiltInValues(GitHubId, getHub);
+        Assert.Equal("get hub", workspace.RowsOf(GitHubId).Single(row => row.RowId == getHub).Row.Values.Spoken);
+
+        // Renaming another row to the renamed row's original form is allowed: that row keeps its own key, so the keys
+        // stay unique and the document holds both.
+        var other = Workspace(Standard());
+        other.EditTerm(GitHubId, RowIdOf(other, GitHubId, "get hub"), new TermValues("git hub", "GitHub"));
+        Assert.Null(other.EditTerm(GitHubId, RowIdOf(other, GitHubId, "octo cat"), new TermValues("get hub", "Octocat")).Issue);
+        Assert.Equal(2, Assert.Single(Capture(other).Writes).Edits!.Terms.Count);
+    }
+
+    [Fact]
+    public void D2_an_undo_that_brings_back_a_row_whose_key_was_taken_again_blocks_the_save_without_collecting()
+    {
+        var workspace = Workspace(Standard());
+        Assert.True(workspace.AddTerm(GitHubId, new TermValues("gh cli", "GitHub CLI")).Applied);
+        var first = RowIdOf(workspace, GitHubId, "gh cli");
+        workspace.EditTerm(GitHubId, first, new TermValues("g h cli", "GitHub CLI"));
+        workspace.DeleteTerm(GitHubId, first);
+        Assert.True(workspace.AddTerm(GitHubId, new TermValues("gh cli", "The GitHub CLI")).Applied);
+        var second = RowIdOf(workspace, GitHubId, "gh cli");
+
+        // The delete is undone: the renamed first row comes back beside the second, both keyed "gh cli".
+        workspace.Undo();
+        Assert.Equal(2, workspace.RowsOf(GitHubId).Count(row => row.Row.Key == LibraryTermKey.From("gh cli")));
+
+        // The test overlay's Collect throws for rows that repeat a key, as the real one does: the workspace must not ask.
+        Assert.True(workspace.HasUnsavedChanges);
+        _ = workspace.Draft;
+        var blocked = workspace.CaptureChangeSet();
+        Assert.Null(blocked.ChangeSet);
+        var issue = Assert.Single(blocked.Issues);
+        Assert.Equal((second, LibraryValidationKind.DuplicateSpoken, (long?)first), (issue.RowId!.Value, issue.Kind, issue.OtherRowId));
+    }
+
+    [Fact]
+    public void D2_a_built_in_has_no_blank_placeholder_row_and_a_term_with_no_spoken_form_is_refused()
+    {
+        var workspace = Workspace(Standard());
+
+        // The test overlay's Add throws for a blank spoken form, as the real one does.
+        Assert.Equal(new LibraryEditResult(false, null), workspace.AddTerm(GitHubId, new TermValues("", "")));
+        var orphan = workspace.AddTerm(GitHubId, new TermValues("  ", "Orphan"));
+        Assert.False(orphan.Applied);
+        Assert.Equal(LibraryValidationKind.WrittenWithoutSpoken, orphan.Issue!.Kind);
+        Assert.False(workspace.HasUnsavedChanges);
+    }
+
+    [Fact]
+    public void D2_an_addition_a_later_version_ships_is_restored_rather_than_deleted()
+    {
+        // The document added "copilot" before the shipped library had it; this version ships it.
+        var edits = new BuiltInLibraryEdits(GitHubId,
+            [new BuiltInTermEdit(LibraryTermKey.From("copilot"), BuiltInTermIntent.Added, null, new TermValues("copilot", "GitHub Copilot"))]);
+        var workspace = Workspace(Catalog([BuiltIn(GitHubId, edits)], [GitHubId]));
+        var row = workspace.RowsOf(GitHubId).Single(candidate => candidate.Row.Key == LibraryTermKey.From("copilot"));
+        Assert.Equal(TermOrigin.Added, row.Row.Origin);
+        Assert.NotNull(row.Row.Shipped);
+
+        var commands = LibraryEditor.AvailableCommands(row.Row, editingText: false);
+        Assert.True(commands.HasFlag(TermCommands.RestoreBuiltIn));
+        Assert.False(commands.HasFlag(TermCommands.Delete));
+        Assert.Throws<InvalidOperationException>(() => workspace.DeleteTerm(GitHubId, row.RowId));
+
+        workspace.RestoreBuiltInValues(GitHubId, row.RowId);
+        Assert.Equal(TermOrigin.Shipped, workspace.RowsOf(GitHubId).Single(candidate => candidate.RowId == row.RowId).Row.Origin);
+        Assert.Null(Assert.Single(Capture(workspace).Writes).Edits);
     }
 
     [Fact]

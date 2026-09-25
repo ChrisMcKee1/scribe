@@ -324,6 +324,8 @@ internal static class DeciderFixture
 
         public LibraryRow Add(TermValues values)
         {
+            // As the real overlay: an added row is keyed by its spoken form, so a blank one is a caller's bug.
+            ArgumentException.ThrowIfNullOrWhiteSpace(values.Spoken);
             var key = LibraryTermKey.From(values.Spoken);
             return new LibraryRow(key, values, TermOrigin.Added, null, new BuiltInTermEdit(key, BuiltInTermIntent.Added, null, values));
         }
@@ -332,6 +334,13 @@ internal static class DeciderFixture
 
         public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows)
         {
+            // As the real overlay: a custom row, or two rows with one key, is no document (O's
+            // Collect_refuses_rows_it_did_not_give_and_rows_that_repeat_a_key).
+            if (rows.Any(row => row.Origin == TermOrigin.Custom) || rows.Select(row => row.Key).Distinct().Count() != rows.Count)
+            {
+                throw new ArgumentException("Rows the overlay did not give, or rows that repeat a key.", nameof(rows));
+            }
+
             var shippedKeys = shipped.Entries.Select(entry => LibraryTermKey.From(entry.Pattern)).ToHashSet();
             var rowKeys = rows.Select(row => row.Key).ToHashSet();
             var entries = rows.Where(row => row.Origin != TermOrigin.Shipped && row.Edit is not null).Select(row => row.Edit!).ToList();

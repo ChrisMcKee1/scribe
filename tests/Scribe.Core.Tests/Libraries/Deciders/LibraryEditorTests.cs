@@ -64,6 +64,10 @@ public sealed class LibraryEditorTests
 
         Assert.Equal("Type how \"get hub\" should be written.", LibraryEditor.Message(Issue(LibraryValidationKind.EmptyWrittenWithoutIntent), " get  hub "));
         Assert.Equal("\"kube\" is already in this library.", LibraryEditor.Message(Issue(LibraryValidationKind.DuplicateSpoken), "kube"));
+        Assert.Equal("\"kube\" is already in this library.", LibraryEditor.Message(Issue(LibraryValidationKind.DuplicateSpoken), "kube", otherSpoken: "KUBE"));
+        Assert.Equal(
+            "\"get hub\" is already in this library as the term you changed to \"git hub\".",
+            LibraryEditor.Message(Issue(LibraryValidationKind.DuplicateSpoken), "get hub", otherSpoken: "git  hub"));
         Assert.Equal("This is longer than 2,000 characters. Shorten it to save.", LibraryEditor.Message(Issue(LibraryValidationKind.FieldTooLong)));
         Assert.Equal("A library can hold up to 50,000 terms.", LibraryEditor.Message(Issue(LibraryValidationKind.TooManyTerms)));
         Assert.Equal(LibraryEditor.MetadataDoubleQuoteMessage, LibraryEditor.Message(Issue(LibraryValidationKind.MetadataDoubleQuote, LibraryMetadataField.Name)));

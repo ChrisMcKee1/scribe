@@ -35,7 +35,8 @@ public enum LibraryImportOperationKind
 
     /// <summary>
     /// The spoken form is already there with a different written form, whole-word or enabled value (decision 3: whole
-    /// word counts), in the library or earlier in the same file.
+    /// word counts), in the library or earlier in the same file; or, in a built-in, the file row says the original form
+    /// of a row the user renamed, which is that row's key.
     /// </summary>
     WrittenDifferently,
 
@@ -106,8 +107,10 @@ public sealed record LibraryImportPlan(
 /// <remarks>
 /// Rows are matched by spoken form trimmed and compared without case (<see cref="LibraryTermKey"/>), the rule
 /// <see cref="DictionaryImportMerger"/> applies to the dictionary, and in the same single pass: a row the import adds is
-/// what a later row of the file with the same spoken form meets. Two files that differ in one row therefore give plans
-/// that differ in that row. Pure; the file was read by the codec already.
+/// what a later row of the file with the same spoken form meets. Into a built-in, a file row also meets a row whose key
+/// it is (a row the user renamed keeps the key of the form it shipped or was added with), so an import never adds a
+/// second row with a key the built-in has; Use the file's version then gives that row the file's spoken form back. Two
+/// files that differ in one row give plans that differ in that row. Pure; the file was read by the codec already.
 /// </remarks>
 public static class LibraryImportPlanner
 {
@@ -137,6 +140,16 @@ public static class LibraryImportPlanner
             if (!key.IsEmpty)
             {
                 known.TryAdd(key, (rows[i].Values, LibraryWorkspace.RowIdIn(draft, existing!.Content.Id, i)));
+            }
+        }
+
+        if (existing is { Content.BuiltIn: true })
+        {
+            // A built-in row keeps the key of its original spoken form when the user renames it, and the built-in cannot
+            // hold a second row with that key: a file row saying the original form is that term, not a new one.
+            for (var i = 0; i < rows.Count; i++)
+            {
+                known.TryAdd(rows[i].Key, (rows[i].Values, LibraryWorkspace.RowIdIn(draft, existing.Content.Id, i)));
             }
         }
 
@@ -217,9 +230,10 @@ public static class LibraryImportPlanner
     }
 
     // "A different written form" (decision 3): the written form, compared exactly, and the whole-word and enabled
-    // values; the spoken forms already match by key.
+    // values. A row met through a renamed built-in term's original key speaks another form, so it is never already here.
     private static bool Same(TermValues file, TermValues existing) =>
-        string.Equals(file.Written, existing.Written, StringComparison.Ordinal)
+        LibraryTermKey.AreSame(file.Spoken, existing.Spoken)
+        && string.Equals(file.Written, existing.Written, StringComparison.Ordinal)
         && file.WholeWord == existing.WholeWord
         && file.Enabled == existing.Enabled;
 

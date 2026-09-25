@@ -27,7 +27,11 @@ public enum LibraryValidationKind
     /// <summary>A row has a Written value and no Spoken value.</summary>
     WrittenWithoutSpoken,
 
-    /// <summary>A Spoken value is repeated in one library, turned-off rows included.</summary>
+    /// <summary>
+    /// A Spoken value is repeated in one library, turned-off rows included. In a built-in, also two rows with one key: a
+    /// renamed built-in row keeps the spoken form it shipped or was added with as its key, and an edits document holds
+    /// one entry per key, so that form cannot be added beside it.
+    /// </summary>
     DuplicateSpoken,
 
     /// <summary>A new or cleared Written value is left empty without "Use as a removal rule" (review finding I1).</summary>
@@ -64,12 +68,17 @@ public enum LibraryValidationKind
 /// <param name="Kind">What is wrong.</param>
 /// <param name="Field">The term field to focus, or <see cref="TermFields.None"/>.</param>
 /// <param name="Metadata">The metadata field to focus, for a name, category or description problem.</param>
+/// <param name="OtherRowId">
+/// For <see cref="LibraryValidationKind.DuplicateSpoken"/>: the row the term collides with, for Go to existing term. In a
+/// built-in that is also a row whose original spoken form is the term's, since a renamed built-in row keeps it as its key.
+/// </param>
 public sealed record LibraryValidationIssue(
     string LibraryId,
     long? RowId,
     LibraryValidationKind Kind,
     TermFields Field,
-    LibraryMetadataField Metadata = LibraryMetadataField.None);
+    LibraryMetadataField Metadata = LibraryMetadataField.None,
+    long? OtherRowId = null);
 
 /// <summary>What an edit did.</summary>
 /// <param name="Applied">
@@ -670,7 +679,10 @@ public sealed class LibraryWorkspace
     /// <summary>
     /// Adds a term, its values committed (<see cref="LibraryEditor.Commit"/>): a custom row, or through the overlay an
     /// added row of a built-in. A problem the new row has (an empty Written value, a repeat) is returned and blocks Save;
-    /// growing past <see cref="LibraryLimits.MaxTermsPerLibrary"/> is refused.
+    /// growing past <see cref="LibraryLimits.MaxTermsPerLibrary"/> is refused. A built-in refuses a term with no spoken
+    /// form, and one whose spoken form is the key of a row it already has: a built-in row is keyed by the spoken form it
+    /// shipped with and keeps that key when the user renames it, so "get hub" added after the shipped "get hub" became
+    /// "git hub" would be a second row with one key, which no edits document can hold. The refusal names that row.
     /// </summary>
     public LibraryEditResult AddTerm(string libraryId, TermValues values, bool removalIntent = false)
     {
@@ -687,6 +699,25 @@ public sealed class LibraryWorkspace
         }
 
         var committed = LibraryEditor.Commit(values);
+        if (lib.Header.BuiltIn)
+        {
+            var key = LibraryTermKey.From(committed.Spoken);
+            if (key.IsEmpty)
+            {
+                // The overlay keys an added row by its spoken form, so a built-in has no blank placeholder row.
+                return committed.Written.Length == 0
+                    ? Refused()
+                    : new LibraryEditResult(false, new LibraryValidationIssue(
+                        lib.Header.Id, null, LibraryValidationKind.WrittenWithoutSpoken, TermFields.Spoken));
+            }
+
+            if (lib.Rows.FirstOrDefault(row => row.Row.Key == key) is { } holder)
+            {
+                return new LibraryEditResult(false, new LibraryValidationIssue(
+                    lib.Header.Id, null, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: holder.RowId));
+            }
+        }
+
         if (!IsBlank(committed) && CountTerms(lib.Rows) + 1 > TermLimit(lib))
         {
             return Refused(lib, LibraryValidationKind.TooManyTerms);
@@ -756,10 +787,14 @@ public sealed class LibraryWorkspace
         return new LibraryEditResult(true, RowIssue(updated, edited));
     }
 
-    /// <summary>Delete term, for a row the user owns: a custom library's row, or an added or no-longer-shipped built-in row. Undoable.</summary>
+    /// <summary>
+    /// Delete term, for a row the user owns: a custom library's row, or a built-in row with no shipped counterpart (added,
+    /// or no longer shipped). Undoable.
+    /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// The row is a shipped, edited, pinned or turned-off built-in row (those are turned off, never deleted), or the
-    /// library's content cannot be edited.
+    /// The row has shipped values (shipped, edited, pinned, turned off, or an addition a later version ships): those are
+    /// turned off or restored, never deleted, since deleting the entry would only bring the shipped row back at the next
+    /// load. Or the library's content cannot be edited.
     /// </exception>
     public void DeleteTerm(string libraryId, long rowId)
     {
@@ -771,9 +806,9 @@ public sealed class LibraryWorkspace
         }
 
         EnsureContentEditable(lib);
-        if (lib.Header.BuiltIn && lib.Rows[index].Row.Origin is not (TermOrigin.Added or TermOrigin.NoLongerShipped))
+        if (lib.Header.BuiltIn && lib.Rows[index].Row.Shipped is not null)
         {
-            throw new InvalidOperationException("A built-in term is turned off, never deleted.");
+            throw new InvalidOperationException("A built-in term is turned off or restored, never deleted.");
         }
 
         Structural("Delete term", _state.WithLib(lib with { Rows = lib.Rows.RemoveAt(index) }));
@@ -1294,6 +1329,24 @@ public sealed class LibraryWorkspace
             return Refused(lib, LibraryValidationKind.ContentNotSaveable);
         }
 
+        if (lib.Header.BuiltIn)
+        {
+            // An addition must not take a key the built-in already has (a renamed row keeps its original one), or the
+            // document could not hold both. The planner meets such a file row with the row instead; this only guards a
+            // plan made some other way.
+            var keys = lib.Rows.Select(row => row.Row.Key).ToHashSet();
+            foreach (var operation in plan.Operations.Where(operation => operation.Kind == LibraryImportOperationKind.Add))
+            {
+                var key = LibraryTermKey.From(operation.FileRow.Spoken);
+                if (key.IsEmpty || !keys.Add(key))
+                {
+                    var holder = lib.Rows.FirstOrDefault(row => row.Row.Key == key);
+                    return new LibraryEditResult(false, new LibraryValidationIssue(
+                        lib.Header.Id, null, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: holder?.RowId));
+                }
+            }
+        }
+
         var rows = ApplyOperations(lib.Rows, lib.Header.BuiltIn, plan.Operations, choice, out var rewrittenKeys);
         if (CountTerms(rows) > TermLimit(lib))
         {
@@ -1332,6 +1385,15 @@ public sealed class LibraryWorkspace
             }
         }
 
+        if (builtIn)
+        {
+            // A renamed built-in row is still the term of its original spoken form, which is its key.
+            for (var i = 0; i < list.Count; i++)
+            {
+                byKey.TryAdd(list[i].Row.Key, i);
+            }
+        }
+
         var added = new Dictionary<LibraryTermKey, int>();
         var rewritten = new List<LibraryTermKey>();
         foreach (var operation in operations)
@@ -1366,6 +1428,15 @@ public sealed class LibraryWorkspace
                         WholeWord = operation.FileRow.WholeWord,
                         Enabled = operation.FileRow.Enabled,
                     };
+
+                    // Met by spoken form, the row keeps its own spelling of it, as the dictionary merge does. Met by a
+                    // renamed built-in row's original key, the file's row is that term as the file says it, so its
+                    // spoken form comes back too.
+                    if (!LibraryTermKey.AreSame(existing.Row.Values.Spoken, operation.FileRow.Spoken))
+                    {
+                        values = values with { Spoken = operation.FileRow.Spoken };
+                    }
+
                     list[found] = existing with
                     {
                         Row = builtIn ? _overlay.Edit(existing.Row, values) : LibraryRow.Custom(values),
@@ -1723,9 +1794,19 @@ public sealed class LibraryWorkspace
             }
             else if (!unchanged && (header.EditsReset || committedLib is null || !SameRows(lib.Rows, committedLib.Rows)))
             {
-                var committedEdits = header.Committed?.Edits;
-                edits = _overlay.Collect(ShippedOf(lib), header.EditsReset ? null : committedEdits, TermsOf(lib));
-                contentChanged = !SameEdits(edits, committedEdits);
+                // Rows that repeat a key (an undo brought back a row whose key a later addition took) are no document:
+                // the capture refuses them with the reason, and the overlay is never asked to collect them.
+                var terms = TermsOf(lib);
+                if (terms.Select(row => row.Key).Distinct().Count() != terms.Count)
+                {
+                    contentChanged = true;
+                }
+                else
+                {
+                    var committedEdits = header.Committed?.Edits;
+                    edits = _overlay.Collect(ShippedOf(lib), header.EditsReset ? null : committedEdits, terms);
+                    contentChanged = !SameEdits(edits, committedEdits);
+                }
             }
         }
         else if (!header.PendingDelete && !unchanged)
@@ -1824,12 +1905,35 @@ public sealed class LibraryWorkspace
         return index == content.Rows.Count;
     }
 
-    private static bool SameEdits(BuiltInLibraryEdits? first, BuiltInLibraryEdits? second) =>
-        ReferenceEquals(first, second)
-        || (first is not null
-            && second is not null
-            && string.Equals(first.LibraryId, second.LibraryId, StringComparison.OrdinalIgnoreCase)
-            && first.Terms.SequenceEqual(second.Terms));
+    // The same document whatever order its entries come in: keys are unique in a document, and after an upgrade the
+    // overlay may collect the same entries in another order than the committed document holds them.
+    private static bool SameEdits(BuiltInLibraryEdits? first, BuiltInLibraryEdits? second)
+    {
+        if (ReferenceEquals(first, second))
+        {
+            return true;
+        }
+
+        if (first is null
+            || second is null
+            || !string.Equals(first.LibraryId, second.LibraryId, StringComparison.OrdinalIgnoreCase)
+            || first.Terms.Count != second.Terms.Count)
+        {
+            return false;
+        }
+
+        var byKey = new Dictionary<LibraryTermKey, BuiltInTermEdit>();
+        foreach (var term in second.Terms)
+        {
+            if (!byKey.TryAdd(term.Key, term))
+            {
+                return false;
+            }
+        }
+
+        var seen = new HashSet<LibraryTermKey>();
+        return first.Terms.All(term => seen.Add(term.Key) && byKey.TryGetValue(term.Key, out var other) && other == term);
+    }
 
     // The shipped library a built-in's edits are collected against; a test catalog's built-in the embedded CSVs do not
     // have is rebuilt from the shipped values its rows carry.
@@ -1891,6 +1995,7 @@ public sealed class LibraryWorkspace
         var id = lib.Header.Id;
         var committed = CommittedRows(lib);
         var first = new Dictionary<LibraryTermKey, DraftTermRow>();
+        var keyed = new Dictionary<LibraryTermKey, DraftTermRow>();
         foreach (var row in lib.Rows)
         {
             if (IsBlank(row))
@@ -1900,13 +2005,23 @@ public sealed class LibraryWorkspace
 
             committed.TryGetValue(row.RowId, out var before);
             var key = LibraryTermKey.From(row.Row.Values.Spoken);
-            if (key.IsEmpty)
+
+            // A built-in row keeps the key of the spoken form it was shipped or added with when it is renamed, and an
+            // edits document holds one entry per key, so a key two rows share blocks whatever they speak now. Rows that
+            // passed that far can only share the key of a spoken form they both speak, which the next check reports.
+            if (lib.Header.BuiltIn && !keyed.TryAdd(row.Row.Key, row))
+            {
+                issues.Add(new LibraryValidationIssue(
+                    id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: keyed[row.Row.Key].RowId));
+            }
+            else if (key.IsEmpty)
             {
                 issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.WrittenWithoutSpoken, TermFields.Spoken));
             }
             else if (!first.TryAdd(key, row) && Blocks(lib, row, before, first[key], committed))
             {
-                issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken));
+                issues.Add(new LibraryValidationIssue(
+                    id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: first[key].RowId));
             }
 
             AddValueIssues(id, row, before, issues);
@@ -1977,7 +2092,15 @@ public sealed class LibraryWorkspace
         committed.TryGetValue(row.RowId, out var before);
         var issues = new List<LibraryValidationIssue>();
         var key = LibraryTermKey.From(row.Row.Values.Spoken);
-        if (key.IsEmpty)
+        var sharesKey = lib.Header.BuiltIn
+            ? lib.Rows.FirstOrDefault(candidate => candidate.RowId != row.RowId && candidate.Row.Key == row.Row.Key)
+            : null;
+        if (sharesKey is not null)
+        {
+            issues.Add(new LibraryValidationIssue(
+                lib.Header.Id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: sharesKey.RowId));
+        }
+        else if (key.IsEmpty)
         {
             issues.Add(new LibraryValidationIssue(lib.Header.Id, row.RowId, LibraryValidationKind.WrittenWithoutSpoken, TermFields.Spoken));
         }
@@ -1987,7 +2110,8 @@ public sealed class LibraryWorkspace
                 candidate.RowId != row.RowId && !IsBlank(candidate) && LibraryTermKey.From(candidate.Row.Values.Spoken) == key);
             if (other is not null && Blocks(lib, row, before, other, committed))
             {
-                issues.Add(new LibraryValidationIssue(lib.Header.Id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken));
+                issues.Add(new LibraryValidationIssue(
+                    lib.Header.Id, row.RowId, LibraryValidationKind.DuplicateSpoken, TermFields.Spoken, OtherRowId: other.RowId));
             }
         }
 
