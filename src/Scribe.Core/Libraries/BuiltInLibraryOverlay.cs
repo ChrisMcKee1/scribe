@@ -51,7 +51,8 @@ namespace Scribe.Core.Libraries;
 /// <b>Rows are canonical.</b> Every row this class returns is exactly what <see cref="Apply"/> gives for its entry against
 /// its shipped values, so writing the entries of any rows and applying them again reproduces the rows. Row methods and
 /// <see cref="Collect"/> refuse a row that is not (an <see cref="ArgumentException"/>): an authored row whose values do
-/// not come from its entry would otherwise be saved as something other than what the user saw.
+/// not come from its entry would otherwise be saved as something other than what the user saw. Every public command also
+/// refuses, the same way, a shipped library, row, document or value holding text that is not well-formed UTF-16.
 /// </para>
 /// <para>
 /// Pure and stateless: no I/O, no clock, no logging, safe to share across threads. Row methods never change the row they
@@ -99,6 +100,10 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Throws <see cref="ArgumentException"/> for a library that is not built in, or whose id or shipped values are not
+    /// well-formed UTF-16, and for a document of another library or one that would not read back as written.
+    /// </remarks>
     public IReadOnlyList<LibraryRow> Apply(DictionaryLibrary shipped, BuiltInLibraryEdits? edits)
     {
         var shippedRows = ShippedValues(shipped);
@@ -273,7 +278,8 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     /// order (one written by hand, or before an upgrade reordered the shipped rows) is written back in this order at the
     /// next Save; only the relative order of the rows this version does not ship is taken from <paramref name="rows"/>,
     /// and the editor appends new ones. Every row must be one this overlay gives for this built-in, and no two rows may
-    /// share a key; an <see cref="ArgumentException"/> otherwise.
+    /// share a key; the shipped library (whose id the document takes), the committed document and every row must hold only
+    /// well-formed UTF-16. An <see cref="ArgumentException"/> otherwise.
     /// </para>
     /// </remarks>
     public BuiltInLibraryEdits? Collect(DictionaryLibrary shipped, BuiltInLibraryEdits? committed, IReadOnlyList<LibraryRow> rows)
@@ -552,7 +558,19 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
             throw new ArgumentException("Only a built-in library has an edits document.", nameof(shipped));
         }
 
-        return [.. (shipped.Entries ?? []).Where(entry => entry is not null).Select(TermValues.FromEntry)];
+        // The id is copied into the document Collect gives, and every value can become a key or a base (round 3, A5).
+        if (!IsText(shipped.Id))
+        {
+            throw new ArgumentException("A built-in library's id is text.", nameof(shipped));
+        }
+
+        IReadOnlyList<TermValues> values = [.. (shipped.Entries ?? []).Where(entry => entry is not null).Select(TermValues.FromEntry)];
+        if (!values.All(value => HoldsText(value)))
+        {
+            throw new ArgumentException(NotText, nameof(shipped));
+        }
+
+        return values;
     }
 
     private static void EnsureDocumentOf(DictionaryLibrary shipped, BuiltInLibraryEdits edits, string parameter)
@@ -613,8 +631,9 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
     private static bool HoldsText(TermValues? values) => values is null || (IsText(values.Spoken) && IsText(values.Written));
 
     // Text is well-formed UTF-16: never null, and every surrogate in a pair. Anything else is refused wherever an id, a
-    // key or a value is taken in: written out, an unpaired surrogate becomes U+FFFD, so two different keys could be written
-    // alike and the document read back with a repeated key, pausing the library (round 2, A2).
+    // key or a value is taken in, by every public command: documents and typed values (round 2, A2), shipped libraries and
+    // rows (round 3, A5). Written out, an unpaired surrogate becomes U+FFFD, so two different keys could be written alike
+    // and the document read back with a repeated key, pausing the library.
     internal static bool IsText(string? value)
     {
         if (value is null)
@@ -652,6 +671,16 @@ public sealed class BuiltInLibraryOverlay : IBuiltInLibraryOverlay
         if (row.Origin == TermOrigin.Custom || !Enum.IsDefined(row.Origin))
         {
             throw new ArgumentException("The built-in overlay changes rows of built-in libraries only.", parameter);
+        }
+
+        // Everything a row carries is text before anything is rebuilt from it: a row whose own values and shipped values
+        // agree rebuilds as itself, so the reconstruction check alone would take text that is not well-formed (round 3, A5).
+        if (!IsText(row.Key.Value) ||
+            row.Values is not { } values || !HoldsText(values) ||
+            !HoldsText(row.Shipped) ||
+            (row.Review is { } review && (!HoldsText(review.Yours) || !HoldsText(review.UpdatedBuiltIn))))
+        {
+            throw new ArgumentException(NotText, parameter);
         }
 
         if (row.Edit is not null)

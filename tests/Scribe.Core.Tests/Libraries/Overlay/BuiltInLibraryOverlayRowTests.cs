@@ -274,6 +274,28 @@ public sealed class BuiltInLibraryOverlayRowTests
         Assert.Equal("gh \uD83D\uDE00", BuiltInOverlay.Add(T("gh \uD83D\uDE00", "GitHub \uD83D\uDC69\u200D\uD83D\uDCBB")).Key.Value);
     }
 
+    public static TheoryData<string> CommandsTakingNotText()
+    {
+        var data = new TheoryData<string>();
+        foreach (var command in CommandsOnNotText().Keys)
+        {
+            data.Add(command);
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(CommandsTakingNotText))]
+    public void Every_command_refuses_a_shipped_library_or_a_row_that_holds_text_that_is_not_well_formed(string command)
+    {
+        // Round 3, A5 (Astra): the refusal of round 2 covered documents and typed values, but a shipped library and a
+        // row were taken at their word, so a built-in whose Spoken held "key\uD800" came back from Apply with that key,
+        // and every row command accepted the row, since its own values and shipped values agreed. Now every public command
+        // that takes a shipped library or a row refuses one that holds text that is not well-formed, the same way.
+        Assert.Throws<ArgumentException>(CommandsOnNotText()[command]);
+    }
+
     [Fact]
     public void An_edit_to_one_field_leaves_the_other_fields_following_later_versions()
     {
@@ -355,5 +377,62 @@ public sealed class BuiltInLibraryOverlayRowTests
         IBuiltInLibraryOverlay overlay = BuiltInLibraryOverlay.Instance;
 
         Assert.Same(BuiltInLibraryOverlay.Instance, overlay);
+    }
+
+    // Shipped libraries and rows that hold text that is not well-formed, each row exactly as the overlay would have given
+    // it for those shipped values (its own values and shipped values agree), so only its text can make a command refuse it.
+    private static Dictionary<string, Action> CommandsOnNotText()
+    {
+        var good = T("key", "K");
+        var edit = T("key", "K2");
+        var notTextSpoken = T("key\uD800", "K");
+        var notTextWritten = T("key", "K\uD800");
+        var badId = Shipped("git\uD800hub", good);
+        var badSpoken = Shipped(notTextSpoken);
+        var badWritten = Shipped(notTextWritten);
+        var edited = Edited("key", good, edit);
+        LibraryRow[] rows =
+        [
+            new(K(notTextSpoken.Spoken), notTextSpoken, TermOrigin.Shipped, notTextSpoken),
+            new(K("key"), notTextWritten, TermOrigin.Shipped, notTextWritten),
+            new(K("key"), edit, TermOrigin.Edited, notTextWritten, edited, new TermReview(edit, notTextWritten, TermFields.Written)),
+            new(K("key"), good, TermOrigin.Edited, notTextWritten, Pinned("key", good, good), new TermReview(good, notTextWritten, TermFields.Written)),
+            new(K("key"), notTextWritten with { Enabled = false }, TermOrigin.Off, notTextWritten, Off("key", good)),
+            new(K("key"), edit, TermOrigin.Added, notTextWritten, Added("key", edit)),
+        ];
+        string[] rowNames =
+        [
+            "a shipped row whose key is not text",
+            "a shipped row whose Written is not text",
+            "an edited row whose shipped values are not text",
+            "a pinned row whose shipped values are not text",
+            "an off row whose shipped values are not text",
+            "an added row whose shipped values are not text",
+        ];
+
+        var commands = new Dictionary<string, Action>
+        {
+            ["Apply, the library id"] = () => BuiltInOverlay.Apply(badId, null),
+            ["Apply, a shipped Spoken"] = () => BuiltInOverlay.Apply(badSpoken, null),
+            ["Apply, a shipped Written"] = () => BuiltInOverlay.Apply(badWritten, null),
+            ["Apply with a document, a shipped Written"] = () => BuiltInOverlay.Apply(badWritten, Document(edited)),
+            ["Collect, the library id it would copy into the document"] =
+                () => BuiltInOverlay.Collect(badId, null, [new LibraryRow(K("key"), edit, TermOrigin.Edited, good, edited)]),
+            ["Collect, the library id"] = () => BuiltInOverlay.Collect(badId, null, []),
+            ["Collect, a shipped Spoken"] = () => BuiltInOverlay.Collect(badSpoken, null, []),
+            ["Collect, a shipped Written"] = () => BuiltInOverlay.Collect(badWritten, null, []),
+            ["Collect, a shipped Written and its row"] = () => BuiltInOverlay.Collect(badWritten, null, [rows[1]]),
+        };
+        for (var i = 0; i < rows.Length; i++)
+        {
+            var row = rows[i];
+            commands[$"Edit, {rowNames[i]}"] = () => BuiltInOverlay.Edit(row, T("key", "Other"));
+            commands[$"SetEnabled, {rowNames[i]}"] = () => BuiltInOverlay.SetEnabled(row, !row.Values.Enabled);
+            commands[$"RestoreShipped, {rowNames[i]}"] = () => BuiltInOverlay.RestoreShipped(row);
+            commands[$"ResolveReview, keep mine, {rowNames[i]}"] = () => BuiltInOverlay.ResolveReview(row, TermReviewChoice.KeepMine);
+            commands[$"ResolveReview, use updated, {rowNames[i]}"] = () => BuiltInOverlay.ResolveReview(row, TermReviewChoice.UseUpdated);
+        }
+
+        return commands;
     }
 }
