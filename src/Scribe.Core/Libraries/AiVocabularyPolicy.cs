@@ -74,8 +74,8 @@ public static class AiVocabularyPolicy
         return !current.Covers(admitted);
     }
 
-    // The choice alone, without the content binding: a draft previews the state its Save would commit, and that Save
-    // records the hash of every file it writes, so the draft's content is by definition the content it accepts.
+    // The choice alone, without the content binding: a preview judges by it only the libraries whose content the draft's
+    // Save writes, since that Save records the hash of every file it writes (round 2, part 3).
     internal static bool IsPermittedByChoice(LibraryLocalState state, string libraryId, bool builtIn) =>
         IsHealthy(state) && IsChosen(state, libraryId, builtIn);
 

@@ -371,14 +371,146 @@ public sealed class LibraryCompositionTests
     [Fact]
     public void A_preview_takes_AI_permission_from_the_drafts_choices()
     {
+        // Round 2, part 3: judged against the draft's base catalog, where team's file is accepted as it stands.
         var team = CustomLibrary("team", Custom("kube", "K8s"));
         var created = CustomLibrary("custom-new", Custom("helm", "Helm"));
-        var state = State(enabled: ["team", "custom-new"], ai: [("team", true), ("custom-new", false)]);
+        var state = State(enabled: ["team", "custom-new"], ai: [("team", true), ("custom-new", false)], accepted: [("team", H1)]);
+        var committed = Catalog(state, Committed(team, H1));
         var preview = LibraryComposition.Preview(
-            Draft(4, state, Draft(team), Draft(created, LibraryOrigin.Created)), [], new GlossaryBudget(80));
+            Draft(4, state, Draft(team), Draft(created, LibraryOrigin.Created)), committed, [], new GlossaryBudget(80));
 
         Assert.Equal(["K8s"], preview.AiLibraryEntries.Select(e => e.Replacement));
         Assert.Equal(["custom-new"], preview.AiExcludedLibraryIds);
         Assert.Equal(GlossaryInclusion.NotPermitted, preview.StatusOf("custom-new", Key("helm")).Glossary);
+    }
+
+    // --- The content check in a preview (round 2, part 3: Astra's review of D) ---
+
+    [Theory]
+    [InlineData("AI box", false)]
+    [InlineData("enabled box", false)]
+    [InlineData("AI box", true)]
+    [InlineData("enabled box", true)]
+    public void A_library_whose_only_draft_change_is_its_AI_box_or_enabled_box_is_not_permitted_while_its_committed_content_is_not_accepted(
+        string change, bool builtIn)
+    {
+        // The committed file (H2) is not the content the state accepted (H1): replaced outside Scribe, not yet adopted.
+        // The draft changes only a box, so its Save writes nothing and the file stays H2: the preview, like the result
+        // after Save, must not permit it, although the box change marks the library unsaved.
+        var library = builtIn
+            ? BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"))
+            : CustomLibrary("team", Custom("get hub", "Nightjar Hub"));
+        var id = library.Id;
+        var before = change == "AI box"
+            ? State(enabled: [id], ai: [(id, false)], accepted: [(id, H1)])
+            : State(enabled: [], ai: [(id, true)], accepted: [(id, H1)]);
+        var after = State(enabled: [id], ai: [(id, true)], accepted: [(id, H1)]);
+        var committed = Catalog(before, Committed(library, H2));
+        var draft = Draft(9, after, Draft(library) with { Unsaved = true });
+
+        foreach (var preview in new[]
+        {
+            LibraryComposition.Preview(draft, committed, [], new GlossaryBudget(80)),
+            LibraryComposition.Preview(draft, [], new GlossaryBudget(80)),
+        })
+        {
+            Assert.Equal([id], preview.AiExcludedLibraryIds);
+            Assert.Empty(preview.AiLibraryEntries);
+            Assert.Equal(GlossaryInclusion.NotPermitted, preview.StatusOf(id, Key("get hub")).Glossary);
+            Assert.Equal("Nightjar Hub", Winner(preview, "get hub"));
+        }
+
+        // The result after Save: the draft's state over the unchanged file.
+        Assert.Equal([id], Compose(Catalog(after, Committed(library, H2))).AiExcludedLibraryIds);
+    }
+
+    [Fact]
+    public void A_library_the_drafts_Save_writes_is_judged_by_the_drafts_choice_whatever_its_committed_file_holds()
+    {
+        // Each committed file here (H2) is not the accepted content (H1); the draft rewrites each one, so its Save records
+        // the new hash and the choice applies. Libraries the committed catalog does not hold are written too.
+        var team = CustomLibrary("team", Custom("kube", "K8s"));
+        var renamed = CustomLibrary("renamed", Custom("helm", "Helm"));
+        var github = BuiltInLibrary("github", Edited("get hub", "GitHub", "get hub", "Nightjar Hub"));
+        string[] brought = ["custom-created", "custom-imported", "custom-duplicate", "custom-restored"];
+        var state = State(
+            enabled: ["team", "renamed", "github", .. brought],
+            ai: [("team", true), ("renamed", true), ("github", true), .. brought.Select(b => (b, true))],
+            accepted: [("team", H1), ("renamed", H1), ("github", H1)]);
+        var committed = Catalog(state, Committed(team, H2), Committed(renamed, H2), Committed(github, H2));
+        var draft = Draft(
+            10, state,
+            Draft(team with { Rows = [.. team.Rows, Custom("argo", "Argo")] }) with { Unsaved = true },
+            Draft(renamed with { Name = "Renamed library" }) with { Unsaved = true },
+            Draft(github with { Rows = [.. github.Rows, Added("octo cat", "Octocat")] }) with { Unsaved = true },
+            Draft(CustomLibrary("custom-created", Custom("alpha", "Alpha")), LibraryOrigin.Created),
+            Draft(CustomLibrary("custom-imported", Custom("beta", "Beta")), LibraryOrigin.Imported),
+            Draft(CustomLibrary("custom-duplicate", Custom("gamma", "Gamma")), LibraryOrigin.Duplicated),
+            Draft(CustomLibrary("custom-restored", Custom("delta", "Delta")), LibraryOrigin.Restored));
+
+        var preview = LibraryComposition.Preview(draft, committed, [], new GlossaryBudget(80));
+
+        Assert.Empty(preview.AiExcludedLibraryIds);
+        Assert.Equal(
+            ["Alpha", "Argo", "Beta", "Delta", "Gamma", "Helm", "K8s", "Nightjar Hub", "Octocat"],
+            preview.AiLibraryEntries.Select(e => e.Replacement).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void Without_its_committed_catalog_a_preview_permits_only_the_libraries_its_draft_brings_in()
+    {
+        // The overload without the committed catalog cannot see which files the Save leaves as they are, nor what they
+        // hold, so it fails closed for every committed library; with the catalog, the accepted file is permitted.
+        var team = CustomLibrary("team", Custom("kube", "K8s"));
+        var github = BuiltInLibrary("github", Shipped("get hub", "GitHub"));
+        var created = CustomLibrary("custom-created", Custom("helm", "Helm"));
+        var state = State(enabled: ["team", "github", "custom-created"], ai: [("team", true), ("custom-created", true)], accepted: [("team", H1)]);
+        var committed = Catalog(state, Committed(team, H1), Committed(github));
+        var draft = Draft(11, state, Draft(team), Draft(github), Draft(created, LibraryOrigin.Created));
+
+        var withCatalog = LibraryComposition.Preview(draft, committed, [], new GlossaryBudget(80));
+        var without = LibraryComposition.Preview(draft, [], new GlossaryBudget(80));
+
+        Assert.Empty(withCatalog.AiExcludedLibraryIds);
+        Assert.Equal(["GitHub", "Helm", "K8s"], withCatalog.AiLibraryEntries.Select(e => e.Replacement).Order(StringComparer.Ordinal));
+        Assert.Equal(["github", "team"], without.AiExcludedLibraryIds.Order(StringComparer.Ordinal));
+        Assert.Equal(["Helm"], without.AiLibraryEntries.Select(e => e.Replacement));
+    }
+
+    [Fact]
+    public void A_preview_refuses_a_committed_catalog_the_draft_was_not_built_from()
+    {
+        var team = CustomLibrary("team", Custom("kube", "K8s"));
+        var state = State(enabled: ["team"], ai: [("team", true)], accepted: [("team", H1)]);
+        var draft = Draft(12, state, Draft(team));
+
+        Assert.Throws<ArgumentException>(() =>
+            LibraryComposition.Preview(draft, Catalog(draft.BaseGeneration + 1, state, Committed(team, H1)), [], new GlossaryBudget(80)));
+    }
+
+    [Fact]
+    public void An_unchanged_library_whose_committed_content_is_not_accepted_previews_with_the_markers_of_the_upgrade()
+    {
+        // A4 in a preview: the file the Save leaves in place composes with a discovered file's defaults, AI off and the
+        // markers the upgrade would give it, exactly as the committed composition does after that Save.
+        var github = BuiltInLibrary("github", Shipped("get hub", "GitHub"));
+        var team = CustomLibrary("team", Custom("get hub", "TeamHub"));
+        var before = State(enabled: ["github"], ai: [("team", true)], accepted: [("team", H1)]);
+        var after = State(enabled: ["github", "team"], ai: [("team", true)], accepted: [("team", H1)]);
+        var committed = Catalog(before, Committed(github), Committed(team, H2));
+
+        var preview = LibraryComposition.Preview(
+            Draft(13, after, Draft(github), Draft(team) with { Unsaved = true }), committed, [], new GlossaryBudget(80));
+
+        Assert.Equal("GitHub", Winner(preview, "get hub"));
+        Assert.True(preview.StatusOf("team", Key("get hub")).LegacyMarkerActive);
+        Assert.Equal(["team"], preview.AiExcludedLibraryIds);
+        var saved = Compose(Catalog(after, Committed(github), Committed(team, H2)));
+        Assert.Equal(Winner(saved, "get hub"), Winner(preview, "get hub"));
+
+        // Content the Save writes takes the draft's markers (none here), so the authored row comes first.
+        var rewritten = LibraryComposition.Preview(
+            Draft(14, after, Draft(github), Draft(team with { Name = "Team" }) with { Unsaved = true }), committed, [], new GlossaryBudget(80));
+        Assert.Equal("TeamHub", Winner(rewritten, "get hub"));
     }
 }

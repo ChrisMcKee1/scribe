@@ -52,7 +52,7 @@ public sealed class DictionaryUsageAnalyzerLibraryTests
             State(enabled: ["team", "private"], ai: [("team", true), ("private", false)], accepted: [("team", H1), ("private", H2)]),
             Committed(team, H1), Committed(privateLibrary, H2));
         var composition = LibraryComposition.Preview(
-            Draft(1, catalog.LocalState, Draft(team), Draft(privateLibrary)), [], new GlossaryBudget(80));
+            Draft(1, catalog.LocalState, Draft(team), Draft(privateLibrary)), catalog, [], new GlossaryBudget(80));
         Assert.Equal(["private"], composition.AiExcludedLibraryIds);
 
         var report = DictionaryUsageAnalyzer.Analyze(

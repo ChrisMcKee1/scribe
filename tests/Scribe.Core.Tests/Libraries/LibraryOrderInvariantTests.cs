@@ -104,7 +104,7 @@ public sealed class LibraryOrderInvariantTests
 
                 Assert.True(expected == TieredOutcome(LibraryComposition.Committed(permuted, personal, new GlossaryBudget(80)), catalog, personalAll),
                     $"{scenario}: a committed composition changed with the libraries in the order " + string.Join(", ", libraries.Select(l => l.Content.Id)));
-                Assert.True(expected == TieredOutcome(LibraryComposition.Preview(draft, personal, new GlossaryBudget(80)), catalog, personalAll),
+                Assert.True(expected == TieredOutcome(LibraryComposition.Preview(draft, permuted, personal, new GlossaryBudget(80)), catalog, personalAll),
                     $"{scenario}: a preview changed with the libraries in the order " + string.Join(", ", libraries.Select(l => l.Content.Id)));
             }
         }

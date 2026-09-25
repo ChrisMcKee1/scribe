@@ -10,7 +10,8 @@ namespace Scribe.Core.Libraries;
 /// legacy markers, the subset AI cleanup may carry, and everything the Libraries and Dictionary pages say about rows,
 /// badges, the Save prompt and glossary inclusion. Committed compositions feed dictation (through
 /// <see cref="ILibraryComposer.ComposeVocabulary"/>); previews feed the Settings window, and name the draft revision they
-/// were computed for so a stale one can be discarded.
+/// were computed for so a stale one can be discarded. A preview is composed against the committed catalog the draft was
+/// built from, so its AI permission is what the draft's Save would commit (round 2, part 3).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -181,17 +182,47 @@ public sealed class LibraryComposition
         LibraryCatalog catalog, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget) =>
         Committed(catalog, dictionary, budget, LibraryDecisions.Precedence);
 
-    /// <summary>The preview of <paramref name="draft"/>: the result its Save would give.</summary>
+    /// <summary>
+    /// The preview of <paramref name="draft"/> where its committed catalog is not at hand; the Libraries page and the
+    /// dictionary cleanup use <see cref="Preview(LibraryDraft, LibraryCatalog, IReadOnlyList{DictionaryEntry}, GlossaryBudget)"/>.
+    /// </summary>
     /// <param name="draft">The draft at one revision.</param>
     /// <param name="dictionary">The personal dictionary in the order dictation reads it; only enabled entries count.</param>
     /// <param name="budget">The glossary budget dictation uses.</param>
     /// <remarks>
-    /// AI permission is the draft's choice. The draft carries no hashes, and its Save records the hash of every file it
-    /// writes in the same commit, so what the draft shows is the content its choices are made for.
+    /// Without the committed catalog the preview cannot tell which files the Save leaves as they are, nor what they hold,
+    /// so AI permission fails closed: a library the draft brings in (created, imported, duplicated, restored, or kept from
+    /// a retired built-in or from a change made outside Scribe), which its Save always writes, is judged by the draft's
+    /// choices, and every library already committed is taken as not permitted (round 2, part 3: the review of D).
     /// </remarks>
     public static LibraryComposition Preview(
         LibraryDraft draft, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget) =>
-        Preview(draft, dictionary, budget, LibraryDecisions.Precedence);
+        Preview(draft, committed: null, dictionary, budget, LibraryDecisions.Precedence);
+
+    /// <summary>The preview of <paramref name="draft"/>: the result its Save would give.</summary>
+    /// <param name="draft">The draft at one revision.</param>
+    /// <param name="committed">
+    /// The committed catalog the draft was built from (its <see cref="LibraryCatalog.Generation"/> is the draft's
+    /// <see cref="LibraryDraft.BaseGeneration"/>): what each library's file holds now.
+    /// </param>
+    /// <param name="dictionary">The personal dictionary in the order dictation reads it; only enabled entries count.</param>
+    /// <param name="budget">The glossary budget dictation uses.</param>
+    /// <remarks>
+    /// AI permission is what the Save would commit (round 2, part 3: the review of D). A library whose content the Save
+    /// writes, one the committed catalog does not hold or whose metadata or rows differ from the committed library's, is
+    /// judged by the draft's choices alone, since that Save records the hash of every file it writes. Every other library
+    /// keeps its committed file, which composes exactly as the committed composition composes it (review finding A4):
+    /// judged against the draft's accepted content, and while that is not the file's content, not permitted and with the
+    /// legacy markers the upgrade would give it, however its enabled state or AI box changed (those changes mark it
+    /// unsaved, and write nothing).
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="committed"/> is not the catalog the draft was built from.</exception>
+    public static LibraryComposition Preview(
+        LibraryDraft draft, LibraryCatalog committed, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        return Preview(draft, committed, dictionary, budget, LibraryDecisions.Precedence);
+    }
 
     // Each decision-1 alternative behind the one policy point, so a veto is a change to LibraryDecisions alone.
     internal static LibraryComposition Committed(
@@ -229,21 +260,85 @@ public sealed class LibraryComposition
     }
 
     internal static LibraryComposition Preview(
-        LibraryDraft draft, IReadOnlyList<DictionaryEntry> dictionary, GlossaryBudget budget, LibraryPrecedenceRule rule)
+        LibraryDraft draft,
+        LibraryCatalog? committed,
+        IReadOnlyList<DictionaryEntry> dictionary,
+        GlossaryBudget budget,
+        LibraryPrecedenceRule rule)
     {
         ArgumentNullException.ThrowIfNull(draft);
         ArgumentNullException.ThrowIfNull(dictionary);
+        if (committed is not null && committed.Generation != draft.BaseGeneration)
+        {
+            throw new ArgumentException(
+                "The committed catalog must be the one the draft was built from, the generation the draft names as its base.",
+                nameof(committed));
+        }
+
         var state = draft.LocalState;
         var markers = MarkersByLibrary(state);
-        var sources = draft.Libraries.Select(library => new Source(
-            library.Content,
-            library.FileName,
-            participates: state.EnabledIds.Contains(library.Content.Id) && LibraryTiers.IsUsable(library.State) &&
-                !library.PendingDelete,
-            aiPermitted: AiVocabularyPolicy.IsPermittedByChoice(state, library.Content.Id, library.Content.BuiltIn),
-            markers.GetValueOrDefault(library.Content.Id) ?? EmptyKeys));
+        Dictionary<string, List<TermValues>>? shipped = null;
+        var sources = new List<Source>(draft.Libraries.Count);
+        foreach (var library in draft.Libraries)
+        {
+            var content = library.Content;
+            IReadOnlySet<LibraryTermKey> marked = markers.GetValueOrDefault(content.Id) ?? EmptyKeys;
+            bool aiPermitted;
+            if (committed is null)
+            {
+                // Nothing committed can be judged without the catalog; a library the draft brings in is always written.
+                aiPermitted = IsBroughtIn(library.Origin) && AiVocabularyPolicy.IsPermittedByChoice(state, content.Id, content.BuiltIn);
+            }
+            else if (FileTheSaveKeeps(committed, content) is { } kept)
+            {
+                // The Save leaves this file as it is, so it composes as the committed composition composes it (A4): judged
+                // against the accepted content, and with the upgrade's markers when that content is not the accepted one.
+                aiPermitted = AiVocabularyPolicy.IsPermitted(state, content.Id, content.BuiltIn, kept.ContentHash);
+                if (!content.BuiltIn && !AiVocabularyPolicy.ContentIsAccepted(state, content.Id, false, kept.ContentHash))
+                {
+                    shipped ??= LibraryTiers.ShippedValues(draft.Libraries.Where(l => l.Content.BuiltIn).Select(l => l.Content));
+                    marked = LibraryTiers.UpgradeMarkers(content, shipped).Select(marker => marker.Key).ToHashSet();
+                }
+            }
+            else
+            {
+                // The Save writes this content and records its hash in the same commit, so the draft's choices apply.
+                aiPermitted = AiVocabularyPolicy.IsPermittedByChoice(state, content.Id, content.BuiltIn);
+            }
+
+            sources.Add(new Source(
+                content,
+                library.FileName,
+                participates: state.EnabledIds.Contains(content.Id) && LibraryTiers.IsUsable(library.State) && !library.PendingDelete,
+                aiPermitted,
+                marked));
+        }
+
         return new LibraryComposition(isPreview: true, draft.Revision, sources, dictionary, budget, rule);
     }
+
+    // A library the draft brings in: its Save always writes the file (a restore puts the entry's bytes back).
+    private static bool IsBroughtIn(LibraryOrigin origin) =>
+        origin is LibraryOrigin.Created or LibraryOrigin.Imported or LibraryOrigin.Duplicated or LibraryOrigin.Restored or
+            LibraryOrigin.RetiredBuiltIn or LibraryOrigin.ChangedOutside;
+
+    // The committed file the draft's Save leaves in place for this content: the committed library of the same id and kind
+    // with the draft's metadata and rows. Null when the Save writes the content, including every library the committed
+    // catalog does not hold.
+    private static CatalogLibrary? FileTheSaveKeeps(LibraryCatalog committed, LibraryContent content) =>
+        committed.Find(content.Id) is { } file && file.Content.BuiltIn == content.BuiltIn && SameContent(file.Content, content)
+            ? file
+            : null;
+
+    // Whether the Save leaves a library's file as it is: the same metadata and rows. Rows compare by value (record
+    // equality), the list element by element.
+    private static bool SameContent(LibraryContent committed, LibraryContent draft) =>
+        ReferenceEquals(committed, draft) ||
+        (string.Equals(committed.Name, draft.Name, StringComparison.Ordinal) &&
+            string.Equals(committed.Category, draft.Category, StringComparison.Ordinal) &&
+            string.Equals(committed.Description, draft.Description, StringComparison.Ordinal) &&
+            string.Equals(committed.BasedOn, draft.BasedOn, StringComparison.Ordinal) &&
+            committed.Rows.SequenceEqual(draft.Rows));
 
     /// <summary>
     /// What the page says about the row of <paramref name="libraryId"/> whose identity is <paramref name="key"/>
