@@ -340,7 +340,8 @@ public sealed record LibrarySaveOutcome(
 /// <param name="Discarded">Manifests of a generation that never committed, discarded with their redo images.</param>
 /// <param name="SetAside">
 /// Manifests quarantined unapplied because the committed generation was lost, was older than them, or their redo image
-/// failed its hash; kept with every file they name for the quarantine retention.
+/// failed its hash: their own journal files (redo images, install copies, spare backups) kept for the quarantine
+/// retention, after the files were made whole; no library file they name is ever deleted by the quarantine.
 /// </param>
 /// <param name="FilesAwaitingRelease">Files of the committed generation still not in place.</param>
 /// <param name="OrphansRemoved">Staged, backup or redo files no manifest, live or set aside, names, removed.</param>
