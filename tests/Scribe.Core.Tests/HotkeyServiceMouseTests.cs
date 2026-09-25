@@ -129,7 +129,7 @@ public partial class HotkeyServiceTests
         var sentinel = button == MouseButtons.Back ? MouseButtons.Forward : MouseButtons.Back;
         Inject(ButtonDown(sentinel), ButtonUp(sentinel));
         Assert.True(guard.WaitFor(2), "The unbound button never came through the service's hook.");
-        Assert.Equal(new[] { Message(ButtonDown(sentinel)), Message(ButtonUp(sentinel)) }, guard.Seen);
+        Assert.Equal(new[] { Message(ButtonDown(sentinel)), Message(ButtonUp(sentinel)) }, guard.SeenWithoutMoves);
         Assert.Equal(4, service.MouseButtonEventsSeen);
     }
 
@@ -147,7 +147,8 @@ public partial class HotkeyServiceTests
         service.Activated += (_, _) => Interlocked.Increment(ref events);
         service.Start();
 
-        // The guard swallows each of these, so the pointer never moves and nothing scrolls.
+        // The guard swallows each of these, so the pointer never moves and nothing scrolls. The last one, a second
+        // horizontal wheel turn of its own size, says when the guard has everything.
         NativeMethods.INPUT[] inputs =
         [
             Mouse(MouseEventMove, dx: 1), Mouse(MouseEventMove, dx: -1),
@@ -155,18 +156,17 @@ public partial class HotkeyServiceTests
             ButtonDown(MouseButtons.Middle), ButtonUp(MouseButtons.Middle),
             ButtonDown(MouseButtons.Forward), ButtonUp(MouseButtons.Forward),
             Mouse(MouseEventMove, dx: 1), Mouse(MouseEventMove, dx: -1),
+            Mouse(MouseEventHWheel, data: 240),
         ];
         Inject(inputs);
 
-        Assert.True(guard.WaitFor(inputs.Length), $"The guard received {guard.Seen.Length} of {inputs.Length} events.");
-        Assert.Equal(inputs.Select(Message).Select(Comparable).ToArray(), guard.Seen.Select(Comparable).ToArray());
+        var expected = inputs.Select(Message).Where(seen => seen.Message != MouseHookFilter.WM_MOUSEMOVE).ToArray();
+        Assert.True(guard.WaitFor(expected.Length), $"The guard received {guard.SeenWithoutMoves.Length} of {expected.Length} events.");
+        Assert.Equal(expected, guard.SeenWithoutMoves);
+        Assert.True(guard.MovesSeen >= 4, $"The guard received {guard.MovesSeen} of the 4 moves.");
         Assert.Equal(4, service.MouseButtonEventsSeen); // the buttons only: no move or wheel reached the engine
         Assert.Equal(0, Volatile.Read(ref events));
     }
-
-    // mouseData means nothing for a move, so only the message is compared for one.
-    private static (int Message, uint MouseData) Comparable((int Message, uint MouseData) seen) =>
-        seen.Message == MouseHookFilter.WM_MOUSEMOVE ? (seen.Message, 0u) : seen;
 
     [Fact]
     public void Start_lets_a_bare_bound_button_through_while_ctrl_is_held_and_takes_it_once_ctrl_is_up()
@@ -210,7 +210,7 @@ public partial class HotkeyServiceTests
                 Message(ButtonDown(MouseButtons.Back)), Message(ButtonUp(MouseButtons.Back)),
                 Message(ButtonDown(MouseButtons.Middle)), Message(ButtonUp(MouseButtons.Middle)),
             },
-            guard.Seen);
+            guard.SeenWithoutMoves);
     }
 
     [Fact]
@@ -237,7 +237,8 @@ public partial class HotkeyServiceTests
 
         Inject(ButtonDown(MouseButtons.Middle), ButtonUp(MouseButtons.Middle));
         Assert.True(guard.WaitFor(2));
-        Assert.Equal(new[] { Message(ButtonDown(MouseButtons.Middle)), Message(ButtonUp(MouseButtons.Middle)) }, guard.Seen);
+        Assert.Equal(
+            new[] { Message(ButtonDown(MouseButtons.Middle)), Message(ButtonUp(MouseButtons.Middle)) }, guard.SeenWithoutMoves);
     }
 
     [Fact]
@@ -257,7 +258,7 @@ public partial class HotkeyServiceTests
         Inject(NativeMethods.MarkedMouseButtonUp(MouseButtons.Forward));
 
         Assert.True(guard.WaitFor(1), "Scribe's own release never came through the service's hook.");
-        Assert.Equal(new[] { (MouseHookFilter.WM_XBUTTONUP, 0x0002_0000u) }, guard.Seen);
+        Assert.Equal(new[] { (MouseHookFilter.WM_XBUTTONUP, 0x0002_0000u) }, guard.SeenWithoutMoves);
         Assert.Equal(0, service.MouseButtonEventsSeen);
     }
 
@@ -387,7 +388,18 @@ public partial class HotkeyServiceTests
 
         public (int Message, uint MouseData)[] Seen => _seen.ToArray();
 
-        public bool WaitFor(int count) => SpinWait.SpinUntil(() => _seen.Count >= count, HookTimeout);
+        /// <summary>
+        /// Everything but moves, in order. Windows adds a move of its own before an injected button event now and then
+        /// (measured on CI: a WM_MOUSEMOVE carrying the same extra information appeared between an injected X button's
+        /// press and release), so the tests judge the order of the button and wheel events alone.
+        /// </summary>
+        public (int Message, uint MouseData)[] SeenWithoutMoves =>
+            _seen.Where(seen => seen.Message != MouseHookFilter.WM_MOUSEMOVE).ToArray();
+
+        public int MovesSeen => _seen.Count(seen => seen.Message == MouseHookFilter.WM_MOUSEMOVE);
+
+        public bool WaitFor(int buttonAndWheelEvents) =>
+            SpinWait.SpinUntil(() => SeenWithoutMoves.Length >= buttonAndWheelEvents, HookTimeout);
 
         public void Dispose()
         {
