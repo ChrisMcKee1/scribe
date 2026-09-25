@@ -14,14 +14,15 @@ internal enum HotkeyCommandKind
 /// A change another thread asks the hook thread to make. It is built on the requesting thread, so
 /// the allocation never happens inside the hook callback, and the engine applies commands in the
 /// order they were requested. <paramref name="Generation"/> is the state epoch in force once the
-/// command has been applied.
+/// command has been applied, and <paramref name="Activation"/> the press a CancelToggle releases.
 /// </summary>
 internal sealed record HotkeyCommand(
     HotkeyCommandKind Kind,
     long Generation,
     HotkeyBinding? Binding = null,
     HotkeyBinding? DictationOnlyBinding = null,
-    bool Enabled = false)
+    bool Enabled = false,
+    long Activation = 0)
 {
     public static HotkeyCommand Bindings(HotkeyBinding binding, HotkeyBinding? dictationOnlyBinding, long generation) =>
         new(HotkeyCommandKind.UpdateBindings, generation, binding, dictationOnlyBinding);
@@ -32,8 +33,8 @@ internal sealed record HotkeyCommand(
     public static HotkeyCommand Paused(bool paused, long generation) =>
         new(HotkeyCommandKind.SetPaused, generation, Enabled: paused);
 
-    public static HotkeyCommand CancelToggle(long generation) =>
-        new(HotkeyCommandKind.CancelToggle, generation);
+    public static HotkeyCommand CancelToggle(long generation, long activation) =>
+        new(HotkeyCommandKind.CancelToggle, generation, Activation: activation);
 }
 
 /// <summary>What the hook callback does with one key event.</summary>
@@ -55,6 +56,11 @@ internal readonly record struct HookDecision(bool Suppress, bool RequestReconcil
 /// </summary>
 internal sealed class HotkeyEngine
 {
+    // Numbers every press that claims a dictation, across every installation and service in the process, so a release
+    // asked for one press can never match a newer press, on this engine or a replacement. Only hook threads take a
+    // number, with one interlocked add; it never wraps in practice (2^55 presses).
+    private static long _lastActivation;
+
     private readonly LockFreeInbox<HotkeyCommand> _commands = new();
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
@@ -308,10 +314,27 @@ internal sealed class HotkeyEngine
                 ApplyPaused(command.Enabled);
                 break;
             case HotkeyCommandKind.CancelToggle:
-                _standard.CancelToggle();
-                _dictationOnly?.CancelToggle();
-                _arbiter.Reset();
+                ReleaseActivation(command.Activation);
                 break;
+        }
+    }
+
+    // Scribe itself ended the dictation this press started (the silence auto-stop, a microphone fault, a pause, the
+    // duration ceiling), so the press gives up the dictation and its latch, and the next press starts afresh instead of
+    // being swallowed as the missing toggle-off. A newer press that owns the dictation keeps both: clearing its latch would
+    // leave the recording it starts with no release to end it. Every other latch owns no dictation (a press the arbiter
+    // refused) and is forgotten, as before.
+    private void ReleaseActivation(long activation)
+    {
+        var owner = _arbiter.ReleaseActivation(activation);
+        if (owner != HotkeyTrigger.Standard)
+        {
+            _standard.CancelToggle();
+        }
+
+        if (owner != HotkeyTrigger.DictationOnly)
+        {
+            _dictationOnly?.CancelToggle();
         }
     }
 
@@ -396,9 +419,11 @@ internal sealed class HotkeyEngine
 
     private void EmitKeyTransition(HotkeyTransition transition, HotkeyTrigger trigger)
     {
+        long activation = 0;
         if (transition == HotkeyTransition.Activated)
         {
-            if (!_arbiter.TryActivate(trigger))
+            activation = Interlocked.Increment(ref _lastActivation);
+            if (!_arbiter.TryActivate(trigger, activation))
             {
                 return;
             }
@@ -419,7 +444,8 @@ internal sealed class HotkeyEngine
         // Activated computed after a desktop switch always carries the new one; the item names this engine, whose epoch
         // the consumer judges it by.
         _transitions.TryEnqueue(new HotkeyService.QueuedTransition(
-            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this));
+            transition, trigger, _generation, AllowReconcile: true, ActivationEpoch: _activationEpoch, Engine: this,
+            Activation: activation));
     }
 
     // A null trigger means the engine was retired first, and the retirement reported the stop.

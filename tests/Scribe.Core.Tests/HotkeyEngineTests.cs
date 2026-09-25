@@ -29,7 +29,7 @@ public class HotkeyEngineTests
         using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy, gate: gate);
 
         // A request already queued: applying it on the hook thread must not need the gate either.
-        h.Router.CancelToggle();
+        h.Router.CancelToggle(activation: 0);
 
         Task writer;
         (HookDecision Down, HookDecision Up) press;
@@ -132,10 +132,11 @@ public class HotkeyEngineTests
         using var h = new HotkeyEngineHarness(HotkeyBinding.Legacy with { Mode = HotkeyMode.Toggle });
         h.Down(RightCtrl);
         h.Up(RightCtrl);
-        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+        var on = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Activated, on.Transition);
 
         // Silence auto-stop ended the dictation from another thread; no wake was processed yet.
-        await Task.Run(() => h.Router.CancelToggle());
+        await Task.Run(() => h.Router.CancelToggle(on.Activation));
 
         h.Down(RightCtrl);
         Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
@@ -148,16 +149,16 @@ public class HotkeyEngineTests
 
         // A thread's posted-message queue is finite, so one outstanding wake covers any number of
         // requests made before the hook thread gets to it.
-        Assert.Same(h.Engine, h.Router.CancelToggle());
-        Assert.Null(h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
+        Assert.Null(h.Router.CancelToggle(activation: 0));
         Assert.Null(h.Router.SetCaptureMode(false));
 
         h.Engine.OnWake();
-        Assert.Same(h.Engine, h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
 
         // An undeliverable wake is released so the next request asks again.
         h.Engine.CancelWake();
-        Assert.Same(h.Engine, h.Router.CancelToggle());
+        Assert.Same(h.Engine, h.Router.CancelToggle(activation: 0));
     }
 
     [Fact]
@@ -341,25 +342,56 @@ public class HotkeyEngineTests
     {
         // The owner thread's state clear takes it first, so the owner sends the stop.
         var ownerFirst = new HotkeyTriggerArbiter();
-        Assert.True(ownerFirst.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(ownerFirst.TryActivate(HotkeyTrigger.DictationOnly, activation: 1));
         Assert.Equal(HotkeyTrigger.DictationOnly, ownerFirst.TryTake(HotkeyTrigger.Standard));
         Assert.Null(ownerFirst.Retire());
 
         // Retired first: the retirement reports it, and the owner's later take yields nothing.
         var retiredFirst = new HotkeyTriggerArbiter();
-        Assert.True(retiredFirst.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(retiredFirst.TryActivate(HotkeyTrigger.DictationOnly, activation: 2));
         Assert.Equal(HotkeyTrigger.DictationOnly, retiredFirst.Retire());
         Assert.Null(retiredFirst.TryTake(HotkeyTrigger.Standard));
 
-        // Retirement is terminal: nothing starts, stops, clears or reports anything afterwards.
+        // Retirement is terminal: nothing starts, stops, clears, releases or reports anything afterwards.
         retiredFirst.Reset();
-        Assert.False(retiredFirst.TryActivate(HotkeyTrigger.Standard));
+        Assert.False(retiredFirst.TryActivate(HotkeyTrigger.Standard, activation: 3));
         Assert.False(retiredFirst.TryDeactivate(HotkeyTrigger.DictationOnly));
         Assert.Null(retiredFirst.TryTake(HotkeyTrigger.Standard));
+        Assert.Null(retiredFirst.ReleaseActivation(2));
         Assert.Null(retiredFirst.Retire());
 
         // A live arbiter with nothing active still yields the fallback, as state clears expect.
         Assert.Equal(HotkeyTrigger.Standard, new HotkeyTriggerArbiter().TryTake(HotkeyTrigger.Standard));
+    }
+
+    [Fact]
+    public void Trigger_arbiter_releases_only_the_press_that_owns_the_dictation()
+    {
+        // A stop Scribe made itself names the press that started its recording. A newer press that owns the dictation
+        // keeps it, and is reported as the owner still there.
+        var arbiter = new HotkeyTriggerArbiter();
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 7));
+        Assert.True(arbiter.TryDeactivate(HotkeyTrigger.Standard)); // the old press released
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 8)); // and the key pressed again
+
+        Assert.Equal(HotkeyTrigger.Standard, arbiter.ReleaseActivation(7));
+        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 9)); // 8 still owns it
+        Assert.Equal(HotkeyTrigger.DictationOnly, WithOwner(HotkeyTrigger.DictationOnly, 10).ReleaseActivation(8));
+
+        // The owning press is released, and nothing owns a dictation afterwards.
+        Assert.Null(arbiter.ReleaseActivation(8));
+        Assert.Null(arbiter.TryTakeActive());
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 11));
+
+        // With nothing owning a dictation there is nothing to release.
+        Assert.Null(new HotkeyTriggerArbiter().ReleaseActivation(7));
+
+        static HotkeyTriggerArbiter WithOwner(HotkeyTrigger trigger, long activation)
+        {
+            var owned = new HotkeyTriggerArbiter();
+            Assert.True(owned.TryActivate(trigger, activation));
+            return owned;
+        }
     }
 
     [Fact]
@@ -401,7 +433,7 @@ public class HotkeyEngineTests
 
         Assert.Equal((true, (HotkeyEngine?)null), router.UpdateBindings(F8Hold, F9Hold));
         Assert.Null(router.SetCaptureMode(true));
-        Assert.Null(router.CancelToggle());
+        Assert.Null(router.CancelToggle(activation: 0));
         Assert.Equal(F8Hold, router.Binding);
         Assert.Equal(F9Hold, router.DictationOnlyBinding);
         Assert.False(router.IsPressed(F8));
@@ -416,7 +448,7 @@ public class HotkeyEngineTests
         service.SetPaused(true);
         service.SetCaptureMode(true);
         service.SetCaptureMode(false);
-        service.CancelToggle();
+        service.CancelToggle(activation: 0);
         service.SetPaused(false);
         service.SetPaused(true, requestSequence: 1);
         service.SetPaused(false, requestSequence: 2);

@@ -47,7 +47,8 @@ public sealed class HotkeyService : IHotkeyService
     /// stop is harmless, a missed stop is not). AllowReconcile is false for transitions born from a
     /// state clear: right after a clear the reconciler cannot distinguish a genuinely held key from
     /// a leaked one and could release a key the user is holding. Deactivation says why a
-    /// Deactivated happened.
+    /// Deactivated happened, and Activation numbers the press an Activated came from
+    /// (<see cref="HotkeyTriggerEventArgs.Activation"/>), zero otherwise.
     /// </summary>
     internal readonly record struct QueuedTransition(
         HotkeyTransition Transition,
@@ -56,7 +57,8 @@ public sealed class HotkeyService : IHotkeyService
         bool AllowReconcile,
         HotkeyDeactivation Deactivation = HotkeyDeactivation.Released,
         long ActivationEpoch = 0,
-        HotkeyEngine? Engine = null);
+        HotkeyEngine? Engine = null,
+        long Activation = 0);
 
     private HotkeyTransitionQueue? _transitions;
     private HotkeyReconcileSignal? _reconcileSignal;
@@ -230,7 +232,7 @@ public sealed class HotkeyService : IHotkeyService
         _logger.LogInformation("Hotkey hook removed.");
     }
 
-    public void CancelToggle() => Wake(_router.CancelToggle());
+    public void CancelToggle(long activation) => Wake(_router.CancelToggle(activation));
 
     public void SetCaptureMode(bool enabled)
     {
@@ -355,7 +357,7 @@ public sealed class HotkeyService : IHotkeyService
                     return;
                 }
 
-                Activated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger));
+                Activated?.Invoke(this, new HotkeyTriggerEventArgs(item.Trigger, activation: item.Activation));
             }
             else if (item.Transition == HotkeyTransition.Deactivated)
             {
@@ -776,25 +778,31 @@ public sealed class HotkeyService : IHotkeyService
 }
 
 /// <summary>
-/// Lets at most one trigger own the dictation, arbitrated without a lock. The same word records
-/// retirement, so "which dictation did this engine leave running" and "this engine may no longer
-/// start or stop one" are settled by one atomic operation rather than a flag and a read that a
-/// concurrent owner thread could interleave.
+/// Lets at most one trigger own the dictation, arbitrated without a lock, and remembers which press owns it (the
+/// activation number its Activated carried). One word holds the owner, its press and retirement, so "which dictation did
+/// this engine leave running", "which press started it" and "this engine may no longer start or stop one" are settled
+/// by one atomic operation rather than flags and reads that a concurrent owner thread could interleave.
 /// </summary>
 internal sealed class HotkeyTriggerArbiter
 {
-    // Zero means no trigger is active; Retired is terminal.
-    private const int Retired = -1;
+    // Zero means no trigger owns a dictation, and Retired is terminal. Otherwise the word is the owning press's activation
+    // number above its trigger's code, so a press and its trigger are claimed, compared and released together.
+    private const long Retired = -1;
+    private const int CodeBits = 8;
+    private const long CodeMask = (1L << CodeBits) - 1;
 
-    private int _activeCode;
+    private long _word;
 
-    public bool TryActivate(HotkeyTrigger trigger) =>
-        Interlocked.CompareExchange(ref _activeCode, Code(trigger), 0) == 0;
+    /// <summary>Claims the dictation for this press, unless a trigger already owns one or the engine was retired.</summary>
+    public bool TryActivate(HotkeyTrigger trigger, long activation) =>
+        Interlocked.CompareExchange(ref _word, Encode(trigger, activation), 0) == 0;
 
+    /// <summary>Releases the dictation if <paramref name="trigger"/> owns it; false otherwise, and once retired.</summary>
     public bool TryDeactivate(HotkeyTrigger trigger)
     {
-        var code = Code(trigger);
-        return Interlocked.CompareExchange(ref _activeCode, 0, code) == code;
+        // Only the owner thread and a retirement write the word, so a failed exchange means the engine was retired.
+        var word = Volatile.Read(ref _word);
+        return IsOwned(word) && TriggerOf(word) == trigger && Interlocked.CompareExchange(ref _word, 0, word) == word;
     }
 
     /// <summary>
@@ -804,16 +812,16 @@ internal sealed class HotkeyTriggerArbiter
     /// </summary>
     public HotkeyTrigger? TryTake(HotkeyTrigger fallback)
     {
-        var code = Volatile.Read(ref _activeCode);
-        while (code != Retired)
+        var word = Volatile.Read(ref _word);
+        while (word != Retired)
         {
-            var observed = Interlocked.CompareExchange(ref _activeCode, 0, code);
-            if (observed == code)
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
             {
-                return code == 0 ? fallback : Trigger(code);
+                return word == 0 ? fallback : TriggerOf(word);
             }
 
-            code = observed;
+            word = observed;
         }
 
         return null;
@@ -830,16 +838,43 @@ internal sealed class HotkeyTriggerArbiter
     /// </summary>
     public HotkeyTrigger? TryTakeActive()
     {
-        var code = Volatile.Read(ref _activeCode);
-        while (code is not (0 or Retired))
+        var word = Volatile.Read(ref _word);
+        while (IsOwned(word))
         {
-            var observed = Interlocked.CompareExchange(ref _activeCode, 0, code);
-            if (observed == code)
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
             {
-                return Trigger(code);
+                return TriggerOf(word);
             }
 
-            code = observed;
+            word = observed;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Releases the dictation if the press <paramref name="activation"/> still owns it, and returns the trigger that owns
+    /// one afterwards: null when nobody does (that press was released here, or nothing owned one) or once retired, and
+    /// otherwise the trigger of the newer press that owns it, which keeps it.
+    /// </summary>
+    public HotkeyTrigger? ReleaseActivation(long activation)
+    {
+        var word = Volatile.Read(ref _word);
+        while (IsOwned(word))
+        {
+            if (ActivationOf(word) != activation)
+            {
+                return TriggerOf(word);
+            }
+
+            var observed = Interlocked.CompareExchange(ref _word, 0, word);
+            if (observed == word)
+            {
+                return null;
+            }
+
+            word = observed;
         }
 
         return null;
@@ -851,12 +886,17 @@ internal sealed class HotkeyTriggerArbiter
     /// </summary>
     public HotkeyTrigger? Retire()
     {
-        var code = Interlocked.Exchange(ref _activeCode, Retired);
-        return code is 0 or Retired ? null : Trigger(code);
+        var word = Interlocked.Exchange(ref _word, Retired);
+        return IsOwned(word) ? TriggerOf(word) : null;
     }
 
-    // Reserve zero for no active trigger so compare-exchange can arbitrate without a lock.
-    private static int Code(HotkeyTrigger trigger) => (int)trigger + 1;
+    // Zero is reserved for no owner and Retired is negative, so compare-exchange can arbitrate without a lock and an owned
+    // word is always positive.
+    private static bool IsOwned(long word) => word > 0;
 
-    private static HotkeyTrigger Trigger(int code) => (HotkeyTrigger)(code - 1);
+    private static long Encode(HotkeyTrigger trigger, long activation) => (activation << CodeBits) | ((long)trigger + 1);
+
+    private static HotkeyTrigger TriggerOf(long word) => (HotkeyTrigger)((word & CodeMask) - 1);
+
+    private static long ActivationOf(long word) => word >> CodeBits;
 }

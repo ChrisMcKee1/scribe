@@ -145,12 +145,16 @@ internal sealed class HotkeyCommandRouter
         return (true, Post(HotkeyCommand.Paused(paused, generation)));
     }
 
-    /// <summary>Returns the engine to wake.</summary>
-    public HotkeyEngine? CancelToggle()
+    /// <summary>
+    /// Returns the engine to wake. Releases the press <paramref name="activation"/> names, if it still owns the dictation
+    /// (see <see cref="HotkeyEngine"/>). It starts no new epoch: a newer press is left alone, so its queued activation
+    /// stays current and its latch stays set.
+    /// </summary>
+    public HotkeyEngine? CancelToggle(long activation)
     {
         lock (_gate)
         {
-            return Post(HotkeyCommand.CancelToggle(CurrentGeneration));
+            return Post(HotkeyCommand.CancelToggle(CurrentGeneration, activation));
         }
     }
 

@@ -47,6 +47,12 @@ internal sealed class HotkeyEngineHarness : IDisposable
 
     public HookDecision Up(uint key) => Engine.OnKeyEvent(key, isDown: false);
 
+    public void Tap(uint key)
+    {
+        Down(key);
+        Up(key);
+    }
+
     public List<HotkeyService.QueuedTransition> TakeTransitions()
     {
         var taken = new List<HotkeyService.QueuedTransition>();

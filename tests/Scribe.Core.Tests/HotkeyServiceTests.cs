@@ -152,11 +152,11 @@ public class HotkeyServiceTests
     {
         var arbiter = new HotkeyTriggerArbiter();
 
-        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard));
-        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.Standard, activation: 1));
+        Assert.False(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 2));
         Assert.False(arbiter.TryDeactivate(HotkeyTrigger.DictationOnly));
         Assert.True(arbiter.TryDeactivate(HotkeyTrigger.Standard));
-        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly));
+        Assert.True(arbiter.TryActivate(HotkeyTrigger.DictationOnly, activation: 3));
     }
 
     [Fact]
