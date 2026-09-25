@@ -33,6 +33,12 @@ public sealed class LogPrivacyGuardTests
         Path.Combine("src", "Scribe.Core", "Transcription", "TranscriptionModelInstaller.cs"),
     ];
 
+    // Every file of the library service family (contract 3.1.7): it handles library names, ids and terms.
+    private static readonly (string Folder, string Pattern)[] GuardedFilePatterns =
+    [
+        (Path.Combine("src", "Scribe.Core", "PostProcessing"), "DictionaryLibrary*.cs"),
+    ];
+
     [Fact]
     public void No_app_or_provider_facing_core_log_call_passes_an_exception_or_its_text()
     {
@@ -41,7 +47,9 @@ public sealed class LogPrivacyGuardTests
         var appCalls = 0;
         var files = GuardedFolders
             .SelectMany(folder => SourceFiles(Path.Combine(root, folder)))
-            .Concat(GuardedFiles.Select(file => Path.Combine(root, file)));
+            .Concat(GuardedFiles.Select(file => Path.Combine(root, file)))
+            .Concat(GuardedFilePatterns.SelectMany(pattern =>
+                Directory.EnumerateFiles(Path.Combine(root, pattern.Folder), pattern.Pattern, SearchOption.TopDirectoryOnly)));
         foreach (var file in files)
         {
             var source = File.ReadAllText(file);
@@ -164,6 +172,50 @@ public sealed class LogPrivacyGuardTests
             "private static void TryLogTo(object log, System.Exception? ex, string message) { } }";
 
         Assert.Empty(LogCallScanner.FindHelperCalls(Source));
+    }
+
+    [Fact]
+    public void The_library_service_family_is_guarded()
+    {
+        var root = RepositoryRoot();
+        var family = GuardedFilePatterns
+            .SelectMany(pattern => Directory.EnumerateFiles(Path.Combine(root, pattern.Folder), pattern.Pattern, SearchOption.TopDirectoryOnly))
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Contains("DictionaryLibraryService.cs", family);
+        Assert.Contains("DictionaryLibraryComposer.cs", family);
+        Assert.Contains("DictionaryLibraryCsv.cs", family);
+    }
+
+    // The journal's failure line carries a LibraryFileOperation and FailureShape.Describe output and nothing else (review
+    // finding G8): these are the shapes a path, a file name or an exception's text would have reached it in.
+    [Theory]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", path, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, Path.GetFileName(path));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, FailureShape.Describe(ex), path);")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", fileName, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read);")]
+    [InlineData("TryLog(LogLevel.Warning, \"Library file operation {Operation} failed: {Failure}\", path, FailureShape.Describe(ex));")]
+    public void The_file_operation_line_refuses_anything_but_an_operation_and_a_failure_shape(string call)
+    {
+        var source = "class C { void M(string path, string fileName, LibraryFileOperation operation) " +
+            "{ try { } catch (System.Exception ex) { " + call + " } } }";
+
+        Assert.NotEmpty(LogCallScanner.CheckFileOperationLines(source));
+        Assert.NotEmpty(LogCallScanner.Check(source));
+    }
+
+    [Theory]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", LibraryFileOperation.Read, FailureShape.Describe(ex));")]
+    [InlineData("_logger.LogWarning(\"Library file operation {Operation} failed: {Failure}\", operation, FailureShape.Describe(exception));")]
+    public void The_file_operation_line_allows_an_operation_and_a_failure_shape(string call)
+    {
+        var source = "class C { void M(LibraryFileOperation operation, System.Exception exception) " +
+            "{ try { } catch (System.Exception ex) { " + call + " } } }";
+
+        Assert.Empty(LogCallScanner.CheckFileOperationLines(source));
+        Assert.Empty(LogCallScanner.Check(source));
     }
 
     private static string RepositoryRoot()

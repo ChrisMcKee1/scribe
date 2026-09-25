@@ -16,7 +16,12 @@ public interface ISettingsRepository
     /// <summary>Returns the persisted settings, or freshly-defaulted settings when none exist.</summary>
     AppSettings Load();
 
-    /// <summary>Persists the full settings document.</summary>
+    /// <summary>
+    /// Persists the full settings document. Once library state is stored (<see cref="Libraries.LibrarySettingKeys.State"/>),
+    /// the document's <see cref="AppSettings.EnabledDictionaryLibraryIds"/> keeps the list stored, whatever
+    /// <paramref name="settings"/> holds: that list is written only together with the library state row (review
+    /// finding A17), so a window opened before an adoption patched it cannot put the old list back.
+    /// </summary>
     void Save(AppSettings settings);
 
     /// <summary>
@@ -30,7 +35,8 @@ public interface ISettingsRepository
     /// repair lost is refused the same way, until a whole document is saved with <see cref="Save"/> or
     /// <see cref="SaveBundle"/>. Never queues behind storage maintenance. <paramref name="mutate"/> must
     /// be quick and must not call back into the repository; if it throws, nothing is saved and the
-    /// exception propagates. Otherwise it fails only the way <see cref="Save"/> can.
+    /// exception propagates. Otherwise it fails only the way <see cref="Save"/> can. Like <see cref="Save"/>, it keeps
+    /// the stored enabled-library list once library state is stored.
     /// </summary>
     AppSettings Update(Action<AppSettings> mutate);
 
@@ -72,7 +78,9 @@ public interface ISettingsRepository
     /// Once the save commits, every tray change up to it is superseded
     /// (<see cref="Update(Action{AppSettings}, long, out bool)"/>). Zero means the window has no intent, so its switch
     /// may be older than what is stored: the stored value is kept, and <paramref name="settings"/> takes it once the
-    /// save has succeeded, so the caller shows and applies what is stored. The microphone is written as given.
+    /// save has succeeded, so the caller shows and applies what is stored. The microphone is written as given. Once
+    /// library state is stored, the enabled-library list is kept as stored as well (and <paramref name="settings"/>
+    /// takes it), because only a save with a library payload may change it.
     /// </summary>
     void SaveBundle(
         AppSettings settings,
@@ -93,6 +101,46 @@ public interface ISettingsRepository
         IReadOnlyList<Snippet>? snippets,
         ExternalIntents intents) =>
         SaveBundle(settings, dictionaryEntries, snippets, intents.AiCleanup);
+
+    /// <summary>
+    /// The whole-document save above that also commits a library Save (<paramref name="libraries"/>, built only by
+    /// <see cref="Libraries.ILibraryCatalogStore.PrepareSave"/>), in the same BEGIN IMMEDIATE transaction: the settings
+    /// document, the dictionary and snippets, the library's auxiliary rows and its generation. When the stored
+    /// <see cref="Libraries.LibrarySettingKeys.Generation"/> is not <see cref="Libraries.LibrarySavePayload.ExpectedGeneration"/>,
+    /// nothing is written and <see cref="LibraryGenerationConflictException"/> is thrown. A payload whose
+    /// <see cref="Libraries.LibrarySavePayload.EnabledLibraryIds"/> is set stores that list in the document, and
+    /// <paramref name="settings"/> takes it once the save has succeeded. With a null payload this is exactly
+    /// <see cref="SaveBundle(AppSettings, IReadOnlyList{DictionaryEntry}, IReadOnlyList{Snippet}, ExternalIntents)"/>.
+    /// The caller completes the library Save (<see cref="Libraries.ILibraryCatalogStore.CompleteSave"/>) whether this
+    /// returned or threw. This default serves only test fakes: a null payload is passed on, and any other throws
+    /// <see cref="NotSupportedException"/>; <see cref="SettingsRepository"/> honors both.
+    /// </summary>
+    void SaveBundle(
+        AppSettings settings,
+        IReadOnlyList<DictionaryEntry>? dictionaryEntries,
+        IReadOnlyList<Snippet>? snippets,
+        ExternalIntents intents,
+        Libraries.LibrarySavePayload? libraries)
+    {
+        if (libraries is not null)
+        {
+            throw new NotSupportedException("This settings store cannot commit library state.");
+        }
+
+        SaveBundle(settings, dictionaryEntries, snippets, intents);
+    }
+
+    /// <summary>
+    /// Commits library state the library service records without a Save (an adoption, a lost state's denial, the
+    /// <c>Import</c> and <c>Remove</c> wrappers): the generation check of <see cref="SaveBundle(AppSettings, IReadOnlyList{DictionaryEntry}, IReadOnlyList{Snippet}, ExternalIntents, Libraries.LibrarySavePayload)"/>,
+    /// then the library's auxiliary rows and its generation, and, when <see cref="Libraries.LibrarySavePayload.EnabledLibraryIds"/>
+    /// is set, the stored document's enabled-library field and nothing else of the document, patched in place. A
+    /// document that is not stored, cannot be read or that a repair lost is never patched: the call throws
+    /// <see cref="InvalidOperationException"/> and writes nothing. This default serves only test fakes, and throws
+    /// <see cref="NotSupportedException"/>.
+    /// </summary>
+    void CommitLibraryState(Libraries.LibrarySavePayload payload) =>
+        throw new NotSupportedException("This settings store cannot commit library state.");
 
     /// <summary>Reads a single raw value by key, or <see langword="null"/> when absent.</summary>
     string? Get(string key);

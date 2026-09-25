@@ -121,17 +121,20 @@ public sealed class PostProcessingLogPrivacyTests : IDisposable
         var library = service.Import(LibraryCsv, "fallback name");
         log.Entries.Clear();
 
-        // Holding the file open without sharing makes the read fail with a sharing violation,
-        // whose message would repeat the full path, library slug included.
+        // Holding the file open without sharing makes the read fail with a sharing violation, whose message would repeat
+        // the full path, library slug included. The library is not skipped (contract 3.1.4, review finding G10): it keeps
+        // the content this process last read, awaiting release, and the log says which operation failed and how.
         using (new FileStream(
             Path.Combine(paths.LibrariesDir, library.Id + ".csv"), FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            Assert.DoesNotContain(service.GetLibraries(), candidate => candidate.Id == library.Id);
+            var listed = Assert.Single(service.GetLibraries(), candidate => candidate.Id == library.Id);
+            Assert.Equal("WibbleFrotz", Assert.Single(listed.Entries).Replacement);
         }
 
         var warning = Assert.Single(log.Entries, entry => entry.Level == LogLevel.Warning);
         Assert.Null(warning.Exception);
-        Assert.Contains(("ExceptionType", nameof(IOException)), warning.State);
+        Assert.Contains(("Operation", "Read"), warning.State);
+        Assert.Contains(warning.State, pair => pair.Key == "Failure" && pair.Value!.Contains(nameof(IOException), StringComparison.Ordinal));
         AssertNeverLogged(log, library.Id, "zorblax", "quintessence", paths.LibrariesDir, _root);
     }
 

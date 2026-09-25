@@ -64,6 +64,9 @@ public sealed class StorageMaintenance : IDisposable
     private readonly TimeProvider _time;
     private readonly StorageMaintenanceOptions _options;
 
+    // The library storage's retention (contract 3.1.6): a light step, run with this schedule's own clock (P-10).
+    private readonly Libraries.LibraryJanitor? _libraryJanitor;
+
     // Scheduling runs on the monotonic timestamp, never the wall clock: a clock set back by a day
     // would otherwise push every triggered pass a day out. Retention cutoffs still use wall time,
     // because that is what the stored timestamps are.
@@ -118,7 +121,8 @@ public sealed class StorageMaintenance : IDisposable
         ICleanupFailureLog failureLog,
         ILogger logger,
         TimeProvider time,
-        StorageMaintenanceOptions options)
+        StorageMaintenanceOptions options,
+        Libraries.LibraryJanitor? libraryJanitor = null)
     {
         _database = database;
         _history = history;
@@ -126,6 +130,7 @@ public sealed class StorageMaintenance : IDisposable
         _logger = logger;
         _time = time;
         _options = options;
+        _libraryJanitor = libraryJanitor;
         _origin = time.GetTimestamp();
         _quietCount = database.ActivityCount;
         _database.StorageChanged += OnStorageChanged;
@@ -588,6 +593,13 @@ public sealed class StorageMaintenance : IDisposable
                 "damaged copy retention",
                 default(DamagedCopyPruneResult),
                 () => PruneDamagedCopies(path, now));
+        }
+
+        // File work only, outside the write gate: the janitor takes the library service's own lock, and a settings
+        // commit it may cause asks maintenance to yield like any other settings write.
+        if (!Stopping && _libraryJanitor is { } janitor)
+        {
+            report.LibraryRetention = Step("library retention", default(Libraries.LibraryJanitorResult), () => janitor.Run(now));
         }
 
         if (report.HistoryEntriesRemoved > 0 || report.CleanupFailuresRemoved > 0)
@@ -1441,6 +1453,9 @@ internal sealed class StorageMaintenanceReport
     public int CleanupFailuresRemoved { get; set; }
 
     public DamagedCopyPruneResult DamagedCopies { get; set; }
+
+    /// <summary>What the library janitor removed this pass.</summary>
+    public Libraries.LibraryJanitorResult LibraryRetention { get; set; }
 
     public ReclaimOutcome Reclaim { get; set; }
 
