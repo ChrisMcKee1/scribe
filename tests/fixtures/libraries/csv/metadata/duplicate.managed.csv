@@ -1,0 +1,9 @@
+# name: GitHub - Copy
+# category: Microsoft
+# description: GitHub product names, copied.
+# based-on: github
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"say ""hi""","Hello, world",false,true
+kube,K8s,true,false

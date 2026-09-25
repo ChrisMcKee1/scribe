@@ -1,0 +1,218 @@
+{
+  "about": "What the library CSV codec writes for each content: WriteManaged (a file in the libraries folder) and WriteExport (a file the user shares).",
+  "cases": [
+    {
+      "name": "basic",
+      "about": "An ordinary library.",
+      "content": {
+        "name": "Team terms",
+        "category": "Custom",
+        "description": "Our spellings",
+        "basedOn": null,
+        "rows": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "kube",
+            "written": "K8s",
+            "wholeWord": false,
+            "enabled": true
+          },
+          {
+            "spoken": "azure",
+            "written": "Azure",
+            "wholeWord": true,
+            "enabled": false
+          }
+        ]
+      },
+      "managed": "write/basic.managed.csv",
+      "export": "write/basic.export.csv"
+    },
+    {
+      "name": "quoting",
+      "about": "Values the writer quotes: a # or header-shaped first field, white space at an edge, commas, quotes and line breaks.",
+      "content": {
+        "name": "Quoting",
+        "category": "Custom",
+        "description": null,
+        "basedOn": null,
+        "rows": [
+          {
+            "spoken": "#tag",
+            "written": "#tag",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "Pattern",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": " Pattern ",
+            "written": "x",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "edge ",
+            "written": " edge",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "\u00A0nbsp",
+            "written": "nbsp\u00A0",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "a,b",
+            "written": "c,d",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "say \"hi\"",
+            "written": "\"quoted\"",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "multi",
+            "written": "line one\nline two",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "cr",
+            "written": "a\rb",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "tab\tinside",
+            "written": "tab\tinside",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ]
+      },
+      "managed": "write/quoting.managed.csv",
+      "export": "write/quoting.export.csv"
+    },
+    {
+      "name": "guard",
+      "about": "Values the export guard marks: formula starts, their full-width forms, control characters, leading apostrophes and spaces.",
+      "content": {
+        "name": "Guard",
+        "category": "Custom",
+        "description": null,
+        "basedOn": null,
+        "rows": [
+          {
+            "spoken": "=SUM(A1)",
+            "written": "+1",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "-x",
+            "written": "@user",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "＝x",
+            "written": "＋x",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "－x",
+            "written": "＠x",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "\tx",
+            "written": "\rx",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "\nx",
+            "written": "  =x",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "'=x",
+            "written": "''+x",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "' =x",
+            "written": "a=b",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "'",
+            "written": "''",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": " ' =x",
+            "written": "\u3000=x",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ]
+      },
+      "managed": "write/guard.managed.csv",
+      "export": "write/guard.export.csv"
+    },
+    {
+      "name": "empty",
+      "about": "A library with no rows and no description.",
+      "content": {
+        "name": "Empty",
+        "category": "Custom",
+        "description": null,
+        "basedOn": null,
+        "rows": []
+      },
+      "managed": "write/empty.managed.csv",
+      "export": "write/empty.export.csv"
+    },
+    {
+      "name": "duplicate",
+      "about": "A duplicate, which records the library it was copied from.",
+      "content": {
+        "name": "GitHub - Copy",
+        "category": "Microsoft",
+        "description": "GitHub product names",
+        "basedOn": "github",
+        "rows": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ]
+      },
+      "managed": "write/duplicate.managed.csv",
+      "export": "write/duplicate.export.csv"
+    }
+  ]
+}

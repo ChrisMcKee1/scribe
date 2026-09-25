@@ -1,0 +1,841 @@
+{
+  "about": "What the library CSV codec reads from each file under read/: \"managed\" is ReadManaged, a file in the libraries folder; \"import\" is ReadImport, a file the user imports, whose ANSI fallback here is the code page given.",
+  "ansiCodePage": 1252,
+  "cases": [
+    {
+      "file": "read/managed-legacy-043.csv",
+      "read": "managed",
+      "about": "A file 0.4.3 wrote: raw metadata with commas and paired quotes, quoted rows.",
+      "expected": {
+        "name": "Team terms, 2026",
+        "category": "Custom",
+        "description": "Our \"house\" spellings, acronyms and names",
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "acme, inc",
+            "written": "Acme \"The Best\" Inc.",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "kube",
+            "written": "K8s",
+            "wholeWord": false,
+            "enabled": false
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-legacy-quirks.csv",
+      "read": "managed",
+      "about": "0.4.3's rules without the marker: a header anywhere, quoted and unquoted # skipped, every field trimmed, a stray quote inside a field, errors.",
+      "expected": {
+        "name": "Quirks",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "a p i m",
+            "written": "APIM",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "say hi",
+            "written": "Hello",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "padded",
+            "written": "value",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "b",
+            "written": "B",
+            "wholeWord": false,
+            "enabled": false
+          },
+          {
+            "spoken": "x",
+            "written": "X",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [
+          {
+            "line": 8,
+            "kind": "EmptySpoken",
+            "field": null
+          },
+          {
+            "line": 10,
+            "kind": "InvalidWholeWord",
+            "field": "maybe"
+          },
+          {
+            "line": 11,
+            "kind": "MissingFields",
+            "field": null
+          }
+        ],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-legacy-unclosed.csv",
+      "read": "managed",
+      "about": "An unpaired quote in the name: 0.4.3 reads no rows at all, and neither does this version.",
+      "expected": {
+        "name": "Team \"Notes",
+        "category": "Custom",
+        "description": null,
+        "basedOn": null,
+        "terms": [],
+        "errors": [
+          {
+            "line": 1,
+            "kind": "UnclosedQuote",
+            "field": null
+          }
+        ],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-format-2.csv",
+      "read": "managed",
+      "about": "A file this version writes: the marker, rows quoted because they start with # or read as the header, edge white space, a multi-line value.",
+      "expected": {
+        "name": "Strict terms",
+        "category": "Custom",
+        "description": "Written by this version",
+        "basedOn": "github",
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "#tag",
+            "written": "Tag",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "Pattern",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": " padded ",
+            "written": "Kept",
+            "wholeWord": true,
+            "enabled": false
+          },
+          {
+            "spoken": "multi",
+            "written": "line one\nline two",
+            "wholeWord": false,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-format-2-hand-edited.csv",
+      "read": "managed",
+      "about": "A marked file edited by hand: comments only on raw # lines, the header only first, blank rows skipped, only unquoted fields trimmed.",
+      "expected": {
+        "name": "Edited",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "x",
+            "written": "X",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "replacement",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": " q ",
+            "written": "w",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [
+          {
+            "line": 10,
+            "kind": "MissingFields",
+            "field": null
+          }
+        ],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-utf8-bom.csv",
+      "read": "managed",
+      "about": "UTF-8 with a byte order mark.",
+      "expected": {
+        "name": "Café",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-utf16le.csv",
+      "read": "managed",
+      "about": "UTF-16 little endian with a byte order mark.",
+      "expected": {
+        "name": "Café",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 1200,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-utf16be.csv",
+      "read": "managed",
+      "about": "UTF-16 big endian with a byte order mark.",
+      "expected": {
+        "name": "Café",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 1201,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/managed-invalid-utf8.csv",
+      "read": "managed",
+      "about": "Bytes that are not UTF-8: replaced as 0.4.3 replaced them, and reported.",
+      "expected": {
+        "name": "Caf�",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "caf�",
+            "written": "Cafe",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": true
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-export.csv",
+      "read": "import",
+      "about": "What an export looks like: a byte order mark, metadata quoted when it holds a comma or a quote, the formula guard.",
+      "expected": {
+        "name": "Team, terms",
+        "category": "Custom",
+        "description": "Say \"hi\", then go",
+        "basedOn": "github",
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "sum",
+            "written": "=SUM(A1)",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "quote",
+            "written": "'=literal",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "#tag",
+            "written": "#tag",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "a,b",
+            "wholeWord": false,
+            "enabled": true
+          },
+          {
+            "spoken": "at",
+            "written": "@user",
+            "wholeWord": true,
+            "enabled": false
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": 1,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-excel-utf8.csv",
+      "read": "import",
+      "about": "That export after a spreadsheet's CSV UTF-8 save: padding, quotes only where needed, TRUE and FALSE, a date and a time. The #tag row lost its quotes and reads as a comment.",
+      "expected": {
+        "name": "Team, terms",
+        "category": "Custom",
+        "description": "Say \"hi\", then go",
+        "basedOn": "github",
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "sum",
+            "written": "=SUM(A1)",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "a,b",
+            "wholeWord": false,
+            "enabled": true
+          },
+          {
+            "spoken": "three four",
+            "written": "4-Mar",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "new year",
+            "written": "1/2/2026",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "half past",
+            "written": "12:30",
+            "wholeWord": true,
+            "enabled": false
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": 1,
+        "issues": [
+          "HeaderPaddingRemoved"
+        ]
+      }
+    },
+    {
+      "file": "read/import-excel-ansi.csv",
+      "read": "import",
+      "about": "A spreadsheet's plain CSV save on a Western PC: Windows-1252, no byte order mark.",
+      "expected": {
+        "name": "Équipe",
+        "category": "Café",
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "crème brûlée",
+            "written": "Crème brûlée",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 1252,
+          "byteOrderMark": false,
+          "ansiFallback": true,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": 1,
+        "issues": [
+          "HeaderPaddingRemoved"
+        ]
+      }
+    },
+    {
+      "file": "read/import-libreoffice-quote-all.csv",
+      "read": "import",
+      "about": "LibreOffice with Quote all text cells: every text cell quoted, the header too.",
+      "expected": {
+        "name": "Team terms",
+        "category": "Custom",
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "sum",
+            "written": "=SUM(A1)",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "#tag",
+            "written": "Tag",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": 1,
+        "issues": [
+          "HeaderPaddingRemoved"
+        ]
+      }
+    },
+    {
+      "file": "read/import-043-export.csv",
+      "read": "import",
+      "about": "An export 0.4.3 wrote: raw metadata lines, no guard. A comma in a metadata line is rejoined; a quote in one is lost, as a CSV reader must read it.",
+      "expected": {
+        "name": "Team terms, 2026",
+        "category": "Custom",
+        "description": "Our house spellings, acronyms and names",
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "acme, inc",
+            "written": "Acme \"The Best\" Inc.",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-043-export-spreadsheet.csv",
+      "read": "import",
+      "about": "That 0.4.3 export after a spreadsheet split its metadata lines at their commas and saved them: the lines are rejoined exactly.",
+      "expected": {
+        "name": "Team terms, 2026",
+        "category": "Custom",
+        "description": "Our \"house\" spellings, acronyms and names",
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "get hub",
+            "written": "GitHub",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "acme, inc",
+            "written": "Acme \"The Best\" Inc.",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": [
+          "HeaderPaddingRemoved"
+        ]
+      }
+    },
+    {
+      "file": "read/import-headerless.csv",
+      "read": "import",
+      "about": "No column header: metadata and comments, quoted or not, before the first row; after it only raw # lines are comments.",
+      "expected": {
+        "name": "Loose",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "a",
+            "written": "A",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "#tag",
+            "written": "Tag",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "b",
+            "written": "B",
+            "wholeWord": false,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-strict-rules.csv",
+      "read": "import",
+      "about": "The strict rules after the header, and every kind of row error.",
+      "expected": {
+        "name": "Strict",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "#tag",
+            "written": "Tag",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": "pattern",
+            "written": "replacement",
+            "wholeWord": true,
+            "enabled": true
+          },
+          {
+            "spoken": " kept ",
+            "written": "trimmed",
+            "wholeWord": true,
+            "enabled": false
+          }
+        ],
+        "errors": [
+          {
+            "line": 9,
+            "kind": "MissingFields",
+            "field": null
+          },
+          {
+            "line": 10,
+            "kind": "EmptySpoken",
+            "field": null
+          },
+          {
+            "line": 11,
+            "kind": "InvalidWholeWord",
+            "field": "maybe"
+          },
+          {
+            "line": 12,
+            "kind": "InvalidEnabled",
+            "field": "sometimes"
+          },
+          {
+            "line": 13,
+            "kind": "UnclosedQuote",
+            "field": null
+          }
+        ],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-utf16le.csv",
+      "read": "import",
+      "about": "UTF-16 little endian with a byte order mark.",
+      "expected": {
+        "name": "中文",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 1200,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-utf16be.csv",
+      "read": "import",
+      "about": "UTF-16 big endian with a byte order mark.",
+      "expected": {
+        "name": "中文",
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "été",
+            "written": "Summer",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 1201,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-bom-invalid.csv",
+      "read": "import",
+      "about": "A UTF-8 byte order mark and then bytes that are not UTF-8: the mark is honoured and the bytes replaced.",
+      "expected": {
+        "name": null,
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "caf�",
+            "written": "Cafe",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": true,
+          "ansiFallback": false,
+          "invalidBytesReplaced": true
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    },
+    {
+      "file": "read/import-field-too-long.csv",
+      "read": "import",
+      "about": "A value longer than the per-field cap is skipped with its reason.",
+      "expected": {
+        "name": null,
+        "category": null,
+        "description": null,
+        "basedOn": null,
+        "terms": [
+          {
+            "spoken": "short",
+            "written": "ok",
+            "wholeWord": true,
+            "enabled": true
+          }
+        ],
+        "errors": [
+          {
+            "line": 3,
+            "kind": "FieldTooLong",
+            "field": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ],
+        "encoding": {
+          "codePage": 65001,
+          "byteOrderMark": false,
+          "ansiFallback": false,
+          "invalidBytesReplaced": false
+        },
+        "formulaGuardVersion": null,
+        "issues": []
+      }
+    }
+  ]
+}

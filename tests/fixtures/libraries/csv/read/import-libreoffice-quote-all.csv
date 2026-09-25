@@ -1,0 +1,7 @@
+"# name: Team terms",,,
+"# category: Custom",,,
+"# formula-guard: 1",,,
+"pattern","replacement","whole_word","enabled"
+"get hub","GitHub",TRUE,TRUE
+"sum","'=SUM(A1)",TRUE,TRUE
+"#tag","Tag",TRUE,TRUE

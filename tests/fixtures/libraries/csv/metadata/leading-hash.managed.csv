@@ -1,0 +1,8 @@
+# name: #1 team
+# category: #work
+# description: # not a comment
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+"say ""hi""","Hello, world",false,true
+kube,K8s,true,false

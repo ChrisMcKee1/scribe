@@ -1,0 +1,6 @@
+# name: Équipe,,,
+# category: Café,,,
+# formula-guard: 1,,,
+pattern,replacement,whole_word,enabled
+été,Summer,TRUE,TRUE
+crème brûlée,Crème brûlée,TRUE,TRUE

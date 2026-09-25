@@ -1,0 +1,8 @@
+# name: Team terms
+# category: Custom
+# description: Our spellings
+# scribe-format: 2
+pattern,replacement,whole_word,enabled
+get hub,GitHub,true,true
+kube,K8s,false,true
+azure,Azure,true,false

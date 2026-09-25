@@ -1,0 +1,16 @@
+# name: Quirks
+#
+# a comment, with a comma and a "quote"
+pattern,replacement
+a p i m,APIM
+"#tag",Tag
+ pattern , again
+,,,
+say "hi",Hello
+cosmos db,Cosmos DB,maybe
+lonely
+
+  padded  ,  value  
+b,B,no,0
+# name: Late
+x,X

@@ -1,0 +1,13 @@
+# name: Strict
+pattern,replacement,whole_word,enabled
+"#tag",Tag,true,true
+#comment,ignored,true,true
+  #also a comment
+pattern,replacement,true,true
+,,,
+" kept ", trimmed ,yes,no
+lonely
+"",empty
+x,X,maybe
+y,Y,true,sometimes
+z,"open
