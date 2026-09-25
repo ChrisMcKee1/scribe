@@ -153,10 +153,14 @@ internal static class LibraryGolden
             {
                 Assert.Fail(
                     $"The library outputs differ from {GoldenPath} at line {i + 1}.\n  expected: {expected}\n  actual:   {got}\n" +
-                    "Library order, precedence and composition decide this file, and so does a little shipped data: the " +
-                    "shipped rows for azure, get hub, gpt five six terra and llm, ai-terminology supplying at least 74 " +
-                    "rules, and no shipped library having any other spoken form the fixture uses (checked on its own by " +
-                    "The_fixture_shares_only_its_chosen_spoken_forms_with_the_shipped_libraries).\n" +
+                    "Library order, precedence and composition decide this file, and so does some shipped data: the " +
+                    "shipped catalog itself (every built-in's id and name, which the first section lists and the badges and " +
+                    "Save prompt quote, so adding, retiring or renaming one moves it), the shipped rows for azure, get hub, " +
+                    "gpt five six terra and llm, ai-terminology supplying at least 74 rules, no shipped library having any " +
+                    "other spoken form the fixture uses, and no other shipped rule matching any part of a fixture sentence " +
+                    "(the finished text runs the whole sentences through every shipped rule that is on). The last two are " +
+                    "checked on their own by The_fixture_shares_only_its_chosen_spoken_forms_with_the_shipped_libraries " +
+                    "and No_shipped_rule_matches_a_fixture_sentence_beyond_the_ones_the_golden_already_reads.\n" +
                     $"If the change is intended, set {UpdateVariable}=1, run the test again and review the diff.");
             }
         }

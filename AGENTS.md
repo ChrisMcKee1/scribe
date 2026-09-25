@@ -818,6 +818,9 @@ the downmix**) so the next report of this arrives answerable. Statistics only, n
   winners, the glossary's order, the badges, the Save prompt and finished text for `LibraryFixture`, including a 0.4.3
   quirk kept on purpose: the Save prompt names the first enabled library that lists a spoken form, even in a row
   turned off there. Regenerate it only for a change you mean (`SCRIBE_WRITE_LIBRARY_GOLDEN=1`, then review the diff).
+  It also reads shipped data: every built-in's id and name, the shipped rows for four spoken forms, and every shipped
+  rule the matcher finds anywhere in a fixture sentence, so a CSV edit can move it; two precondition tests in
+  `LibraryCompositionGoldenTests` name the rule when that happens.
 - **The macOS port does not follow this yet.** It reads no fixture and keeps its own library order. Stream M1, which
   ports these library changes to macOS, will read `built-in-precedence.json` and sort the list with
   `localizedStandardCompare` and the same two tie-breaks; until it lands, the Dictionary Libraries and Dictionary
