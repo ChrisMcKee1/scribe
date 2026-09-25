@@ -88,7 +88,7 @@ public sealed class LibraryWorkspacePropertyTests
     }
 
     [Fact]
-    public void WritesContent_is_exactly_what_the_captured_change_set_writes_at_every_revision()
+    public void D19_WritesContent_is_exactly_what_the_captured_change_set_writes_at_every_revision()
     {
         // The ruling on GPT-6 Astra's verification of sub-stream C: the draft tells a preview which libraries its Save
         // writes, and that is the capture's own answer at every revision, never an inference from what the rows show.

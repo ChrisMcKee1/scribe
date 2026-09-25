@@ -151,11 +151,11 @@ internal static class DeciderFixture
         workspace.Draft.Find(libraryId)!.Content.Rows.Select(row => row.Values).ToList();
 
     /// <summary>
-    /// Whether the draft at the workspace's revision says its Save writes the library's content, read from the draft, where
-    /// a preview reads it.
+    /// Whether the draft at the workspace's revision says its Save writes the library's content
+    /// (<see cref="DraftLibrary.WritesContent"/>), read from the draft, where a preview reads it.
     /// </summary>
     public static bool WritesContent(LibraryWorkspace workspace, string libraryId) =>
-        LibraryWorkspace.WritesContentIn(workspace.Draft, libraryId);
+        workspace.Draft.Find(libraryId)!.WritesContent;
 
     /// <summary>Whether a change set writes the library's content: a write for it, or a restore of its Recently deleted entry.</summary>
     public static bool Writes(LibraryChangeSet changes, string libraryId) =>

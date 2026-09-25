@@ -134,10 +134,11 @@ public sealed record LibraryCaptureResult(LibraryChangeSet? ChangeSet, IReadOnly
 /// encodes which libraries AI cleanup may use by default. The one place it needs the permission a library currently has
 /// is where a new library inherits it (a duplicate, a retired built-in's kept rows) and where Use these choices records
 /// what is shown. That is the draft-time mirror of the policy's documented order, not a call to it: an unhealthy state
-/// permits nothing, content that is not the accepted one is not permitted (a retired built-in's document included), an
-/// explicit choice decides, a lost state denies, then the kind default from the delegate, a built-in's as an existing
-/// one and a custom library's as a discovered file. Content the draft rewrites is accepted by its Save, so it is not
-/// checked.
+/// permits nothing, content that is not the accepted one is not permitted (a retired built-in's document included, and a
+/// built-in whose document vanished while an accepted entry remains), an explicit choice decides, a lost state denies,
+/// then the kind default from the delegate, a built-in's as an existing one and a custom library's as a discovered file.
+/// Content the Save writes (<see cref="DraftLibrary.WritesContent"/>) is accepted by that Save, so it is not checked;
+/// every other library is judged by its committed content, as the composition after the Save will judge it.
 /// </para>
 /// </remarks>
 public sealed class LibraryWorkspace
@@ -406,8 +407,8 @@ public sealed class LibraryWorkspace
     /// <summary>
     /// What the library's Use in AI cleanup box shows in this draft: the draft-time mirror of the policy's order (see the
     /// class remarks), with Decision 2 from the delegate for a library nothing recorded, the loss's denial, and content the
-    /// draft rewrites counted as accepted by its Save. The page renders the box from this, not from the committed
-    /// runtime policy, which judges committed content only.
+    /// Save writes (<see cref="DraftLibrary.WritesContent"/>) counted as accepted by that Save. The page renders the box
+    /// from this, not from the committed runtime policy, which judges committed content only.
     /// </summary>
     public bool ShowsAiPermission(string libraryId) => ShownAi(_state, Get(libraryId));
 
@@ -1844,15 +1845,19 @@ public sealed class LibraryWorkspace
             lib.Header.RestoredFrom is { } restored
             && string.Equals(restored.Entry.EntryName, entryName, StringComparison.OrdinalIgnoreCase));
 
+    // The content check is skipped exactly for the libraries the Save writes (WritesContent: that Save records the hash
+    // of what it writes) and for libraries the draft added, which have no committed content; every other library is
+    // judged as the composition after the Save will judge it, by its committed content (the surface's WritesContent
+    // rule, review finding A6 on the composition stream).
     private bool ShownAi(State state, Lib lib) =>
         ShownAi(state, lib.Header.Id, lib.Header.BuiltIn,
             contentAccepted: lib.Header.Committed is not { } committed
-                || (!lib.Header.PendingDelete && Diff.Libraries.TryGetValue(lib.Header.Id, out var change) && change.ContentChanged)
+                || WritesContent(StepsOf(lib, Diff.Libraries[lib.Header.Id]))
                 || ContentAccepted(lib.Header.Id, lib.Header.BuiltIn, committed.ContentHash));
 
     // What a library's Use in AI cleanup box shows, in the policy's order (see the class remarks): used where a new
-    // library inherits a permission and where Use these choices records what is shown. Content the Save rewrites is
-    // accepted by that Save, so only content the draft keeps as committed is checked against the accepted content.
+    // library inherits a permission and where Use these choices records what is shown. contentAccepted is the content
+    // check as the caller decided it for the draft (above).
     private bool ShownAi(State state, string id, bool builtIn, bool contentAccepted)
     {
         if (IsReadOnly || !contentAccepted)
@@ -1872,18 +1877,19 @@ public sealed class LibraryWorkspace
     }
 
     // Whether content is what the committed state's choices were made for (review finding A4), as the policy decides it:
-    // a built-in with no edits document holds its shipped rows; an edits document, a retired built-in's included, and
-    // every custom file must be the accepted content, and a custom file whose bytes were not read is never accepted.
+    // a built-in with no edits document holds its shipped rows, accepted only while no accepted entry remains for it (one
+    // that does means its document disappeared outside Scribe, review finding A5 on the composition stream); an edits
+    // document, a retired built-in's included, and every custom file must be the accepted content, and a custom file
+    // whose bytes were not read is never accepted.
     private bool ContentAccepted(string id, bool builtIn, LibraryContentHash? content)
     {
-        if (builtIn && content is null)
+        var hasAccepted = _committed.LocalState.AcceptedContent.TryGetValue(id, out var accepted);
+        if (content is not { } held)
         {
-            return true;
+            return builtIn && !hasAccepted;
         }
 
-        return content is { } held
-            && _committed.LocalState.AcceptedContent.TryGetValue(id, out var accepted)
-            && accepted == held;
+        return hasAccepted && accepted == held;
     }
 
     private Differences Diff => _differences ??= ComputeDifferences();
@@ -2357,14 +2363,22 @@ public sealed class LibraryWorkspace
     {
         var diff = Diff;
         var ordered = Ordered(_state).ToList();
+
+        // WritesContent is the capture's own decision for each library (StepsOf), so a preview is told exactly which
+        // content the Save writes and never infers it from what the rows show.
         var libraries = ordered
-            .Select(lib => new DraftLibrary(
-                ContentOf(lib),
-                lib.Header.Origin,
-                lib.Header.FileState,
-                lib.Header.PendingDelete,
-                diff.Libraries[lib.Header.Id].Unsaved,
-                lib.Header.BuiltIn ? null : lib.Header.FileName))
+            .Select(lib =>
+            {
+                var change = diff.Libraries[lib.Header.Id];
+                return new DraftLibrary(
+                    ContentOf(lib),
+                    lib.Header.Origin,
+                    lib.Header.FileState,
+                    lib.Header.PendingDelete,
+                    change.Unsaved,
+                    lib.Header.BuiltIn ? null : lib.Header.FileName,
+                    WritesContent(StepsOf(lib, change)));
+            })
             .ToList();
         var local = _state.Local;
         var state = LibraryLocalState.Create(
@@ -2375,18 +2389,12 @@ public sealed class LibraryWorkspace
             .ToList();
         var draft = new LibraryDraft(_revision, _committed.Generation, libraries, state, recentlyDeleted);
         var rowIds = new Dictionary<string, long[]>(StringComparer.OrdinalIgnoreCase);
-        var writes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var lib in ordered)
         {
             rowIds[lib.Header.Id] = lib.Rows.Where(row => !IsBlank(row)).Select(row => row.RowId).ToArray();
-            if (WritesContent(StepsOf(lib, diff.Libraries[lib.Header.Id])))
-            {
-                writes.Add(lib.Header.Id);
-            }
         }
 
         DraftRowIds.AddOrUpdate(draft, rowIds);
-        DraftWrites.AddOrUpdate(draft, writes);
         return draft;
     }
 
@@ -2400,20 +2408,6 @@ public sealed class LibraryWorkspace
         DraftRowIds.TryGetValue(draft, out var ids) && ids.TryGetValue(libraryId, out var rows) && index >= 0 && index < rows.Length
             ? rows[index]
             : null;
-
-    // Which libraries the Save of a draft's revision writes the content of (StepsOf, the capture's own decision). The
-    // surface's DraftLibrary is gaining WritesContent for it (the ruling on the verification of sub-stream C); until that
-    // lands, previews and tests read it here, and then it moves into the record the draft is built from.
-    private static readonly ConditionalWeakTable<LibraryDraft, HashSet<string>> DraftWrites = new();
-
-    /// <summary>
-    /// Whether the Save of <paramref name="draft"/>'s revision writes the library's content: a custom file written, a
-    /// built-in's edits document written or removed (a reset of intents no row shows included) or recovered, a library
-    /// created, imported, duplicated, kept or restored. False for a change of enabled state or AI permission alone and for
-    /// a pending deletion, and for a draft no workspace built.
-    /// </summary>
-    internal static bool WritesContentIn(LibraryDraft draft, string libraryId) =>
-        DraftWrites.TryGetValue(draft, out var ids) && ids.Contains(libraryId);
 
     // The draft of a catalog with nothing changed. Rows keep the ids they had in mapFrom where they are the same rows
     // (MapRowIds: a custom row by its values or its one spoken form, a built-in's rows by their key), so a Save or a reload

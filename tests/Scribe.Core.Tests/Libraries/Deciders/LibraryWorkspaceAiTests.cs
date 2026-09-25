@@ -238,6 +238,45 @@ public sealed class LibraryWorkspaceAiTests
     }
 
     [Fact]
+    public void A_built_in_whose_edits_document_vanished_outside_scribe_shows_no_permission_until_the_draft_writes_it()
+    {
+        // The catalog holds no document while the state still accepts one: it disappeared outside Scribe (review finding A5
+        // on the composition stream), so nothing permits the built-in, not even the default, and a copy inherits nothing.
+        var catalog = Catalog([BuiltIn(GitHubId), BuiltIn(AzureId)], [GitHubId, AzureId],
+            accepted: [new(GitHubId, Hash("the document that vanished"))]);
+        var workspace = Workspace(catalog);
+
+        Assert.False(workspace.ShowsAiPermission(GitHubId));
+        Assert.True(workspace.ShowsAiPermission(AzureId));
+        var copy = workspace.Duplicate(GitHubId);
+        Assert.False(workspace.Draft.LocalState.AiPermissions[copy]);
+
+        // Once the draft writes the built-in's document, that Save records its hash, and the kind default shows again.
+        workspace.EditTerm(GitHubId, RowIdOf(workspace, GitHubId, "copilot"), new TermValues("copilot", "GitHub Copilot"));
+        Assert.True(WritesContent(workspace, GitHubId));
+        Assert.True(workspace.ShowsAiPermission(GitHubId));
+    }
+
+    [Fact]
+    public void Edited_content_the_save_cannot_write_keeps_the_committed_content_check()
+    {
+        // The draft edited "Team terms"; then a newer catalog found its file partly readable, holding bytes the state never
+        // accepted. The Save cannot write the edit, so the box is judged as the composition after that Save will judge it.
+        var catalog = Standard();
+        var workspace = Workspace(catalog);
+        workspace.EditTerm("team-terms", RowIdOf(workspace, "team-terms", "kube"), new TermValues("kube", "K8s"));
+        Assert.True(workspace.ShowsAiPermission("team-terms"));
+
+        var partial = Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes")], state: LibraryFileState.PartlyReadable);
+        workspace.Rebase(Catalog(
+            [BuiltIn(GitHubId), BuiltIn(AzureId), partial], [GitHubId, "team-terms"], ai: [new("team-terms", true)],
+            generation: catalog.Generation + 1, accepted: [new("team-terms", Hash("the bytes this version wrote"))]));
+
+        Assert.False(WritesContent(workspace, "team-terms"));
+        Assert.False(workspace.ShowsAiPermission("team-terms"));
+    }
+
+    [Fact]
     public void A_permission_choice_is_recorded_explicitly_and_toggling_back_to_the_committed_choice_is_no_change()
     {
         var workspace = Workspace(Standard());

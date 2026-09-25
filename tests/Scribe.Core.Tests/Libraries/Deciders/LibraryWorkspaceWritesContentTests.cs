@@ -5,14 +5,15 @@ using static Scribe.Core.Tests.Libraries.Deciders.DeciderFixture;
 namespace Scribe.Core.Tests.Libraries.Deciders;
 
 /// <summary>
-/// Whether the Save of a draft revision writes each library's content, which the draft carries for previews (the ruling
-/// on GPT-6 Astra's verification of sub-stream C): the capture's own decision, never inferred from what the rows show.
-/// The seeded property over random sequences is in <see cref="LibraryWorkspacePropertyTests"/>.
+/// D-19: <see cref="DraftLibrary.WritesContent"/>, whether the Save of a draft revision writes each library's content,
+/// which the draft carries for previews (the ruling on GPT-6 Astra's verification of sub-stream C): the capture's own
+/// decision, never inferred from what the rows show. The seeded property over random sequences is in
+/// <see cref="LibraryWorkspacePropertyTests"/>.
 /// </summary>
 public sealed class LibraryWorkspaceWritesContentTests
 {
     [Fact]
-    public void Restoring_all_values_of_a_built_in_whose_document_holds_only_an_invisible_off_intent_writes_its_content()
+    public void D19_Restoring_all_values_of_a_built_in_whose_document_holds_only_an_invisible_off_intent_writes_its_content()
     {
         // The document turns off a term this version does not ship, so no row shows it and the rows are the shipped ones.
         var edits = new BuiltInLibraryEdits(GitHubId,
@@ -36,7 +37,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void Changing_only_the_enabled_state_or_the_ai_box_writes_no_content()
+    public void D19_Changing_only_the_enabled_state_or_the_ai_box_writes_no_content()
     {
         var workspace = Workspace(Standard());
 
@@ -55,7 +56,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void A_pending_deletion_an_untouched_new_library_and_an_edit_that_commits_to_what_is_shown_write_no_content()
+    public void D19_A_pending_deletion_an_untouched_new_library_and_an_edit_that_commits_to_what_is_shown_write_no_content()
     {
         var workspace = Workspace(Standard());
         var created = workspace.CreateLibrary();
@@ -78,7 +79,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void Creating_importing_duplicating_restoring_keeping_and_editing_write_the_content_exactly_as_the_capture_does()
+    public void D19_Creating_importing_duplicating_restoring_keeping_and_editing_write_the_content_exactly_as_the_capture_does()
     {
         var entry = Deleted("20260901T100000Z.gone.csv", "gone", "Gone", new TermValues("gone term", "Gone term"));
         var catalog = Catalog(
@@ -128,7 +129,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void A_restore_writes_its_content_whether_or_not_it_was_edited_and_a_recovery_writes_the_document()
+    public void D19_A_restore_writes_its_content_whether_or_not_it_was_edited_and_a_recovery_writes_the_document()
     {
         var entry = Deleted("20260901T100000Z.gone.csv", "gone", "Gone", new TermValues("gone term", "Gone term"));
         var catalog = Catalog(
@@ -156,7 +157,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void A_read_only_state_writes_nothing()
+    public void D19_A_read_only_state_writes_nothing()
     {
         var workspace = Workspace(Catalog([BuiltIn(GitHubId), Custom("team-terms", "Team terms", [new TermValues("kube", "Kubernetes")])],
             [GitHubId], health: LocalStateHealth.Newer));
@@ -167,7 +168,7 @@ public sealed class LibraryWorkspaceWritesContentTests
     }
 
     [Fact]
-    public void Edited_content_a_newer_catalog_made_unsaveable_is_not_written_and_blocks_the_save()
+    public void D19_Edited_content_a_newer_catalog_made_unsaveable_is_not_written_and_blocks_the_save()
     {
         var catalog = Standard();
         var workspace = Workspace(catalog);
