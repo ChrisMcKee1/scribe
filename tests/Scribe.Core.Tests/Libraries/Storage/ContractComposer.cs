@@ -157,6 +157,18 @@ internal sealed class ContractComposer : ILibraryComposer
         var adopted = 0;
         foreach (var library in catalog.Libraries)
         {
+            // Sub-stream C's rule (A1 on C): an available built-in with no edits document while the state still accepts a
+            // hash for it lost that document outside Scribe, which is replaced content: its AI permission goes, the stale
+            // entry is dropped and its enabled state stays. A paused, newer or locked built-in may still have its document.
+            if (library.Content.BuiltIn && library.ContentHash is null && library.State == LibraryFileState.Available &&
+                acceptedContent.Remove(library.Content.Id))
+            {
+                reasons |= LibraryAdoptionReasons.ContentReplaced;
+                ai[library.Content.Id] = false;
+                adopted++;
+                continue;
+            }
+
             if (library.ContentHash is not { } hash || library.State is LibraryFileState.AwaitingRelease or LibraryFileState.Unreadable)
             {
                 continue;
@@ -254,6 +266,13 @@ internal sealed class ContractComposer : ILibraryComposer
         }
 
         if (builtIn && content is { } document && (!hasAccepted || accepted != document))
+        {
+            return false;
+        }
+
+        // C's A5 (ebfa048): a built-in with no document while an accepted entry remains lost it outside Scribe, and is
+        // denied at once, on defaults too, where no adoption runs.
+        if (builtIn && content is null && hasAccepted)
         {
             return false;
         }

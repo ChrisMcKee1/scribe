@@ -131,6 +131,7 @@ public sealed class LibrarySaveRoundTripTests : IDisposable
     {
         // The amended contract (eb79dcc): an accepted entry left for a built-in with no document means the document
         // disappeared outside Scribe, so a removal of Scribe's own drops the entry in the same commit.
+        _fixture.SaveEnabled("github");
         var service = _fixture.Service();
         var catalog = service.LoadCatalog();
         Changes.Save(service, _fixture.Settings, Changes.Of(
@@ -143,9 +144,104 @@ public sealed class LibrarySaveRoundTripTests : IDisposable
 
         Assert.Equal(LibrarySaveStatus.Applied, removed.Outcome!.Status);
         Assert.False(_fixture.Exists("edits/github.json"));
+
+        // Dropped by the Save's own commit, not by an adoption reading the removal as a disappearance: no generation but
+        // the Save's own, at its publication or at the next start.
+        Assert.Equal(catalog.Generation + 1, _fixture.StoredGeneration);
+        var generation = _fixture.StoredGeneration;
         _fixture.Restart();
         var reloaded = _fixture.Service().LoadCatalog();
         Assert.False(reloaded.LocalState.AcceptedContent.ContainsKey("github"));
         Assert.Equal(LibraryFileState.Available, reloaded.Find("github")!.State);
+        Assert.Equal(generation, _fixture.StoredGeneration);
+    }
+
+    // A permitted built-in whose edits document the committed state accepts, and that document's bytes.
+    private (Scribe.Core.PostProcessing.DictionaryLibraryService Service, LibraryCatalog Catalog) PermittedBuiltInWithEdits()
+    {
+        _fixture.WriteBytes("edits/github.json", JsonEditsOverlay.Document("github", ("get hub", "GitHub Enterprise")));
+        _fixture.SaveEnabled("github");
+        var service = _fixture.Service();
+        var catalog = service.LoadCatalog();
+        Changes.Save(service, _fixture.Settings, Changes.Of(catalog, state: Changes.With(catalog.LocalState, ai: [("github", true)])));
+        catalog = service.LoadCatalog();
+        Assert.True(catalog.LocalState.AcceptedContent.ContainsKey("github"));
+        Assert.True(catalog.LocalState.AiPermissions["github"]);
+        Assert.Contains("github", service.Current.AiScope.PermittedLibraryIds);
+        return (service, catalog);
+    }
+
+    [Fact]
+    public void Restoring_a_permitted_built_ins_values_drops_its_accepted_entry_so_the_next_load_revokes_nothing()
+    {
+        // Sub-stream C's request (w1b-c.md, A1 on C): an available built-in with no edits document while an accepted entry
+        // remains reads as a document that disappeared outside Scribe, and loses its AI permission. Scribe's own removal
+        // drops the entry in the same commit, so the built-in stays permitted by its choice.
+        var (service, catalog) = PermittedBuiltInWithEdits();
+
+        var restored = Changes.Save(service, _fixture.Settings, Changes.Of(
+            catalog, writes: [new LibraryWrite("github", true, LibraryOrigin.Existing, catalog.Find("github")!.ContentHash, Edits: null)]));
+        Assert.Equal(LibrarySaveStatus.Applied, restored.Outcome!.Status);
+        Assert.Equal(catalog.Generation + 1, _fixture.StoredGeneration);
+        Assert.Contains("github", service.Current.AiScope.PermittedLibraryIds);
+        var generation = _fixture.StoredGeneration;
+        var mark = _fixture.Log.Entries.Count;
+
+        _fixture.Restart();
+        var reloadedService = _fixture.Service();
+        var reloaded = reloadedService.LoadCatalog();
+
+        Assert.Equal(generation, _fixture.StoredGeneration);
+        Assert.False(reloaded.LocalState.AcceptedContent.ContainsKey("github"));
+        Assert.True(reloaded.LocalState.AiPermissions["github"]);
+        Assert.Contains("github", reloaded.LocalState.EnabledIds);
+        Assert.Contains("github", reloadedService.Current.AiScope.PermittedLibraryIds);
+        Assert.Null(reloadedService.Current.AiScope.PermittedContent["github"]);
+        Assert.DoesNotContain(_fixture.Log.Entries.Skip(mark), entry => entry.Message.StartsWith("Adopted ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void An_edits_document_deleted_outside_Scribe_is_replaced_content_and_its_permission_is_revoked()
+    {
+        // The negative case: the same document gone without a Save of Scribe's, so the accepted entry remains, and the next
+        // load's adoption revokes the permission, drops the entry and keeps the built-in on.
+        var (service, _) = PermittedBuiltInWithEdits();
+        var admitted = service.Current.AiScope;
+        var generation = _fixture.StoredGeneration;
+        var mark = _fixture.Log.Entries.Count;
+        File.Delete(_fixture.PathOf("edits/github.json"));
+
+        _fixture.Restart();
+        var reloadedService = _fixture.Service();
+        var reloaded = reloadedService.LoadCatalog();
+
+        Assert.Equal(generation + 1, _fixture.StoredGeneration);
+        Assert.False(reloaded.LocalState.AcceptedContent.ContainsKey("github"));
+        Assert.False(reloaded.LocalState.AiPermissions["github"]);
+        Assert.Contains("github", reloaded.LocalState.EnabledIds);
+        Assert.DoesNotContain("github", reloadedService.Current.AiScope.PermittedLibraryIds);
+        Assert.False(reloadedService.TryHandOff(admitted, () => Assert.Fail("A scope admitted for the vanished document was handed over.")));
+        Assert.Contains(_fixture.Log.Entries.Skip(mark), entry => entry.Message.StartsWith("Adopted ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_vanished_edits_document_is_denied_at_once_on_defaults_too_where_no_adoption_runs()
+    {
+        // ebfa048 (C's A5): the permission rule itself denies a built-in with no document while an accepted entry remains,
+        // so a session on defaults, which adopts nothing, never sends it either; and Scribe's own removal, which drops the
+        // entry, is not denied that way.
+        var (service, _) = PermittedBuiltInWithEdits();
+        var admitted = service.Current.AiScope;
+        File.Delete(_fixture.PathOf("edits/github.json"));
+        var generation = _fixture.StoredGeneration;
+        _fixture.Context = new LibraryStateContext(RunningOnDefaults: true, DatabaseRepaired: false, GenerationStored: false);
+
+        var onDefaults = _fixture.Service();
+        var catalog = onDefaults.LoadCatalog();
+
+        Assert.Equal(generation, _fixture.StoredGeneration);
+        Assert.True(catalog.LocalState.AcceptedContent.ContainsKey("github"));
+        Assert.DoesNotContain("github", onDefaults.Current.AiScope.PermittedLibraryIds);
+        Assert.False(onDefaults.TryHandOff(admitted, () => Assert.Fail("A scope admitted for the vanished document was handed over.")));
     }
 }
