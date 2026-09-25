@@ -31,7 +31,6 @@ using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
 using Scribe.Core.Transcription;
-using Scribe.Core.Vocabulary;
 
 namespace Scribe.App.Settings;
 
@@ -75,8 +74,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     // Both return the answer of the vocabulary generation the application asked for, which the window awaits before it
     // says a stored change is in effect.
-    private readonly Func<AppSettings, Task<VocabularyRefresh>> _applySettings;
-    private readonly Func<Task<VocabularyRefresh>> _reloadVocabulary;
+    private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;
+    private readonly Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _reloadVocabulary;
 
     // The committed library vocabulary dictation uses, which the usage report's library selection comes from: never the
     // window's own library switches (after a failed Save _settings holds unsaved ones), and never a fresh read of the
@@ -194,8 +193,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         AppPaths paths,
         StartupRegistration startup,
         Action<OverlayPosition> previewOverlay,
-        Func<AppSettings, Task<VocabularyRefresh>> applySettings,
-        Func<Task<VocabularyRefresh>> reloadVocabulary,
+        Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> applySettings,
+        Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> reloadVocabulary,
         ILibraryVocabularySource libraryVocabulary,
         Action<bool>? setHotkeyCaptureMode = null,
         UpdateService? updates = null,
@@ -5161,7 +5160,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
             if (!applied.Applied)
             {
-                ShowInfo(VocabularyNotice.SavedButNotApplied("Settings saved"), Wpf.Ui.Controls.InfoBarSeverity.Warning);
+                ShowInfo(
+                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied("Settings saved"),
+                    Wpf.Ui.Controls.InfoBarSeverity.Warning);
                 return false;
             }
 
@@ -6257,7 +6258,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             else
             {
                 ShowInfo(
-                    VocabularyNotice.SavedButNotApplied($"Added \"{term.Text}\" to your dictionary"),
+                    Scribe.Core.Vocabulary.VocabularyNotice.SavedButNotApplied($"Added \"{term.Text}\" to your dictionary"),
                     Wpf.Ui.Controls.InfoBarSeverity.Warning);
             }
 

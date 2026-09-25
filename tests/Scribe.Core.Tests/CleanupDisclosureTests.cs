@@ -153,7 +153,7 @@ public sealed class CleanupDisclosureTests
         // generation they ask for, which the window awaits before it says the change is in effect.
         var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
         Assert.All(uses, line => Assert.True(
-            line is "private readonly Func<AppSettings, Task<VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" or "var applying = _applySettings(_settings);" ||
+            line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" or "var applying = _applySettings(_settings);" ||
             line.StartsWith("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
             $"The window uses _applySettings in a way this test does not know: {line}"));
 

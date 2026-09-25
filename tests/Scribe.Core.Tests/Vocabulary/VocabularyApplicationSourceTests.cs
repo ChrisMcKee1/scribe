@@ -33,8 +33,8 @@ public sealed class VocabularyApplicationSourceTests
         }
 
         // The Settings window's two application callbacks carry the answer.
-        Assert.Contains("private readonly Func<AppSettings, Task<VocabularyRefresh>> _applySettings;", window, StringComparison.Ordinal);
-        Assert.Contains("private readonly Func<Task<VocabularyRefresh>> _reloadVocabulary;", window, StringComparison.Ordinal);
+        Assert.Contains("private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;", window, StringComparison.Ordinal);
+        Assert.Contains("private readonly Func<Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _reloadVocabulary;", window, StringComparison.Ordinal);
 
         // A Save reports success only after the generation its application asked for is awaited; a build that failed is
         // said to have saved the settings without them applying yet, and the window stays open with that.
