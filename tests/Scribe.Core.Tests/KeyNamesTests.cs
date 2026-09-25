@@ -58,6 +58,9 @@ public sealed class KeyNamesTests
     [InlineData(0x5Cu, "Right Win")]
     [InlineData(0xADu, "Volume Mute")]
     [InlineData(0xB3u, "Play/Pause")]
+    [InlineData(0x04u, "Middle mouse button")]
+    [InlineData(0x05u, "Mouse Back (button 4)")]
+    [InlineData(0x06u, "Mouse Forward (button 5)")]
     public void A_layout_independent_key_has_its_canonical_name(uint virtualKey, string name)
     {
         Assert.Equal(name, KeyNames.Of(virtualKey));

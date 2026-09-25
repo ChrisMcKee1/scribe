@@ -1,0 +1,742 @@
+using System.Runtime.InteropServices;
+using Scribe.Core.Hotkeys;
+using Scribe.Core.Models;
+using Scribe.Core.Settings;
+
+namespace Scribe.Core.Tests;
+
+/// <summary>
+/// The middle, Back and Forward mouse buttons as hotkeys. A button is stored as its virtual-key code and reaches the
+/// same engine as the keyboard, so every rule the keys have holds for it: hold and toggle, both triggers, a chord with a
+/// key, swallowed while it drives a dictation and passed through otherwise, the bare-binding modifier rule the Page keys
+/// have, the desktop-switch reset, pause, capture mode, a reinstall and a retired engine. The mouse hook's filter hands
+/// every other mouse message on without reading it, and a keyboard event carrying a button's code is not the button.
+/// </summary>
+public sealed class MouseButtonHotkeyTests
+{
+    private const uint Middle = MouseButtons.Middle;
+    private const uint Back = MouseButtons.Back;
+    private const uint Forward = MouseButtons.Forward;
+    private const uint PageDown = 0x22;
+    private const uint PageUp = 0x21;
+    private const uint Ctrl = 0x11;
+    private const uint Shift = 0x10;
+    private const uint CapsLock = 0x14;
+    private const uint Insert = 0x2D;
+    private const uint LeftWin = 0x5B;
+    private const uint LeftShift = 0xA0;
+    private const uint RightShift = 0xA1;
+    private const uint LeftCtrl = 0xA2;
+    private const uint RightCtrl = 0xA3;
+    private const uint LeftAlt = 0xA4;
+    private const uint RightAlt = 0xA5;
+    private const uint F9 = 0x78;
+
+    public static TheoryData<uint> Buttons => new() { Middle, Back, Forward };
+
+    // A bare button pressed with any of these is meant for the app under the pointer, as a bare Page key is.
+    public static TheoryData<uint, string, uint[]> ButtonsWithModifiers
+    {
+        get
+        {
+            var combinations = new Dictionary<string, uint[]>
+            {
+                ["Left Ctrl"] = [LeftCtrl],
+                ["Right Ctrl"] = [RightCtrl],
+                ["Left Shift"] = [LeftShift],
+                ["Right Shift"] = [RightShift],
+                ["Left Alt"] = [LeftAlt],
+                ["Right Alt"] = [RightAlt],
+                ["Left Win"] = [LeftWin],
+                ["Ctrl+Shift"] = [LeftCtrl, LeftShift],
+                ["AltGr"] = [LeftCtrl, RightAlt],
+                ["Narrator key Caps Lock"] = [CapsLock],
+                ["Narrator key Insert"] = [Insert],
+                ["injected generic Ctrl"] = [Ctrl],
+                ["injected generic Shift"] = [Shift],
+            };
+            var data = new TheoryData<uint, string, uint[]>();
+            foreach (var button in new[] { Middle, Back, Forward })
+            {
+                foreach (var (name, keys) in combinations)
+                {
+                    data.Add(button, name, keys);
+                }
+            }
+
+            return data;
+        }
+    }
+
+    private static HotkeyBinding Bare(uint button, HotkeyMode mode = HotkeyMode.Hold) =>
+        HotkeyCaptureSession.Build([button], mode);
+
+    private static HotkeyBinding Chord(uint first, uint second, HotkeyMode mode = HotkeyMode.Hold) =>
+        HotkeyCaptureSession.Build([first, second], mode);
+
+    private static (HotkeyTransition, HotkeyTrigger)[] Transitions(HotkeyEngineHarness h) =>
+        h.TakeTransitions().Select(t => (t.Transition, t.Trigger)).ToArray();
+
+    [Theory]
+    [MemberData(nameof(Buttons))]
+    public void A_held_button_dictates_and_its_press_and_release_never_reach_the_app(uint button)
+    {
+        using var h = new HotkeyEngineHarness(Bare(button));
+
+        var down = h.ButtonDown(button);
+        var up = h.ButtonUp(button);
+
+        Assert.True(down.Suppress);
+        Assert.True(up.Suppress);
+        Assert.True(up.RequestReconcile); // a swallowed release is the moment the leak check runs, as for a key
+        var transitions = h.TakeTransitions();
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            transitions.Select(t => t.Transition).ToArray());
+        Assert.True(h.WouldDispatch(transitions[0]));
+        Assert.True(transitions[0].Activation > 0);
+        Assert.Equal(2, h.Engine.MouseButtonEvents);
+    }
+
+    [Theory]
+    [MemberData(nameof(Buttons))]
+    public void A_toggled_button_starts_on_one_click_and_stops_on_the_next(uint button)
+    {
+        using var h = new HotkeyEngineHarness(Bare(button, HotkeyMode.Toggle));
+
+        var first = h.Click(button);
+        Assert.Equal(new[] { (HotkeyTransition.Activated, HotkeyTrigger.Standard) }, Transitions(h));
+        var second = h.Click(button);
+        Assert.Equal(new[] { (HotkeyTransition.Deactivated, HotkeyTrigger.Standard) }, Transitions(h));
+
+        Assert.All(new[] { first.Down, first.Up, second.Down, second.Up }, decision => Assert.True(decision.Suppress));
+    }
+
+    [Fact]
+    public void A_button_on_the_dictation_only_trigger_starts_its_own_dictation()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, Bare(Forward));
+
+        Assert.True(h.ButtonDown(Forward).Suppress);
+        Assert.True(h.ButtonUp(Forward).Suppress);
+        Assert.True(h.Down(PageDown).Suppress);
+        Assert.True(h.Up(PageDown).Suppress);
+
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyTrigger.DictationOnly),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.DictationOnly),
+                (HotkeyTransition.Activated, HotkeyTrigger.Standard),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+            },
+            Transitions(h));
+    }
+
+    [Fact]
+    public void A_button_no_binding_presses_reaches_the_app_and_starts_nothing()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+
+        foreach (var other in new[] { Middle, Forward })
+        {
+            var (down, up) = h.Click(other);
+            Assert.False(down.Suppress);
+            Assert.False(up.Suppress);
+            Assert.False(up.RequestReconcile);
+        }
+
+        Assert.Empty(h.TakeTransitions());
+        Assert.True(h.ButtonDown(Back).Suppress); // and the bound one still works
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Fact]
+    public void Keyboard_bindings_leave_every_mouse_button_alone()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+
+        foreach (var button in new[] { Middle, Back, Forward })
+        {
+            var (down, up) = h.Click(button);
+            Assert.False(down.Suppress);
+            Assert.False(up.Suppress);
+        }
+
+        Assert.Empty(h.TakeTransitions());
+        Assert.False(h.Engine.UsesMouseButtons);
+    }
+
+    [Theory]
+    [InlineData(Back)]
+    [InlineData(Middle)]
+    [InlineData(MouseButtons.Left)]
+    [InlineData(MouseButtons.Right)]
+    public void A_keyboard_event_with_a_mouse_button_code_is_not_the_button(uint code)
+    {
+        // Only injected keyboard input can carry these codes. Taken as the button, a keyboard "down" with no matching
+        // "up" from the mouse hook would leave the button held in the engine's view.
+        using var h = new HotkeyEngineHarness(Bare(Back));
+
+        Assert.Equal(default, h.Down(code));
+        Assert.Equal(default, h.Up(code));
+        Assert.False(h.Engine.IsPressed(code));
+        Assert.Empty(h.TakeTransitions());
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+
+        Assert.True(h.ButtonDown(Back).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Theory]
+    [InlineData(MouseButtons.Left)]
+    [InlineData(MouseButtons.Right)]
+    [InlineData(0x03u)] // VK_CANCEL, a key
+    [InlineData(0x07u)]
+    public void The_engine_takes_only_the_middle_and_side_buttons_from_the_mouse_hook(uint code)
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+
+        Assert.Equal(default, h.Engine.OnMouseButtonEvent(code, isDown: true));
+        Assert.False(h.Engine.IsPressed(code));
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+    }
+
+    [Fact]
+    public void Ctrl_then_back_dictates_swallowing_the_button_and_letting_ctrl_through()
+    {
+        using var h = new HotkeyEngineHarness(Chord(LeftCtrl, Back));
+
+        Assert.False(h.Down(LeftCtrl).Suppress); // a chord member waits for the chord, so Ctrl reaches the app
+        Assert.True(h.ButtonDown(Back).Suppress); // the input that completes the chord is swallowed
+        Assert.Equal(new[] { (HotkeyTransition.Activated, HotkeyTrigger.Standard) }, Transitions(h));
+        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.Equal(new[] { (HotkeyTransition.Deactivated, HotkeyTrigger.Standard) }, Transitions(h));
+        Assert.False(h.Up(LeftCtrl).Suppress);
+
+        // Releasing the key first ends it too, and the button's release still pairs with its swallowed press.
+        h.Down(LeftCtrl);
+        h.ButtonDown(Back);
+        Assert.False(h.Up(LeftCtrl).Suppress);
+        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyTrigger.Standard),
+                (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+            },
+            Transitions(h));
+    }
+
+    [Fact]
+    public void A_button_pressed_before_its_chord_key_reaches_the_app_whole_and_the_key_completes_the_chord()
+    {
+        // The chord rule keys always had: its first input is not pre-empted (only a Windows key is), so a button pressed
+        // first does its job in the app, and its release pairs with that press. The capture warns about this order.
+        using var h = new HotkeyEngineHarness(Chord(LeftCtrl, Back));
+
+        Assert.False(h.ButtonDown(Back).Suppress);
+        Assert.True(h.Down(LeftCtrl).Suppress);
+        Assert.Equal(new[] { (HotkeyTransition.Activated, HotkeyTrigger.Standard) }, Transitions(h));
+        Assert.False(h.ButtonUp(Back).Suppress);
+        Assert.Equal(new[] { (HotkeyTransition.Deactivated, HotkeyTrigger.Standard) }, Transitions(h));
+        Assert.True(h.Up(LeftCtrl).Suppress);
+    }
+
+    [Fact]
+    public void A_chord_of_two_buttons_and_a_toggled_key_and_button_chord_work_like_key_chords()
+    {
+        using (var buttons = new HotkeyEngineHarness(Chord(Back, Forward)))
+        {
+            Assert.False(buttons.ButtonDown(Back).Suppress);
+            Assert.True(buttons.ButtonDown(Forward).Suppress);
+            Assert.True(buttons.ButtonUp(Forward).Suppress);
+            Assert.False(buttons.ButtonUp(Back).Suppress);
+            Assert.Equal(
+                new[]
+                {
+                    (HotkeyTransition.Activated, HotkeyTrigger.Standard),
+                    (HotkeyTransition.Deactivated, HotkeyTrigger.Standard),
+                },
+                Transitions(buttons));
+        }
+
+        using var toggle = new HotkeyEngineHarness(Chord(RightCtrl, Middle, HotkeyMode.Toggle));
+        toggle.Down(RightCtrl);
+        toggle.Click(Middle);
+        toggle.Up(RightCtrl);
+        Assert.Equal(new[] { (HotkeyTransition.Activated, HotkeyTrigger.Standard) }, Transitions(toggle));
+        toggle.Down(RightCtrl);
+        toggle.Click(Middle);
+        toggle.Up(RightCtrl);
+        Assert.Equal(new[] { (HotkeyTransition.Deactivated, HotkeyTrigger.Standard) }, Transitions(toggle));
+    }
+
+    [Fact]
+    public void A_chord_with_a_button_matches_whatever_else_is_held()
+    {
+        // Only a bare binding is judged by the modifier rule, so a chord still fires with Shift held.
+        using var h = new HotkeyEngineHarness(Chord(LeftCtrl, Back));
+
+        h.Down(LeftShift);
+        h.Down(LeftCtrl);
+        Assert.True(h.ButtonDown(Back).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Theory]
+    [MemberData(nameof(ButtonsWithModifiers))]
+    public void A_bare_button_pressed_with_a_modifier_reaches_the_app_whole_and_starts_nothing(
+        uint button, string combination, uint[] modifiers)
+    {
+        using var h = new HotkeyEngineHarness(Bare(button));
+
+        foreach (var modifier in modifiers)
+        {
+            Assert.False(h.Down(modifier).Suppress, combination);
+        }
+
+        var (down, up) = h.Click(button);
+        Assert.False(down.Suppress, combination);
+        Assert.False(up.Suppress, combination);
+        foreach (var modifier in modifiers.Reverse())
+        {
+            Assert.False(h.Up(modifier).Suppress, combination);
+        }
+
+        Assert.Empty(h.TakeTransitions());
+
+        // Nothing was left behind: the bare button dictates straight after.
+        Assert.True(h.ButtonDown(button).Suppress, combination);
+        Assert.True(h.ButtonUp(button).Suppress, combination);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+    }
+
+    [Fact]
+    public void A_modifier_pressed_during_a_button_dictation_neither_ends_it_nor_lets_the_button_through()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+
+        Assert.True(h.ButtonDown(Back).Suppress);
+        Assert.False(h.Down(LeftCtrl).Suppress);
+        Assert.False(h.Up(LeftCtrl).Suppress);
+        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+    }
+
+    [Fact]
+    public void A_modifier_windows_reports_up_blocks_no_bare_button()
+    {
+        // Win+L: the hook saw Win go down and never saw it come up, but Windows says it is up, so the bare button
+        // dictates; with Windows saying it is down, the click reaches the app.
+        var windowsDown = new HashSet<uint>();
+        using var h = new HotkeyEngineHarness(Bare(Middle), isLogicallyDown: windowsDown.Contains);
+
+        h.Down(LeftWin);
+        Assert.True(h.ButtonDown(Middle).Suppress);
+        h.ButtonUp(Middle);
+        Assert.Equal(2, h.TakeTransitions().Count);
+
+        windowsDown.Add(LeftWin);
+        Assert.False(h.ButtonDown(Middle).Suppress);
+        Assert.False(h.ButtonUp(Middle).Suppress);
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void Ctrl_with_a_page_key_still_reaches_the_app_beside_a_bare_button_binding()
+    {
+        // One rule for both kinds of bare binding, each judged on its own trigger.
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation, Bare(Back));
+
+        h.Down(LeftCtrl);
+        Assert.False(h.Down(PageDown).Suppress);
+        Assert.False(h.Up(PageDown).Suppress);
+        Assert.False(h.ButtonDown(Back).Suppress);
+        Assert.False(h.ButtonUp(Back).Suppress);
+        h.Up(LeftCtrl);
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void A_desktop_switch_ends_a_button_hold_once_and_the_next_press_starts_afresh()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+        h.ButtonDown(Back);
+
+        h.Engine.OnDesktopSwitch(); // Win+L: the button is released on the lock screen, unseen
+        h.Engine.OnDesktopSwitchNotice(() => true); // unlocked
+        var transitions = h.TakeTransitions();
+        Assert.Equal(
+            new[]
+            {
+                (HotkeyTransition.Activated, HotkeyDeactivation.Released),
+                (HotkeyTransition.Deactivated, HotkeyDeactivation.DesktopSwitch),
+            },
+            transitions.Select(t => (t.Transition, t.Deactivation)).ToArray());
+        Assert.False(h.Engine.IsPressed(Back));
+
+        // Without the reset this press would read as the button still held, and start nothing.
+        Assert.True(h.ButtonDown(Back).Suppress);
+        Assert.True(h.ButtonUp(Back).Suppress);
+        Assert.Equal(
+            new[] { HotkeyTransition.Activated, HotkeyTransition.Deactivated },
+            h.TakeTransitions().Select(t => t.Transition).ToArray());
+    }
+
+    [Fact]
+    public void An_activation_queued_before_a_desktop_switch_never_starts_a_button_recording()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Forward, HotkeyMode.Toggle));
+        h.Click(Forward);
+        h.Engine.OnDesktopSwitch();
+
+        var transitions = h.TakeTransitions();
+        Assert.Equal(HotkeyTransition.Activated, transitions[0].Transition);
+        Assert.False(h.WouldDispatch(transitions[0]));
+        Assert.True(h.WouldDispatch(transitions[1]));
+    }
+
+    [Fact]
+    public void Paused_a_click_reaches_the_app_and_a_button_swallowed_before_the_pause_stays_swallowed()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+        Assert.True(h.ButtonDown(Back).Suppress);
+        h.TakeTransitions();
+
+        h.Router.SetPaused(true);
+        Assert.True(h.ButtonUp(Back).Suppress); // its press was swallowed, so its release is too
+        var (down, up) = h.Click(Back);
+        Assert.False(down.Suppress);
+        Assert.False(up.Suppress);
+        Assert.Empty(h.TakeTransitions());
+
+        // Held across the resume, the button needs a fresh press.
+        h.ButtonDown(Back);
+        h.Router.SetPaused(false);
+        h.Engine.OnWake();
+        Assert.False(h.ButtonUp(Back).Suppress);
+        Assert.Empty(h.TakeTransitions());
+        Assert.True(h.ButtonDown(Back).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Fact]
+    public void Capture_mode_passes_every_button_through_and_ends_a_button_dictation()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Middle));
+        h.ButtonDown(Middle);
+        var activation = Assert.Single(h.TakeTransitions());
+
+        h.Router.SetCaptureMode(true);
+        Assert.False(h.WouldDispatch(activation));
+        var up = h.ButtonUp(Middle); // the release of the button held when capture began reaches the capture box
+        Assert.False(up.Suppress);
+        var stop = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Deactivated, stop.Transition);
+        Assert.False(stop.AllowReconcile);
+
+        var (down, release) = h.Click(Middle);
+        Assert.False(down.Suppress);
+        Assert.False(release.Suppress);
+        Assert.Empty(h.TakeTransitions());
+
+        h.Router.SetCaptureMode(false);
+        Assert.True(h.ButtonDown(Middle).Suppress);
+        Assert.Equal(HotkeyTransition.Activated, Assert.Single(h.TakeTransitions()).Transition);
+    }
+
+    [Fact]
+    public void A_reinstall_stops_a_button_dictation_and_the_retired_engine_passes_buttons_through()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+        h.ButtonDown(Back);
+        h.TakeTransitions();
+
+        var (replacement, interrupted) = h.Router.BeginEngine(h.Transitions);
+
+        Assert.Equal(HotkeyTrigger.Standard, interrupted);
+        Assert.True(h.Engine.IsRetired);
+        Assert.Equal(default, h.Engine.OnMouseButtonEvent(Back, isDown: false)); // a late release on the old thread
+        Assert.Equal(default, h.Engine.OnMouseButtonEvent(Back, isDown: true));
+        Assert.Empty(h.TakeTransitions());
+        Assert.True(replacement.UsesMouseButtons);
+
+        // The replacement starts from a clean state: a fresh press dictates on it.
+        Assert.True(replacement.OnMouseButtonEvent(Back, isDown: true).Suppress);
+        var start = Assert.Single(h.TakeTransitions());
+        Assert.Equal(HotkeyTransition.Activated, start.Transition);
+        Assert.Same(replacement, start.Engine);
+        Assert.True(h.WouldDispatch(start));
+    }
+
+    [Fact]
+    public void The_engine_says_whether_its_bindings_need_a_mouse_hook()
+    {
+        using var h = new HotkeyEngineHarness(HotkeyBinding.DefaultDictation);
+        Assert.False(h.Engine.UsesMouseButtons);
+
+        h.Router.UpdateBindings(Bare(Back), null);
+        Assert.False(h.Engine.UsesMouseButtons); // requested; the hook thread has not applied it yet
+        h.Engine.OnWake();
+        Assert.True(h.Engine.UsesMouseButtons);
+
+        h.Router.UpdateBindings(HotkeyBinding.DefaultDictation, Chord(LeftCtrl, Forward));
+        h.Engine.OnWake();
+        Assert.True(h.Engine.UsesMouseButtons);
+
+        h.Router.UpdateBindings(HotkeyBinding.DefaultDictation, HotkeyBinding.DefaultDictationOnly);
+        h.Engine.OnWake();
+        Assert.False(h.Engine.UsesMouseButtons);
+
+        // A new engine takes it from the published configuration.
+        h.Router.UpdateBindings(Bare(Middle), null);
+        var (next, _) = h.Router.BeginEngine(h.Transitions);
+        Assert.True(next.UsesMouseButtons);
+    }
+
+    [Theory]
+    [InlineData(0x04u, true)]
+    [InlineData(0x05u, true)]
+    [InlineData(0x06u, true)]
+    [InlineData(0x01u, false)]
+    [InlineData(0x02u, false)]
+    [InlineData(0x03u, false)]
+    [InlineData(0x22u, false)]
+    public void Only_the_middle_and_side_buttons_are_bindable(uint code, bool bindable)
+    {
+        Assert.Equal(bindable, MouseButtons.IsBindable(code));
+        Assert.Equal(bindable, MouseButtons.Uses(new HotkeyBinding(code, KeyModifiers.None, HotkeyMode.Hold, true)));
+        Assert.Equal(
+            bindable, MouseButtons.Uses(new HotkeyBinding(F9, KeyModifiers.None, HotkeyMode.Hold, true, SecondaryVirtualKey: code)));
+    }
+
+    [Fact]
+    public void The_log_names_what_kind_of_input_a_binding_presses()
+    {
+        Assert.Equal("key", MouseButtons.InputKind(HotkeyBinding.DefaultDictation));
+        Assert.Equal("key", MouseButtons.InputKind(Chord(LeftCtrl, F9)));
+        Assert.Equal("mouse", MouseButtons.InputKind(Bare(Back)));
+        Assert.Equal("mouse", MouseButtons.InputKind(Chord(Back, Forward)));
+        Assert.Equal("key+mouse", MouseButtons.InputKind(Chord(LeftCtrl, Back)));
+        Assert.Equal("key+mouse", MouseButtons.InputKind(Chord(Middle, F9)));
+        Assert.Equal(
+            "key+mouse", MouseButtons.InputKind(new HotkeyBinding(Back, KeyModifiers.Control, HotkeyMode.Hold, true)));
+        Assert.False(MouseButtons.Uses(null));
+    }
+
+    [Fact]
+    public void Exactly_the_four_button_messages_pass_the_fast_path_comparison()
+    {
+        var passing = new List<int>();
+        for (var message = -0x1000; message <= 0x10000; message++)
+        {
+            if (MouseHookFilter.IsButtonMessage(message))
+            {
+                passing.Add(message);
+            }
+        }
+
+        Assert.Equal(
+            new[]
+            {
+                MouseHookFilter.WM_MBUTTONDOWN, MouseHookFilter.WM_MBUTTONUP,
+                MouseHookFilter.WM_XBUTTONDOWN, MouseHookFilter.WM_XBUTTONUP,
+            },
+            passing);
+        Assert.False(MouseHookFilter.IsButtonMessage(int.MinValue));
+        Assert.False(MouseHookFilter.IsButtonMessage(int.MaxValue));
+        Assert.False(MouseHookFilter.IsButtonMessage(MouseHookFilter.WM_MOUSEMOVE));
+        Assert.False(MouseHookFilter.IsButtonMessage(MouseHookFilter.WM_MOUSEWHEEL));
+        Assert.False(MouseHookFilter.IsButtonMessage(MouseHookFilter.WM_MOUSEHWHEEL));
+    }
+
+    [Fact]
+    public void Moves_wheels_and_the_left_and_right_buttons_are_passed_on_without_reading_the_message()
+    {
+        // lParam is zero, so a read of the message's data would throw: these are handed on untouched, and the engine,
+        // bound to every button a hotkey can use, never hears of them.
+        using var h = new HotkeyEngineHarness(Bare(Back), Chord(Middle, Forward));
+        for (var message = 0x0200; message <= 0x020E; message++)
+        {
+            if (!MouseHookFilter.IsButtonMessage(message))
+            {
+                Assert.False(MouseHookFilter.Swallows(0, message, lParam: 0, h.Engine, reconcileSignal: null));
+            }
+        }
+
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Fact]
+    public void The_fast_path_and_an_unbound_button_allocate_nothing()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+        using var message = new HookMessage();
+        message.Set(mouseData: 0);
+
+        // Warm up every path first, so a first-call cost cannot be mistaken for a per-event one.
+        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+        MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+        h.Engine.OnKeyEvent(0x41, isDown: true);
+        h.Engine.OnKeyEvent(0x41, isDown: false);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10_000; i++)
+        {
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEMOVE, 0, h.Engine, null);
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MOUSEWHEEL, 0, h.Engine, null);
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, message.Pointer, h.Engine, null);
+            MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, message.Pointer, h.Engine, null);
+            h.Engine.OnKeyEvent(0x41, isDown: true); // and a key no binding uses, on the keyboard hook's path
+            h.Engine.OnKeyEvent(0x41, isDown: false);
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Empty(h.TakeTransitions());
+    }
+
+    [Theory]
+    [InlineData(MouseHookFilter.WM_MBUTTONDOWN, 0u, Middle, true)]
+    [InlineData(MouseHookFilter.WM_MBUTTONUP, 0u, Middle, false)]
+    [InlineData(MouseHookFilter.WM_XBUTTONDOWN, 0x0001_0000u, Back, true)]
+    [InlineData(MouseHookFilter.WM_XBUTTONUP, 0x0001_0000u, Back, false)]
+    [InlineData(MouseHookFilter.WM_XBUTTONDOWN, 0x0002_0000u, Forward, true)]
+    [InlineData(MouseHookFilter.WM_XBUTTONUP, 0x0002_0000u, Forward, false)]
+    public void A_button_message_reaches_the_engine_as_its_button(int message, uint mouseData, uint button, bool isDown)
+    {
+        Assert.Equal(button, MouseHookFilter.ButtonOf(message, mouseData));
+        Assert.Equal(isDown, MouseHookFilter.IsDown(message));
+
+        using var h = new HotkeyEngineHarness(Bare(button));
+        using var hook = new HookMessage();
+        hook.Set(mouseData);
+        if (!isDown)
+        {
+            // Each release message is its press message plus one.
+            Assert.True(MouseHookFilter.Swallows(0, message - 1, hook.Pointer, h.Engine, null));
+        }
+
+        Assert.True(MouseHookFilter.Swallows(0, message, hook.Pointer, h.Engine, null));
+        Assert.Equal(isDown ? 1 : 2, h.TakeTransitions().Count);
+        Assert.Equal(isDown ? 1 : 2, h.Engine.MouseButtonEvents);
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(0x0003_0000u)] // both X buttons at once, which only injected input sends
+    [InlineData(0x0004_0000u)]
+    public void An_x_button_message_that_names_neither_button_is_passed_on(uint mouseData)
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back), Bare(Forward));
+        using var hook = new HookMessage();
+        hook.Set(mouseData);
+
+        Assert.False(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONDOWN, hook.Pointer, h.Engine, null));
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+    }
+
+    [Fact]
+    public void Scribe_s_own_injected_release_and_a_negative_code_are_passed_on_untouched()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Back));
+        using var hook = new HookMessage();
+
+        // The whole marker, and the low half of it, which is all Windows hands a low-level mouse hook (measured on CI).
+        hook.Set(0x0001_0000u, SyntheticInputMarker.Value);
+        Assert.False(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONUP, hook.Pointer, h.Engine, null));
+        hook.Set(0x0001_0000u, MouseHookFilter.Marker);
+        Assert.False(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONDOWN, hook.Pointer, h.Engine, null));
+        hook.Set(0x0001_0000u);
+        Assert.False(MouseHookFilter.Swallows(-1, MouseHookFilter.WM_XBUTTONDOWN, hook.Pointer, h.Engine, null));
+        Assert.Equal(0, h.Engine.MouseButtonEvents);
+
+        // Another app's extra information is the user's input as far as the hook is concerned.
+        hook.Set(0x0001_0000u, unchecked((nuint)0x5343524954455354UL));
+        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_XBUTTONDOWN, hook.Pointer, h.Engine, null));
+        Assert.Equal(1, h.Engine.MouseButtonEvents);
+    }
+
+    [Fact]
+    public void A_swallowed_release_asks_for_the_leak_check()
+    {
+        using var h = new HotkeyEngineHarness(Bare(Middle));
+        using var hook = new HookMessage();
+        using var checkRan = new ManualResetEventSlim(false);
+        using var signal = new HotkeyReconcileSignal(checkRan.Set);
+        hook.Set(0);
+
+        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONDOWN, hook.Pointer, h.Engine, signal));
+        Assert.False(checkRan.IsSet);
+        Assert.True(MouseHookFilter.Swallows(0, MouseHookFilter.WM_MBUTTONUP, hook.Pointer, h.Engine, signal));
+
+        Assert.True(checkRan.Wait(TimeSpan.FromSeconds(10)), "The swallowed release never asked for the leak check.");
+    }
+
+    [Theory]
+    [InlineData(Middle, NativeMethods.MOUSEEVENTF_MIDDLEUP, 0u)]
+    [InlineData(Back, NativeMethods.MOUSEEVENTF_XUP, 1u)]
+    [InlineData(Forward, NativeMethods.MOUSEEVENTF_XUP, 2u)]
+    public void The_leaked_button_release_releases_that_button_moves_nothing_and_is_marked(uint button, uint flags, uint data)
+    {
+        var input = NativeMethods.MarkedMouseButtonUp(button);
+
+        Assert.Equal(NativeMethods.INPUT_MOUSE, input.type);
+        Assert.Equal(flags, input.U.mi.dwFlags); // no MOUSEEVENTF_MOVE (0x1) or MOUSEEVENTF_ABSOLUTE (0x8000)
+        Assert.Equal(data, input.U.mi.mouseData);
+        Assert.Equal(0, input.U.mi.dx);
+        Assert.Equal(0, input.U.mi.dy);
+        Assert.Equal(SyntheticInputMarker.Value, input.U.mi.dwExtraInfo);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NativeMethods.MarkedMouseButtonUp(MouseButtons.Left));
+    }
+
+    [Fact]
+    public void The_leak_check_covers_a_bound_button_and_releases_it_only_when_windows_holds_it_and_the_hook_does_not()
+    {
+        Assert.Equal(new[] { Back }, SuppressedKeyReconciler.CandidateKeys(Bare(Back)));
+        Assert.Equal(new[] { Back, LeftCtrl }, SuppressedKeyReconciler.CandidateKeys(Chord(LeftCtrl, Back)).OrderBy(k => k));
+
+        var windowsDown = new HashSet<uint> { Back, Middle };
+        var hookDown = new HashSet<uint> { Middle };
+        var released = new List<uint>();
+        var reconciler = new SuppressedKeyReconciler(windowsDown.Contains, hookDown.Contains, key =>
+        {
+            released.Add(key);
+            return true;
+        });
+
+        Assert.Equal(new[] { Back }, reconciler.ReleaseLeakedKeys(Bare(Back)).Released);
+        Assert.Empty(reconciler.ReleaseLeakedKeys(Bare(Middle)).Released); // held for real
+        Assert.Equal(new[] { Back }, released);
+    }
+
+    [Fact]
+    public void The_hook_message_struct_matches_the_windows_layout()
+    {
+        // MSLLHOOKSTRUCT: POINT pt; DWORD mouseData; DWORD flags; DWORD time; ULONG_PTR dwExtraInfo.
+        Assert.Equal(8, (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.mouseData)));
+        Assert.Equal(
+            IntPtr.Size == 8 ? 24 : 20,
+            (int)Marshal.OffsetOf<NativeMethods.MSLLHOOKSTRUCT>(nameof(NativeMethods.MSLLHOOKSTRUCT.dwExtraInfo)));
+    }
+
+    // An MSLLHOOKSTRUCT in native memory, as the mouse hook receives one.
+    private sealed class HookMessage : IDisposable
+    {
+        public HookMessage() => Pointer = Marshal.AllocHGlobal(Marshal.SizeOf<NativeMethods.MSLLHOOKSTRUCT>());
+
+        public nint Pointer { get; }
+
+        public void Set(uint mouseData, nuint extraInfo = 0) =>
+            Marshal.StructureToPtr(
+                new NativeMethods.MSLLHOOKSTRUCT { mouseData = mouseData, dwExtraInfo = extraInfo }, Pointer, fDeleteOld: false);
+
+        public void Dispose() => Marshal.FreeHGlobal(Pointer);
+    }
+}
