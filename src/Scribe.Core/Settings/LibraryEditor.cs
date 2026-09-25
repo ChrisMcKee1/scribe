@@ -87,6 +87,62 @@ public static class LibraryEditor
     }
 
     /// <summary>
+    /// The values an edit of a built-in row hands the overlay: each field the user changed, in its committed form, and
+    /// every other field exactly as the row shows it (plan 3.3, per-field authorship). The overlay makes a field the
+    /// user's only where the values it is given differ from the row's, and a field left equal to the row keeps its base,
+    /// so it goes on taking later shipped values; committing an untouched field (trimming a shipped value, say) would
+    /// claim it for the user. A field whose typed value commits to what the row shows is unchanged too.
+    /// </summary>
+    public static TermValues CommitChanges(TermValues displayed, TermValues typed)
+    {
+        ArgumentNullException.ThrowIfNull(displayed);
+        ArgumentNullException.ThrowIfNull(typed);
+        return new TermValues(
+            ChangedText(displayed.Spoken, typed.Spoken, CommitSpoken),
+            ChangedText(displayed.Written, typed.Written, CommitWritten),
+            typed.WholeWord,
+            typed.Enabled);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> is well-formed UTF-16: every high surrogate followed by a low one, and no low
+    /// surrogate without one before it. Ill-formed text (half of an emoji left behind by a paste or an input method) is
+    /// no text a file can hold, and the libraries' stores refuse it, so the editor refuses it first. Null is well formed.
+    /// </summary>
+    public static bool IsWellFormed(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (char.IsHighSurrogate(ch))
+            {
+                if (i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                {
+                    i++;
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (char.IsLowSurrogate(ch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string ChangedText(string displayed, string? typed, Func<string?, string> commit) =>
+        string.Equals(displayed, typed, StringComparison.Ordinal) ? displayed : commit(typed);
+
+    /// <summary>
     /// The commands a row offers. A row the user owns (a custom library's, or a built-in row with no shipped
     /// counterpart) is deleted; an authored built-in row with shipped values is restored instead, since deleting its entry
     /// would only bring the shipped row back at the next load. While the user is typing in a cell or composing with an
@@ -159,6 +215,8 @@ public static class LibraryEditor
                     "This library is open in another app. Close it there to make changes.",
                 _ => "This library couldn't be read, so it can't be edited here.",
             },
+            LibraryValidationKind.IllFormedText =>
+                "Part of a character is missing here, so this can't be saved. Delete it and type it again.",
             _ => string.Empty,
         };
     }

@@ -27,6 +27,45 @@ public sealed class LibraryEditorTests
     }
 
     [Fact]
+    public void Committing_changes_keeps_every_untouched_field_exactly_as_the_row_shows_it()
+    {
+        var displayed = new TermValues("get  hub", " GitHub", WholeWord: true, Enabled: true);
+
+        // Only Written was typed into: Spoken stays as shown, even though it is not in commit form.
+        Assert.Equal(new TermValues("get  hub", "GH", true, true), LibraryEditor.CommitChanges(displayed, displayed with { Written = " GH " }));
+
+        // A field typed back to what commits to the shown value is unchanged, and so is one passed back as shown.
+        Assert.Equal(displayed, LibraryEditor.CommitChanges(displayed, displayed));
+        Assert.Equal(displayed with { WholeWord = false }, LibraryEditor.CommitChanges(displayed, displayed with { WholeWord = false }));
+        Assert.Equal(
+            new TermValues("get hub", " GitHub", true, true),
+            LibraryEditor.CommitChanges(displayed, displayed with { Spoken = " get hub " }));
+    }
+
+    [Fact]
+    public void Ill_formed_utf16_is_told_apart_from_text()
+    {
+        // Built in code: theory data is serialized between the runner and the test, which replaces a lone surrogate.
+        var cases = new (string? Text, bool WellFormed)[]
+        {
+            ("plain", true),
+            ("rocket \uD83D\uDE80 launch", true),
+            ("", true),
+            (null, true),
+            ("\uD83D", false),
+            ("half \uD83D of it", false),
+            ("\uDE80", false),
+            ("backwards \uDE80\uD83D", false),
+            ("pair then half \uD83D\uDE80\uD83D", false),
+        };
+
+        foreach (var (text, wellFormed) in cases)
+        {
+            Assert.Equal(wellFormed, LibraryEditor.IsWellFormed(text));
+        }
+    }
+
+    [Fact]
     public void Each_row_offers_its_honest_commands_and_none_of_the_keys_while_text_is_edited()
     {
         var shipped = new TermValues("get hub", "GitHub");

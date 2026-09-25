@@ -60,6 +60,13 @@ public enum LibraryValidationKind
     /// saving it would rewrite a file this version cannot reproduce whole.
     /// </summary>
     ContentNotSaveable,
+
+    /// <summary>
+    /// A name, category, description, spoken or written form is ill-formed UTF-16 (an unpaired surrogate, half of an
+    /// emoji a paste or an input method left behind). No library file can hold it, and the stores refuse it, so the
+    /// editor refuses it first.
+    /// </summary>
+    IllFormedText,
 }
 
 /// <summary>A validation problem, with the row and field to focus.</summary>
@@ -270,6 +277,11 @@ public sealed class LibraryWorkspace
             return Refused(lib, LibraryValidationKind.ContentNotSaveable);
         }
 
+        if (!LibraryEditor.IsWellFormed(name))
+        {
+            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Name);
+        }
+
         if (LibraryMetadata.CheckTyped(name) == LibraryMetadataProblem.DoubleQuote)
         {
             return Refused(lib, LibraryValidationKind.MetadataDoubleQuote, LibraryMetadataField.Name);
@@ -319,6 +331,16 @@ public sealed class LibraryWorkspace
         if (!ContentEditable(lib))
         {
             return Refused(lib, LibraryValidationKind.ContentNotSaveable);
+        }
+
+        if (!sameCategory && !LibraryEditor.IsWellFormed(category))
+        {
+            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Category);
+        }
+
+        if (!sameDescription && !LibraryEditor.IsWellFormed(description))
+        {
+            return Refused(lib, LibraryValidationKind.IllFormedText, LibraryMetadataField.Description);
         }
 
         if (!sameCategory && LibraryMetadata.CheckTyped(category) == LibraryMetadataProblem.DoubleQuote)
@@ -698,6 +720,11 @@ public sealed class LibraryWorkspace
             return Refused(lib, LibraryValidationKind.ContentNotSaveable);
         }
 
+        if (IllFormed(lib.Header.Id, values, null) is { } illFormed)
+        {
+            return new LibraryEditResult(false, illFormed);
+        }
+
         var committed = LibraryEditor.Commit(values);
         if (lib.Header.BuiltIn)
         {
@@ -733,8 +760,11 @@ public sealed class LibraryWorkspace
     }
 
     /// <summary>
-    /// Edits a term, its values committed (<see cref="LibraryEditor.Commit"/>). A custom row is re-keyed by its new Spoken
-    /// value; a built-in row goes through the overlay and keeps its key. A value edit removes the row's legacy marker.
+    /// Edits a term. A custom row is committed whole (<see cref="LibraryEditor.Commit"/>) and re-keyed by its new Spoken
+    /// value, so an edited legacy row is regular from then on (review finding A10). A built-in row goes through the overlay
+    /// with only the fields the user changed committed and every other field exactly as the row shows it
+    /// (<see cref="LibraryEditor.CommitChanges"/>), so an untouched field stays the base's and keeps taking later shipped
+    /// values (plan 3.3); it keeps its key. A value edit removes the row's legacy marker. Ill-formed text is refused.
     /// <paramref name="removalIntent"/> true is "Use as a removal rule" for an empty Written value; an intent already
     /// given stays while Written stays empty. Setting only the intent is undoable.
     /// </summary>
@@ -754,7 +784,14 @@ public sealed class LibraryWorkspace
         }
 
         var current = lib.Rows[index];
-        var committed = LibraryEditor.Commit(values);
+        if (IllFormed(lib.Header.Id, values, current.Row.Values) is { } illFormed)
+        {
+            return new LibraryEditResult(false, illFormed with { RowId = current.RowId });
+        }
+
+        var committed = lib.Header.BuiltIn
+            ? LibraryEditor.CommitChanges(current.Row.Values, values)
+            : LibraryEditor.Commit(values);
         var emptyWritten = committed.Written.Length == 0;
         var intent = (removalIntent || current.RemovalIntent) && emptyWritten;
         if (committed == current.Row.Values)
@@ -1022,6 +1059,11 @@ public sealed class LibraryWorkspace
             return Refused();
         }
 
+        if (IllFormedIn(plan) is { } illFormed)
+        {
+            return new LibraryEditResult(false, illFormed);
+        }
+
         return plan.Target switch
         {
             LibraryImportTarget.NewLibrary => ImportAsNewLibrary(plan, choice),
@@ -1287,6 +1329,48 @@ public sealed class LibraryWorkspace
         Commit(merged);
     }
 
+    // Ill-formed text in what an import would bring in: the name (a new library's), its details and every row it
+    // applies. The codec never decodes bytes into ill-formed text, so this guards a plan made from anything else.
+    private static LibraryValidationIssue? IllFormedIn(LibraryImportPlan plan)
+    {
+        var libraryId = plan.Target is LibraryImportTarget.ExistingLibrary into ? into.LibraryId : string.Empty;
+        LibraryValidationIssue Issue(TermFields field, LibraryMetadataField metadata) =>
+            new(libraryId, null, LibraryValidationKind.IllFormedText, field, metadata);
+
+        if (plan.Target is LibraryImportTarget.NewLibrary)
+        {
+            if (!LibraryEditor.IsWellFormed(plan.SuggestedName))
+            {
+                return Issue(TermFields.None, LibraryMetadataField.Name);
+            }
+
+            if (!LibraryEditor.IsWellFormed(plan.Category))
+            {
+                return Issue(TermFields.None, LibraryMetadataField.Category);
+            }
+
+            if (!LibraryEditor.IsWellFormed(plan.Description))
+            {
+                return Issue(TermFields.None, LibraryMetadataField.Description);
+            }
+        }
+
+        foreach (var operation in plan.Operations.Where(operation => operation.Kind != LibraryImportOperationKind.AlreadyHere))
+        {
+            if (!LibraryEditor.IsWellFormed(operation.FileRow.Spoken))
+            {
+                return Issue(TermFields.Spoken, LibraryMetadataField.None);
+            }
+
+            if (!LibraryEditor.IsWellFormed(operation.FileRow.Written))
+            {
+                return Issue(TermFields.Written, LibraryMetadataField.None);
+            }
+        }
+
+        return null;
+    }
+
     private LibraryEditResult ImportAsNewLibrary(LibraryImportPlan plan, ImportConflictChoice choice)
     {
         if (LibraryMetadata.CheckTyped(plan.SuggestedName) == LibraryMetadataProblem.DoubleQuote)
@@ -1482,6 +1566,23 @@ public sealed class LibraryWorkspace
         !string.Equals(before.Spoken, after.Spoken, StringComparison.Ordinal)
         || !string.Equals(before.Written, after.Written, StringComparison.Ordinal)
         || before.WholeWord != after.WholeWord;
+
+    // The first typed text field that is ill-formed UTF-16, as the issue that refuses it; a field typed exactly as
+    // `current` shows it is not checked again. Null when both are well formed.
+    private static LibraryValidationIssue? IllFormed(string libraryId, TermValues typed, TermValues? current)
+    {
+        if (!string.Equals(typed.Spoken, current?.Spoken, StringComparison.Ordinal) && !LibraryEditor.IsWellFormed(typed.Spoken))
+        {
+            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.IllFormedText, TermFields.Spoken);
+        }
+
+        if (!string.Equals(typed.Written, current?.Written, StringComparison.Ordinal) && !LibraryEditor.IsWellFormed(typed.Written))
+        {
+            return new LibraryValidationIssue(libraryId, null, LibraryValidationKind.IllFormedText, TermFields.Written);
+        }
+
+        return null;
+    }
 
     private static bool SameRows(IReadOnlyList<DraftTermRow> first, IReadOnlyList<DraftTermRow> second)
     {
@@ -2048,6 +2149,19 @@ public sealed class LibraryWorkspace
     private static void AddValueIssues(string id, DraftTermRow row, DraftTermRow? before, List<LibraryValidationIssue> issues)
     {
         var values = row.Row.Values;
+
+        // Every path into the draft refuses ill-formed text; this is the last check before anything is written, for
+        // content that came from elsewhere (a restored entry, a retired built-in's rows).
+        if (!LibraryEditor.IsWellFormed(values.Spoken))
+        {
+            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.IllFormedText, TermFields.Spoken));
+        }
+
+        if (!LibraryEditor.IsWellFormed(values.Written))
+        {
+            issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.IllFormedText, TermFields.Written));
+        }
+
         if (values.Written.Length == 0 && !row.RemovalIntent && !row.LegacyEmpty)
         {
             issues.Add(new LibraryValidationIssue(id, row.RowId, LibraryValidationKind.EmptyWrittenWithoutIntent, TermFields.Written));
@@ -2140,6 +2254,20 @@ public sealed class LibraryWorkspace
                 : OddQuotes(header.Description) ? LibraryMetadataField.Description
                 : LibraryMetadataField.BasedOn;
             issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.MetadataUnreadableInOlder, TermFields.None, field));
+        }
+
+        foreach (var (value, field) in new[]
+        {
+            (header.Name, LibraryMetadataField.Name),
+            (header.Category, LibraryMetadataField.Category),
+            (header.Description, LibraryMetadataField.Description),
+            (header.BasedOn, LibraryMetadataField.BasedOn),
+        })
+        {
+            if (!LibraryEditor.IsWellFormed(value))
+            {
+                issues.Add(new LibraryValidationIssue(header.Id, null, LibraryValidationKind.IllFormedText, TermFields.None, field));
+            }
         }
     }
 
