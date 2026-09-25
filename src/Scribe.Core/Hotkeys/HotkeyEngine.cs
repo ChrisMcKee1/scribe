@@ -66,7 +66,7 @@ internal sealed class HotkeyEngine
     private readonly HotkeyTriggerArbiter _arbiter = new();
     private readonly HotkeyTransitionQueue _transitions;
     private readonly Func<uint, bool>? _isLogicallyDown;
-    private readonly Func<uint, bool?>? _buttonHeldInWindows;
+    private readonly WindowsMouseView? _windowsView;
     private readonly ChordStateMachine _standard;
     private ChordStateMachine? _dictationOnly;
     private bool _captureMode;
@@ -78,22 +78,32 @@ internal sealed class HotkeyEngine
     private long _desktopSwitches;
     private long _desktopSwitchNotices;
     private long _mouseHookLossesHandled;
-    private long _owedReleaseReconciliations;
     private long _mouseButtonEvents;
     private int _wakePending;
     private uint _ownerThreadId;
 
-    // The mouse buttons whose press was swallowed and whose release has not been seen since, one bit per button code, and
-    // SealedDebts once the engine is retired. A release owed here is swallowed too, whatever happened in between: a
-    // desktop switch, capture, new bindings or a lost mouse hook reset the machines, a reinstall hands these to the
-    // replacement engine (OwedButtonReleases), and DefWindowProc turns a side button's lone release into a Back or
-    // Forward command. A new press of the button retires it, since buttons never repeat: the release went up where no
-    // hook could see it. One word, changed by compare-exchange, so a debt is either committed before the retirement
-    // seals it, and handed on, or refused, and then its press is not swallowed either (see OnMouseButtonEvent).
+    // The mouse buttons whose press was swallowed and whose release has not been seen since, one bit per button code; the
+    // same bits shifted by UncertainShift for the debts a time no hook saw the mouse has made uncertain (a mouse hook found
+    // gone, or the gap a reinstall leaves); and SealedDebts once the engine is retired. A new press of the button retires
+    // its debt, since buttons never repeat: the release went up where no hook could see it. What a release that pays a
+    // debt does is decided when it is made, on Windows' own view at that moment (SwallowsOwedRelease), and DefWindowProc
+    // is why it matters: it turns a side button's lone release into a Back or Forward command. One word, changed by
+    // compare-exchange, so a debt is either committed before the retirement seals it, and handed on, or refused, and then
+    // its press is not swallowed either (see OnMouseButtonEvent).
     private int _owedButtonReleases;
 
     private const int SealedDebts = 1 << 30;
     private const int ButtonDebts = (1 << (int)MouseButtons.Middle) | (1 << (int)MouseButtons.Back) | (1 << (int)MouseButtons.Forward);
+    private const int UncertainShift = 8;
+    private const int UncertainDebts = ButtonDebts << UncertainShift;
+
+    // What a release, or a new press, found owed for its button.
+    private enum OwedRelease
+    {
+        None,
+        Certain,
+        Uncertain,
+    }
 
     /// <param name="isLogicallyDown">
     /// Windows' view of a key, which each binding's machine asks about a modifier its own view holds (see
@@ -102,13 +112,14 @@ internal sealed class HotkeyEngine
     /// <param name="owedButtonReleases">
     /// The releases still owed to button presses the engine this one replaces had swallowed
     /// (<see cref="OwedButtonReleases"/>), so a reinstall, whose state otherwise starts over, still keeps them from the
-    /// app. Handed on as they were sealed; this engine judges them against Windows once its own mouse hook exists
-    /// (<see cref="ReconcileOwedReleases"/>). Zero for none.
+    /// app. They cross the time between the old thread's exit and this engine's registration, when no hook saw the mouse,
+    /// so this engine takes them as uncertain, each decided on Windows' view when its release is made
+    /// (<see cref="OnMouseButtonEvent"/>). Zero for none.
     /// </param>
-    /// <param name="buttonHeldInWindows">
-    /// Windows' own view of a mouse button, null for a button it cannot tell about, which the recovery decision
-    /// (<see cref="ReconcileOwedReleases"/>) asks about every release still owed (<see cref="ReleasesWindowsDoesNotHold"/>).
-    /// Null for the whole function keeps every owed release, as the tests that do not script Windows expect.
+    /// <param name="windowsView">
+    /// Windows' own view of the mouse buttons, read in the callback for a release this engine owes
+    /// (<see cref="WindowsMouseView"/>). Null for the tests that do not script Windows, where the engine's own state
+    /// decides an owed release: it is swallowed.
     /// </param>
     public HotkeyEngine(
         HotkeyBinding binding,
@@ -119,18 +130,19 @@ internal sealed class HotkeyEngine
         HotkeyTransitionQueue transitions,
         Func<uint, bool>? isLogicallyDown = null,
         int owedButtonReleases = 0,
-        Func<uint, bool?>? buttonHeldInWindows = null)
+        WindowsMouseView? windowsView = null)
     {
         _transitions = transitions;
         _isLogicallyDown = isLogicallyDown;
-        _buttonHeldInWindows = buttonHeldInWindows;
+        _windowsView = windowsView;
         _captureMode = captureMode;
         _paused = paused;
         _generation = generation;
         _standard = CreateMachine(binding);
         _dictationOnly = dictationOnlyBinding is null ? null : CreateMachine(dictationOnlyBinding);
         _usesMouseButtons = MouseButtons.Uses(binding) || MouseButtons.Uses(dictationOnlyBinding);
-        _owedButtonReleases = owedButtonReleases & ButtonDebts;
+        var inherited = owedButtonReleases & ButtonDebts;
+        _owedButtonReleases = inherited | (inherited << UncertainShift);
     }
 
     /// <summary>
@@ -141,81 +153,41 @@ internal sealed class HotkeyEngine
     public int OwedButtonReleases => Volatile.Read(ref _owedButtonReleases) & ButtonDebts;
 
     /// <summary>
+    /// Any thread, for tests: of <see cref="OwedButtonReleases"/>, the ones a time no hook saw the mouse has made uncertain
+    /// (a mouse hook found gone, a reinstall's inheritance), whose release is swallowed only on an up Windows' reading can
+    /// vouch for.
+    /// </summary>
+    internal int UncertainButtonReleases => (Volatile.Read(ref _owedButtonReleases) & UncertainDebts) >> UncertainShift;
+
+    /// <summary>
     /// Any thread: whether a swallowed button press still owes its release, so the hook thread keeps a drain-only mouse
     /// hook for it even once no binding presses a mouse button.
     /// </summary>
     public bool OwesButtonRelease => OwedButtonReleases != 0;
 
-    /// <summary>
-    /// The recovery decision for owed releases, made between messages once the hook's view can no longer be trusted (a
-    /// lost mouse hook, a registration after a time without one, such as a reinstall's first): of
-    /// <paramref name="owedButtonReleases"/>, only the buttons Windows reports up stay owed. A press the hook swallowed
-    /// never reaches Windows, so Windows holding the button means it received a press the hook did not swallow (a
-    /// callback that missed its deadline passes its message on, or a press made while no hook existed), and that press's
-    /// release must reach the app, or the app keeps the button down and every later swallowed click keeps it so. A button
-    /// Windows cannot tell about (null, which includes a reading of up the call may have failed to take:
-    /// <see cref="NativeMethods.ReadMouseButtonState"/>) is dropped too: at worst that lets one release through, never
-    /// strands a press. Windows reporting up holds nothing a swallowed release could strand. Without a view at all (a
-    /// null function) everything stays owed.
-    /// </summary>
-    internal static int ReleasesWindowsDoesNotHold(int owedButtonReleases, Func<uint, bool?>? buttonHeldInWindows)
+    // Owner thread, between messages: every release still owed now crosses a time no hook saw the mouse, when a press may
+    // have reached Windows unseen, so each is decided by what Windows shows when it is made, and swallowed only on an up
+    // the reading can vouch for. Sealed, nothing changes: the debts are the replacement's.
+    private void MarkOwedReleasesUncertain()
     {
-        var owed = owedButtonReleases & ButtonDebts;
-        if (buttonHeldInWindows is null)
+        var debts = Volatile.Read(ref _owedButtonReleases);
+        while ((debts & SealedDebts) == 0)
         {
-            return owed;
-        }
-
-        foreach (var button in new[] { MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward })
-        {
-            var bit = 1 << (int)button;
-            if ((owed & bit) != 0 && buttonHeldInWindows(button) != false)
+            var marked = debts | ((debts & ButtonDebts) << UncertainShift);
+            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, marked, debts);
+            if (observed == debts)
             {
-                owed &= ~bit;
+                return;
             }
+
+            debts = observed;
         }
-
-        return owed;
-    }
-
-    // Owner thread, between messages: forgives the releases Windows does not show as swallowed (ReleasesWindowsDoesNotHold).
-    private void ForgiveReleasesWindowsHolds()
-    {
-        var owed = OwedButtonReleases;
-        var forgiven = owed & ~ReleasesWindowsDoesNotHold(owed, _buttonHeldInWindows);
-        foreach (var button in new[] { MouseButtons.Middle, MouseButtons.Back, MouseButtons.Forward })
-        {
-            if ((forgiven & (1 << (int)button)) != 0)
-            {
-                _ = SettleRelease(button);
-            }
-        }
-    }
-
-    /// <summary>Any thread, for tests: how many times the owner reconciled its owed releases with Windows' view.</summary>
-    internal long OwedReleaseReconciliations => Interlocked.Read(ref _owedReleaseReconciliations);
-
-    /// <summary>
-    /// Owner thread, between messages, only once this engine's mouse hook exists: the recovery decision for the releases
-    /// still owed (<see cref="ReleasesWindowsDoesNotHold"/>), made at every point after which the hook's view may lag
-    /// Windows': a renewal that found the hook gone (<see cref="OnMouseHookLost"/>), and every registration that follows a
-    /// time without this installation's mouse hook, its first one included, which is when a reinstall's inherited debts
-    /// meet the mouse again. Asked any earlier, a release and a new press could still reach Windows unseen between the
-    /// answer and the hook. A retired engine does nothing: its debts are the replacement's.
-    /// </summary>
-    public void ReconcileOwedReleases()
-    {
-        if (!IsOwnerCall())
-        {
-            return;
-        }
-
-        Interlocked.Increment(ref _owedReleaseReconciliations);
-        ForgiveReleasesWindowsHolds();
     }
 
     // Owner thread, for a press the machines swallow: commits the debt of its release unless the retirement sealed the
-    // debts first, which is the one way this returns false.
+    // debts first, which is the one way this returns false. The debt is certain: the press itself went through this hook,
+    // and SettleRelease has just cleared whatever this button owed before, its uncertainty included (an uncertainty is
+    // only ever set for a debt that exists, and goes with it).
     private bool TryOweRelease(uint button)
     {
         var bit = 1 << (int)button;
@@ -234,27 +206,54 @@ internal sealed class HotkeyEngine
         return false;
     }
 
-    // Owner thread: a release, or a new press, of this button pays or forgives its debt. Returns whether one was owed.
-    // Sealed, the debts are the replacement's and stay as they are, but one owed is still reported. That matters only in
-    // the in-flight window: a callback this engine admitted before the retirement and is still running, whose release is
-    // then swallowed rather than passed on alone. A callback that starts after the retirement returns at the top of
+    // Owner thread: a release, or a new press, of this button pays or forgives its debt. Returns what was owed. Sealed, the
+    // debts are the replacement's and stay as they are, but one owed is still reported. That matters only in the in-flight
+    // window: a callback this engine admitted before the retirement and is still running, whose release is then judged as
+    // an owed one rather than passed on alone. A callback that starts after the retirement returns at the top of
     // OnMouseButtonEvent and swallows nothing.
-    private bool SettleRelease(uint button)
+    private OwedRelease SettleRelease(uint button)
     {
         var bit = 1 << (int)button;
+        var paid = bit | (bit << UncertainShift);
         var debts = Volatile.Read(ref _owedButtonReleases);
         while ((debts & bit) != 0 && (debts & SealedDebts) == 0)
         {
-            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, debts & ~bit, debts);
+            var observed = Interlocked.CompareExchange(ref _owedButtonReleases, debts & ~paid, debts);
             if (observed == debts)
             {
-                return true;
+                return KindOfDebt(debts, bit);
             }
 
             debts = observed;
         }
 
-        return (debts & bit) != 0;
+        return (debts & bit) == 0 ? OwedRelease.None : KindOfDebt(debts, bit);
+    }
+
+    private static OwedRelease KindOfDebt(int debts, int bit) =>
+        (debts & (bit << UncertainShift)) != 0 ? OwedRelease.Uncertain : OwedRelease.Certain;
+
+    // Owner thread, in the mouse hook callback: whether the release of a button whose press this engine swallowed is
+    // swallowed too, decided now, on Windows' own view of that button. The callback runs before Windows applies this
+    // release, and Windows takes input one event at a time, so the view shows every earlier press, a press still inside
+    // another program's hook when this one registered included. A button Windows shows down received a press this hook
+    // did not swallow, and its release must reach the app, or the app keeps the button down. Otherwise a certain debt (no
+    // time without the hook since its press) is swallowed on the plain reading: every press since went through this hook,
+    // so the up is right whatever else could have made the read zero, short of a press that reached Windows some way the
+    // hook does not cover (a second mouse, the secure desktop, an event lost in a renewal's swap) while the read fails. An
+    // uncertain one is swallowed only on an up the reading can vouch for (WindowsMouseView.Reading), and let through on
+    // any doubt, which at worst sends one release to the app. A zero cannot say why it is zero, so a foreground that flips
+    // to a window the read cannot reach and back inside the read defeats that reading too; either way the button stays
+    // down in Windows only until a later click's release is read as down and reaches the app. Without a view (the tests
+    // that do not script Windows) the engine's own state decides: swallowed.
+    private bool SwallowsOwedRelease(uint button, bool uncertain)
+    {
+        if (_windowsView is not { } windows)
+        {
+            return true;
+        }
+
+        return uncertain ? windows.Reading(button) == false : !windows.IsDown(button);
     }
 
     /// <summary>The owner's thread id once it has attached, otherwise zero. Any thread.</summary>
@@ -297,16 +296,16 @@ internal sealed class HotkeyEngine
     /// is removed silently, with no way for the application to know). Until the renewal no hook saw the mouse, so a
     /// button the machines hold may have been released unseen, and a toggle's second click may have gone to the app.
     /// The Core transition that follows keeps every guarantee the other state clears keep: commands requested before it
-    /// apply first; a release still owed stays owed only while Windows reports that button up, since Windows holding it
-    /// means it received a press the hook did not swallow, whose release must reach the app
-    /// (<see cref="ReleasesWindowsDoesNotHold"/>); the machines forget their mouse buttons, and a binding that presses
-    /// one gives up its latch (<see cref="ChordStateMachine.ForgetMouseButtons"/>); and if the
+    /// apply first; every release still owed stays owed but becomes uncertain, since a press may have reached Windows
+    /// while no hook saw the mouse, so each is decided on Windows' view when it is made, not now
+    /// (<see cref="OnMouseButtonEvent"/>): a press still inside another program's hook as the renewal lands reaches
+    /// Windows only after it, and a reading taken now can be one UIPI denied; the machines forget their mouse buttons,
+    /// and a binding that presses one gives up its latch (<see cref="ChordStateMachine.ForgetMouseButtons"/>); and if the
     /// arbiter's owner is a binding that presses a mouse button, this engine's activation epoch advances first, so its
     /// Activated still waiting for the dispatcher can never open the microphone, and then the owner is released and its
     /// dictation ended, reported as <see cref="HotkeyDeactivation.MouseHookLost"/>. A keyboard binding's dictation, its
-    /// queued Activated included, is left alone: the keyboard hook saw everything. A release owed to a press Windows
-    /// never saw stays owed, so a swallowed button still held reaches no app when it is let go. A retired engine does
-    /// nothing, as for a desktop switch.
+    /// queued Activated included, is left alone: the keyboard hook saw everything. A retired engine does nothing, as for
+    /// a desktop switch.
     /// </summary>
     public void OnMouseHookLost()
     {
@@ -317,7 +316,7 @@ internal sealed class HotkeyEngine
 
         ApplyPendingCommands();
         Interlocked.Increment(ref _mouseHookLossesHandled);
-        ReconcileOwedReleases();
+        MarkOwedReleasesUncertain();
         _standard.ForgetMouseButtons();
         _dictationOnly?.ForgetMouseButtons();
 
@@ -513,9 +512,12 @@ internal sealed class HotkeyEngine
     /// A button is one more key to the machines: it completes a binding, is swallowed while it drives a dictation, is
     /// let through while paused or capturing, and a bare binding of one lets a press made with a modifier through, as a
     /// bare Page Up or Page Down does (see <see cref="ChordStateMachine"/>). The engine itself keeps what the machines'
-    /// resets must not lose, the release owed to a press it swallowed, which it swallows even after a reset or in capture;
+    /// resets must not lose, the release owed to a press it swallowed, which it judges even after a reset or in capture;
     /// a press is swallowed only once that debt is committed, so a press the retirement overtakes reaches the app whole,
-    /// with its release. Nothing here allocates or waits: two compare-exchanges at most.
+    /// with its release. The release of a press it swallowed is decided now, on Windows' own view of the button
+    /// (<see cref="SwallowsOwedRelease"/>). Nothing here allocates, takes a lock of Scribe's or waits for another thread:
+    /// two compare-exchanges at most, and for such a release one GetAsyncKeyState, or for an uncertain debt the reading of
+    /// <see cref="NativeMethods.ReadMouseButtonState"/>.
     /// </summary>
     public HookDecision OnMouseButtonEvent(uint button, bool isDown)
     {
@@ -528,14 +530,21 @@ internal sealed class HotkeyEngine
 
         // A button never repeats, so every press is new: a release still owed to an earlier swallowed press went up
         // where no hook could see it. A release pays its own.
-        var owed = SettleRelease(button) && !isDown;
+        var owed = SettleRelease(button);
         var decision = OnInput(button, isDown);
-        var suppress = decision.Suppress || owed;
-        if (suppress && isDown && !TryOweRelease(button))
+        var suppress = decision.Suppress;
+        if (isDown)
         {
-            // The retirement sealed the debts while this press was judged: its release goes to the replacement, which
-            // owes it nothing, so the press must reach the app too, or the app gets a release with no press.
-            suppress = false;
+            if (suppress && !TryOweRelease(button))
+            {
+                // The retirement sealed the debts while this press was judged: its release goes to the replacement, which
+                // owes it nothing, so the press must reach the app too, or the app gets a release with no press.
+                suppress = false;
+            }
+        }
+        else if (suppress || owed != OwedRelease.None)
+        {
+            suppress = SwallowsOwedRelease(button, owed == OwedRelease.Uncertain);
         }
 
         return new HookDecision(suppress, RequestReconcile: !isDown && suppress);

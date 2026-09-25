@@ -5,10 +5,10 @@ using Scribe.Core.Settings;
 namespace Scribe.Core.Tests;
 
 /// <summary>
-/// Review round 5. A5 (continuing): a reinstall hands its sealed debts on as they are, and the replacement asks Windows
-/// about them only once its own mouse hook exists, because until then a release and a new press can still reach Windows
-/// unseen. A6: a reading of up counts only when GetAsyncKeyState could reach the foreground thread; one UIPI may have
-/// denied is unknown, which drops the debt.
+/// Review round 5, as decided since round 6. A5 (continuing): a reinstall hands its sealed debts on as they are, and
+/// nothing is decided about them until their release is made, on Windows' view at that moment. A6: a reading of up counts
+/// only when GetAsyncKeyState could reach the foreground thread; one UIPI may have denied is unknown, and an unknown
+/// release is let through.
 /// </summary>
 public sealed class MouseButtonRound5Tests
 {
@@ -17,64 +17,55 @@ public sealed class MouseButtonRound5Tests
 
     private static HotkeyBinding Bare(uint button) => HotkeyCaptureSession.Build([button], HotkeyMode.Hold);
 
-    // A5: Middle swallowed; the reinstall retires the old engine while Windows still shows Middle up (the press was
-    // swallowed); before the replacement's mouse hook exists the user lets go and presses Middle again, both reaching
-    // Windows; the hook thread registers the hook and only then asks. The real release of that second press must reach
-    // the app.
-    [Fact]
-    public void A_debt_handed_on_by_a_reinstall_is_judged_when_the_replacement_s_hook_exists_not_before()
-    {
-        var windows = new HashSet<uint>();
-        using var h = new HotkeyEngineHarness(Bare(Middle), buttonHeldInWindows: button => windows.Contains(button));
-        Assert.True(h.ButtonDown(Middle).Suppress);
-
-        var (replacement, _) = h.Router.BeginEngine(h.Transitions);
-        Assert.Equal(1 << (int)Middle, replacement.OwedButtonReleases);
-        windows.Add(Middle);
-
-        replacement.ReconcileOwedReleases(); // what the new hook thread does right after its first registration
-
-        Assert.Equal(0, replacement.OwedButtonReleases);
-        Assert.False(replacement.OnMouseButtonEvent(Middle, isDown: false).Suppress);
-    }
-
+    // The reinstall asks Windows nothing: the replacement takes every sealed debt, and its release asks once and follows
+    // the answer.
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    [InlineData(null)]
-    public void A_reinstall_hands_on_every_sealed_debt_and_the_replacement_keeps_only_what_windows_shows_up(bool? view)
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(null, false)]
+    public void A_reinstall_asks_windows_nothing_and_the_release_follows_one_answer(bool? view, bool swallowed)
     {
         var asked = 0;
-        using var h = new HotkeyEngineHarness(Bare(Back), buttonHeldInWindows: _ =>
+        using var h = new HotkeyEngineHarness(Bare(Back), windowsView: new WindowsMouseView(_ => view == true, _ =>
         {
             asked++;
             return view;
-        });
+        }));
         Assert.True(h.ButtonDown(Back).Suppress);
 
         var (replacement, _) = h.Router.BeginEngine(h.Transitions);
 
-        Assert.Equal(0, asked); // nothing is decided before the replacement's hook exists
+        Assert.Equal(0, asked);
         Assert.Equal(1 << (int)Back, replacement.OwedButtonReleases);
 
-        replacement.ReconcileOwedReleases();
-
+        Assert.Equal(swallowed, replacement.OnMouseButtonEvent(Back, isDown: false).Suppress);
         Assert.Equal(1, asked);
-        Assert.Equal(view == false ? 1 << (int)Back : 0, replacement.OwedButtonReleases);
-        Assert.Equal(1, replacement.OwedReleaseReconciliations);
     }
 
+    // A retired engine judges nothing: its sealed debts stay as they were, handed on, and an event that reaches it after
+    // the retirement passes without a reading.
     [Fact]
-    public void A_retired_engine_reconciles_nothing()
+    public void A_retired_engine_judges_nothing()
     {
-        using var h = new HotkeyEngineHarness(Bare(Back), buttonHeldInWindows: _ => true);
+        var asked = 0;
+        using var h = new HotkeyEngineHarness(Bare(Back), windowsView: new WindowsMouseView(_ =>
+        {
+            asked++;
+            return true;
+        }, _ =>
+        {
+            asked++;
+            return true;
+        }));
         Assert.True(h.ButtonDown(Back).Suppress);
         h.Router.BeginEngine(h.Transitions);
 
-        h.Engine.ReconcileOwedReleases();
+        h.Engine.OnMouseHookLost();
+        Assert.False(h.Engine.OnMouseButtonEvent(Back, isDown: false).Suppress);
 
         Assert.Equal(1 << (int)Back, h.Engine.OwedButtonReleases); // sealed and handed on; the old engine changes nothing
-        Assert.Equal(0, h.Engine.OwedReleaseReconciliations);
+        Assert.Equal(0, h.Engine.UncertainButtonReleases);
+        Assert.Equal(0, asked);
     }
 
     // A6: the reading, over its scripted parts.
@@ -104,23 +95,23 @@ public sealed class MouseButtonRound5Tests
         Assert.Equal(expected, reading);
     }
 
-    // A6, end to end in memory: a leaked Middle press (Windows received it); an elevated window takes the foreground, so
-    // GetAsyncKeyState reads zero; the recovery must not take that for up, or the real release, made once a normal app
-    // is back in front, is swallowed and Windows keeps Middle down.
+    // A6, end to end in memory: a leaked Middle press (Windows received it); an elevated window is in front when the
+    // hook comes back, where GetAsyncKeyState reads zero. Nothing is decided then; the release, made once a normal app is
+    // back in front, reads Windows holding Middle and reaches the app.
     [Fact]
-    public void A_recovery_while_an_elevated_window_is_in_front_drops_the_debt()
+    public void A_recovery_while_an_elevated_window_is_in_front_decides_nothing()
     {
         const nint Elevated = 42;
         var foreground = Elevated;
+        bool ReadsDown(uint button) => button == Middle && foreground != Elevated; // UIPI zero while elevated
         bool? View(uint button) => NativeMethods.ReadMouseButtonState(
-            button, () => true, () => foreground, _ => false, window => window == Elevated ? false : true);
-        using var h = new HotkeyEngineHarness(Bare(Middle), buttonHeldInWindows: View);
+            button, () => true, () => foreground, ReadsDown, window => window == Elevated ? false : true);
+        using var h = new HotkeyEngineHarness(Bare(Middle), windowsView: new WindowsMouseView(ReadsDown, View));
         Assert.True(h.ButtonDown(Middle).Suppress);
 
         h.Engine.OnMouseHookLost();
         foreground = 7; // a normal app is back in front
 
-        Assert.Equal(0, h.Engine.OwedButtonReleases);
         Assert.False(h.ButtonUp(Middle).Suppress);
     }
 
